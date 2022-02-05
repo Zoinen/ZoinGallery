@@ -19,8 +19,14 @@ void BatchThumbnailGenerator::generate(QStringList paths) {
     _iconRequestMap.clear();
 
     std::function<QImage(const QString &)> generateFunction = [] (const QString &input) {
-        ThumbnailLoader loader;
-        QImage img = loader.load(input);
+        QImage img(20000, 5000, QImage::Format_RGBA8888);
+
+        img.fill(Qt::blue);
+        img = img.scaled(100, 100);
+        qDebug() << "generate" << input;
+
+//        ThumbnailLoader loader;
+//        QImage img = loader.load(input);
 
         return img;
     };

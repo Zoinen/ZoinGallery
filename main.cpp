@@ -21,5 +21,14 @@ int main(int argc, char *argv[])
     ViewerController *controller = new ViewerController(&engine);
     engine.load(url);
 
+//    QQuickView *view = new QQuickView;
+//    QQmlEngine *engine = view->engine();
+
+//    ViewerController *controller = new ViewerController(engine);
+//    view->setSource(url);
+
+//    view->setGeometry(600, 400, 500, 500);
+//    view->show();
+
     return app.exec();
 }

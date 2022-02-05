@@ -5,9 +5,9 @@
 #include "QmlImageProvider.h"
 
 #include <QQmlContext>
-#include <QQmlApplicationEngine>
+#include <QQmlEngine>
 
-ViewerController::ViewerController(QQmlApplicationEngine *engine)
+ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
     ThumbnailLoader::init();
 

@@ -3,13 +3,13 @@
 
 #include <QObject>
 
-class QQmlApplicationEngine;
+class QQmlEngine;
 class FileListModel;
 
 class ViewerController : public QObject {
     Q_OBJECT
 public:
-    ViewerController(QQmlApplicationEngine *engine);
+    ViewerController(QQmlEngine *engine);
 
     Q_INVOKABLE void doCd();
 

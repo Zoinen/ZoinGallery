@@ -1,7 +1,7 @@
-import QtQuick 2.15
-import QtQuick.Window 2.15
-import QtQuick.Layouts 1.15
-import QtQuick.Controls 2.15
+import QtQuick 2.14
+import QtQuick.Window 2.14
+import QtQuick.Layouts 1.14
+import QtQuick.Controls 2.14
 
 Window {
     width: 640
@@ -14,15 +14,32 @@ Window {
 
         spacing: 10
 
-        Button {
-            Layout.leftMargin: 10
-            Layout.topMargin: 10
-            width: 150
-            height: 30
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 20
+            Button {
+                Layout.leftMargin: 10
+                Layout.topMargin: 10
+                width: 150
+                height: 30
 
-            text: "Do CD"
-            onClicked: {
-                viewerController.doCd()
+                text: "Do CD"
+                onClicked: {
+                    viewerController.doCd()
+                }
+            }
+
+            Rectangle {
+                color: "orange"
+                Layout.preferredWidth: 20
+                Layout.preferredHeight: 40
+                antialiasing: true
+
+                RotationAnimator on rotation {
+                    loops: Animation.Infinite
+                    duration: 2000
+                    from: 0 ; to: 360
+                }
             }
         }
 
@@ -75,7 +92,7 @@ Window {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 180
                         fillMode: Image.PreserveAspectFit
-                        mipmap: true
+//                        mipmap: true
                         source: "image://thumbnails/" + imageIdRole
                     }
 

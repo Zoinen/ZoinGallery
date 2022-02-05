@@ -6,6 +6,7 @@ list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_compile_definitions(_HAS_AUTO_PTR_ETC=1)
 
 # conan
 if(NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
@@ -44,6 +45,8 @@ set(PROJECT_SOURCES
     QmlImageProvider.cpp
     BatchThumbnailGenerator.cpp
     ViewerController.cpp
+    ThreadedThumbnailGenerator.cpp
+    ThreadPoolThumbnailGenerator.cpp
     qml.qrc
 )
 

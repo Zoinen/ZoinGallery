@@ -11,9 +11,10 @@ QmlImageProvider::QmlImageProvider(const QString &prefix, FileListModel *model)
 }
 
 QImage QmlImageProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize) {
-    QStandardItem *item = _model->itemForImageId(id);
+//    qDebug() << "requesting image" << id;
+    const FileListModel::MyItem *item = _model->itemForImageId(id);
     if (item) {
-        QImage img = item->data(FileListModel::ImageRole).value<QImage>();
+        QImage img = item->image;
         if (!img.isNull()) {
             return img;
         }

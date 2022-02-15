@@ -3,6 +3,9 @@
 #include <QDebug>
 #include <QImage>
 #include <QFile>
+#include <QString>
+#include <QFileInfo>
+#include <QElapsedTimer>
 
 #include <exiv2/exiv2.hpp>
 #include <exiv2/preview.hpp>
@@ -15,17 +18,14 @@
 #include <sstream>
 
 #include "tiffio.hxx"
+#include "Unsharp/Unsharp.h"
+#include <turbojpeg.h>
 
 #ifdef _WIN32
 #define NULL_DEVICE "NUL:"
 #else
 #define NULL_DEVICE "/dev/null"
 #endif
-
-
-ThumbnailLoader::ThumbnailLoader() {
-
-}
 
 void ThumbnailLoader::init() {
     Exiv2::XmpParser::initialize();
@@ -64,15 +64,17 @@ struct imemstream: virtual membuf, std::istream {
     }
 };
 
-QImage ThumbnailLoader::load(const QString &path) {
-    const char* key = "CameraModel";
-    const char *tag = "Exif.SubImage2";
+QImage ThumbnailLoader::loadRawOrTiff(const QString &path, ExifOrientation *outOrientation) {
+    _path = path;
 
     try {
         std::string strPath(path.toUtf8());
         Exiv2::Image::AutoPtr image = Exiv2::ImageFactory::open(strPath);
         assert(image.get() != 0);
         image->readMetadata();
+        if (outOrientation) {
+            *outOrientation = readOrientationFromExif(image.get());
+        }
 
         Exiv2::PreviewManager manager(*image);
         Exiv2::PreviewPropertiesList properties = manager.getPreviewProperties();
@@ -83,78 +85,226 @@ QImage ThumbnailLoader::load(const QString &path) {
             return QImage();
         }
 
-        Exiv2::PreviewImage previewImg = manager.getPreviewImage(properties.size() > 1 ? properties[0] : properties[0]);
-        imemstream memStream(previewImg.pData(), previewImg.size());
+        Exiv2::PreviewProperties previewProp = properties.back();
+        Exiv2::PreviewImage previewImg = manager.getPreviewImage(previewProp);
 
-        std::istringstream input_TIFF_stream;
+        if (previewProp.mimeType_ == "image/tiff") {
+            imemstream memStream(previewImg.pData(), previewImg.size());
 
-        TIFF* tif = TIFFStreamOpen("MemTIFF", &memStream);
+            std::istringstream input_TIFF_stream;
 
-        if (tif) {
-            uint32_t w, h;
-            size_t npixels;
-            uint32_t *raster;
+            TIFF* tif = TIFFStreamOpen("MemTIFF", &memStream);
 
-            TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
-            TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
-            npixels = w * h;
-            raster = (uint32_t*) _TIFFmalloc(npixels * sizeof(uint32_t));
-            if (raster != NULL) {
-                if (TIFFReadRGBAImageOriented(tif, w, h, raster, ORIENTATION_TOPLEFT, 0)) {
-                    QImage img((uchar *)raster, w, h, QImage::Format_RGBA8888);
-                    //                _TIFFfree(raster);
-                    TIFFClose(tif);
-                    return img;
+            if (tif) {
+                uint32_t w, h;
+                size_t npixels;
+
+                TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
+                TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
+                npixels = w * h;
+                uint32_t *tiffRaster = (uint32_t*) _TIFFmalloc(npixels * sizeof(uint32_t));
+                if (tiffRaster != NULL) {
+                    if (TIFFReadRGBAImageOriented(tif, w, h, tiffRaster, ORIENTATION_TOPLEFT, 0)) {
+                        TIFFClose(tif);
+
+                        QImage img((uchar *)tiffRaster, w, h, QImage::Format_RGBA8888,
+                                   [] (void *ptr) { if (ptr) _TIFFfree(ptr); }, tiffRaster);
+                        return img;
+                    }
+                    else {
+                        _TIFFfree(tiffRaster);
+                        tiffRaster = nullptr;
+                    }
                 }
-                else {
-                    _TIFFfree(raster);
-                }
+                TIFFClose(tif);
             }
-            TIFFClose(tif);
+        }
+        else if (previewProp.mimeType_ == "image/jpeg") {
+            QImage img = loadFullFromData(previewImg.pData(), previewImg.size());
+            return img;
+        }
+        else {
+            qDebug() << "Unsupportes preview" << previewProp.extension_.c_str() << previewProp.mimeType_.c_str();
         }
     } catch (Exiv2::AnyError& e) {
-//        std::cerr << "Caught Exiv2 exception '" << e << "'" << std::endl;
+        std::cout << "Caught Exiv2 exception '" << e << "'" << std::endl;
         return QImage();
     }
     return QImage();
+}
 
-//    QFile f("c:\\Temp\\__2");
-//    f.open(QFile::WriteOnly);
-//    f.write((char *)previewImg.pData(), previewImg.size());
-//    QImage img = QImage::fromData(previewImg.pData(), previewImg.size());
-//    qDebug() << img.width() << "x" << img.height();
-//    img.save("C:\\temp\\_1.png");
+QImage ThumbnailLoader::loadJpeg(const QString &path, ExifOrientation *outOrientation) {
+    _path = path;
 
-
-
-    /*Exiv2::ExifData &exifData = image->exifData();
-
-    if (exifData.empty()) {
-        std::cerr << "no metadata found in file " << path.toStdString() << std::endl;
-        exit(2);
-    }
+    QFile f(path);
+    f.open(QFile::ReadOnly);
+    QByteArray file = f.readAll();
+    f.close();
+    QImage img = loadFullFromData((uint8_t *)file.data(), file.size());
 
     try {
-//        for (auto it = exifData.begin(); it != exifData.end(); ++it) {
-//            qDebug() << it->key().c_str() << it->value().toString().substr(0, 50).c_str();
-//        }
-//        std::cout << exifData[key] << std::endl;
-
-        auto it = exifData.findKey(Exiv2::ExifKey(tag));
-        if (it != exifData.end()) {
-            Exiv2::DataBuf buf = it->dataArea();
-            QImage img = QImage::fromData(buf.pData_, buf.size_);
-            qDebug() << img.width() << "x" << img.height();
-            img.save("C:\\temp\\_1.png");
-        }
-        else {
-            qDebug() << tag << "not found";
+        std::string strPath(path.toUtf8());
+        Exiv2::Image::AutoPtr image = Exiv2::ImageFactory::open(strPath);
+        assert(image.get() != 0);
+        image->readMetadata();
+        if (outOrientation) {
+            *outOrientation = readOrientationFromExif(image.get());
         }
     } catch (Exiv2::AnyError& e) {
-        std::cerr << "Caught Exiv2 exception '" << e << "'" << std::endl;
-        exit(3);
-    } catch ( ... ) {
-        std::cerr << "Caught a cold!" << std::endl;
-        exit(4);
-    }**/
+        std::cout << "Caught Exiv2 exception '" << e << "'" << std::endl;
+    }
+    return img;
+}
+
+QImage ThumbnailLoader::loadImageOther(const QString &path, ExifOrientation *outOrientation) {
+    return QImage(path);
+}
+
+QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions, ExifOrientation orientation) {
+    if (orientation == ExifOrientation::Rotate90CW || orientation == ExifOrientation::Rotate270CW) {
+        dimensions = QSize(dimensions.height(), dimensions.width());
+    }
+    dimensions = image.size().scaled(dimensions, Qt::KeepAspectRatio);
+
+    return image.scaled(dimensions, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+}
+
+QImage ThumbnailLoader::unsharpMask(QImage &image) {
+    image.convertTo(QImage::Format_RGB888);
+//    image.save(QString("c:\\temp\\%1.png").arg(QFileInfo(_path).baseName()));
+    uint8_t *unsharped = unsharp(image.bits(), image.width(), image.height(), 24);
+    QImage imageSharp((uchar *)unsharped, image.width(), image.height(), QImage::Format_RGB888,
+                          [] (void *ptr) {delete[] (uint8_t *)ptr;}, unsharped);
+//    imageSharp.save(QString("c:\\temp\\%1+.png").arg(QFileInfo(_path).baseName()));
+    return imageSharp;
+}
+
+QImage ThumbnailLoader::rotateAndFlip(const QImage &image, ExifOrientation orientation) {
+    if (orientation && orientation != ExifOrientation::Horizontal) {
+        QTransform transform;
+        if (orientation == ExifOrientation::Rotate270CW) {
+            transform.rotate(270);
+        }
+        else if (orientation == ExifOrientation::Rotate90CW) {
+            transform.rotate(90);
+        }
+        else if (orientation == ExifOrientation::Rotate180) {
+            transform.rotate(180);
+        }
+        else if (orientation == ExifOrientation::MirrorHorizontal) {
+            transform.scale(-1, 1);
+        }
+        else if (orientation == ExifOrientation::MirrorHorizontalAndRotate270CW) {
+            transform.scale(-1, 1);
+            transform.rotate(270);
+        }
+        else if (orientation == ExifOrientation::MirrorHorizontalAndRotate90CW) {
+            transform.scale(-1, 1);
+            transform.rotate(90);
+        }
+        else if (orientation == ExifOrientation::MirrorVertical) {
+            transform.scale(1, -1);
+        }
+        return image.transformed(transform);
+    }
+    return image;
+}
+
+bool ThumbnailLoader::isJpeg(const QString &path) {
+    QStringList extensions = {"jpg", "jpeg", "jpe", "jfif"};
+    for (const QString &ext : extensions) {
+        if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ThumbnailLoader::isRawOrTiff(const QString &path) {
+    QStringList extensions = {"tiff", "tif", "cr2", "dng", "crw", "nef", "arw", "arq"};
+    for (const QString &ext : extensions) {
+        if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ThumbnailLoader::isImageOther(const QString &path) {
+    QStringList extensions = {"bmp", "png", "gif", "jp2", "jpc", "tga", "ico", "cur", "ppm", "pgm", "pbm", "svg", "wmf", "emf", "webp"};
+    for (const QString &ext : extensions) {
+        if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QImage ThumbnailLoader::loadFullFromData(const uint8_t *data, uint32_t size) {
+    const int COLOR_COMPONENTS = 3;
+
+    long unsigned int _jpegSize = size;
+    const unsigned char* _compressedImage = data;
+
+    int jpegSubsamp, jpegColorspace, width, height;
+
+    tjhandle _jpegDecompressor = tjInitDecompress();
+
+    int res = tjDecompressHeader3(_jpegDecompressor, _compressedImage, _jpegSize, &width, &height, &jpegSubsamp, &jpegColorspace);
+    if (res == -1) {
+        if (tjGetErrorCode(_jpegDecompressor) == TJERR_FATAL) {
+            qDebug() << "JPEG header decode error:" << tjGetErrorStr2(_jpegDecompressor) << "," << _path;
+            tjDestroy(_jpegDecompressor);
+            return QImage();
+        }
+    }
+
+    int num = 0;
+    tjscalingfactor *factors = tjGetScalingFactors(&num);
+    int denomIndex = 0;
+    for (; denomIndex < num; denomIndex++) {
+        int scaledWidth = TJSCALED(width, factors[denomIndex]);
+        int scaledHeight = TJSCALED(height, factors[denomIndex]);
+        if (scaledWidth < ThumbnailWidthLimit && scaledHeight < ThumbnailHeightLimit) {
+            break;
+        }
+    }
+    if (denomIndex >= num) {
+        denomIndex--;
+    }
+    width = TJSCALED(width, factors[denomIndex]);
+    height = TJSCALED(height, factors[denomIndex]);
+
+    int pitch = TJPAD(width * tjPixelSize[TJPF_RGB]);
+    unsigned char *buffer = new unsigned char[pitch * height * COLOR_COMPONENTS];
+
+    res = tjDecompress2(_jpegDecompressor, _compressedImage, _jpegSize, buffer, width, pitch, height, TJPF_RGB, TJFLAG_FASTDCT);
+    if (res == -1) {
+        if (tjGetErrorCode(_jpegDecompressor) == TJERR_FATAL) {
+            qDebug() << "JPEG decode error:" << tjGetErrorStr2(_jpegDecompressor) << "," << _path;
+            delete[] buffer;
+            tjDestroy(_jpegDecompressor);
+            return QImage();
+        }
+    }
+    tjDestroy(_jpegDecompressor);
+
+    QImage img(buffer, width, height, QImage::Format_RGB888, [] (void *ptr) {delete[] (uint8_t *)ptr;}, buffer);
+    /*int taken3 = t.restart();
+    qDebug() << "time:" << path << taken << taken2 << taken3;*/
+//    img.save(QString("c:\\temp\\%1").arg(QFileInfo(path).fileName()));
+    return img;
+
+}
+
+ThumbnailLoader::ExifOrientation ThumbnailLoader::readOrientationFromExif(Exiv2::Image *image) {
+    ExifOrientation orientation = Horizontal;
+    const Exiv2::ExifData &exifData = image->exifData();
+    if (!exifData.empty()) {
+        auto it = exifData.findKey(Exiv2::ExifKey("Exif.Image.Orientation"));
+        if (it != exifData.end()) {
+            orientation = (ExifOrientation)it->toLong();
+        }
+    }
+    return orientation;
 }

@@ -30,5 +30,7 @@ int main(int argc, char *argv[])
 //    view->setGeometry(600, 400, 500, 500);
 //    view->show();
 
+    controller->doCd();
+
     return app.exec();
 }

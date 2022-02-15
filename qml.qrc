@@ -1,5 +1,9 @@
 <RCC>
     <qresource prefix="/">
         <file>main.qml</file>
+        <file>resources/ThumbnailsShadow.png</file>
+        <file>resources/ThumbnailsShadow@2x.png</file>
+        <file>resources/FileIcon.svg</file>
+        <file>resources/FolderIcon.svg</file>
     </qresource>
 </RCC>

@@ -4,47 +4,69 @@
 #include <QObject>
 #include <QImage>
 #include <QRunnable>
+#include <QAtomicInt>
+#include <QElapsedTimer>
 
 class QThread;
+class ThreadedThumbnailGenerator;
 
 class Worker : public QObject  {
      Q_OBJECT
 public:
-    void generateThumbnail(QString path);
+    Worker(ThreadedThumbnailGenerator *generator);
+    void setThumbnailResolution(QSize dimensions, qreal dpr);
+    void generateThumbnail(QString path, int queueId);
 
 signals:
     void resultReady(QString path, QImage image);
 
 private:
      QString _path;
+     QSize _dimensions;
+     qreal _dpr;
+     ThreadedThumbnailGenerator *_generator;
 };
 
 class ThreadedThumbnailGenerator : public QObject {
     Q_OBJECT
 public:
     explicit ThreadedThumbnailGenerator(QObject *parent = nullptr);
+    void prepareToClose();
 
     void generate(QStringList paths);
+    void setNextRequestImage(QString path, bool isForward);
+    void setThumbnailResolution(QSize dimensions, qreal dpr);
+
+    QAtomicInt _queueId;
 
 signals:
     void thumbnailReady(QString path, QImage thumbnail);
-    void requestThumbnail(QString path);
+    void requestThumbnail(QString path, int queueId);
+    void setThumbnailResolutionSignal(QSize dimensions, qreal dpr);
+    void generationFinished();
 
 private:
     struct WorkerInfo {
         QThread *thread;
         Worker *worker;
-        QMetaObject::Connection requestConnection;
+        bool isFinished;
     };
 
     void onResultReady(QString path, QImage image);
-    void requestNextThumbnail(WorkerInfo &worker);
+    bool requestNextThumbnail(WorkerInfo &worker);
+
+    int nextPathIndex();
+    int prevPathIndex();
 
     QStringList _paths;
+    QVector<bool> _pathsRequested;
     int _lastPathIndex;
+    int _lastPathIndexIncrement;
 
     QList<WorkerInfo> _workers;
-    const int MaxThreads = 10;
+    const int MaxThreads = 6;
+
+    QElapsedTimer _benchmark;
 };
 
 #endif // THREADEDTHUMBNAILGENERATOR_H

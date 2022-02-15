@@ -1,12 +1,12 @@
-#ifndef FILELISTMODEL_H
-#define FILELISTMODEL_H
+#ifndef STANDARDFILELISTMODEL_H
+#define STANDARDFILELISTMODEL_H
 
 #include <QStandardItemModel>
 #include <QHash>
 
 class ThreadedThumbnailGenerator;
 
-class FileListModel : public QAbstractListModel {
+class StandardFileListModel : public QStandardItemModel {
     Q_OBJECT
     Q_PROPERTY(bool generationFinished MEMBER _generationFinished NOTIFY generationFinishedChanged)
 
@@ -18,30 +18,16 @@ public:
         ImageResolutionRole
     };
 
-    struct MyItem {
-        QString text;
-        QImage image;
-        QString imageId;
-        bool isFolder;
-        int index;
-    };
-
-    FileListModel(QObject *parent = nullptr);
-
-    QHash<int, QByteArray> roleNames() const override;
-
-    int rowCount(const QModelIndex &parent) const override;
-    QVariant data(const QModelIndex &index, int role) const override;
-
+    StandardFileListModel(QObject *parent = nullptr);
     void prepareToClose();
 
     void setThumbnailResolution(QSize dimensions, qreal dpr);
-    int cd(QString path, QString itemToSelect = QString());
+    void cd(QString path);
     void updateThumbnails();
     QString rootPath() const;
 
     QString fullPath(QString fileName);
-    const MyItem *itemForImageId(QString imageId);
+    QStandardItem *itemForImageId(QString imageId);
 
     Q_INVOKABLE void setNextRequestIndex(int index);
 
@@ -50,13 +36,12 @@ signals:
 
 private:
     QString generateNewId();
-    void updateImageId(MyItem *item);
+    void updateImageId(QStandardItem *item);
     bool isImage(QString fileName);
 
     QString _root;
-    QHash<QString, MyItem *> _fileToItem;
-    QHash<QString, MyItem *> _imageIdToItem;
-    QList<MyItem *> _items;
+    QHash<QString, QStandardItem *> _fileToItem;
+    QHash<QString, QStandardItem *> _imageIdToItem;
     QStringList _imagePaths;
     int _lastRequestIndex;
     int _lastId;
@@ -65,4 +50,4 @@ private:
     bool _generationFinished;
 };
 
-#endif // FILELISTMODEL_H
+#endif // STANDARDFILELISTMODEL_H

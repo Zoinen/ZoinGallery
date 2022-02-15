@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
-project(ZoinGallery LANGUAGES CXX)
+project(ZoinGallery LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
 list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
@@ -22,7 +22,11 @@ include(${CMAKE_BINARY_DIR}/conan.cmake)
 conan_cmake_configure(REQUIRES exiv2/0.27.4 libtiff/4.3.0
                       GENERATORS cmake
                       IMPORTS "bin, *.dll -> ./bin"
-                      IMPORTS "bin, *.pdb -> ./bin")
+                      IMPORTS "bin, *.pdb -> ./bin"
+                      OPTIONS
+                      libtiff:jpeg=libjpeg-turbo
+                      )
+
 
 conan_cmake_autodetect(settings)
 
@@ -37,16 +41,21 @@ conan_basic_setup(NO_OUTPUT_DIRS)
 find_package(QT NAMES Qt6 Qt5 COMPONENTS Core Quick Concurrent REQUIRED)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Concurrent REQUIRED)
 
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DQT_QML_DEBUG ")
 
 set(PROJECT_SOURCES
     main.cpp
     ThumbnailLoader.cpp
     FileListModel.cpp
+    StandardFileListModel.cpp
     QmlImageProvider.cpp
     BatchThumbnailGenerator.cpp
     ViewerController.cpp
     ThreadedThumbnailGenerator.cpp
     ThreadPoolThumbnailGenerator.cpp
+    Unsharp/Unsharp.cpp
+    Unsharp/Utilities.h
+    QmlResourcesProvider.cpp
     qml.qrc
 )
 
@@ -54,6 +63,10 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+if(WIN32)
+    configure_file(ZoinGallery.rc.cmake ${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery.rc @ONLY)
+    set(RESOURCE_FILES ${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery.rc)
+endif()
 
-add_executable(ZoinGallery ${PROJECT_SOURCES})
+add_executable(ZoinGallery ${PROJECT_SOURCES} ${RESOURCE_FILES})
 target_link_libraries(ZoinGallery PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Quick Qt${QT_VERSION_MAJOR}::Concurrent ${CONAN_LIBS})

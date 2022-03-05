@@ -56,6 +56,7 @@ set(PROJECT_SOURCES
     Unsharp/Unsharp.cpp
     Unsharp/Utilities.h
     QmlResourcesProvider.cpp
+    MasonryLayout.cpp
     qml.qrc
 )
 

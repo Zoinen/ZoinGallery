@@ -64,7 +64,7 @@ struct imemstream: virtual membuf, std::istream {
     }
 };
 
-QImage ThumbnailLoader::loadRawOrTiff(const QString &path, ExifOrientation *outOrientation) {
+QImage ThumbnailLoader::loadRawOrTiff(const QString &path, QSize preferredSize, ExifOrientation *outOrientation, QSize *outFullResolution) {
     _path = path;
 
     try {
@@ -78,14 +78,40 @@ QImage ThumbnailLoader::loadRawOrTiff(const QString &path, ExifOrientation *outO
 
         Exiv2::PreviewManager manager(*image);
         Exiv2::PreviewPropertiesList properties = manager.getPreviewProperties();
-//        for (const auto &preview : properties) {
-//            qDebug() << preview.width_ << "x" << preview.height_ << ":" << preview.extension_.c_str() << preview.mimeType_.c_str();
-//        }
         if (!properties.size()) {
             return QImage();
         }
 
-        Exiv2::PreviewProperties previewProp = properties.back();
+        QSize fullResolution = readResolutionFromExif(image.get());
+        if (fullResolution.isEmpty()) {
+            for (const auto &preview : properties) {
+                if (int(preview.width_) > fullResolution.width() && int(preview.height_) > fullResolution.height()) {
+                    fullResolution = QSize(preview.width_, preview.height_);
+                }
+            }
+        }
+        if (outFullResolution) {
+            *outFullResolution = fullResolution;
+        }
+
+        QSize preferredSizeRotated = preferredSize;
+        if (*outOrientation == ThumbnailLoader::ExifOrientation::Rotate270CW ||
+                *outOrientation == ThumbnailLoader::ExifOrientation::Rotate90CW ||
+                *outOrientation == ThumbnailLoader::ExifOrientation::MirrorHorizontalAndRotate270CW ||
+                *outOrientation == ThumbnailLoader::ExifOrientation::MirrorHorizontalAndRotate90CW) {
+            preferredSizeRotated = QSize(preferredSizeRotated.height(), preferredSizeRotated.width());
+        }
+
+        Exiv2::PreviewProperties previewProp = properties.front();
+        for (const auto &preview : properties) {
+//            qDebug() << preferredSizeRotated;
+            if (preview.width_ >= preferredSizeRotated.width() || preview.height_ >= preferredSizeRotated.height()) {
+                previewProp = preview;
+                break;
+            }
+        }
+//        qDebug() << previewProp.width_ << "x" << previewProp.height_ << ":" << previewProp.extension_.c_str() << previewProp.mimeType_.c_str();
+
         Exiv2::PreviewImage previewImg = manager.getPreviewImage(previewProp);
 
         if (previewProp.mimeType_ == "image/tiff") {
@@ -133,7 +159,7 @@ QImage ThumbnailLoader::loadRawOrTiff(const QString &path, ExifOrientation *outO
     return QImage();
 }
 
-QImage ThumbnailLoader::loadJpeg(const QString &path, ExifOrientation *outOrientation) {
+QImage ThumbnailLoader::loadJpeg(const QString &path, ExifOrientation *outOrientation, QSize *outFullResolution) {
     _path = path;
 
     QFile f(path);
@@ -141,6 +167,11 @@ QImage ThumbnailLoader::loadJpeg(const QString &path, ExifOrientation *outOrient
     QByteArray file = f.readAll();
     f.close();
     QImage img = loadFullFromData((uint8_t *)file.data(), file.size());
+
+    if (outFullResolution) {
+        // TODO: Limited by ThumbnailWidthLimit for now
+        *outFullResolution = img.size();
+    }
 
     try {
         std::string strPath(path.toUtf8());
@@ -156,8 +187,12 @@ QImage ThumbnailLoader::loadJpeg(const QString &path, ExifOrientation *outOrient
     return img;
 }
 
-QImage ThumbnailLoader::loadImageOther(const QString &path, ExifOrientation *outOrientation) {
-    return QImage(path);
+QImage ThumbnailLoader::loadImageOther(const QString &path, ExifOrientation *outOrientation, QSize *outFullResolution) {
+    QImage img(path);
+    if (outFullResolution) {
+        *outFullResolution = img.size();
+    }
+    return img;
 }
 
 QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions, ExifOrientation orientation) {
@@ -307,4 +342,17 @@ ThumbnailLoader::ExifOrientation ThumbnailLoader::readOrientationFromExif(Exiv2:
         }
     }
     return orientation;
+}
+
+QSize ThumbnailLoader::readResolutionFromExif(Exiv2::Image *image) {
+    QSize size;
+    const Exiv2::ExifData &exifData = image->exifData();
+    if (!exifData.empty()) {
+        auto widthIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.PixelXDimension"));
+        auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.PixelYDimension"));
+        if (widthIt != exifData.end() && heightIt != exifData.end()) {
+            size = QSize(widthIt->toLong(), heightIt->toLong());
+        }
+    }
+    return size;
 }

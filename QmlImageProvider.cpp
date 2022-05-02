@@ -22,7 +22,7 @@ QmlImageProvider::QmlImageProvider(const QString &prefix, StandardFileListModel 
 QImage QmlImageProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize) {
 //    qDebug() << "requesting image" << id;
     if (_model) {
-        const FileListModel::MyItem *item = _model->itemForImageId(id);
+        const FileListModel::ImageFile *item = _model->itemForImageId(id);
         if (item) {
             QImage img = item->image;
             if (!img.isNull()) {

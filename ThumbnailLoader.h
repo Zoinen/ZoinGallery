@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QSize>
 
 namespace Exiv2 {
 class Image;
@@ -23,9 +24,9 @@ public:
 
     static void init();
 
-    QImage loadRawOrTiff(const QString &path, ExifOrientation *outOrientation = nullptr);
-    QImage loadJpeg(const QString &path, ExifOrientation *outOrientation = nullptr);
-    QImage loadImageOther(const QString &path, ExifOrientation *outOrientation = nullptr);
+    QImage loadRawOrTiff(const QString &path, QSize preferredSize = QSize(), ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
+    QImage loadJpeg(const QString &path, ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
+    QImage loadImageOther(const QString &path, ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
 
     QImage createThumbnail(const QImage &image, QSize dimensions, ExifOrientation orientation);
     QImage unsharpMask(QImage &image);
@@ -38,6 +39,7 @@ public:
 private:
     QImage loadFullFromData(const uint8_t *data, uint32_t size);
     ExifOrientation readOrientationFromExif(Exiv2::Image *image);
+    QSize readResolutionFromExif(Exiv2::Image *image);
 
     const int ThumbnailWidthLimit = 1024;
     const int ThumbnailHeightLimit = 1024;

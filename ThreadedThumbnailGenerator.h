@@ -18,7 +18,7 @@ public:
     void generateThumbnail(QString path, int queueId);
 
 signals:
-    void resultReady(QString path, QImage image);
+    void resultReady(QString path, QImage image, QSize fullSize);
 
 private:
      QString _path;
@@ -40,7 +40,7 @@ public:
     QAtomicInt _queueId;
 
 signals:
-    void thumbnailReady(QString path, QImage thumbnail);
+    void thumbnailReady(QString path, QImage thumbnail, QSize fullSize);
     void requestThumbnail(QString path, int queueId);
     void setThumbnailResolutionSignal(QSize dimensions, qreal dpr);
     void generationFinished();
@@ -52,7 +52,7 @@ private:
         bool isFinished;
     };
 
-    void onResultReady(QString path, QImage image);
+    void onResultReady(QString path, QImage image, QSize fullSize);
     bool requestNextThumbnail(WorkerInfo &worker);
 
     int nextPathIndex();
@@ -64,7 +64,7 @@ private:
     int _lastPathIndexIncrement;
 
     QList<WorkerInfo> _workers;
-    const int MaxThreads = 6;
+    const int MaxThreads = 1;
 
     QElapsedTimer _benchmark;
 };

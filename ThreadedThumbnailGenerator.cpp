@@ -171,15 +171,23 @@ void Worker::generateThumbnail(QString path, int queueId) {
 
     ThumbnailLoader loader;
     ThumbnailLoader::ExifOrientation orientation = ThumbnailLoader::Horizontal;
+    QSize fullSize;
     QImage thumbnail;
     if (ThumbnailLoader::isRawOrTiff(path)) {
-        thumbnail = loader.loadRawOrTiff(path, &orientation);
+        thumbnail = loader.loadRawOrTiff(path, _dimensions, &orientation, &fullSize);
     }
     else if (ThumbnailLoader::isJpeg(path)) {
-        thumbnail = loader.loadJpeg(path, &orientation);
+        thumbnail = loader.loadJpeg(path, &orientation, &fullSize);
     }
     else {
-        thumbnail = loader.loadImageOther(path, &orientation);
+        thumbnail = loader.loadImageOther(path, &orientation, &fullSize);
+    }
+
+    if (orientation == ThumbnailLoader::ExifOrientation::Rotate270CW ||
+            orientation == ThumbnailLoader::ExifOrientation::Rotate90CW ||
+            orientation == ThumbnailLoader::ExifOrientation::MirrorHorizontalAndRotate270CW ||
+            orientation == ThumbnailLoader::ExifOrientation::MirrorHorizontalAndRotate90CW) {
+        fullSize = QSize(fullSize.height(), fullSize.width());
     }
     thumbnail = loader.createThumbnail(thumbnail, _dimensions, orientation);
     thumbnail = loader.unsharpMask(thumbnail);
@@ -190,7 +198,7 @@ void Worker::generateThumbnail(QString path, int queueId) {
     }
 
     thumbnail.setDevicePixelRatio(_dpr);
-    emit resultReady(path, thumbnail);
+    emit resultReady(path, thumbnail, fullSize);
 
 //    QImage img(200, 164, QImage::Format_RGBA8888);
 
@@ -203,9 +211,9 @@ void Worker::generateThumbnail(QString path, int queueId) {
 //    QThread::sleep(10);
 }
 
-void ThreadedThumbnailGenerator::onResultReady(QString path, QImage image) {
+void ThreadedThumbnailGenerator::onResultReady(QString path, QImage image, QSize fullSize) {
 //    qDebug() << "-------- on ready" << path;
-    emit thumbnailReady(path, image);
+    emit thumbnailReady(path, image, fullSize);
     Worker *worker = static_cast<Worker*>(sender());
     for (int i = 0; i < _workers.size(); i++) {
         if (_workers[i].worker == worker) {

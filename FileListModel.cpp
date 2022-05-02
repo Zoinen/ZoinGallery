@@ -12,14 +12,20 @@ FileListModel::FileListModel(QObject *parent)
 
     _generator = new ThreadedThumbnailGenerator(this);
 
-    connect(_generator, &ThreadedThumbnailGenerator::thumbnailReady, this, [&] (const QString &path, const QImage &thumbnail) {
+    connect(_generator, &ThreadedThumbnailGenerator::thumbnailReady, this, [&] (const QString &path, const QImage &thumbnail, QSize fullSize) {
         auto it = _fileToItem.find(path);
         if (it != _fileToItem.end()) {
-            MyItem *item = it.value();
+            ImageFile *item = it.value();
             item->image = thumbnail;
             updateImageId(item);
             QModelIndex modelIndex = index(item->index, 0);
-            emit dataChanged(modelIndex, modelIndex, QVector<int>({ImageIdRole}));
+            QVector<int> roles = {ImageIdRole};
+
+            if (item->fullSize.isEmpty() && !fullSize.isEmpty()) {
+                item->fullSize = fullSize;
+                roles.append(ImageFullSizeRole);
+            }
+            emit dataChanged(modelIndex, modelIndex, roles);
         }
     });
 
@@ -36,7 +42,7 @@ QHash<int, QByteArray> FileListModel::roleNames() const {
     names[ImageRole] = "imageRole";
     names[ImageIdRole] = "imageIdRole";
     names[FolderRole] = "folderRole";
-    names[ImageResolutionRole] = "imageResolutionRole";
+    names[ImageFullSizeRole] = "imageFullSizeRole";
 
     return names;
 }
@@ -56,6 +62,15 @@ QVariant FileListModel::data(const QModelIndex &index, int role) const {
         else if (role == FolderRole) {
             return _items[index.row()]->isFolder;
         }
+        else if (role == ImageRole) {
+            return _items[index.row()]->image;
+        }
+        else if (role == ImageFullSizeRole) {
+            return _items[index.row()]->fullSize;
+        }
+        else if (role == ImageFileRole) {
+            return QVariant::fromValue(_items[index.row()]);
+        }
     }
     return QVariant();
 }
@@ -65,7 +80,10 @@ void FileListModel::prepareToClose() {
 }
 
 void FileListModel::setThumbnailResolution(QSize dimensions, qreal dpr) {
-    qDebug() << "Thumbs resolution" << dimensions << dpr;
+    if (dimensions.isEmpty()) {
+        return;
+    }
+//    qDebug() << "Thumbs resolution" << dimensions << dpr;
     _generator->setThumbnailResolution(dimensions, dpr);
 }
 
@@ -85,7 +103,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
 
     if (path == "Computer") {
         for (const auto &drive : QDir::drives()) {
-            MyItem *item = new MyItem();
+            ImageFile *item = new ImageFile();
             item->text = QDir::toNativeSeparators(drive.path());
             item->isFolder = true;
             item->index = _items.size();
@@ -100,7 +118,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
         QDir dir(_root);
         QStringList folders = dir.entryList(QDir::NoDotAndDotDot | QDir::Dirs | QDir::Hidden | QDir::System);
         for (const auto &folder : folders) {
-            MyItem *item = new MyItem();
+            ImageFile *item = new ImageFile();
             item->text = folder;
             item->isFolder = true;
             item->index = _items.size();
@@ -113,12 +131,12 @@ int FileListModel::cd(QString path, QString itemToSelect) {
 
         QStringList files = dir.entryList(QDir::NoDotAndDotDot | QDir::Files | QDir::Hidden | QDir::System);
         for (const auto &file : files) {
-            MyItem *item = new MyItem();
+            ImageFile *item = new ImageFile();
             item->text = file;
             item->isFolder = false;
 
             if (isImage(file)) {
-                updateImageId(item);
+//                updateImageId(item);
                 QString path = fullPath(file);
                 _fileToItem.insert(path, item);
                 _imagePaths.append(path);
@@ -149,7 +167,7 @@ QString FileListModel::fullPath(QString fileName) {
     return _root + "/" + fileName;
 }
 
-const FileListModel::MyItem *FileListModel::itemForImageId(QString imageId) {
+const FileListModel::ImageFile *FileListModel::itemForImageId(QString imageId) {
     auto it = _imageIdToItem.find(imageId);
     if (it != _imageIdToItem.end()) {
         return *it;
@@ -177,7 +195,7 @@ QString FileListModel::generateNewId() {
     return id;
 }
 
-void FileListModel::updateImageId(MyItem *item) {
+void FileListModel::updateImageId(ImageFile *item) {
     QString imageId = item->imageId;
     if (!imageId.isEmpty()) {
         _imageIdToItem.remove(imageId);

@@ -1,0 +1,26 @@
+import QtQuick 2.15
+import QtQuick.Controls 2.15 as T
+
+T.ScrollBar {
+    id: scroll
+    policy: T.ScrollBar.AlwaysOn
+    visible: parent.contentHeight > parent.height
+
+    implicitWidth: 15
+    hoverEnabled: true
+
+    leftPadding: 0
+    topPadding: 0
+    rightPadding: 0
+    bottomPadding: 0
+
+    contentItem: Rectangle {
+        id: contentItem
+        implicitWidth: 15
+        color: scroll.pressed ? "#676767" : "#474747"
+    }
+
+    background: Rectangle {
+        color: "#292929"
+    }
+}

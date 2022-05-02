@@ -1,6 +1,11 @@
 <RCC>
     <qresource prefix="/">
         <file>main.qml</file>
+        <file>qml/GridMode.qml</file>
+        <file>qml/MasonryMode.qml</file>
+        <file>qml/ScrollBar.qml</file>
+        <file>qml/Slider.qml</file>
+        <file>qml/Button.qml</file>
         <file>resources/ThumbnailsShadow.png</file>
         <file>resources/ThumbnailsShadow@2x.png</file>
         <file>resources/FileIcon.svg</file>

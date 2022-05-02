@@ -15,13 +15,15 @@ public:
         ImageRole = Qt::UserRole + 100,
         ImageIdRole,
         FolderRole,
-        ImageResolutionRole
+        ImageFullSizeRole,
+        ImageFileRole
     };
 
-    struct MyItem {
+    struct ImageFile {
         QString text;
         QImage image;
         QString imageId;
+        QSize fullSize;
         bool isFolder;
         int index;
     };
@@ -41,7 +43,7 @@ public:
     QString rootPath() const;
 
     QString fullPath(QString fileName);
-    const MyItem *itemForImageId(QString imageId);
+    const ImageFile *itemForImageId(QString imageId);
 
     Q_INVOKABLE void setNextRequestIndex(int index);
 
@@ -50,13 +52,13 @@ signals:
 
 private:
     QString generateNewId();
-    void updateImageId(MyItem *item);
+    void updateImageId(ImageFile *item);
     bool isImage(QString fileName);
 
     QString _root;
-    QHash<QString, MyItem *> _fileToItem;
-    QHash<QString, MyItem *> _imageIdToItem;
-    QList<MyItem *> _items;
+    QHash<QString, ImageFile *> _fileToItem;
+    QHash<QString, ImageFile *> _imageIdToItem;
+    QList<ImageFile *> _items;
     QStringList _imagePaths;
     int _lastRequestIndex;
     int _lastId;
@@ -64,5 +66,7 @@ private:
     ThreadedThumbnailGenerator *_generator;
     bool _generationFinished;
 };
+
+Q_DECLARE_METATYPE(FileListModel::ImageFile *)
 
 #endif // FILELISTMODEL_H

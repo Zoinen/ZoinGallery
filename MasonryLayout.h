@@ -2,21 +2,28 @@
 #define MASONRYLAYOUT_H
 
 #include <QQuickItem>
-
+#include <QAbstractListModel>
+#include "FileListModel.h"
 
 class BrickItem : public QQuickItem {
     Q_OBJECT
 public:
     BrickItem(QQuickItem *parent = nullptr);
 
-    void setGeometry(QRectF rect);
+    void setRowColumn(int row, int column);
+    void setGeometry(QRectF rect, bool instantMove);
+
+    int row() const;
+    int column() const;
 
     // QQuickItem interface
 protected:
-    void geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry) override;
+    void geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry); // Qt 6.3 no override;
 
 private:
     bool _isChangingGeometry;
+    int _row;
+    int _column;
 };
 
 
@@ -25,6 +32,9 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(int targetHeight READ targetHeight WRITE setTargetHeight NOTIFY targetHeightChanged)
     Q_PROPERTY(int contentY READ contentY WRITE setContentY NOTIFY contentYChanged)
     Q_PROPERTY(int contentHeight READ contentHeight NOTIFY contentHeightChanged)
+    Q_PROPERTY(QAbstractListModel *model READ model WRITE setModel NOTIFY modelChanged)
+    Q_PROPERTY(QQmlComponent *delegate MEMBER _delegate)
+    Q_PROPERTY(int currentIndex READ currentIndex WRITE setCurrentIndex NOTIFY currentIndexChanged)
 
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
@@ -38,20 +48,40 @@ public:
 
     int contentHeight() const;
 
+    QAbstractListModel *model() const;
+    void setModel(QAbstractListModel *newModel);
+
+    int currentIndex() const;
+    void setCurrentIndex(int newCurrentIndex);
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
     void contentHeightChanged();
+    void modelChanged();
+
+    void currentIndexChanged();
 
 private:
     BrickItem *createComponent();
 
     void rewrap();
     void updateProperties();
+    void setContentYInternal(int newContentY);
 
     void setContentHeight(int newContentHeight);
 
-    struct Pic {
+    void onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles = QVector<int>());
+    void onModelReset();
+
+    void pushBrickItem(BrickItem *item);
+    BrickItem *popBrickItem();
+    QSet<BrickItem *> _usedBrickItems;
+    QSet<BrickItem *> _freeBrickItems;
+
+    QAbstractListModel *_model;
+
+    struct MasonryBrick {
         QSizeF originalSize;
         QSizeF normalizedSize;
         qreal x;
@@ -59,14 +89,22 @@ private:
         int row;
         int column;
         BrickItem *item;
+        FileListModel::ImageFile *image;
 
-        Pic(int width, int height) : originalSize(QSize(width, height)), x(0), y(0), row(0), column(0), item(nullptr) {
-        }
+        MasonryBrick(int width, int height);
+        MasonryBrick(FileListModel::ImageFile *image_, QSizeF originalSize_);
+        QRectF viewGeometry(int contentY) const;
     };
-    QList<Pic> _pics;
+    QList<MasonryBrick> _bricks;
+    int _visibleStart;
+    int _visibleEnd;
+    int _topItem;
+
     int _targetHeight;
     int _contentY;
     int _contentHeight;
+    QQmlComponent *_delegate;
+    int _currentIndex;
 };
 
 #endif // MASONRYLAYOUT_H

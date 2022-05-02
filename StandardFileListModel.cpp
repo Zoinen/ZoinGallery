@@ -21,7 +21,7 @@ StandardFileListModel::StandardFileListModel(QObject *parent)
 
     _generator = new ThreadedThumbnailGenerator(this);
 
-    connect(_generator, &ThreadedThumbnailGenerator::thumbnailReady, this, [&] (const QString &path, const QImage &thumbnail) {
+    connect(_generator, &ThreadedThumbnailGenerator::thumbnailReady, this, [&] (const QString &path, const QImage &thumbnail, QSize fullSize) {
         auto it = _fileToItem.find(path);
         if (it != _fileToItem.end()) {
             QStandardItem *item = it.value();

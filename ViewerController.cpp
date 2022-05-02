@@ -5,6 +5,7 @@
 #include "StandardFileListModel.h"
 #include "QmlImageProvider.h"
 #include "QmlResourcesProvider.h"
+#include "GridFlow/GridFlow.hpp"
 
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -39,7 +40,11 @@ void ViewerController::setThumbnailResolution(QSize dimensions, qreal dpr) {
 
 void ViewerController::doCd() {
     //    _fileListModel->cd("C:\\Users\\xs\\Documents\\____");
-    QString path = "C:\\";
+//    QString path = "C:\\Users\\xs\\Documents\\____\\new";
+    QString path = "B:\\_Photos\\[2022.01.29] Irina's DR in Gosti";
+//    QString path = "B:\\_Photos\\"; //[2021.12.29] New Year in Rostum\\pro\\1"; //"P:\\RAED";
+//    QString path = "P:\\[Year 2015]\\[2015.03.14] Sputnik";
+//    QString path = "C:\\";
     _currentPath = path;
     emit currentPathChanged();
 

@@ -5,7 +5,6 @@
 
 class QQmlEngine;
 class FileListModel;
-class StandardFileListModel;
 
 class ViewerController : public QObject {
     Q_OBJECT
@@ -25,7 +24,6 @@ signals:
 
 private:
     FileListModel *_fileListModel;
-    StandardFileListModel *_standardFileListModel;
 
     QString _currentPath;
 };

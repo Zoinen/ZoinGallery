@@ -1,8 +1,5 @@
 #include "QmlResourcesProvider.h"
 
-#include "FileListModel.h"
-#include "StandardFileListModel.h"
-
 #include <QPainter>
 
 QmlResourcesProvider::QmlResourcesProvider(const QString &prefix)

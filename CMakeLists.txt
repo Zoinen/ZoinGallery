@@ -47,12 +47,9 @@ set(PROJECT_SOURCES
     main.cpp
     ThumbnailLoader.cpp
     FileListModel.cpp
-    StandardFileListModel.cpp
     QmlImageProvider.cpp
-    BatchThumbnailGenerator.cpp
     ViewerController.cpp
     ThreadedThumbnailGenerator.cpp
-    ThreadPoolThumbnailGenerator.cpp
     Unsharp/Unsharp.cpp
     Unsharp/Utilities.h
     QmlResourcesProvider.cpp

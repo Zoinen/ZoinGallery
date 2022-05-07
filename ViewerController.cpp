@@ -2,10 +2,8 @@
 
 #include "ThumbnailLoader.h"
 #include "FileListModel.h"
-#include "StandardFileListModel.h"
 #include "QmlImageProvider.h"
 #include "QmlResourcesProvider.h"
-#include "GridFlow/GridFlow.hpp"
 
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -15,18 +13,13 @@ ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
     ThumbnailLoader::init();
     _fileListModel = nullptr;
-    _standardFileListModel = nullptr;
 
     engine->rootContext()->setContextProperty("viewerController", this);
 
     _fileListModel = new FileListModel(engine);
     engine->rootContext()->setContextProperty("fileListModel", _fileListModel);
 
-//    _standardFileListModel = new StandardFileListModel(engine);
-//    engine->rootContext()->setContextProperty("fileListModel", _standardFileListModel);
-
     QmlImageProvider *imageProvider = new QmlImageProvider("thumbnails", _fileListModel);
-//    QmlImageProvider *imageProvider = new QmlImageProvider("thumbnails", _standardFileListModel);
     engine->addImageProvider("thumbnails", imageProvider);
 
     QmlResourcesProvider *resourcesProvider = new QmlResourcesProvider("resources");

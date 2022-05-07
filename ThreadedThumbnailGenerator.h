@@ -18,7 +18,7 @@ public:
     void generateThumbnail(QString path, int queueId);
 
 signals:
-    void resultReady(QString path, QImage image, QSize fullSize);
+    void resultReady(const QString &path, const QImage &image, QSize fullSize);
 
 private:
      QString _path;
@@ -52,7 +52,7 @@ private:
         bool isFinished;
     };
 
-    void onResultReady(QString path, QImage image, QSize fullSize);
+    void onResultReady(const QString &path, const QImage &image, QSize fullSize);
     bool requestNextThumbnail(WorkerInfo &worker);
 
     int nextPathIndex();

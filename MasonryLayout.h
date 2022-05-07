@@ -12,6 +12,7 @@ public:
 
     void setRowColumn(int row, int column);
     void setGeometry(QRectF rect, bool instantMove);
+    QRectF geometry() const;
 
     int row() const;
     int column() const;
@@ -93,12 +94,13 @@ private:
 
         MasonryBrick(int width, int height);
         MasonryBrick(FileListModel::ImageFile *image_, QSizeF originalSize_);
-        QRectF viewGeometry(int contentY) const;
+        QRectF viewGeometry() const;
     };
     QList<MasonryBrick> _bricks;
     int _visibleStart;
     int _visibleEnd;
     int _topItem;
+    QQuickItem *_viewport;
 
     int _targetHeight;
     int _contentY;

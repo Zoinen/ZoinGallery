@@ -1,9 +1,11 @@
-import QtQuick 2.15
-import QtQuick.Window 2.15
-import QtQuick.Layouts 1.15
-//import QtQuick.Controls.Basic
-import QtQuick.Controls 2.15 as T
-//import QtGraphicalEffects 1.15
+//import QtQuick 2.15
+//import QtQuick.Window 2.15
+//import QtQuick.Layouts 1.15
+//import QtQuick.Controls 2.15 as T
+import QtQuick
+import QtQuick.Window
+import QtQuick.Layouts
+import QtQuick.Controls.Basic as T
 
 import "qml"
 

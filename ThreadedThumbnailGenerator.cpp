@@ -211,7 +211,7 @@ void Worker::generateThumbnail(QString path, int queueId) {
 //    QThread::sleep(10);
 }
 
-void ThreadedThumbnailGenerator::onResultReady(QString path, QImage image, QSize fullSize) {
+void ThreadedThumbnailGenerator::onResultReady(const QString &path, const QImage &image, QSize fullSize) {
 //    qDebug() << "-------- on ready" << path;
     emit thumbnailReady(path, image, fullSize);
     Worker *worker = static_cast<Worker*>(sender());

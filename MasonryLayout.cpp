@@ -25,6 +25,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _model = nullptr;
     _delegate = nullptr;
     _currentIndex = 0;
+    _viewport = nullptr;
 }
 
 void MasonryLayout::componentComplete() {
@@ -45,6 +46,25 @@ void MasonryLayout::componentComplete() {
 }
 
 BrickItem *MasonryLayout::createComponent() {
+    if (!_viewport) {
+        QQmlComponent component(qmlEngine(this));
+        component.setData(R"QML(
+        import QtQuick 2.15
+
+        Item {
+//            anchors.left: parent.left
+//            anchors.right: parent.right
+        }
+        )QML", QUrl());
+        if (component.status() != QQmlComponent::Ready) {
+            qDebug() << "Error in component:" << component.status() << component.errors();
+        }
+
+        _viewport = qobject_cast<QQuickItem*>(component.create(QQmlEngine::contextForObject(this)));
+        _viewport->setParentItem(this);
+        _viewport->setParent(this);
+    }
+
     if (!_delegate) {
         qDebug() << "Empty delegate";
     }
@@ -54,8 +74,8 @@ BrickItem *MasonryLayout::createComponent() {
     }
 
     BrickItem *object = qobject_cast<BrickItem*>(_delegate->create(QQmlEngine::contextForObject(this)));
-    object->setParentItem(this);
-    object->setParent(this);
+    object->setParentItem(_viewport);
+    object->setParent(_viewport);
     return object;
 }
 
@@ -68,8 +88,8 @@ void MasonryLayout::rewrap() {
     qreal lastX = 0;
     qreal lastY = 0;
 
-    int newContentY = _contentY;
-    int contentYOffset = 0;
+    qreal newContentY = _contentY;
+    qreal contentYOffset = 0;
     if (_topItem != -1 && _topItem < _bricks.size()) {
         contentYOffset = _contentY - _bricks[_topItem].y;
 //        qDebug() << "offset" << _topItem << contentYOffset << _contentY << _bricks[_topItem].y;
@@ -152,9 +172,9 @@ void MasonryLayout::updateProperties() {
 //    qDebug() << "update props";
     int newVisibleStart = -1;
     int newVisibleEnd = -1;
-    QRectF boundingRect_ = boundingRect().adjusted(0, -_targetHeight*2, 0, _targetHeight*2);
+    QRectF boundingRect_ = boundingRect().adjusted(0, -_targetHeight*2 + _contentY, 0, _targetHeight*2 + _contentY);
     for (int i = 0; i < _bricks.size(); i++) {
-        if (_bricks[i].viewGeometry(_contentY).intersects(boundingRect_)) {
+        if (_bricks[i].viewGeometry().intersects(boundingRect_)) {
             if (newVisibleStart == -1) {
                 newVisibleStart = i;
             }
@@ -198,15 +218,24 @@ void MasonryLayout::updateProperties() {
                     QQmlProperty(_bricks[i].item, "singleMoveAnimationEnabled").write(true);
                 }
             }
-            _bricks[i].item->setGeometry(_bricks[i].viewGeometry(_contentY), false);
+
+            if (_bricks[i].item->geometry() != _bricks[i].viewGeometry()) {
+                _bricks[i].item->setGeometry(_bricks[i].viewGeometry(), false);
+//                qDebug() << "GG change" << _bricks[i].viewGeometry();
+            }
             _bricks[i].item->setVisible(true);
 //            QQmlProperty(_pics[i].item, "text").write(QString("%1 [%2,%3]\n%4").arg(i).arg(_pics[i].row).arg(_pics[i].column).arg(rectToString(_pics[i].viewGeometry(_contentY))));
+//            if (_bricks[i].item->property("text").toString() != _bricks[i].image->text) {
+//                QQmlProperty(_bricks[i].item, "text").write(_bricks[i].image->text);
+////                QQmlProperty(_bricks[i].item, "text").write(QString("%1x%2").arg(_bricks[i].row).arg(_bricks[i].column));
+//            }
             if (_bricks[i].item->property("text").toString() != _bricks[i].image->text) {
-                QQmlProperty(_bricks[i].item, "text").write(_bricks[i].image->text);
+                _bricks[i].item->setProperty("text", _bricks[i].image->text);
 //                QQmlProperty(_bricks[i].item, "text").write(QString("%1x%2").arg(_bricks[i].row).arg(_bricks[i].column));
             }
             if (_bricks[i].item->property("index").toInt() != i) {
-                QQmlProperty(_bricks[i].item, "index").write(i);
+                _bricks[i].item->setProperty("index", i);
+//                QQmlProperty(_bricks[i].item, "index").write(i);
             }
 
             QString imageId;
@@ -217,7 +246,8 @@ void MasonryLayout::updateProperties() {
                 imageId = QString("image://thumbnails/") + _bricks[i].image->imageId;
             }
             if (_bricks[i].item->property("imageId").toString() != imageId) {
-                QQmlProperty(_bricks[i].item, "imageId").write(imageId);
+                _bricks[i].item->setProperty("imageId", imageId);
+//                QQmlProperty(_bricks[i].item, "imageId").write(imageId);
             }
         }
     }
@@ -233,6 +263,9 @@ void MasonryLayout::setContentHeight(int newContentHeight) {
         return;
     }
     _contentHeight = newContentHeight;
+    if (_viewport) {
+        _viewport->setHeight(_contentHeight);
+    }
     emit contentHeightChanged();
 }
 
@@ -322,7 +355,7 @@ int MasonryLayout::contentY() const {
 void MasonryLayout::setContentY(int newContentY) {
     setContentYInternal(newContentY);
     for (_topItem = _visibleStart; _topItem < _visibleEnd && _topItem < _bricks.size(); _topItem++) {
-        if (_bricks[_topItem].viewGeometry(_contentY).y() >= 0) {
+        if (_bricks[_topItem].viewGeometry().y() >= 0) {
             break;
         }
     }
@@ -334,7 +367,6 @@ void MasonryLayout::setContentY(int newContentY) {
 void MasonryLayout::setContentYInternal(int newContentY) {
     static int depth = 0;
     depth++;
-//    qDebug() << "set content y" << newContentY;
     if (_contentY == newContentY || depth > 1) {
 //        qDebug() << "skip";
         depth--;
@@ -342,6 +374,10 @@ void MasonryLayout::setContentYInternal(int newContentY) {
     }
 //    qDebug() << "contentY" << _contentY << "->" << newContentY;
     _contentY = newContentY;
+    if (_viewport) {
+        _viewport->setY(-_contentY);
+    }
+
     updateProperties();
     emit contentYChanged();
     depth--;
@@ -401,6 +437,10 @@ void BrickItem::setGeometry(QRectF rect, bool instantMove) {
     }
 }
 
+QRectF BrickItem::geometry() const {
+    return QRectF(x(), y(), width(), height());
+}
+
 int BrickItem::row() const {
     return _row;
 }
@@ -412,7 +452,9 @@ int BrickItem::column() const {
 void BrickItem::geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry) {
     if (!_isChangingGeometry) {
         // Qt 6.3 this got broken
+#if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
         QQuickItem::geometryChanged(newGeometry, oldGeometry);
+#endif
     }
 }
 
@@ -424,8 +466,8 @@ MasonryLayout::MasonryBrick::MasonryBrick(FileListModel::ImageFile *image_, QSiz
     : originalSize(originalSize_), x(0), y(0), row(0), column(0), item(nullptr), image(image_) {
 }
 
-QRectF MasonryLayout::MasonryBrick::viewGeometry(int contentY) const {
-    return QRectF(QPointF(x, y - contentY), normalizedSize);
+QRectF MasonryLayout::MasonryBrick::viewGeometry() const {
+    return QRectF(QPointF(x, y), normalizedSize);
 }
 
 QAbstractListModel *MasonryLayout::model() const {

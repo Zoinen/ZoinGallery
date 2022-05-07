@@ -1,6 +1,10 @@
-import QtQuick 2.15
-import QtQuick.Layouts 1.15
-import QtQuick.Controls 2.15 as T
+//import QtQuick 2.15
+//import QtQuick.Layouts 1.15
+//import QtQuick.Controls 2.15 as T
+import QtQuick
+import QtQuick.Layouts
+import QtQuick.Controls.Basic as T
+
 import ZoinGallery 1.0
 
 Item {

@@ -1,6 +1,9 @@
-import QtQuick 2.15
-import QtQuick.Layouts 1.15
-import QtQuick.Controls 2.15 as T
+//import QtQuick 2.15
+//import QtQuick.Layouts 1.15
+//import QtQuick.Controls 2.15 as T
+import QtQuick
+import QtQuick.Layouts
+import QtQuick.Controls.Basic as T
 
 import ZoinGallery 1.0
 
@@ -33,12 +36,12 @@ Item {
         model: fileListModel
 
         Component.onCompleted: {
-            viewerController.setThumbnailResolution(Qt.size(width * dpr, targetHeight * dpr), dpr)
+            viewerController.setThumbnailResolution(Qt.size(width, targetHeight), dpr)
             console.log("NEW render size", width, targetHeight, dpr)
         }
 
         onTargetHeightChanged: {
-            viewerController.setThumbnailResolution(Qt.size(width * dpr, targetHeight * dpr), dpr)
+            viewerController.setThumbnailResolution(Qt.size(width, targetHeight), dpr)
             console.log("NEW render size", width, targetHeight, dpr)
         }
 
@@ -58,11 +61,12 @@ Item {
 
                 Image {
                     id: image
-                    width: parent.width - 4
-                    height: parent.height - 4
+//                    width: parent.width - 4
+//                    height: parent.height - 4
                     x: 2
                     y: 2
                     fillMode: Image.PreserveAspectCrop
+                    asynchronous: true
                 }
 
                 Rectangle {
@@ -136,9 +140,9 @@ Item {
             anchors.fill: parent
             acceptedButtons: Qt.NoButton
             onWheel: (wheel) => {
-                         let deltaCell = wheel.angleDelta.y / 120
+                         let deltaCell = wheel.angleDelta.y/* / 120*/
 
-                         deltaCell *= masonryLayout.targetHeight
+//                         deltaCell *= masonryLayout.targetHeight
                          var newContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY) - deltaCell
                          newContentY = Math.max(0, Math.min(masonryLayout.contentHeight - masonryLayout.height, newContentY))
                          scrollAnimation2.from = masonryLayout.contentY

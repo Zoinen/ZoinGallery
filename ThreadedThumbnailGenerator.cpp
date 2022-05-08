@@ -1,5 +1,6 @@
 #include "ThreadedThumbnailGenerator.h"
 #include "ThumbnailLoader.h"
+#include "ImageFile.h"
 
 #include <QThread>
 #include <QThreadPool>
@@ -18,8 +19,6 @@ ThreadedThumbnailGenerator::ThreadedThumbnailGenerator(QObject *parent)
         info.worker->moveToThread(info.thread);
         connect(info.worker, &Worker::resultReady,
                 this, &ThreadedThumbnailGenerator::onResultReady);
-        connect(this, &ThreadedThumbnailGenerator::setThumbnailResolutionSignal,
-                info.worker, &Worker::setThumbnailResolution);
         _workers.append(info);
 
         info.thread->start();
@@ -33,16 +32,11 @@ void ThreadedThumbnailGenerator::prepareToClose() {
     }
 }
 
-void ThreadedThumbnailGenerator::generate(QStringList paths) {
+void ThreadedThumbnailGenerator::setRequestQueue(QList<ThumbnailRequest> requests) {
     _benchmark.start();
-    _paths = paths;
-    _pathsRequested.clear();
-    _pathsRequested.resize(_paths.size());
-    for (int i = 0; i < _pathsRequested.size(); i++) {
-        _pathsRequested[i] = false;
-    }
-    _lastPathIndex = -1;
-    _lastPathIndexIncrement = 1;
+    _requests = requests;
+    _lastRequestIndex = -1;
+    _lastRequestIndexIncrement = 1;
     _queueId.fetchAndAddOrdered(1);
     for (int i = 0; i < _workers.size(); i++) {
         requestNextThumbnail(_workers[i]);
@@ -50,43 +44,52 @@ void ThreadedThumbnailGenerator::generate(QStringList paths) {
     //    qDebug() << "FIRST QUEUE DONE ----------------------------";
 }
 
+void ThreadedThumbnailGenerator::addRequestQueue(QList<ThumbnailRequest> requests) {
+    int lastQueueSize = _requests.size() - 1;
+    _requests.append(requests);
+    if (_lastRequestIndex == -2) {
+        _lastRequestIndex = lastQueueSize;
+        for (int i = 0; i < _workers.size(); i++) {
+            if (_workers[i].isFinished) {
+                requestNextThumbnail(_workers[i]);
+            }
+        }
+    }
+}
+
 void ThreadedThumbnailGenerator::setNextRequestImage(QString path, bool isForward) {
-    for (int i = 0; i < _paths.size(); i++) {
-        if (_paths[i] == path) {
-            _lastPathIndex = i - 1;
-            qDebug() << "next:" << path << _lastPathIndex << isForward;
-            _lastPathIndexIncrement = (isForward ? 1 : -1);
+    for (int i = 0; i < _requests.size(); i++) {
+        if (_requests[i].sourcePath == path) {
+            _lastRequestIndex = i - 1;
+            qDebug() << "next:" << path << _lastRequestIndex << isForward;
+            _lastRequestIndexIncrement = (isForward ? 1 : -1);
             break;
         }
     }
 }
 
-void ThreadedThumbnailGenerator::setThumbnailResolution(QSize dimensions, qreal dpr) {
-    emit setThumbnailResolutionSignal(dimensions, dpr);
-}
-
 bool ThreadedThumbnailGenerator::requestNextThumbnail(WorkerInfo &worker) {
 //    qDebug() << "lpi" << _lastPathIndex << _lastPathIndexIncrement;
-    if (_lastPathIndex == -2) {
+    if (_lastRequestIndex == -2) {
         return false;
     }
 
-    if (_lastPathIndex > -1) {
-        if (_lastPathIndexIncrement == 1) {
+    if (_lastRequestIndex > -1) {
+        if (_lastRequestIndexIncrement == 1) {
             int next = nextPathIndex();
             if (next == -1) {
                 int prev = prevPathIndex();
                 if (prev == -1) {
-                    _lastPathIndex = -2;
+                    _lastRequestIndex = -2;
 //                    qDebug() << "hard stop forward";
                     return false;
                 }
                 else {
-                    _lastPathIndex = prev;
+                    _lastRequestIndex = prev;
                 }
             }
             else {
-                _lastPathIndex = next;
+                _lastRequestIndex = next;
             }
         }
         else {
@@ -94,36 +97,36 @@ bool ThreadedThumbnailGenerator::requestNextThumbnail(WorkerInfo &worker) {
             if (prev == -1) {
                 int next = nextPathIndex();
                 if (next == -1) {
-                    _lastPathIndex = -2;
+                    _lastRequestIndex = -2;
                     qDebug() << "hard stop backward";
                     return false;
                 }
                 else {
-                    _lastPathIndex = next;
+                    _lastRequestIndex = next;
                 }
             }
             else {
-                _lastPathIndex = prev;
+                _lastRequestIndex = prev;
             }
         }
     }
     else {
-        if (_paths.size() > 0) {
-            _lastPathIndex = 0;
+        if (_requests.size() > 0) {
+            _lastRequestIndex = 0;
 //            qDebug() << "zero" << _paths.size();
         }
         else {
-            _lastPathIndex = -2;
+            _lastRequestIndex = -2;
             return false;
         }
     }
 
-    if (_lastPathIndex >= 0 && _lastPathIndex < _paths.size()) {
+    if (_lastRequestIndex >= 0 && _lastRequestIndex < _requests.size()) {
         QMetaObject::Connection connection = connect(this, &ThreadedThumbnailGenerator::requestThumbnail,
                                            worker.worker, &Worker::generateThumbnail);
-        _pathsRequested[_lastPathIndex] = true;
+        _requests[_lastRequestIndex].requested = true;
         worker.isFinished = false;
-        emit requestThumbnail(_paths.at(_lastPathIndex), _queueId.loadAcquire());
+        emit requestThumbnail(_requests.at(_lastRequestIndex), _queueId.loadAcquire());
         disconnect(connection);
     }
     else {
@@ -133,9 +136,9 @@ bool ThreadedThumbnailGenerator::requestNextThumbnail(WorkerInfo &worker) {
 }
 
 int ThreadedThumbnailGenerator::nextPathIndex() {
-    int i = _lastPathIndex;
-    for (; i < _paths.size(); i++) {
-        if (!_pathsRequested[i]) {
+    int i = _lastRequestIndex;
+    for (; i < _requests.size(); i++) {
+        if (!_requests[i].requested) {
             return i;
         }
     }
@@ -143,9 +146,9 @@ int ThreadedThumbnailGenerator::nextPathIndex() {
 }
 
 int ThreadedThumbnailGenerator::prevPathIndex() {
-    int i = _lastPathIndex;
+    int i = _lastRequestIndex;
     for (; i >= 0; i--) {
-        if (!_pathsRequested[i]) {
+        if (!_requests[i].requested) {
             return i;
         }
     }
@@ -154,16 +157,10 @@ int ThreadedThumbnailGenerator::prevPathIndex() {
 
 Worker::Worker(ThreadedThumbnailGenerator *generator) {
     _generator = generator;
-    _dpr = 1;
 }
 
-void Worker::setThumbnailResolution(QSize dimensions, qreal dpr) {
-    _dimensions = dimensions;
-    _dpr = dpr;
-}
-
-void Worker::generateThumbnail(QString path, int queueId) {
-    _path = path;
+void Worker::generateThumbnail(ThumbnailRequest request, int queueId) {
+    _request = request;
 
     if (queueId != _generator->_queueId.loadRelaxed()) {
         return;
@@ -173,14 +170,14 @@ void Worker::generateThumbnail(QString path, int queueId) {
     ThumbnailLoader::ExifOrientation orientation = ThumbnailLoader::Horizontal;
     QSize fullSize;
     QImage thumbnail;
-    if (ThumbnailLoader::isRawOrTiff(path)) {
-        thumbnail = loader.loadRawOrTiff(path, _dimensions, &orientation, &fullSize);
+    if (ThumbnailLoader::isRawOrTiff(request.sourcePath) || ThumbnailLoader::isJpeg(request.sourcePath)) {
+        thumbnail = loader.loadRawOrTiff(request.sourcePath, request.targetSize, &orientation, &fullSize);
     }
-    else if (ThumbnailLoader::isJpeg(path)) {
-        thumbnail = loader.loadJpeg(path, &orientation, &fullSize);
-    }
+//    else if (ThumbnailLoader::isJpeg(path)) {
+//        thumbnail = loader.loadJpeg(path, _dimensions, &orientation, &fullSize);
+//    }
     else {
-        thumbnail = loader.loadImageOther(path, &orientation, &fullSize);
+        thumbnail = loader.loadImageOther(request.sourcePath, &orientation, &fullSize);
     }
 
     if (orientation == ThumbnailLoader::ExifOrientation::Rotate270CW ||
@@ -189,16 +186,18 @@ void Worker::generateThumbnail(QString path, int queueId) {
             orientation == ThumbnailLoader::ExifOrientation::MirrorHorizontalAndRotate90CW) {
         fullSize = QSize(fullSize.height(), fullSize.width());
     }
-    thumbnail = loader.createThumbnail(thumbnail, _dimensions, orientation);
-    thumbnail = loader.unsharpMask(thumbnail);
+    if (!request.targetSize.isEmpty()) {
+        thumbnail = loader.createThumbnail(thumbnail, request.targetSize, orientation);
+        thumbnail = loader.unsharpMask(thumbnail);
+    }
     thumbnail = loader.rotateAndFlip(thumbnail, orientation);
 
     if (queueId != _generator->_queueId.loadRelaxed()) {
         return;
     }
 
-    thumbnail.setDevicePixelRatio(_dpr);
-    emit resultReady(path, thumbnail, fullSize);
+//    thumbnail.setDevicePixelRatio(_dpr);
+    emit resultReady(request.sourcePath, thumbnail, fullSize);
 
 //    QImage img(200, 164, QImage::Format_RGBA8888);
 

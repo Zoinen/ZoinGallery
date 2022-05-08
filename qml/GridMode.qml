@@ -32,14 +32,14 @@ Item {
         secondChangeNotify = !secondChangeNotify
         if (secondChangeNotify && thumbnailWidth > 0 && thumbnailHeight > 0) {
             console.log("set thumbs size", thumbnailWidth, thumbnailHeight, secondChangeNotify)
-            viewerController.setThumbnailResolution(Qt.size(gridRoot.thumbnailWidth, gridRoot.thumbnailHeight), dpr)
+//            viewerController.setThumbnailResolution(Qt.size(gridRoot.thumbnailWidth, gridRoot.thumbnailHeight), dpr)
         }
     }
     onThumbnailHeightChanged: {
         secondChangeNotify = !secondChangeNotify
         if (secondChangeNotify && thumbnailWidth > 0 && thumbnailHeight > 0) {
             console.log("set thumbs size", thumbnailWidth, thumbnailHeight, secondChangeNotify)
-            viewerController.setThumbnailResolution(Qt.size(gridRoot.thumbnailWidth, gridRoot.thumbnailHeight), dpr)
+//            viewerController.setThumbnailResolution(Qt.size(gridRoot.thumbnailWidth, gridRoot.thumbnailHeight), dpr)
         }
     }
 

@@ -4,6 +4,8 @@
 #include <QStandardItemModel>
 #include <QHash>
 
+#include "ImageFile.h"
+
 class ThreadedThumbnailGenerator;
 
 class FileListModel : public QAbstractListModel {
@@ -19,15 +21,6 @@ public:
         ImageFileRole
     };
 
-    struct ImageFile {
-        QString text;
-        QImage image;
-        QString imageId;
-        QSize fullSize;
-        bool isFolder;
-        int index;
-    };
-
     FileListModel(QObject *parent = nullptr);
 
     QHash<int, QByteArray> roleNames() const override;
@@ -37,7 +30,6 @@ public:
 
     void prepareToClose();
 
-    void setThumbnailResolution(QSize dimensions, qreal dpr);
     int cd(QString path, QString itemToSelect = QString());
     void updateThumbnails();
     QString rootPath() const;
@@ -46,6 +38,9 @@ public:
     const ImageFile *itemForImageId(QString imageId);
 
     Q_INVOKABLE void setNextRequestIndex(int index);
+
+public slots:
+    void requestThumbnails(QList<ThumbnailRequest> requests);
 
 signals:
     void generationFinishedChanged();
@@ -66,7 +61,5 @@ private:
     ThreadedThumbnailGenerator *_generator;
     bool _generationFinished;
 };
-
-Q_DECLARE_METATYPE(FileListModel::ImageFile *)
 
 #endif // FILELISTMODEL_H

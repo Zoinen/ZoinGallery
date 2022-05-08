@@ -26,11 +26,6 @@ ViewerController::ViewerController(QQmlEngine *engine)
     engine->addImageProvider("resources", resourcesProvider);
 }
 
-void ViewerController::setThumbnailResolution(QSize dimensions, qreal dpr) {
-    _fileListModel->setThumbnailResolution(dimensions * dpr, dpr);
-    _fileListModel->updateThumbnails();
-}
-
 void ViewerController::doCd() {
     //    _fileListModel->cd("C:\\Users\\xs\\Documents\\____");
 //    QString path = "C:\\Users\\xs\\Documents\\____\\new";

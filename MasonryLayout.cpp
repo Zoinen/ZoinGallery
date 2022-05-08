@@ -1,10 +1,9 @@
 #include "MasonryLayout.h"
+#include "FileListModel.h"
 
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQmlProperty>
-
-#include "FileListModel.h"
 
 static void registerMyQmlTypes() {
     qmlRegisterType<MasonryLayout>("ZoinGallery", 1, 0, "MasonryLayout");
@@ -16,7 +15,7 @@ Q_COREAPP_STARTUP_FUNCTION(registerMyQmlTypes)
 
 MasonryLayout::MasonryLayout(QQuickItem *parent)
     : QQuickItem(parent) {
-    _targetHeight = 100;
+    _targetHeight = 200; //100;
     _visibleStart = -1;
     _visibleEnd = -1;
     _topItem = 10;//-1;
@@ -229,8 +228,8 @@ void MasonryLayout::updateProperties() {
 //                QQmlProperty(_bricks[i].item, "text").write(_bricks[i].image->text);
 ////                QQmlProperty(_bricks[i].item, "text").write(QString("%1x%2").arg(_bricks[i].row).arg(_bricks[i].column));
 //            }
-            if (_bricks[i].item->property("text").toString() != _bricks[i].image->text) {
-                _bricks[i].item->setProperty("text", _bricks[i].image->text);
+            if (_bricks[i].item->property("text").toString() != _bricks[i].image->path) {
+                _bricks[i].item->setProperty("text", _bricks[i].image->path);
 //                QQmlProperty(_bricks[i].item, "text").write(QString("%1x%2").arg(_bricks[i].row).arg(_bricks[i].column));
             }
             if (_bricks[i].item->property("index").toInt() != i) {
@@ -279,6 +278,17 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             if (!qFuzzyCompare(oldAspect, newAspect)) {
                 // Todo: rewrap only from the current row
                 rewrap();
+                if ((index < _bricks.size() - 2 && _bricks[index + 1].row != _bricks[index].row) || index == _bricks.size() - 1) {
+                    qDebug() << "Row completed" << index;
+                    QList<ThumbnailRequest> requests;
+                    for (int i = index; i >= 0; i--) {
+                        if (_bricks[i].row != _bricks[index].row) {
+                            break;
+                        }
+                        requests.prepend(ThumbnailRequest(_bricks[i].image->path, _bricks[i].normalizedSize.toSize()));
+                    }
+                    emit requestThumbnails(requests);
+                }
                 updateProperties();
                 //                _bricks[index].item->setGeometry(_bricks[index].viewGeometry(_contentY));
                 //                QQmlProperty(_bricks[index].item, "imageId").write(QString("image://thumbnails/") + _bricks[index].image->imageId);
@@ -306,7 +316,7 @@ void MasonryLayout::onModelReset() {
 
     _bricks.clear();
     for (int i = 0; i < _model->rowCount(); i++) {
-        FileListModel::ImageFile *imageFile = _model->data(_model->index(i), FileListModel::ImageFileRole).value<FileListModel::ImageFile *>();
+        ImageFile *imageFile = _model->data(_model->index(i), FileListModel::ImageFileRole).value<ImageFile *>();
         QSize imgSize = imageFile->fullSize;
         if (imgSize.isEmpty()) {
             imgSize = QSize(3, 2);
@@ -315,6 +325,9 @@ void MasonryLayout::onModelReset() {
     }
     emit modelChanged();
     rewrap();
+    if (_viewport) {
+        _viewport->setY(-_contentY);
+    }
 }
 
 void MasonryLayout::pushBrickItem(BrickItem *item) {
@@ -462,7 +475,7 @@ MasonryLayout::MasonryBrick::MasonryBrick(int width, int height)
     : originalSize(QSize(width, height)), x(0), y(0), row(0), column(0), item(nullptr), image(nullptr) {
 }
 
-MasonryLayout::MasonryBrick::MasonryBrick(FileListModel::ImageFile *image_, QSizeF originalSize_)
+MasonryLayout::MasonryBrick::MasonryBrick(ImageFile *image_, QSizeF originalSize_)
     : originalSize(originalSize_), x(0), y(0), row(0), column(0), item(nullptr), image(image_) {
 }
 
@@ -480,12 +493,16 @@ void MasonryLayout::setModel(QAbstractListModel *newModel) {
                    this, &MasonryLayout::onDataChanged);
         disconnect(_model, &QAbstractListModel::modelReset,
                    this, &MasonryLayout::onModelReset);
+        disconnect(this, SIGNAL(requestThumbnails(QList<ThumbnailRequest>)),
+                   _model, SLOT(requestThumbnails(QList<ThumbnailRequest>)));
     }
     _model = newModel;
     connect(_model, &QAbstractListModel::dataChanged,
             this, &MasonryLayout::onDataChanged);
     connect(_model, &QAbstractListModel::modelReset,
             this, &MasonryLayout::onModelReset);
+    connect(this, SIGNAL(requestThumbnails(QList<ThumbnailRequest>)),
+            _model, SLOT(requestThumbnails(QList<ThumbnailRequest>)));
 
     onModelReset();
 }

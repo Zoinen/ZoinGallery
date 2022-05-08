@@ -6,6 +6,7 @@
 class QQmlEngine;
 class FileListModel;
 
+
 class ViewerController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString currentPath MEMBER _currentPath NOTIFY currentPathChanged)
@@ -13,7 +14,6 @@ class ViewerController : public QObject {
 public:
     ViewerController(QQmlEngine *engine);
 
-    Q_INVOKABLE void setThumbnailResolution(QSize dimensions, qreal dpr);
     Q_INVOKABLE void doCd();
     Q_INVOKABLE void cd(QString folder);
     Q_INVOKABLE int up();

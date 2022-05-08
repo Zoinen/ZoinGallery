@@ -79,6 +79,14 @@ QImage ThumbnailLoader::loadRawOrTiff(const QString &path, QSize preferredSize, 
         Exiv2::PreviewManager manager(*image);
         Exiv2::PreviewPropertiesList properties = manager.getPreviewProperties();
         if (!properties.size()) {
+            if (isJpeg(path)) {
+                QFile f(path);
+                f.open(QFile::ReadOnly);
+                QByteArray file = f.readAll();
+                f.close();
+                return loadJpegFromData((uint8_t *)file.data(), file.size());
+            }
+
             return QImage();
         }
 
@@ -103,14 +111,15 @@ QImage ThumbnailLoader::loadRawOrTiff(const QString &path, QSize preferredSize, 
         }
 
         Exiv2::PreviewProperties previewProp = properties.front();
-        for (const auto &preview : properties) {
-//            qDebug() << preferredSizeRotated;
-            if (preview.width_ >= preferredSizeRotated.width() || preview.height_ >= preferredSizeRotated.height()) {
-                previewProp = preview;
-                break;
+        if (!preferredSize.isEmpty()) {
+            for (const auto &preview : properties) {
+                if (preview.width_ >= preferredSizeRotated.width() || preview.height_ >= preferredSizeRotated.height()) {
+                    previewProp = preview;
+                    break;
+                }
+                qDebug() << preview.width_ << "x" << preview.height_ << ":" << preview.extension_.c_str() << preview.mimeType_.c_str();
             }
         }
-//        qDebug() << previewProp.width_ << "x" << previewProp.height_ << ":" << previewProp.extension_.c_str() << previewProp.mimeType_.c_str();
 
         Exiv2::PreviewImage previewImg = manager.getPreviewImage(previewProp);
 
@@ -146,7 +155,7 @@ QImage ThumbnailLoader::loadRawOrTiff(const QString &path, QSize preferredSize, 
             }
         }
         else if (previewProp.mimeType_ == "image/jpeg") {
-            QImage img = loadFullFromData(previewImg.pData(), previewImg.size());
+            QImage img = loadJpegFromData(previewImg.pData(), previewImg.size());
             return img;
         }
         else {
@@ -159,14 +168,14 @@ QImage ThumbnailLoader::loadRawOrTiff(const QString &path, QSize preferredSize, 
     return QImage();
 }
 
-QImage ThumbnailLoader::loadJpeg(const QString &path, ExifOrientation *outOrientation, QSize *outFullResolution) {
+QImage ThumbnailLoader::loadJpeg(const QString &path, QSize preferredSize, ExifOrientation *outOrientation, QSize *outFullResolution) {
     _path = path;
 
     QFile f(path);
     f.open(QFile::ReadOnly);
     QByteArray file = f.readAll();
     f.close();
-    QImage img = loadFullFromData((uint8_t *)file.data(), file.size());
+    QImage img = loadJpegFromData((uint8_t *)file.data(), file.size());
 
     if (outFullResolution) {
         // TODO: Limited by ThumbnailWidthLimit for now
@@ -275,7 +284,7 @@ bool ThumbnailLoader::isImageOther(const QString &path) {
     return false;
 }
 
-QImage ThumbnailLoader::loadFullFromData(const uint8_t *data, uint32_t size) {
+QImage ThumbnailLoader::loadJpegFromData(const uint8_t *data, uint32_t size) {
     const int COLOR_COMPONENTS = 3;
 
     long unsigned int _jpegSize = size;

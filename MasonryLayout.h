@@ -3,7 +3,7 @@
 
 #include <QQuickItem>
 #include <QAbstractListModel>
-#include "FileListModel.h"
+#include "ImageFile.h"
 
 class BrickItem : public QQuickItem {
     Q_OBJECT
@@ -63,6 +63,8 @@ signals:
 
     void currentIndexChanged();
 
+    void requestThumbnails(QList<ThumbnailRequest> requests);
+
 private:
     BrickItem *createComponent();
 
@@ -89,11 +91,12 @@ private:
         qreal y;
         int row;
         int column;
+        bool lastInRow;
         BrickItem *item;
-        FileListModel::ImageFile *image;
+        ImageFile *image;
 
         MasonryBrick(int width, int height);
-        MasonryBrick(FileListModel::ImageFile *image_, QSizeF originalSize_);
+        MasonryBrick(ImageFile *image_, QSizeF originalSize_);
         QRectF viewGeometry() const;
     };
     QList<MasonryBrick> _bricks;

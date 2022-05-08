@@ -36,13 +36,13 @@ Item {
         model: fileListModel
 
         Component.onCompleted: {
-            viewerController.setThumbnailResolution(Qt.size(width, targetHeight), dpr)
-            console.log("NEW render size", width, targetHeight, dpr)
+//            viewerController.setThumbnailResolution(Qt.size(width, targetHeight), dpr)
+//            console.log("NEW render size", width, targetHeight, dpr)
         }
 
         onTargetHeightChanged: {
-            viewerController.setThumbnailResolution(Qt.size(width, targetHeight), dpr)
-            console.log("NEW render size", width, targetHeight, dpr)
+//            viewerController.setThumbnailResolution(Qt.size(width, targetHeight), dpr)
+//            console.log("NEW render size", width, targetHeight, dpr)
         }
 
         delegate: BrickItem {
@@ -61,8 +61,8 @@ Item {
 
                 Image {
                     id: image
-//                    width: parent.width - 4
-//                    height: parent.height - 4
+                    width: parent.width - 4
+                    height: parent.height - 4
                     x: 2
                     y: 2
                     fillMode: Image.PreserveAspectCrop
@@ -154,7 +154,7 @@ Item {
                 id: scrollAnimation2
                 target: masonryLayout
                 property: "contentY"
-                duration: 250
+                duration: 200
                 easing.type: Easing.OutSine
             }
         }

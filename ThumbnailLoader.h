@@ -25,7 +25,7 @@ public:
     static void init();
 
     QImage loadRawOrTiff(const QString &path, QSize preferredSize = QSize(), ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
-    QImage loadJpeg(const QString &path, ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
+    QImage loadJpeg(const QString &path, QSize preferredSize = QSize(), ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
     QImage loadImageOther(const QString &path, ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
 
     QImage createThumbnail(const QImage &image, QSize dimensions, ExifOrientation orientation);
@@ -37,7 +37,7 @@ public:
     static bool isImageOther(const QString &path);
 
 private:
-    QImage loadFullFromData(const uint8_t *data, uint32_t size);
+    QImage loadJpegFromData(const uint8_t *data, uint32_t size);
     ExifOrientation readOrientationFromExif(Exiv2::Image *image);
     QSize readResolutionFromExif(Exiv2::Image *image);
 

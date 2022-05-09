@@ -113,11 +113,11 @@ QImage ThumbnailLoader::loadRawOrTiff(const QString &path, QSize preferredSize, 
         Exiv2::PreviewProperties previewProp = properties.front();
         if (!preferredSize.isEmpty()) {
             for (const auto &preview : properties) {
+//                qDebug() << preview.width_ << "x" << preview.height_ << ":" << preview.extension_.c_str() << preview.mimeType_.c_str();
                 if (preview.width_ >= preferredSizeRotated.width() || preview.height_ >= preferredSizeRotated.height()) {
                     previewProp = preview;
                     break;
                 }
-                qDebug() << preview.width_ << "x" << preview.height_ << ":" << preview.extension_.c_str() << preview.mimeType_.c_str();
             }
         }
 
@@ -208,7 +208,7 @@ QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions, E
     if (orientation == ExifOrientation::Rotate90CW || orientation == ExifOrientation::Rotate270CW) {
         dimensions = QSize(dimensions.height(), dimensions.width());
     }
-    dimensions = image.size().scaled(dimensions, Qt::KeepAspectRatio);
+    //dimensions = image.size().scaled(dimensions, Qt::KeepAspectRatio);
 
     return image.scaled(dimensions, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 }

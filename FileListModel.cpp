@@ -185,7 +185,7 @@ void FileListModel::setNextRequestIndex(int index_) {
 }
 
 void FileListModel::requestThumbnails(QList<ThumbnailRequest> requests) {
-    qDebug() << "Add to queue" << requests.size();
+//    qDebug() << "Add to queue" << requests.size();
     for (int i = 0; i < requests.size(); i++) {
         requests[i].sourcePath = fullPath(requests[i].sourcePath);
     }

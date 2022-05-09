@@ -98,6 +98,7 @@ private:
         MasonryBrick(int width, int height);
         MasonryBrick(ImageFile *image_, QSizeF originalSize_);
         QRectF viewGeometry() const;
+        QSizeF thumbnailSize() const;
     };
     QList<MasonryBrick> _bricks;
     int _visibleStart;

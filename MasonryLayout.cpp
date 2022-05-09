@@ -4,6 +4,7 @@
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQmlProperty>
+#include <QQuickWindow>
 
 static void registerMyQmlTypes() {
     qmlRegisterType<MasonryLayout>("ZoinGallery", 1, 0, "MasonryLayout");
@@ -278,14 +279,20 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             if (!qFuzzyCompare(oldAspect, newAspect)) {
                 // Todo: rewrap only from the current row
                 rewrap();
-                if ((index < _bricks.size() - 2 && _bricks[index + 1].row != _bricks[index].row) || index == _bricks.size() - 1) {
-                    qDebug() << "Row completed" << index;
+                if ((index > 0 && _bricks[index - 1].row != _bricks[index].row) || index == _bricks.size() - 1) {
+//                    qDebug() << "Row completed" << index - 1 << (_bricks[index - 1].thumbnailSize() * window()->devicePixelRatio()).toSize();
                     QList<ThumbnailRequest> requests;
-                    for (int i = index; i >= 0; i--) {
-                        if (_bricks[i].row != _bricks[index].row) {
+                    int startIndex = index - 1;
+                    if (index == _bricks.size() - 1) {
+                        startIndex = index;
+                    }
+                    for (int i = startIndex; i >= 0; i--) {
+                        if (_bricks[i].row != _bricks[index - 1].row && i != _bricks.size() - 1) {
                             break;
                         }
-                        requests.prepend(ThumbnailRequest(_bricks[i].image->path, _bricks[i].normalizedSize.toSize()));
+                        QSize thumbnailSize = (_bricks[i].thumbnailSize() * window()->devicePixelRatio()).toSize();
+                        qDebug() << "Requesting" << index << _bricks[i].image->path << thumbnailSize;
+                        requests.prepend(ThumbnailRequest(_bricks[i].image->path, thumbnailSize));
                     }
                     emit requestThumbnails(requests);
                 }
@@ -411,6 +418,9 @@ void BrickItem::setRowColumn(int row, int column) {
 }
 
 void BrickItem::setGeometry(QRectF rect, bool instantMove) {
+    // Rounding to floor
+    rect = QRect(rect.x(), rect.y(), rect.width(), rect.height());
+
     if (!isVisible() || instantMove) {
         QRectF oldGeometry(x(), y(), width(), height());
         _isChangingGeometry = true;
@@ -481,6 +491,10 @@ MasonryLayout::MasonryBrick::MasonryBrick(ImageFile *image_, QSizeF originalSize
 
 QRectF MasonryLayout::MasonryBrick::viewGeometry() const {
     return QRectF(QPointF(x, y), normalizedSize);
+}
+
+QSizeF MasonryLayout::MasonryBrick::thumbnailSize() const {
+    return normalizedSize.toSize() - QSizeF(4, 4);
 }
 
 QAbstractListModel *MasonryLayout::model() const {

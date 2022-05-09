@@ -44,7 +44,19 @@ void ThreadedThumbnailGenerator::setRequestQueue(QList<ThumbnailRequest> request
     //    qDebug() << "FIRST QUEUE DONE ----------------------------";
 }
 
+template <class T>
+void insertList(QList<T> &listDst, int pos, const QList<T> &listSrc) {
+    listDst.insert(pos, listSrc.size(), T());
+    for (int i = 0; i < listSrc.size(); i++) {
+        listDst[pos + i] = listSrc[i];
+    }
+}
+
 void ThreadedThumbnailGenerator::addRequestQueue(QList<ThumbnailRequest> requests) {
+    if (_lastRequestIndex != -2) {
+        insertList(_requests, _lastRequestIndex, requests);
+    }
+
     int lastQueueSize = _requests.size() - 1;
     _requests.append(requests);
     if (_lastRequestIndex == -2) {
@@ -199,6 +211,9 @@ void Worker::generateThumbnail(ThumbnailRequest request, int queueId) {
 //    thumbnail.setDevicePixelRatio(_dpr);
     emit resultReady(request.sourcePath, thumbnail, fullSize);
 
+//    if (!request.targetSize.isEmpty()) {
+//        thumbnail.save(QString("C:\\Temp\\%1.png").arg(QFileInfo(request.sourcePath).fileName()));
+//    }
 //    QImage img(200, 164, QImage::Format_RGBA8888);
 
 //    QImage img(2000, 2000, QImage::Format_RGBA8888);

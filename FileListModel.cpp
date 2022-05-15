@@ -137,17 +137,18 @@ int FileListModel::cd(QString path, QString itemToSelect) {
             item->index = _items.size();
             _items.append(item);
         }
-        updateThumbnails();
     }
     endResetModel();
     return indexToSelect;
 }
 
-void FileListModel::updateThumbnails() {
-    QList<ThumbnailRequest> requests;
+void FileListModel::requestThumbnails(QSize preferredSize) {
+    qDebug() << "Request thumbnails" << preferredSize;
+
+    QList<ThumbnailReadRequest> requests;
     requests.reserve(_imagePaths.size());
     for (const QString &path : _imagePaths) {
-        requests.append(ThumbnailRequest(path));
+        requests.append(ThumbnailReadRequest(path, preferredSize));
     }
     _generator->setRequestQueue(requests);
     _generationFinished = false;
@@ -184,15 +185,15 @@ void FileListModel::setNextRequestIndex(int index_) {
     }
 }
 
-void FileListModel::requestThumbnails(QList<ThumbnailRequest> requests) {
-//    qDebug() << "Add to queue" << requests.size();
-    for (int i = 0; i < requests.size(); i++) {
-        requests[i].sourcePath = fullPath(requests[i].sourcePath);
-    }
-    _generator->addRequestQueue(requests);
-    _generationFinished = false;
-    emit generationFinishedChanged();
-}
+//void FileListModel::addRequestThumbnails(QList<ThumbnailReadRequest> requests) {
+////    qDebug() << "Add to queue" << requests.size();
+//    for (int i = 0; i < requests.size(); i++) {
+//        requests[i].sourcePath = fullPath(requests[i].sourcePath);
+//    }
+//    _generator->addRequestQueue(requests);
+//    _generationFinished = false;
+//    emit generationFinishedChanged();
+//}
 
 QString FileListModel::generateNewId() {
     QString id = QString::number(_lastId);

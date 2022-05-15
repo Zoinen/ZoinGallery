@@ -31,7 +31,7 @@ public:
     void prepareToClose();
 
     int cd(QString path, QString itemToSelect = QString());
-    void updateThumbnails();
+    void requestThumbnails(QSize preferredSize);
     QString rootPath() const;
 
     QString fullPath(QString fileName);
@@ -39,8 +39,8 @@ public:
 
     Q_INVOKABLE void setNextRequestIndex(int index);
 
-public slots:
-    void requestThumbnails(QList<ThumbnailRequest> requests);
+//public slots:
+//    void addRequestThumbnails(QList<ThumbnailReadRequest> requests);
 
 signals:
     void generationFinishedChanged();

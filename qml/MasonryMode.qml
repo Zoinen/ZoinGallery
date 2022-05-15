@@ -17,6 +17,7 @@ Item {
 
     property bool keyHeld: false
     property alias targetHeight: masonryLayout.targetHeight
+    property alias currentIndex: masonryLayout.currentIndex
 
 //    visible: topLevelWindow.masonryViewMode
 
@@ -34,6 +35,11 @@ Item {
         }
         clip: true
         model: fileListModel
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#2d2d2d"
+        }
 
         Component.onCompleted: {
 //            viewerController.setThumbnailResolution(Qt.size(width, targetHeight), dpr)
@@ -56,8 +62,20 @@ Item {
 
             Rectangle {
                 anchors.fill: parent
-                color: "transparent"
-                border.color: masonryLayout.currentIndex === index ? "yellow" : "transparent"
+//                color: "#fff"
+//                color: "transparent"
+                border.width: 2
+                border.color: masonryLayout.currentIndex === index ? "#2980b9" : "#202020"
+
+                Rectangle {
+                    width: parent.width - 2
+                    height: parent.height - 2
+                    x: 1
+                    y: 1
+//                    visible: image.source == ""
+                    color: "#202020"
+                    border.color: masonryLayout.currentIndex === index ? "#2980b9" : "#000"
+                }
 
                 Image {
                     id: image
@@ -66,16 +84,7 @@ Item {
                     x: 2
                     y: 2
                     fillMode: Image.PreserveAspectCrop
-                    asynchronous: true
-                }
-
-                Rectangle {
-                    width: parent.width - 4
-                    height: parent.height - 4
-                    x: 2
-                    y: 2
-                    visible: image.source == ""
-                    color: "#202020"
+//                    asynchronous: true
                 }
 
                 Rectangle {
@@ -98,6 +107,16 @@ Item {
                         color: "#d1d1d1"
                     }
                 }
+
+                Text {
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 5
+
+                    color: "#d1d1d1"
+                    text: index
+                }
+
             }
 
             MouseArea {

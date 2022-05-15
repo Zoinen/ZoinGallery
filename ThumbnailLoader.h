@@ -5,26 +5,18 @@
 #include <QString>
 #include <QSize>
 
+#include "ImageFile.h"
+
 namespace Exiv2 {
 class Image;
 }
 
 class ThumbnailLoader {
 public:
-    enum ExifOrientation {
-        Horizontal = 1,
-        MirrorHorizontal = 2,
-        Rotate180 = 3,
-        MirrorVertical = 4,
-        MirrorHorizontalAndRotate270CW = 5,
-        Rotate90CW = 6,
-        MirrorHorizontalAndRotate90CW = 7,
-        Rotate270CW = 8
-    };
-
     static void init();
 
-    QImage loadRawOrTiff(const QString &path, QSize preferredSize = QSize(), ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
+    bool readExifPreview(const QString &path, QSize preferredSize, ThumbnailReadResult &outResult);
+    QImage decodeImage(const QByteArray &data, const QString &mimeType);
     QImage loadJpeg(const QString &path, QSize preferredSize = QSize(), ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
     QImage loadImageOther(const QString &path, ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
 
@@ -32,6 +24,7 @@ public:
     QImage unsharpMask(QImage &image);
     QImage rotateAndFlip(const QImage &image, ExifOrientation orientation);
 
+    static bool isExifCompatible(const QString &path);
     static bool isJpeg(const QString &path);
     static bool isRawOrTiff(const QString &path);
     static bool isImageOther(const QString &path);

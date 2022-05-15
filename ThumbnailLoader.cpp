@@ -9,6 +9,7 @@
 
 #include <exiv2/exiv2.hpp>
 #include <exiv2/preview.hpp>
+#include "exiv2/Preview.h"
 #include <iostream>
 #include <iomanip>
 #include <cassert>
@@ -64,106 +65,96 @@ struct imemstream: virtual membuf, std::istream {
     }
 };
 
-QImage ThumbnailLoader::loadRawOrTiff(const QString &path, QSize preferredSize, ExifOrientation *outOrientation, QSize *outFullResolution) {
+bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, ThumbnailReadResult &outResult) {
     _path = path;
 
+    outResult.request.sourcePath = path;
+
+    QFile f(path);
+    if (!f.open(QFile::ReadOnly)) {
+        return false;
+    }
+    uchar *mappedFile = f.map(0, f.size());
+    if (!mappedFile) {
+        f.unmap(mappedFile);
+        return false;
+    }
+
     try {
-        std::string strPath(path.toUtf8());
-        Exiv2::Image::AutoPtr image = Exiv2::ImageFactory::open(strPath);
+        Exiv2::Image::AutoPtr image = Exiv2::ImageFactory::open(mappedFile, f.size());
+
         assert(image.get() != 0);
         image->readMetadata();
-        if (outOrientation) {
-            *outOrientation = readOrientationFromExif(image.get());
-        }
+        outResult.orientation = readOrientationFromExif(image.get());
+        outResult.fullSize = readResolutionFromExif(image.get());
 
-        Exiv2::PreviewManager manager(*image);
-        Exiv2::PreviewPropertiesList properties = manager.getPreviewProperties();
-        if (!properties.size()) {
-            if (isJpeg(path)) {
-                QFile f(path);
-                f.open(QFile::ReadOnly);
-                QByteArray file = f.readAll();
-                f.close();
-                return loadJpegFromData((uint8_t *)file.data(), file.size());
-            }
-
-            return QImage();
-        }
-
-        QSize fullResolution = readResolutionFromExif(image.get());
-        if (fullResolution.isEmpty()) {
-            for (const auto &preview : properties) {
-                if (int(preview.width_) > fullResolution.width() && int(preview.height_) > fullResolution.height()) {
-                    fullResolution = QSize(preview.width_, preview.height_);
-                }
-            }
-        }
-        if (outFullResolution) {
-            *outFullResolution = fullResolution;
-        }
+        qDebug() << "Read exif preview" << path << outResult.request.targetSize << outResult.fullSize;
 
         QSize preferredSizeRotated = preferredSize;
-        if (*outOrientation == ThumbnailLoader::ExifOrientation::Rotate270CW ||
-                *outOrientation == ThumbnailLoader::ExifOrientation::Rotate90CW ||
-                *outOrientation == ThumbnailLoader::ExifOrientation::MirrorHorizontalAndRotate270CW ||
-                *outOrientation == ThumbnailLoader::ExifOrientation::MirrorHorizontalAndRotate90CW) {
+        if (outResult.orientation == ExifOrientation::Rotate270CW ||
+                outResult.orientation == ExifOrientation::Rotate90CW ||
+                outResult.orientation == ExifOrientation::MirrorHorizontalAndRotate270CW ||
+                outResult.orientation == ExifOrientation::MirrorHorizontalAndRotate90CW) {
             preferredSizeRotated = QSize(preferredSizeRotated.height(), preferredSizeRotated.width());
         }
 
-        Exiv2::PreviewProperties previewProp = properties.front();
-        if (!preferredSize.isEmpty()) {
-            for (const auto &preview : properties) {
-//                qDebug() << preview.width_ << "x" << preview.height_ << ":" << preview.extension_.c_str() << preview.mimeType_.c_str();
-                if (preview.width_ >= preferredSizeRotated.width() || preview.height_ >= preferredSizeRotated.height()) {
-                    previewProp = preview;
-                    break;
-                }
-            }
+        Exiv2::PreviewProperties previewProp;
+        Exiv2::DataBuf previewImg = Exiv2Preview::preview(*image.get(), preferredSizeRotated.width(), preferredSizeRotated.height(), &previewProp);
+        if (previewImg.pData_) {
+            outResult.data = QByteArray::fromRawData(reinterpret_cast<char *>(previewImg.pData_), previewImg.size_);
+            outResult.mimeType = QString::fromStdString(previewProp.mimeType_);
         }
-
-        Exiv2::PreviewImage previewImg = manager.getPreviewImage(previewProp);
-
-        if (previewProp.mimeType_ == "image/tiff") {
-            imemstream memStream(previewImg.pData(), previewImg.size());
-
-            std::istringstream input_TIFF_stream;
-
-            TIFF* tif = TIFFStreamOpen("MemTIFF", &memStream);
-
-            if (tif) {
-                uint32_t w, h;
-                size_t npixels;
-
-                TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
-                TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
-                npixels = w * h;
-                uint32_t *tiffRaster = (uint32_t*) _TIFFmalloc(npixels * sizeof(uint32_t));
-                if (tiffRaster != NULL) {
-                    if (TIFFReadRGBAImageOriented(tif, w, h, tiffRaster, ORIENTATION_TOPLEFT, 0)) {
-                        TIFFClose(tif);
-
-                        QImage img((uchar *)tiffRaster, w, h, QImage::Format_RGBA8888,
-                                   [] (void *ptr) { if (ptr) _TIFFfree(ptr); }, tiffRaster);
-                        return img;
-                    }
-                    else {
-                        _TIFFfree(tiffRaster);
-                        tiffRaster = nullptr;
-                    }
-                }
-                TIFFClose(tif);
-            }
-        }
-        else if (previewProp.mimeType_ == "image/jpeg") {
-            QImage img = loadJpegFromData(previewImg.pData(), previewImg.size());
-            return img;
-        }
-        else {
-            qDebug() << "Unsupportes preview" << previewProp.extension_.c_str() << previewProp.mimeType_.c_str();
-        }
+        previewImg.release();
+        f.unmap(mappedFile);
+        return true;
     } catch (Exiv2::AnyError& e) {
         std::cout << "Caught Exiv2 exception '" << e << "'" << std::endl;
-        return QImage();
+        f.unmap(mappedFile);
+        return false;
+    }
+    f.unmap(mappedFile);
+    return false;
+}
+
+QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeType) {
+    if (mimeType == "image/tiff") {
+        imemstream memStream(reinterpret_cast<const uint8_t *>(data.constData()), data.size());
+
+        std::istringstream input_TIFF_stream;
+
+        TIFF* tif = TIFFStreamOpen("MemTIFF", &memStream);
+
+        if (tif) {
+            uint32_t w, h;
+            size_t npixels;
+
+            TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
+            TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
+            npixels = w * h;
+            uint32_t *tiffRaster = (uint32_t*) _TIFFmalloc(npixels * sizeof(uint32_t));
+            if (tiffRaster != NULL) {
+                if (TIFFReadRGBAImageOriented(tif, w, h, tiffRaster, ORIENTATION_TOPLEFT, 0)) {
+                    TIFFClose(tif);
+
+                    QImage img((uchar *)tiffRaster, w, h, QImage::Format_RGBA8888,
+                               [] (void *ptr) { if (ptr) _TIFFfree(ptr); }, tiffRaster);
+                    return img;
+                }
+                else {
+                    _TIFFfree(tiffRaster);
+                    tiffRaster = nullptr;
+                }
+            }
+            TIFFClose(tif);
+        }
+    }
+    else if (mimeType == "image/jpeg") {
+        QImage img = loadJpegFromData(reinterpret_cast<const uint8_t *>(data.constData()), data.size());
+        return img;
+    }
+    else {
+        //thumbnail = loader.loadImageOther(request.sourcePath, &orientation, &fullSize);
+        qDebug() << "Could not decode image";
     }
     return QImage();
 }
@@ -254,6 +245,10 @@ QImage ThumbnailLoader::rotateAndFlip(const QImage &image, ExifOrientation orien
     return image;
 }
 
+bool ThumbnailLoader::isExifCompatible(const QString &path) {
+    return isRawOrTiff(path) || isJpeg(path);
+}
+
 bool ThumbnailLoader::isJpeg(const QString &path) {
     QStringList extensions = {"jpg", "jpeg", "jpe", "jfif"};
     for (const QString &ext : extensions) {
@@ -341,7 +336,7 @@ QImage ThumbnailLoader::loadJpegFromData(const uint8_t *data, uint32_t size) {
 
 }
 
-ThumbnailLoader::ExifOrientation ThumbnailLoader::readOrientationFromExif(Exiv2::Image *image) {
+ExifOrientation ThumbnailLoader::readOrientationFromExif(Exiv2::Image *image) {
     ExifOrientation orientation = Horizontal;
     const Exiv2::ExifData &exifData = image->exifData();
     if (!exifData.empty()) {
@@ -361,6 +356,19 @@ QSize ThumbnailLoader::readResolutionFromExif(Exiv2::Image *image) {
         auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.PixelYDimension"));
         if (widthIt != exifData.end() && heightIt != exifData.end()) {
             size = QSize(widthIt->toLong(), heightIt->toLong());
+        }
+        else {
+            auto sizeIt = exifData.findKey(Exiv2::ExifKey("Exif.SubImage1.DefaultCropSize"));
+            if (sizeIt != exifData.end() && sizeIt->count() == 2) {
+                size = QSize(sizeIt->toLong(0), sizeIt->toLong(1));
+            }
+            else {
+                auto widthIt = exifData.findKey(Exiv2::ExifKey("Exif.Image.ImageWidth"));
+                auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.Image.ImageLength"));
+                if (widthIt != exifData.end() && heightIt != exifData.end()) {
+                    size = QSize(widthIt->toLong(), heightIt->toLong());
+                }
+            }
         }
     }
     return size;

@@ -20,6 +20,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _visibleStart = -1;
     _visibleEnd = -1;
     _topItem = 10;//-1;
+    _topItemOffset = 0;
     setCurrentIndex(_topItem);
     _contentY = 0;
     _model = nullptr;
@@ -92,7 +93,7 @@ void MasonryLayout::rewrap() {
     qreal contentYOffset = 0;
     if (_topItem != -1 && _topItem < _bricks.size()) {
         contentYOffset = _contentY - _bricks[_topItem].y;
-//        qDebug() << "offset" << _topItem << contentYOffset << _contentY << _bricks[_topItem].y;
+        //qDebug() << "offset" << _topItem << contentYOffset << _contentY << _bricks[_topItem].y;
     }
 
     int rowTargetWidth = targetWidth;
@@ -105,7 +106,7 @@ void MasonryLayout::rewrap() {
         _bricks[i].y = lastY;
 
         if (_topItem == i) {
-            newContentY = lastY + contentYOffset;
+            newContentY = lastY - _topItemOffset;
         }
 
         if (lastX + _bricks[i].normalizedSize.width() < rowTargetWidth) {
@@ -279,22 +280,9 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             if (!qFuzzyCompare(oldAspect, newAspect)) {
                 // Todo: rewrap only from the current row
                 rewrap();
-                if ((index > 0 && _bricks[index - 1].row != _bricks[index].row) || index == _bricks.size() - 1) {
-//                    qDebug() << "Row completed" << index - 1 << (_bricks[index - 1].thumbnailSize() * window()->devicePixelRatio()).toSize();
-                    QList<ThumbnailRequest> requests;
-                    int startIndex = index - 1;
-                    if (index == _bricks.size() - 1) {
-                        startIndex = index;
-                    }
-                    for (int i = startIndex; i >= 0; i--) {
-                        if (_bricks[i].row != _bricks[index - 1].row && i != _bricks.size() - 1) {
-                            break;
-                        }
-                        QSize thumbnailSize = (_bricks[i].thumbnailSize() * window()->devicePixelRatio()).toSize();
-                        qDebug() << "Requesting" << index << _bricks[i].image->path << thumbnailSize;
-                        requests.prepend(ThumbnailRequest(_bricks[i].image->path, thumbnailSize));
-                    }
-                    emit requestThumbnails(requests);
+                QRect viewport = QRect(0, _contentY, width(), height());
+                if (_bricks[index].y > viewport.bottom() || index == _bricks.size() - 1) {
+                    onViewportChanged();
                 }
                 updateProperties();
                 //                _bricks[index].item->setGeometry(_bricks[index].viewGeometry(_contentY));
@@ -334,6 +322,27 @@ void MasonryLayout::onModelReset() {
     rewrap();
     if (_viewport) {
         _viewport->setY(-_contentY);
+    }
+
+    static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
+}
+
+void MasonryLayout::onViewportChanged() {
+    return;
+    QRect viewport = QRect(0, _contentY, width(), height());
+    if (_lastViewportGeometry.isEmpty() || viewport != _lastViewportGeometry) {
+        _lastViewportGeometry = viewport;
+
+        QList<ThumbnailReadRequest> requests;
+        for (int i = _topItem; i < _bricks.size(); i++) {
+            if (!viewport.contains(QPoint(0, _bricks[i].y))) {
+                break;
+            }
+            QSize thumbnailSize = (_bricks[i].thumbnailSize() * window()->devicePixelRatio()).toSize();
+//            qDebug() << "Requesting" << i << _bricks[i].image->path << thumbnailSize;
+            requests.append(ThumbnailReadRequest(_bricks[i].image->path, thumbnailSize));
+        }
+//        emit requestThumbnails(requests);
     }
 }
 
@@ -375,13 +384,13 @@ int MasonryLayout::contentY() const {
 void MasonryLayout::setContentY(int newContentY) {
     setContentYInternal(newContentY);
     for (_topItem = _visibleStart; _topItem < _visibleEnd && _topItem < _bricks.size(); _topItem++) {
-        if (_bricks[_topItem].viewGeometry().y() >= 0) {
+        if (_bricks[_topItem].y >= _contentY) {
             break;
         }
     }
+    _topItemOffset = _bricks[_topItem].y - _contentY;
 //    _topItem = _visibleStart;
-    setCurrentIndex(_topItem);
-//    qDebug() << "top is" << _topItem;
+//    setCurrentIndex(_topItem);
 }
 
 void MasonryLayout::setContentYInternal(int newContentY) {
@@ -421,7 +430,7 @@ void BrickItem::setGeometry(QRectF rect, bool instantMove) {
     // Rounding to floor
     rect = QRect(rect.x(), rect.y(), rect.width(), rect.height());
 
-    if (!isVisible() || instantMove) {
+    if (!isVisible() || instantMove || 1) {
         QRectF oldGeometry(x(), y(), width(), height());
         _isChangingGeometry = true;
 
@@ -507,16 +516,12 @@ void MasonryLayout::setModel(QAbstractListModel *newModel) {
                    this, &MasonryLayout::onDataChanged);
         disconnect(_model, &QAbstractListModel::modelReset,
                    this, &MasonryLayout::onModelReset);
-        disconnect(this, SIGNAL(requestThumbnails(QList<ThumbnailRequest>)),
-                   _model, SLOT(requestThumbnails(QList<ThumbnailRequest>)));
     }
     _model = newModel;
     connect(_model, &QAbstractListModel::dataChanged,
             this, &MasonryLayout::onDataChanged);
     connect(_model, &QAbstractListModel::modelReset,
             this, &MasonryLayout::onModelReset);
-    connect(this, SIGNAL(requestThumbnails(QList<ThumbnailRequest>)),
-            _model, SLOT(requestThumbnails(QList<ThumbnailRequest>)));
 
     onModelReset();
 }

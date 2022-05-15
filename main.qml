@@ -11,8 +11,8 @@ import "qml"
 
 Window {
     id: topLevelWindow
-    width: 640
-    height: 480
+    width: 1640
+    height: 980
     visible: true
     color: "#333333"
     title: qsTr("Zoin Gallery")
@@ -43,9 +43,14 @@ Window {
                 text: "Up"
 
                 onReleased: {
-                    gridView.highlightMoveDuration = 0
-                    gridView.currentIndex = viewerController.up()
-                    gridView.highlightMoveDuration = 150
+                    if (!topLevelWindow.masonryViewMode) {
+                        gridView.highlightMoveDuration = 0
+                        gridView.currentIndex = viewerController.up()
+                        gridView.highlightMoveDuration = 150
+                    }
+                    else {
+                        masonryLayout.currentIndex = viewerController.up()
+                    }
                 }
             }
 

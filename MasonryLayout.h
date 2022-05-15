@@ -63,8 +63,6 @@ signals:
 
     void currentIndexChanged();
 
-    void requestThumbnails(QList<ThumbnailRequest> requests);
-
 private:
     BrickItem *createComponent();
 
@@ -76,6 +74,7 @@ private:
 
     void onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles = QVector<int>());
     void onModelReset();
+    void onViewportChanged();
 
     void pushBrickItem(BrickItem *item);
     BrickItem *popBrickItem();
@@ -104,11 +103,13 @@ private:
     int _visibleStart;
     int _visibleEnd;
     int _topItem;
+    int _topItemOffset;
     QQuickItem *_viewport;
 
     int _targetHeight;
     int _contentY;
     int _contentHeight;
+    QRect _lastViewportGeometry;
     QQmlComponent *_delegate;
     int _currentIndex;
 };

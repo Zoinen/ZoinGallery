@@ -20,7 +20,7 @@ public:
     QImage loadJpeg(const QString &path, QSize preferredSize = QSize(), ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
     QImage loadImageOther(const QString &path, ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
 
-    QImage createThumbnail(const QImage &image, QSize dimensions, ExifOrientation orientation);
+    QImage createThumbnail(const QImage &image, QSize dimensions);
     QImage unsharpMask(QImage &image);
     QImage rotateAndFlip(const QImage &image, ExifOrientation orientation);
 

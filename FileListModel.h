@@ -39,8 +39,7 @@ public:
 
     Q_INVOKABLE void setNextRequestIndex(int index);
 
-//public slots:
-//    void addRequestThumbnails(QList<ThumbnailReadRequest> requests);
+    void addRequestThumbnails(QList<ThumbnailReadRequest> requests);
 
 signals:
     void generationFinishedChanged();

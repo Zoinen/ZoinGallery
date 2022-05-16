@@ -274,26 +274,40 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
     int index = topLeft.row();
     if (index < _bricks.size()) {
         if (roles.contains(FileListModel::ImageIdRole)) {
-            qreal oldAspect = _bricks[index].originalSize.width() / _bricks[index].originalSize.height();
-            qreal newAspect = _bricks[index].image->fullSize.width() / qreal(_bricks[index].image->fullSize.height());
-
-            if (!qFuzzyCompare(oldAspect, newAspect)) {
-                // Todo: rewrap only from the current row
-                rewrap();
-                QRect viewport = QRect(0, _contentY, width(), height());
-                if (_bricks[index].y > viewport.bottom() || index == _bricks.size() - 1) {
-                    onViewportChanged();
-                }
-                updateProperties();
-                //                _bricks[index].item->setGeometry(_bricks[index].viewGeometry(_contentY));
-                //                QQmlProperty(_bricks[index].item, "imageId").write(QString("image://thumbnails/") + _bricks[index].image->imageId);
-            }
-            else {
-                QQmlProperty(_bricks[index].item, "imageId").write(QString("image://thumbnails/") + _bricks[index].image->imageId);
-            }
+            QQmlProperty(_bricks[index].item, "imageId").write(QString("image://thumbnails/") + _bricks[index].image->imageId);
         }
         if (roles.contains(FileListModel::ImageFullSizeRole)) {
+//            qreal oldAspect = _bricks[index].originalSize.width() / _bricks[index].originalSize.height();
+//            qreal newAspect = _bricks[index].image->fullSize.width() / qreal(_bricks[index].image->fullSize.height());
+
+//            qDebug() << "New orig size" << _bricks[index].image->fullSize << "vs" << _bricks[index].originalSize;
             _bricks[index].originalSize = _bricks[index].image->fullSize;
+
+//            if (!qFuzzyCompare(oldAspect, newAspect)) {
+                // Todo: rewrap only from the current row
+                rewrap();
+                updateProperties();
+//            }
+
+            if ((index > 0 && _bricks[index - 1].row != _bricks[index].row) || index == _bricks.size() - 1) {
+//                    qDebug() << "Row completed" << index - 1 << (_bricks[index - 1].thumbnailSize() * window()->devicePixelRatio()).toSize();
+                QList<ThumbnailReadRequest> requests;
+                int startIndex = index - 1;
+                if (index == _bricks.size() - 1) {
+                    startIndex = index;
+                }
+                for (int i = startIndex; i >= 0; i--) {
+                    if (_bricks[i].row != _bricks[index - 1].row && i != _bricks.size() - 1) {
+                        break;
+                    }
+                    QSize thumbnailSize = (_bricks[i].thumbnailSize() * window()->devicePixelRatio()).toSize();
+//                    qDebug() << "Requesting" << index << _bricks[i].image->path << thumbnailSize;
+                    requests.prepend(ThumbnailReadRequest(_bricks[i].image->path, thumbnailSize));
+                }
+                static_cast<FileListModel *>(_model)->addRequestThumbnails(requests);
+            }
+            //                _bricks[index].item->setGeometry(_bricks[index].viewGeometry(_contentY));
+            //                QQmlProperty(_bricks[index].item, "imageId").write(QString("image://thumbnails/") + _bricks[index].image->imageId);
         }
     }
 }

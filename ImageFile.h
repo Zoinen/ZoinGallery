@@ -18,6 +18,16 @@ enum ExifOrientation {
     Rotate270CW = 8
 };
 
+inline QSize rotateToOrientation(QSize size, ExifOrientation orientation) {
+    if (orientation == ExifOrientation::Rotate270CW ||
+            orientation == ExifOrientation::Rotate90CW ||
+            orientation == ExifOrientation::MirrorHorizontalAndRotate270CW ||
+            orientation == ExifOrientation::MirrorHorizontalAndRotate90CW) {
+        return QSize(size.height(), size.width());
+    }
+    return size;
+}
+
 struct ImageFile {
     QString path;
     QImage image;

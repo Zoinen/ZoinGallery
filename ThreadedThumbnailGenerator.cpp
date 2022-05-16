@@ -48,7 +48,7 @@ void ThreadedThumbnailGenerator::prepareToClose() {
     _loaderThread->wait();
 }
 
-void ThreadedThumbnailGenerator::setRequestQueue(QList<ThumbnailReadRequest> requests) {
+void ThreadedThumbnailGenerator::setThumbnailReadQueue(QList<ThumbnailReadRequest> requests) {
     _benchmark.start();
     _requests = requests;
     _lastRequestIndex = -1;
@@ -69,7 +69,23 @@ void insertList(QList<T> &listDst, int pos, const QList<T> &listSrc) {
     }
 }
 
-void ThreadedThumbnailGenerator::addRequestQueue(QList<ThumbnailReadRequest> requests) {
+void ThreadedThumbnailGenerator::requestDecode(QList<ThumbnailReadRequest> requests) {
+    for (int i = 0; i < requests.size(); i++) {
+        auto it = _thumbnailReadSet.find(requests.at(i).sourcePath);
+        if (it != _thumbnailReadSet.end()) {
+            ThumbnailReadResult res = *it;
+            res.request.targetSize = requests.at(i).targetSize;
+            _thumbnailDecodeQueue.enqueue(res);
+            _thumbnailReadSet.erase(it);
+        }
+    }
+    for (int i = 0; i < _workers.size(); i++) {
+        if (_workers[i].isFinished) {
+            requestNextThumbnailDecode(_workers[i]);
+            break;
+        }
+    }
+
 //    if (_lastRequestIndex != -2) {
 //        insertList(_requests, _lastRequestIndex, requests);
 //    }
@@ -161,14 +177,14 @@ bool ThreadedThumbnailGenerator::requestNextThumbnailRead() {
 }
 
 bool ThreadedThumbnailGenerator::requestNextThumbnailDecode(WorkerInfo &worker) {
-    if (_thumbnailData.isEmpty()) {
+    if (_thumbnailDecodeQueue.isEmpty()) {
         return false;
     }
 
     worker.isFinished = false;
     QMetaObject::Connection connection = connect(this, &ThreadedThumbnailGenerator::requestDecodeThumbnail,
                                                  worker.worker, &DecodeWorker::decodeThumbnail);
-    emit requestDecodeThumbnail(_thumbnailData.dequeue(), _queueId.loadAcquire());
+    emit requestDecodeThumbnail(_thumbnailDecodeQueue.dequeue(), _queueId.loadAcquire());
     disconnect(connection);
     return true;
 }
@@ -209,14 +225,8 @@ int ThreadedThumbnailGenerator::prevPathIndex() {
 }
 
 void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResult &result) {
-    _thumbnailData.enqueue(result);
-
-    for (int i = 0; i < _workers.size(); i++) {
-        if (_workers[i].isFinished) {
-            requestNextThumbnailDecode(_workers[i]);
-            break;
-        }
-    }
+    _thumbnailReadSet[result.request.sourcePath] = result;
+    emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
 
     if (result.request.sourcePath == _requests.last().sourcePath) {
         _readFinished = true;
@@ -224,9 +234,9 @@ void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResu
     }
 }
 
-void ThreadedThumbnailGenerator::onThumbnailDecodeFinished(const QString &path, const QImage &image, QSize fullSize) {
+void ThreadedThumbnailGenerator::onThumbnailDecodeFinished(const QString &path, const QImage &image) {
 //    qDebug() << "-------- on ready" << path;
-    emit thumbnailReady(path, image, fullSize);
+    emit thumbnailReady(path, image);
     DecodeWorker *worker = static_cast<DecodeWorker*>(sender());
     for (int i = 0; i < _workers.size(); i++) {
         if (_workers[i].worker == worker) {
@@ -251,23 +261,19 @@ void DecodeWorker::decodeThumbnail(const ThumbnailReadResult &readResult, int qu
 
     ThumbnailLoader loader;
     QImage thumbnail = loader.decodeImage(readResult.data, readResult.mimeType);
+    delete[] readResult.data.constData();
 
-    QSize fullSize = readResult.fullSize;
-    if (readResult.orientation == ExifOrientation::Rotate270CW ||
-            readResult.orientation == ExifOrientation::Rotate90CW ||
-            readResult.orientation == ExifOrientation::MirrorHorizontalAndRotate270CW ||
-            readResult.orientation == ExifOrientation::MirrorHorizontalAndRotate90CW) {
-        fullSize = QSize(fullSize.height(), fullSize.width());
-    }
     thumbnail = loader.rotateAndFlip(thumbnail, readResult.orientation);
-    thumbnail = loader.createThumbnail(thumbnail, readResult.request.targetSize, readResult.orientation);
+    thumbnail = loader.createThumbnail(thumbnail, readResult.request.targetSize);
     thumbnail = loader.unsharpMask(thumbnail);
+    //thumbnail.save(QString("c:\\temp\\%1+.png").arg(QFileInfo(readResult.request.sourcePath).baseName()));
+
 
     if (queueId != _generator->_queueId.loadRelaxed()) {
         return;
     }
 
-    emit decodeResultReady(readResult.request.sourcePath, thumbnail, fullSize);
+    emit decodeResultReady(readResult.request.sourcePath, thumbnail);
 }
 
 

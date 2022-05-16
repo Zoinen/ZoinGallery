@@ -88,15 +88,9 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         outResult.orientation = readOrientationFromExif(image.get());
         outResult.fullSize = readResolutionFromExif(image.get());
 
-        qDebug() << "Read exif preview" << path << outResult.request.targetSize << outResult.fullSize;
+//        qDebug() << "Read exif preview" << path << outResult.request.targetSize << outResult.fullSize;
 
-        QSize preferredSizeRotated = preferredSize;
-        if (outResult.orientation == ExifOrientation::Rotate270CW ||
-                outResult.orientation == ExifOrientation::Rotate90CW ||
-                outResult.orientation == ExifOrientation::MirrorHorizontalAndRotate270CW ||
-                outResult.orientation == ExifOrientation::MirrorHorizontalAndRotate90CW) {
-            preferredSizeRotated = QSize(preferredSizeRotated.height(), preferredSizeRotated.width());
-        }
+        QSize preferredSizeRotated = rotateToOrientation(preferredSize, outResult.orientation);
 
         Exiv2::PreviewProperties previewProp;
         Exiv2::DataBuf previewImg = Exiv2Preview::preview(*image.get(), preferredSizeRotated.width(), preferredSizeRotated.height(), &previewProp);
@@ -195,10 +189,7 @@ QImage ThumbnailLoader::loadImageOther(const QString &path, ExifOrientation *out
     return img;
 }
 
-QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions, ExifOrientation orientation) {
-    if (orientation == ExifOrientation::Rotate90CW || orientation == ExifOrientation::Rotate270CW) {
-        dimensions = QSize(dimensions.height(), dimensions.width());
-    }
+QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions) {
     //dimensions = image.size().scaled(dimensions, Qt::KeepAspectRatio);
 
     return image.scaled(dimensions, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);

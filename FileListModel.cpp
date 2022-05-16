@@ -12,20 +12,26 @@ FileListModel::FileListModel(QObject *parent)
 
     _generator = new ThreadedThumbnailGenerator(this);
 
-    connect(_generator, &ThreadedThumbnailGenerator::thumbnailReady, this, [&] (const QString &path, const QImage &thumbnail, QSize fullSize) {
+    connect(_generator, &ThreadedThumbnailGenerator::thumbnailInfoReady, this, [&] (const QString &path, QSize fullSize) {
+        auto it = _fileToItem.find(path);
+        if (it != _fileToItem.end()) {
+            ImageFile *item = it.value();
+            item->fullSize = fullSize;
+
+            QModelIndex modelIndex = index(item->index, 0);
+            emit dataChanged(modelIndex, modelIndex, {ImageFullSizeRole});
+        }
+    });
+
+    connect(_generator, &ThreadedThumbnailGenerator::thumbnailReady, this, [&] (const QString &path, const QImage &thumbnail) {
         auto it = _fileToItem.find(path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
             item->image = thumbnail;
             updateImageId(item);
-            QModelIndex modelIndex = index(item->index, 0);
-            QVector<int> roles = {ImageIdRole};
 
-            if (item->fullSize.isEmpty() && !fullSize.isEmpty()) {
-                item->fullSize = fullSize;
-                roles.append(ImageFullSizeRole);
-            }
-            emit dataChanged(modelIndex, modelIndex, roles);
+            QModelIndex modelIndex = index(item->index, 0);
+            emit dataChanged(modelIndex, modelIndex, {ImageIdRole});
         }
     });
 
@@ -150,7 +156,7 @@ void FileListModel::requestThumbnails(QSize preferredSize) {
     for (const QString &path : _imagePaths) {
         requests.append(ThumbnailReadRequest(path, preferredSize));
     }
-    _generator->setRequestQueue(requests);
+    _generator->setThumbnailReadQueue(requests);
     _generationFinished = false;
     emit generationFinishedChanged();
 }
@@ -185,15 +191,15 @@ void FileListModel::setNextRequestIndex(int index_) {
     }
 }
 
-//void FileListModel::addRequestThumbnails(QList<ThumbnailReadRequest> requests) {
-////    qDebug() << "Add to queue" << requests.size();
-//    for (int i = 0; i < requests.size(); i++) {
-//        requests[i].sourcePath = fullPath(requests[i].sourcePath);
-//    }
-//    _generator->addRequestQueue(requests);
-//    _generationFinished = false;
-//    emit generationFinishedChanged();
-//}
+void FileListModel::addRequestThumbnails(QList<ThumbnailReadRequest> requests) {
+//    qDebug() << "Add to queue" << requests.size();
+    for (int i = 0; i < requests.size(); i++) {
+        requests[i].sourcePath = fullPath(requests[i].sourcePath);
+    }
+    _generator->requestDecode(requests);
+    _generationFinished = false;
+    emit generationFinishedChanged();
+}
 
 QString FileListModel::generateNewId() {
     QString id = QString::number(_lastId);

@@ -47,6 +47,7 @@ set(PROJECT_SOURCES
     main.cpp
     ThumbnailLoader.cpp
     FileListModel.cpp
+    ImageFile.h
     QmlImageProvider.cpp
     ViewerController.cpp
     ThreadedThumbnailGenerator.cpp

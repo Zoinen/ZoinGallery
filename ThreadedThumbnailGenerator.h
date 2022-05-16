@@ -9,6 +9,7 @@
 #include <QAtomicInt>
 #include <QElapsedTimer>
 #include <QQueue>
+#include <QSet>
 
 class QThread;
 class ThreadedThumbnailGenerator;
@@ -35,7 +36,7 @@ public:
     void decodeThumbnail(const ThumbnailReadResult &readResult, int queueId);
 
 signals:
-    void decodeResultReady(const QString &path, const QImage &image, QSize fullSize);
+    void decodeResultReady(const QString &path, const QImage &image);
 
 private:
      ThreadedThumbnailGenerator *_generator;
@@ -48,14 +49,15 @@ public:
     explicit ThreadedThumbnailGenerator(QObject *parent = nullptr);
     void prepareToClose();
 
-    void setRequestQueue(QList<ThumbnailReadRequest> requests);
-    void addRequestQueue(QList<ThumbnailReadRequest> requests);
+    void setThumbnailReadQueue(QList<ThumbnailReadRequest> requests);
+    void requestDecode(QList<ThumbnailReadRequest> requests);
     void setNextRequestImage(QString path, bool isForward);
 
     QAtomicInt _queueId;
 
 signals:
-    void thumbnailReady(QString path, QImage thumbnail, QSize fullSize);
+    void thumbnailReady(QString path, QImage thumbnail);
+    void thumbnailInfoReady(QString path, QSize fullSize);
     void requestReadThumbnail(ThumbnailReadRequest request, int queueId);
     void requestDecodeThumbnail(ThumbnailReadResult request, int queueId);
     void generationFinished();
@@ -67,7 +69,7 @@ private:
         bool isFinished;
     };
 
-    void onThumbnailDecodeFinished(const QString &path, const QImage &image, QSize fullSize);
+    void onThumbnailDecodeFinished(const QString &path, const QImage &image);
     void onThumbnailReadFinished(const ThumbnailReadResult &result);
     bool requestNextThumbnailRead();
     bool requestNextThumbnailDecode(WorkerInfo &worker);
@@ -79,7 +81,8 @@ private:
     QList<ThumbnailReadRequest> _requests;
     QThread *_loaderThread;
     ReadWorker *_loaderWorker;
-    QQueue<ThumbnailReadResult> _thumbnailData;
+    QHash<QString, ThumbnailReadResult> _thumbnailReadSet;
+    QQueue<ThumbnailReadResult> _thumbnailDecodeQueue;
     int _lastRequestIndex;
     int _lastRequestIndexIncrement;
     bool _readFinished;

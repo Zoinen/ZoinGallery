@@ -15,10 +15,11 @@ class ThumbnailLoader {
 public:
     static void init();
 
+    void setPath(const QString &path);
+
     bool readExifPreview(const QString &path, QSize preferredSize, ThumbnailReadResult &outResult);
-    QImage decodeImage(const QByteArray &data, const QString &mimeType);
-    QImage loadJpeg(const QString &path, QSize preferredSize = QSize(), ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
-    QImage loadImageOther(const QString &path, ExifOrientation *outOrientation = nullptr, QSize *outFullResolution = nullptr);
+    QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize);
+    QImage loadImageOther(const QString &path);
 
     QImage createThumbnail(const QImage &image, QSize dimensions);
     QImage unsharpMask(QImage &image);
@@ -30,12 +31,9 @@ public:
     static bool isImageOther(const QString &path);
 
 private:
-    QImage loadJpegFromData(const uint8_t *data, uint32_t size);
+    QImage loadJpegFromData(const uint8_t *data, uint32_t size, QSize targetSize);
     ExifOrientation readOrientationFromExif(Exiv2::Image *image);
     QSize readResolutionFromExif(Exiv2::Image *image);
-
-    const int ThumbnailWidthLimit = 1024;
-    const int ThumbnailHeightLimit = 1024;
 
     QString _path;
 };

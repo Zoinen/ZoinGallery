@@ -38,6 +38,10 @@ void ThumbnailLoader::init() {
     freopen(NULL_DEVICE, "w", stderr);
 }
 
+void ThumbnailLoader::setPath(const QString &path) {
+    _path = path;
+}
+
 struct membuf: std::streambuf {
     membuf(uint8_t const* base, size_t size) {
         char* p((char *)base);
@@ -86,7 +90,12 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         assert(image.get() != 0);
         image->readMetadata();
         outResult.orientation = readOrientationFromExif(image.get());
-        outResult.fullSize = readResolutionFromExif(image.get());
+        if (isJpeg(path)) {
+            outResult.fullSize = QSize(image->pixelWidth(), image->pixelHeight());
+        }
+        else {
+            outResult.fullSize = readResolutionFromExif(image.get());
+        }
 
 //        qDebug() << "Read exif preview" << path << outResult.request.targetSize << outResult.fullSize;
 
@@ -95,12 +104,13 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         Exiv2::PreviewProperties previewProp;
         Exiv2::DataBuf previewImg = Exiv2Preview::preview(*image.get(), preferredSizeRotated.width(), preferredSizeRotated.height(), &previewProp);
         if (previewImg.pData_) {
-            outResult.data = QByteArray::fromRawData(reinterpret_cast<char *>(previewImg.pData_), previewImg.size_);
+            outResult.thumbnailData = QByteArray::fromRawData(reinterpret_cast<char *>(previewImg.pData_), previewImg.size_);
             outResult.mimeType = QString::fromStdString(previewProp.mimeType_);
+            outResult.thumbnailSize = QSize(previewProp.width_, previewProp.height_);
+            previewImg.release();
+            f.unmap(mappedFile);
+            return true;
         }
-        previewImg.release();
-        f.unmap(mappedFile);
-        return true;
     } catch (Exiv2::AnyError& e) {
         std::cout << "Caught Exiv2 exception '" << e << "'" << std::endl;
         f.unmap(mappedFile);
@@ -110,7 +120,7 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
     return false;
 }
 
-QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeType) {
+QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize) {
     if (mimeType == "image/tiff") {
         imemstream memStream(reinterpret_cast<const uint8_t *>(data.constData()), data.size());
 
@@ -143,49 +153,18 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
         }
     }
     else if (mimeType == "image/jpeg") {
-        QImage img = loadJpegFromData(reinterpret_cast<const uint8_t *>(data.constData()), data.size());
+        QImage img = loadJpegFromData(reinterpret_cast<const uint8_t *>(data.constData()), data.size(), targetSize);
         return img;
     }
     else {
         //thumbnail = loader.loadImageOther(request.sourcePath, &orientation, &fullSize);
-        qDebug() << "Could not decode image";
+        qDebug() << "Could not decode image" << mimeType;
     }
     return QImage();
 }
 
-QImage ThumbnailLoader::loadJpeg(const QString &path, QSize preferredSize, ExifOrientation *outOrientation, QSize *outFullResolution) {
-    _path = path;
-
-    QFile f(path);
-    f.open(QFile::ReadOnly);
-    QByteArray file = f.readAll();
-    f.close();
-    QImage img = loadJpegFromData((uint8_t *)file.data(), file.size());
-
-    if (outFullResolution) {
-        // TODO: Limited by ThumbnailWidthLimit for now
-        *outFullResolution = img.size();
-    }
-
-    try {
-        std::string strPath(path.toUtf8());
-        Exiv2::Image::AutoPtr image = Exiv2::ImageFactory::open(strPath);
-        assert(image.get() != 0);
-        image->readMetadata();
-        if (outOrientation) {
-            *outOrientation = readOrientationFromExif(image.get());
-        }
-    } catch (Exiv2::AnyError& e) {
-        std::cout << "Caught Exiv2 exception '" << e << "'" << std::endl;
-    }
-    return img;
-}
-
-QImage ThumbnailLoader::loadImageOther(const QString &path, ExifOrientation *outOrientation, QSize *outFullResolution) {
+QImage ThumbnailLoader::loadImageOther(const QString &path) {
     QImage img(path);
-    if (outFullResolution) {
-        *outFullResolution = img.size();
-    }
     return img;
 }
 
@@ -270,7 +249,7 @@ bool ThumbnailLoader::isImageOther(const QString &path) {
     return false;
 }
 
-QImage ThumbnailLoader::loadJpegFromData(const uint8_t *data, uint32_t size) {
+QImage ThumbnailLoader::loadJpegFromData(const uint8_t *data, uint32_t size, QSize targetSize) {
     const int COLOR_COMPONENTS = 3;
 
     long unsigned int _jpegSize = size;
@@ -295,15 +274,21 @@ QImage ThumbnailLoader::loadJpegFromData(const uint8_t *data, uint32_t size) {
     for (; denomIndex < num; denomIndex++) {
         int scaledWidth = TJSCALED(width, factors[denomIndex]);
         int scaledHeight = TJSCALED(height, factors[denomIndex]);
-        if (scaledWidth < ThumbnailWidthLimit && scaledHeight < ThumbnailHeightLimit) {
+        //qDebug() << denomIndex << scaledWidth << "x" << scaledHeight;
+        if (scaledWidth < targetSize.width() || scaledHeight < targetSize.height()) {
+            denomIndex--;
             break;
         }
     }
-    if (denomIndex >= num) {
-        denomIndex--;
-    }
+    denomIndex = qBound(0, denomIndex, num - 1);
+
+    // Higher quality due to increased base resolution
+    denomIndex--;
+    denomIndex = qBound(0, denomIndex, num - 1);
+
     width = TJSCALED(width, factors[denomIndex]);
     height = TJSCALED(height, factors[denomIndex]);
+//    qDebug() << "Chosen" << denomIndex << "of" << num << width << "x" << height << ", req" << targetSize;
 
     int pitch = TJPAD(width * tjPixelSize[TJPF_RGB]);
     unsigned char *buffer = new unsigned char[pitch * height * COLOR_COMPONENTS];
@@ -361,6 +346,9 @@ QSize ThumbnailLoader::readResolutionFromExif(Exiv2::Image *image) {
                 }
             }
         }
+    }
+    if (size.isEmpty()) {
+        size = QSize(image->pixelWidth(), image->pixelHeight());
     }
     return size;
 }

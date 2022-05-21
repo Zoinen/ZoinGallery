@@ -35,10 +35,13 @@ FileListModel::FileListModel(QObject *parent)
         }
     });
 
-    connect(_generator, &ThreadedThumbnailGenerator::generationFinished, this, [&] () {
+    connect(_generator, &ThreadedThumbnailGenerator::decodeFinished, this, [&] () {
         _generationFinished = true;
         emit generationFinishedChanged();
     });
+
+    connect(_generator, &ThreadedThumbnailGenerator::readFinished,
+            this, &FileListModel::thumbnailReadFinished);
 }
 
 QHash<int, QByteArray> FileListModel::roleNames() const {

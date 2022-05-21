@@ -19,7 +19,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _targetHeight = 200; //100;
     _visibleStart = -1;
     _visibleEnd = -1;
-    _topItem = 10;//-1;
+    _topItem = 0;
     _topItemOffset = 0;
     setCurrentIndex(_topItem);
     _contentY = 0;
@@ -82,85 +82,76 @@ BrickItem *MasonryLayout::createComponent() {
 
 void MasonryLayout::rewrap() {
 //    qDebug() << "rewrap" << width() << _bricks.size();
-    int targetWidth = width();
+    calcLayout(_bricks, width(), _targetHeight);
 
-    int currentRow = 0;
-    int currentColumn = 0;
-    qreal lastX = 0;
-    qreal lastY = 0;
-
-    qreal newContentY = _contentY;
-    qreal contentYOffset = 0;
-    if (_topItem != -1 && _topItem < _bricks.size()) {
-        contentYOffset = _contentY - _bricks[_topItem].y;
-        //qDebug() << "offset" << _topItem << contentYOffset << _contentY << _bricks[_topItem].y;
-    }
-
-    int rowTargetWidth = targetWidth;
-    for (int i = 0; i < _bricks.size(); i++) {
-        qreal divider = _bricks[i].originalSize.height() / qreal(_targetHeight);
-        _bricks[i].normalizedSize = QSizeF(_bricks[i].originalSize.width() / divider, _bricks[i].originalSize.height() / divider);
-        _bricks[i].row = currentRow;
-        _bricks[i].column = currentColumn;
-        _bricks[i].x = lastX;
-        _bricks[i].y = lastY;
-
-        if (_topItem == i) {
-            newContentY = lastY - _topItemOffset;
-        }
-
-        if (lastX + _bricks[i].normalizedSize.width() < rowTargetWidth) {
-            lastX += _bricks[i].normalizedSize.width();
-        }
-        else if (!currentColumn) {
-            qreal divider = _bricks[i].originalSize.width() / qreal(targetWidth);
-            _bricks[i].normalizedSize = QSizeF(_bricks[i].originalSize.width() / divider, _bricks[i].originalSize.height() / divider);
-
-            currentRow++;
-            currentColumn = -1;
-            lastX = 0;
-
-            if (i != _bricks.size() - 1) {
-                lastY += _bricks[i].normalizedSize.height();
-            }
-        }
-        else {
-            qreal stretchFactor = rowTargetWidth / qreal(lastX);
-            for (int reverseI = i - 1; reverseI >= 0; reverseI--) {
-                if (_bricks[reverseI].row != currentRow) {
-                    break;
-                }
-                _bricks[reverseI].normalizedSize *= stretchFactor;
-                _bricks[reverseI].x *= stretchFactor;
-            }
-            currentRow++;
-            currentColumn = -1;
-            lastX = 0;
-            lastY += _targetHeight * stretchFactor;
-            rowTargetWidth = targetWidth;
-            i--;
-        }
-
-        currentColumn++;
-    }
     if (_bricks.size()) {
-        setContentHeight(lastY + _bricks.last().normalizedSize.height());
-//        if (_pics.size() > 1 && _pics[_pics.size() - 2].row == _pics[_pics.size() - 1].row) {
-//        }
-//        else {
-//            setContentHeight(lastY);
-//        }
+        setContentHeight(_bricks.last().y + _bricks.last().normalizedSize.height());
     }
     else {
         setContentHeight(0);
     }
 
-    newContentY = qMin<int>(newContentY, qMax<int>(0, contentHeight() - height()));
+    qreal newContentY = _contentY;
+    if (_topItem < _bricks.size()) {
+        newContentY = qMin<int>(_bricks[_topItem].y - _topItemOffset, qMax<int>(0, contentHeight() - height()));
+    }
     if (newContentY != _contentY) {
         setContentYInternal(newContentY);
     }
     else {
         updateProperties();
+    }
+}
+
+void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight) {
+    int currentRow = 0;
+    int currentColumn = 0;
+    qreal lastX = 0;
+    qreal lastY = 0;
+
+    for (int i = 0; i < bricks.size(); i++) {
+        qreal divider = bricks[i].originalSize.height() / qreal(rowTargetHeight);
+        bricks[i].normalizedSize = QSizeF(bricks[i].originalSize.width() / divider, bricks[i].originalSize.height() / divider);
+        bricks[i].row = currentRow;
+        bricks[i].column = currentColumn;
+        bricks[i].x = lastX;
+        bricks[i].y = lastY;
+
+        bool forceNewline = bricks[i].forceNewLine;
+        bricks[i].forceNewLine = false;
+
+        if (lastX + bricks[i].normalizedSize.width() < canvasWidth && !forceNewline) {
+            lastX += bricks[i].normalizedSize.width();
+        }
+        else if (!currentColumn) {
+            qreal divider = bricks[i].originalSize.width() / qreal(canvasWidth);
+            bricks[i].normalizedSize = QSizeF(bricks[i].originalSize.width() / divider, bricks[i].originalSize.height() / divider);
+
+            currentRow++;
+            currentColumn = -1;
+            lastX = 0;
+
+            if (i != bricks.size() - 1) {
+                lastY += bricks[i].normalizedSize.height();
+            }
+        }
+        else {
+            qreal stretchFactor = canvasWidth / qreal(lastX);
+            for (int reverseI = i - 1; reverseI >= 0; reverseI--) {
+                if (bricks[reverseI].row != currentRow) {
+                    break;
+                }
+                bricks[reverseI].normalizedSize *= stretchFactor;
+                bricks[reverseI].x *= stretchFactor;
+            }
+            currentRow++;
+            currentColumn = -1;
+            lastX = 0;
+            lastY += rowTargetHeight * stretchFactor;
+            i--;
+        }
+
+        currentColumn++;
     }
 }
 
@@ -232,6 +223,11 @@ void MasonryLayout::updateProperties() {
 //            }
             if (_bricks[i].item->property("text").toString() != _bricks[i].image->path) {
                 _bricks[i].item->setProperty("text", _bricks[i].image->path);
+//                _bricks[i].item->setProperty("text", QString("%1x%2, %3x%4").arg(_bricks[i].originalSize.width())
+//                                             .arg(_bricks[i].originalSize.height())
+//                                             .arg(_bricks[i].normalizedSize.width())
+//                                             .arg(_bricks[i].normalizedSize.height())
+//                                             );
 //                QQmlProperty(_bricks[i].item, "text").write(QString("%1x%2").arg(_bricks[i].row).arg(_bricks[i].column));
             }
             if (_bricks[i].item->property("index").toInt() != i) {
@@ -277,45 +273,79 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             QQmlProperty(_bricks[index].item, "imageId").write(QString("image://thumbnails/") + _bricks[index].image->imageId);
         }
         if (roles.contains(FileListModel::ImageFullSizeRole)) {
-//            qreal oldAspect = _bricks[index].originalSize.width() / _bricks[index].originalSize.height();
-//            qreal newAspect = _bricks[index].image->fullSize.width() / qreal(_bricks[index].image->fullSize.height());
-
-//            qDebug() << "New orig size" << _bricks[index].image->fullSize << "vs" << _bricks[index].originalSize;
-            _bricks[index].originalSize = _bricks[index].image->fullSize;
-
-//            if (!qFuzzyCompare(oldAspect, newAspect)) {
-                // Todo: rewrap only from the current row
-                rewrap();
-                updateProperties();
-//            }
-
-            if ((index > 0 && _bricks[index - 1].row != _bricks[index].row) || index == _bricks.size() - 1) {
-//                    qDebug() << "Row completed" << index - 1 << (_bricks[index - 1].thumbnailSize() * window()->devicePixelRatio()).toSize();
-                QList<ThumbnailReadRequest> requests;
-                int startIndex = index - 1;
-                if (index == _bricks.size() - 1) {
-                    startIndex = index;
-                }
-                for (int i = startIndex; i >= 0; i--) {
-                    if (_bricks[i].row != _bricks[index - 1].row && i != _bricks.size() - 1) {
-                        break;
-                    }
-                    QSize thumbnailSize = (_bricks[i].thumbnailSize() * window()->devicePixelRatio()).toSize();
-//                    qDebug() << "Requesting" << index << _bricks[i].image->path << thumbnailSize;
-                    requests.prepend(ThumbnailReadRequest(_bricks[i].image->path, thumbnailSize));
-                }
-                static_cast<FileListModel *>(_model)->addRequestThumbnails(requests);
-            }
-            //                _bricks[index].item->setGeometry(_bricks[index].viewGeometry(_contentY));
-            //                QQmlProperty(_bricks[index].item, "imageId").write(QString("image://thumbnails/") + _bricks[index].image->imageId);
+            pushToCurrentRow(index);
         }
     }
 }
 
+void MasonryLayout::pushToCurrentRow(int index) {
+    bool flushMode = index >= _bricks.count();
+    if (!_currentLoadingRow.count() || index - _currentLoadingRow.last().globalIndex > 1) {
+        int lastIndex = -1;
+        if (_currentLoadingRow.count()) {
+            lastIndex = _currentLoadingRow.last().globalIndex;
+        }
+        int indexToInsert = _currentLoadingRow.count();
+        for (int i = index - 1; i >= 0; i--) {
+            if (i > lastIndex) {
+//                qDebug() << "adding index" << i << "from" << index << i << lastIndex;
+                _currentLoadingRow.insert(indexToInsert, _bricks[i]);
+                _currentLoadingRow[indexToInsert].globalIndex = i;
+            }
+            else {
+                break;
+            }
+        }
+    }
+    if (!flushMode) {
+        _currentLoadingRow.append(MasonryBrick(_bricks[index].image->fullSize.width(), _bricks[index].image->fullSize.height()));
+        _currentLoadingRow.last().globalIndex = index;
+    }
+
+//    qDebug() << "==";
+//    for (int k = 0; k < _currentLoadingRow.count(); k++) {
+//        qDebug() << "In row" << _currentLoadingRow[k].globalIndex;
+//    }
+//    qDebug() << "==";
+
+    calcLayout(_currentLoadingRow, width(), _targetHeight);
+    if (_currentLoadingRow.last().row > 0 || flushMode) {
+//        qDebug() << "REWRAP";
+        QList<ThumbnailReadRequest> requests;
+        for (int i = 0; i < _currentLoadingRow.size(); i++) {
+            if (_currentLoadingRow[i].row != _currentLoadingRow.last().row || flushMode) {
+                int updIndex = _currentLoadingRow[i].globalIndex;
+                if (_bricks[updIndex].image && _bricks[updIndex].image->fullSize.isValid()) {
+                    _bricks[updIndex].originalSize = _bricks[updIndex].image->fullSize;
+
+                    QSize thumbnailSize = (_currentLoadingRow[i].thumbnailSize() * window()->devicePixelRatio()).toSize();
+                    requests.append(ThumbnailReadRequest(_bricks[updIndex].image->path, thumbnailSize));
+                }
+            }
+            else {
+                int forceNewLineFrom = _currentLoadingRow[i].globalIndex;
+                _bricks[forceNewLineFrom].forceNewLine = true;
+                for (int delIndex = 0; delIndex < i; delIndex++) {
+                    _currentLoadingRow.removeFirst();
+                }
+                break;
+            }
+        }
+        rewrap();
+        updateProperties();
+        static_cast<FileListModel *>(_model)->addRequestThumbnails(requests);
+    }
+}
+
+void MasonryLayout::onThumbnailReadFinished() {
+    pushToCurrentRow(_bricks.count());
+}
+
 void MasonryLayout::onModelReset() {
+    _currentLoadingRow.clear();
     _visibleStart = -1;
     _visibleEnd = -1;
-    _topItem = 10;
+    _topItem = 0;
     setCurrentIndex(_topItem);
     for (auto it = _usedBrickItems.begin(); it != _usedBrickItems.end(); ++it) {
         (*it)->setVisible(false);
@@ -324,6 +354,7 @@ void MasonryLayout::onModelReset() {
     _usedBrickItems.clear();
 
     _bricks.clear();
+    qDebug() << "model reset";
     for (int i = 0; i < _model->rowCount(); i++) {
         ImageFile *imageFile = _model->data(_model->index(i), FileListModel::ImageFileRole).value<ImageFile *>();
         QSize imgSize = imageFile->fullSize;
@@ -397,12 +428,16 @@ int MasonryLayout::contentY() const {
 
 void MasonryLayout::setContentY(int newContentY) {
     setContentYInternal(newContentY);
-    for (_topItem = _visibleStart; _topItem < _visibleEnd && _topItem < _bricks.size(); _topItem++) {
-        if (_bricks[_topItem].y >= _contentY) {
-            break;
+    if (_visibleStart != -1) {
+        for (_topItem = _visibleStart; _topItem < _visibleEnd && _topItem < _bricks.size(); _topItem++) {
+            if (_bricks[_topItem].y >= _contentY) {
+                break;
+            }
         }
     }
-    _topItemOffset = _bricks[_topItem].y - _contentY;
+    if (_topItem != -1 && _topItem < _bricks.count()) {
+        _topItemOffset = _bricks[_topItem].y - _contentY;
+    }
 //    _topItem = _visibleStart;
 //    setCurrentIndex(_topItem);
 }
@@ -505,11 +540,13 @@ void BrickItem::geometryChanged(const QRectF &newGeometry, const QRectF &oldGeom
 }
 
 MasonryLayout::MasonryBrick::MasonryBrick(int width, int height)
-    : originalSize(QSize(width, height)), x(0), y(0), row(0), column(0), item(nullptr), image(nullptr) {
+    : originalSize(QSize(width, height)), x(0), y(0), row(0), column(0), item(nullptr), image(nullptr), globalIndex(-1),
+      forceNewLine(false) {
 }
 
 MasonryLayout::MasonryBrick::MasonryBrick(ImageFile *image_, QSizeF originalSize_)
-    : originalSize(originalSize_), x(0), y(0), row(0), column(0), item(nullptr), image(image_) {
+    : originalSize(originalSize_), x(0), y(0), row(0), column(0), item(nullptr), image(image_), globalIndex(-1),
+      forceNewLine(false) {
 }
 
 QRectF MasonryLayout::MasonryBrick::viewGeometry() const {
@@ -525,17 +562,22 @@ QAbstractListModel *MasonryLayout::model() const {
 }
 
 void MasonryLayout::setModel(QAbstractListModel *newModel) {
+    FileListModel *fileModel = static_cast<FileListModel *>(newModel);
     if (_model) {
         disconnect(_model, &QAbstractListModel::dataChanged,
                    this, &MasonryLayout::onDataChanged);
         disconnect(_model, &QAbstractListModel::modelReset,
                    this, &MasonryLayout::onModelReset);
+        disconnect(fileModel, &FileListModel::thumbnailReadFinished,
+                   this, &MasonryLayout::onThumbnailReadFinished);
     }
     _model = newModel;
     connect(_model, &QAbstractListModel::dataChanged,
             this, &MasonryLayout::onDataChanged);
     connect(_model, &QAbstractListModel::modelReset,
             this, &MasonryLayout::onModelReset);
+    connect(fileModel, &FileListModel::thumbnailReadFinished,
+               this, &MasonryLayout::onThumbnailReadFinished);
 
     onModelReset();
 }

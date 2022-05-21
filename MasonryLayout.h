@@ -64,25 +64,6 @@ signals:
     void currentIndexChanged();
 
 private:
-    BrickItem *createComponent();
-
-    void rewrap();
-    void updateProperties();
-    void setContentYInternal(int newContentY);
-
-    void setContentHeight(int newContentHeight);
-
-    void onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles = QVector<int>());
-    void onModelReset();
-    void onViewportChanged();
-
-    void pushBrickItem(BrickItem *item);
-    BrickItem *popBrickItem();
-    QSet<BrickItem *> _usedBrickItems;
-    QSet<BrickItem *> _freeBrickItems;
-
-    QAbstractListModel *_model;
-
     struct MasonryBrick {
         QSizeF originalSize;
         QSizeF normalizedSize;
@@ -93,13 +74,39 @@ private:
         bool lastInRow;
         BrickItem *item;
         ImageFile *image;
+        int globalIndex;
+        bool forceNewLine;
 
         MasonryBrick(int width, int height);
         MasonryBrick(ImageFile *image_, QSizeF originalSize_);
         QRectF viewGeometry() const;
         QSizeF thumbnailSize() const;
     };
+
+    BrickItem *createComponent();
+
+    void rewrap();
+    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight);
+    void updateProperties();
+    void setContentYInternal(int newContentY);
+
+    void setContentHeight(int newContentHeight);
+
+    void onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles = QVector<int>());
+    void pushToCurrentRow(int index);
+    void onThumbnailReadFinished();
+    void onModelReset();
+    void onViewportChanged();
+
+    void pushBrickItem(BrickItem *item);
+    BrickItem *popBrickItem();
+    QSet<BrickItem *> _usedBrickItems;
+    QSet<BrickItem *> _freeBrickItems;
+
+    QAbstractListModel *_model;
+
     QList<MasonryBrick> _bricks;
+    QList<MasonryBrick> _currentLoadingRow;
     int _visibleStart;
     int _visibleEnd;
     int _topItem;

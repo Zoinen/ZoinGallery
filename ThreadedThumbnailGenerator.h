@@ -60,7 +60,8 @@ signals:
     void thumbnailInfoReady(QString path, QSize fullSize);
     void requestReadThumbnail(ThumbnailReadRequest request, int queueId);
     void requestDecodeThumbnail(ThumbnailReadResult request, int queueId);
-    void generationFinished();
+    void readFinished();
+    void decodeFinished();
 
 private:
     struct WorkerInfo {

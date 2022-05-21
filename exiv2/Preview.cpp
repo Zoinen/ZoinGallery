@@ -1419,12 +1419,19 @@ Exiv2::DataBuf Exiv2Preview::preview(const Exiv2::Image& image, int targetWidth,
     DataBuf buf;
 
     // go through the loader table and store all successfully created loaders in the list
+    int previewWithMaxResolution = -1;
+    int maxPreviewWidth = 0;
+    int maxPreviewHeight = 0;
     for (PreviewId id = 0; id < Loader::getNumLoaders(); ++id) {
         Loader::AutoPtr loader = Loader::create(id, image);
         if (loader.get() && loader->readDimensions()) {
 
-            // TODO: use this to choose the needed preview
             PreviewProperties props = loader->getProperties();
+            if (props.width_ > maxPreviewWidth && props.height_ > maxPreviewHeight) {
+                maxPreviewWidth = props.width_;
+                maxPreviewHeight = props.height_;
+                previewWithMaxResolution = id;
+            }
 
             if (props.width_ > targetWidth && props.height_ > targetHeight) {
                 properties = loader->getProperties();
@@ -1432,6 +1439,15 @@ Exiv2::DataBuf Exiv2Preview::preview(const Exiv2::Image& image, int targetWidth,
                 properties.size_ = buf.size_;         //     update the size
                 break;
             }
+        }
+    }
+
+    if (!buf.pData_ && previewWithMaxResolution != -1) {
+        Loader::AutoPtr loader = Loader::create(previewWithMaxResolution, image);
+        if (loader.get() && loader->readDimensions()) {
+            properties = loader->getProperties();
+            buf = loader->getData(); // #16 getPreviewImage()
+            properties.size_ = buf.size_;         //     update the size
         }
     }
     *outPreviewProperties = properties;

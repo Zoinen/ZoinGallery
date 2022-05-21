@@ -52,9 +52,11 @@ struct ThumbnailReadRequest {
 struct ThumbnailReadResult {
     ThumbnailReadRequest request;
     QSize fullSize;
+    QSize thumbnailSize;
     ExifOrientation orientation;
     QString mimeType;
-    QByteArray data;
+    QByteArray thumbnailData;
+    QByteArray fullImageData;
 
     ThumbnailReadResult() : orientation(ExifOrientation::Horizontal) {}
 };

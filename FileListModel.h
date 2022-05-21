@@ -43,6 +43,7 @@ public:
 
 signals:
     void generationFinishedChanged();
+    void thumbnailReadFinished();
 
 private:
     QString generateNewId();

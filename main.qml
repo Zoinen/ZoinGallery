@@ -73,7 +73,7 @@ Window {
                 Layout.rightMargin: 10
                 Layout.alignment: Qt.AlignVCenter
                 from: 30
-                value: 100
+                value: masonryLayout.targetHeight
                 to: 500
                 stepSize: 1
 

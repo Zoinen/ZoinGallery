@@ -14,9 +14,15 @@ static void registerMyQmlTypes() {
 Q_COREAPP_STARTUP_FUNCTION(registerMyQmlTypes)
 
 
+QRect roundRect(const QRectF &rectF) {
+    // Rounding to floor
+    return QRect(rectF.x(), rectF.y(), rectF.width(), rectF.height());
+}
+
+
 MasonryLayout::MasonryLayout(QQuickItem *parent)
     : QQuickItem(parent) {
-    _targetHeight = 200; //100;
+    _targetHeight = 200;
     _visibleStart = -1;
     _visibleEnd = -1;
     _topItem = 0;
@@ -93,7 +99,8 @@ void MasonryLayout::rewrap() {
 
     qreal newContentY = _contentY;
     if (_topItem < _bricks.size()) {
-        newContentY = qMin<int>(_bricks[_topItem].y - _topItemOffset, qMax<int>(0, contentHeight() - height()));
+        newContentY = qMax<int>(0, qMin<int>(_bricks[_topItem].y - _topItemOffset, contentHeight() - height()));
+//        qDebug() << "new contentY" << newContentY << "top item" << _topItem << "offset" << _topItemOffset;
     }
     if (newContentY != _contentY) {
         setContentYInternal(newContentY);
@@ -162,19 +169,26 @@ QString rectToString(QRectF rect) {
 
 void MasonryLayout::updateProperties() {
 //    qDebug() << "update props";
+
     int newVisibleStart = -1;
     int newVisibleEnd = -1;
     QRectF boundingRect_ = boundingRect().adjusted(0, -_targetHeight*2 + _contentY, 0, _targetHeight*2 + _contentY);
+
+    int currentRow = -1;
     for (int i = 0; i < _bricks.size(); i++) {
-        if (_bricks[i].viewGeometry().intersects(boundingRect_)) {
-            if (newVisibleStart == -1) {
-                newVisibleStart = i;
+        if (currentRow != _bricks[i].row) {
+            currentRow = _bricks[i].row;
+
+            if (_bricks[i].geometry().intersects(boundingRect_)) {
+                if (newVisibleStart == -1) {
+                    newVisibleStart = i;
+                }
             }
-        }
-        else {
-            if (newVisibleStart != -1 && newVisibleEnd == -1) {
-                newVisibleEnd = i;
-                break;
+            else {
+                if (newVisibleStart != -1 && newVisibleEnd == -1) {
+                    newVisibleEnd = i;
+                    break;
+                }
             }
         }
     }
@@ -182,12 +196,12 @@ void MasonryLayout::updateProperties() {
         newVisibleEnd = _bricks.size() - 1;
     }
 
+    QSet<BrickItem *> itemsToHide;
     if (_visibleStart != -1) {
         for (int i = _visibleStart; i <= _visibleEnd; i++) {
             if (i < newVisibleStart || i > newVisibleEnd) {
-//                qDebug() << "hiding" << i;
                 pushBrickItem(_bricks[i].item);
-                _bricks[i].item->setVisible(false);
+                itemsToHide.insert(_bricks[i].item);
                 _bricks[i].item = nullptr;
             }
         }
@@ -195,44 +209,29 @@ void MasonryLayout::updateProperties() {
 
     if (newVisibleStart != -1) {
         for (int i = newVisibleStart; i <= newVisibleEnd; i++) {
-//            qDebug() << "showing" << i;
-            bool instantMove = true;
             if (!_bricks[i].item) {
                 _bricks[i].item = popBrickItem();
             }
-            else if (_bricks[i].item->row() != _bricks[i].row || _bricks[i].item->column() != _bricks[i].column) {
-                // TODO: Do this when column count in the row changes too
-                instantMove = false;
-            }
             _bricks[i].item->setRowColumn(_bricks[i].row, _bricks[i].column);
-            if (!instantMove) {
-                if (!_bricks[i].item->property("singleMoveAnimationEnabled").toBool()) {
-                    QQmlProperty(_bricks[i].item, "singleMoveAnimationEnabled").write(true);
+
+            if (roundRect(_bricks[i].item->geometry()) != roundRect(_bricks[i].geometry())) {
+                _bricks[i].item->setGeometry(_bricks[i].geometry(), false);
+            }
+
+            if (itemsToHide.contains(_bricks[i].item)) {
+                itemsToHide.remove(_bricks[i].item);
+            }
+            else {
+                if (!_bricks[i].item->isVisible()) {
+                    _bricks[i].item->setVisible(true);
                 }
             }
 
-            if (_bricks[i].item->geometry() != _bricks[i].viewGeometry()) {
-                _bricks[i].item->setGeometry(_bricks[i].viewGeometry(), false);
-//                qDebug() << "GG change" << _bricks[i].viewGeometry();
-            }
-            _bricks[i].item->setVisible(true);
-//            QQmlProperty(_pics[i].item, "text").write(QString("%1 [%2,%3]\n%4").arg(i).arg(_pics[i].row).arg(_pics[i].column).arg(rectToString(_pics[i].viewGeometry(_contentY))));
-//            if (_bricks[i].item->property("text").toString() != _bricks[i].image->text) {
-//                QQmlProperty(_bricks[i].item, "text").write(_bricks[i].image->text);
-////                QQmlProperty(_bricks[i].item, "text").write(QString("%1x%2").arg(_bricks[i].row).arg(_bricks[i].column));
-//            }
             if (_bricks[i].item->property("text").toString() != _bricks[i].image->path) {
                 _bricks[i].item->setProperty("text", _bricks[i].image->path);
-//                _bricks[i].item->setProperty("text", QString("%1x%2, %3x%4").arg(_bricks[i].originalSize.width())
-//                                             .arg(_bricks[i].originalSize.height())
-//                                             .arg(_bricks[i].normalizedSize.width())
-//                                             .arg(_bricks[i].normalizedSize.height())
-//                                             );
-//                QQmlProperty(_bricks[i].item, "text").write(QString("%1x%2").arg(_bricks[i].row).arg(_bricks[i].column));
             }
             if (_bricks[i].item->property("index").toInt() != i) {
                 _bricks[i].item->setProperty("index", i);
-//                QQmlProperty(_bricks[i].item, "index").write(i);
             }
 
             QString imageId;
@@ -244,7 +243,6 @@ void MasonryLayout::updateProperties() {
             }
             if (_bricks[i].item->property("imageId").toString() != imageId) {
                 _bricks[i].item->setProperty("imageId", imageId);
-//                QQmlProperty(_bricks[i].item, "imageId").write(imageId);
             }
         }
     }
@@ -252,7 +250,9 @@ void MasonryLayout::updateProperties() {
     _visibleStart = newVisibleStart;
     _visibleEnd = newVisibleEnd;
 
-    //    qDebug() << "visible delegates" << _usedBrickItems.size() << ", total" << _freeBrickItems.size();
+    for (BrickItem *item : itemsToHide) {
+        item->setVisible(false);
+    }
 }
 
 void MasonryLayout::setContentHeight(int newContentHeight) {
@@ -270,7 +270,9 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
     int index = topLeft.row();
     if (index < _bricks.size()) {
         if (roles.contains(FileListModel::ImageIdRole)) {
-            QQmlProperty(_bricks[index].item, "imageId").write(QString("image://thumbnails/") + _bricks[index].image->imageId);
+            if (_bricks[index].item) {
+                _bricks[index].item->setProperty("imageId", QString("image://thumbnails/") + _bricks[index].image->imageId);
+            }
         }
         if (roles.contains(FileListModel::ImageFullSizeRole)) {
             pushToCurrentRow(index);
@@ -318,7 +320,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
                 if (_bricks[updIndex].image && _bricks[updIndex].image->fullSize.isValid()) {
                     _bricks[updIndex].originalSize = _bricks[updIndex].image->fullSize;
 
-                    QSize thumbnailSize = (_currentLoadingRow[i].thumbnailSize() * window()->devicePixelRatio()).toSize();
+                    QSize thumbnailSize = _currentLoadingRow[i].thumbnailSize() * window()->devicePixelRatio();
                     requests.append(ThumbnailReadRequest(_bricks[updIndex].image->path, thumbnailSize));
                 }
             }
@@ -372,25 +374,6 @@ void MasonryLayout::onModelReset() {
     static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
 }
 
-void MasonryLayout::onViewportChanged() {
-    return;
-    QRect viewport = QRect(0, _contentY, width(), height());
-    if (_lastViewportGeometry.isEmpty() || viewport != _lastViewportGeometry) {
-        _lastViewportGeometry = viewport;
-
-        QList<ThumbnailReadRequest> requests;
-        for (int i = _topItem; i < _bricks.size(); i++) {
-            if (!viewport.contains(QPoint(0, _bricks[i].y))) {
-                break;
-            }
-            QSize thumbnailSize = (_bricks[i].thumbnailSize() * window()->devicePixelRatio()).toSize();
-//            qDebug() << "Requesting" << i << _bricks[i].image->path << thumbnailSize;
-            requests.append(ThumbnailReadRequest(_bricks[i].image->path, thumbnailSize));
-        }
-//        emit requestThumbnails(requests);
-    }
-}
-
 void MasonryLayout::pushBrickItem(BrickItem *item) {
     _usedBrickItems.remove(item);
     _freeBrickItems.insert(item);
@@ -404,6 +387,7 @@ BrickItem *MasonryLayout::popBrickItem() {
     }
     else {
         item = createComponent();
+//        qDebug() << "create component";
     }
     _usedBrickItems.insert(item);
     return item;
@@ -437,6 +421,7 @@ void MasonryLayout::setContentY(int newContentY) {
     }
     if (_topItem != -1 && _topItem < _bricks.count()) {
         _topItemOffset = _bricks[_topItem].y - _contentY;
+//        qDebug() << "set contentY" << newContentY << "top item" << _topItem << "offset" << _topItemOffset;
     }
 //    _topItem = _visibleStart;
 //    setCurrentIndex(_topItem);
@@ -476,45 +461,32 @@ void BrickItem::setRowColumn(int row, int column) {
 }
 
 void BrickItem::setGeometry(QRectF rect, bool instantMove) {
-    // Rounding to floor
-    rect = QRect(rect.x(), rect.y(), rect.width(), rect.height());
+    rect = roundRect(rect);
 
-    if (!isVisible() || instantMove || 1) {
-        QRectF oldGeometry(x(), y(), width(), height());
-        _isChangingGeometry = true;
+    QRectF oldGeometry(x(), y(), width(), height());
+    _isChangingGeometry = true;
 
-        if (x() != rect.x()) {
-            setX(rect.x());
-        }
-        if (y() != rect.y()) {
-            setY(rect.y());
-        }
-        if (width() != rect.width()) {
-            setWidth(rect.width());
-        }
-        if (height() != rect.height()) {
-            setHeight(rect.height());
-        }
-
-        _isChangingGeometry = false;
-
-        if (oldGeometry != rect) {
-            geometryChanged(oldGeometry, rect);
-        }
+    if (x() != rect.x()) {
+        setX(rect.x());
     }
-    else {
-        if (x() != rect.x()) {
-            QQmlProperty(this, "x").write(rect.x());
-        }
-        if (y() != rect.y()) {
-            QQmlProperty(this, "y").write(rect.y());
-        }
-        if (width() != rect.width()) {
-            QQmlProperty(this, "width").write(rect.width());
-        }
-        if (height() != rect.height()) {
-            QQmlProperty(this, "height").write(rect.height());
-        }
+    if (y() != rect.y()) {
+        setY(rect.y());
+    }
+    if (width() != rect.width()) {
+        setWidth(rect.width());
+    }
+    if (height() != rect.height()) {
+        setHeight(rect.height());
+    }
+
+    _isChangingGeometry = false;
+
+    if (oldGeometry != rect && !instantMove) {
+#if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
+        geometryChanged(oldGeometry, rect);
+#else
+        geometryChange(oldGeometry, rect);
+#endif
     }
 }
 
@@ -530,14 +502,19 @@ int BrickItem::column() const {
     return _column;
 }
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
 void BrickItem::geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry) {
     if (!_isChangingGeometry) {
-        // Qt 6.3 this got broken
-#if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
         QQuickItem::geometryChanged(newGeometry, oldGeometry);
-#endif
     }
 }
+#else
+void BrickItem::geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry) {
+    if (!_isChangingGeometry) {
+        QQuickItem::geometryChange(newGeometry, oldGeometry);
+    }
+}
+#endif
 
 MasonryLayout::MasonryBrick::MasonryBrick(int width, int height)
     : originalSize(QSize(width, height)), x(0), y(0), row(0), column(0), item(nullptr), image(nullptr), globalIndex(-1),
@@ -549,12 +526,12 @@ MasonryLayout::MasonryBrick::MasonryBrick(ImageFile *image_, QSizeF originalSize
       forceNewLine(false) {
 }
 
-QRectF MasonryLayout::MasonryBrick::viewGeometry() const {
+QRectF MasonryLayout::MasonryBrick::geometry() const {
     return QRectF(QPointF(x, y), normalizedSize);
 }
 
-QSizeF MasonryLayout::MasonryBrick::thumbnailSize() const {
-    return normalizedSize.toSize() - QSizeF(4, 4);
+QSize MasonryLayout::MasonryBrick::thumbnailSize() const {
+    return roundRect(geometry()).size() - QSize(4, 4);
 }
 
 QAbstractListModel *MasonryLayout::model() const {

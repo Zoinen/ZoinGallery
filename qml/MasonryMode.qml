@@ -38,118 +38,70 @@ Item {
 
         Rectangle {
             anchors.fill: parent
-            color: "#2d2d2d"
-        }
-
-        Component.onCompleted: {
-//            viewerController.setThumbnailResolution(Qt.size(width, targetHeight), dpr)
-//            console.log("NEW render size", width, targetHeight, dpr)
-        }
-
-        onTargetHeightChanged: {
-//            viewerController.setThumbnailResolution(Qt.size(width, targetHeight), dpr)
-//            console.log("NEW render size", width, targetHeight, dpr)
+            color: "#202020"
         }
 
         delegate: BrickItem {
             id: brickDelegate
-            property alias text: textField.text
-            property alias imageId: image.source
+            property string text
+            property string imageId
             property int index
 
-            property bool singleMoveAnimationEnabled
-            property bool behaviorAnimationEnabled: singleMoveAnimationEnabled && !masonryView.scrolling && !masonryView.keyHeld && brickDelegate.visible
+            Rectangle {
+                width: parent.width - 2
+                height: parent.height - 2
+                x: 1
+                y: 1
+                color: "#202020"
+                border.color: "#000"
+            }
 
             Rectangle {
                 anchors.fill: parent
-//                color: "#fff"
-//                color: "transparent"
-                border.width: 2
-                border.color: masonryLayout.currentIndex === index ? "#2980b9" : "#202020"
+                color: "#2980b9"
+                visible: masonryLayout.currentIndex === index
+            }
 
-                Rectangle {
-                    width: parent.width - 2
-                    height: parent.height - 2
-                    x: 1
-                    y: 1
-//                    visible: image.source == ""
-                    color: "#202020"
-                    border.color: masonryLayout.currentIndex === index ? "#2980b9" : "#000"
-                }
-
-                Image {
-                    id: image
-                    width: parent.width - 4
-                    height: parent.height - 4
-                    x: 2
-                    y: 2
-                    fillMode: Image.PreserveAspectCrop
+            Image {
+                id: image
+                width: parent.width - 4
+                height: parent.height - 4
+                x: 2
+                y: 2
+                visible: imageId !== ""
+                fillMode: Image.PreserveAspectCrop
+                source: imageId
+//                    opacity: 0.1
 //                    asynchronous: true
+            }
+
+            Rectangle {
+                color: Qt.rgba(0, 0, 0, 0.5)
+                anchors {
+                    left: parent.left
+                    right: parent.right
+                    bottom: parent.bottom
                 }
-
-                Rectangle {
-                    color: Qt.rgba(0, 0, 0, 0.5)
-                    anchors {
-                        left: parent.left
-                        right: parent.right
-                        bottom: parent.bottom
-                    }
-                    height: 22
-                    visible: brickMouseArea.containsMouse || image.source == ""
-
-                    Text {
-                        id: textField
-                        anchors.fill: parent
-                        anchors.margins: 5
-
-                        horizontalAlignment: Text.AlignHCenter
-                        elide: Text.ElideMiddle
-                        color: "#d1d1d1"
-                    }
-                }
+                height: 22
+                visible: brickMouseArea.containsMouse || imageId === ""
 
                 Text {
-                    anchors.left: parent.left
-                    anchors.bottom: parent.bottom
+                    id: textField
+                    anchors.fill: parent
                     anchors.margins: 5
 
-                    color: "#d1d1d1"
-                    text: index
-                }
+                    text: brickDelegate.text
 
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideMiddle
+                    color: "#d1d1d1"
+                }
             }
 
             MouseArea {
                 id: brickMouseArea
                 anchors.fill: parent
                 hoverEnabled: true
-            }
-
-
-            Behavior on x {
-                enabled: brickDelegate.behaviorAnimationEnabled
-                NumberAnimation { properties: "x"; duration: 300; easing.type: Easing.InOutQuad }
-            }
-            Behavior on y {
-                enabled: brickDelegate.behaviorAnimationEnabled
-                NumberAnimation { properties: "y"; duration: 300; easing.type: Easing.InOutQuad }
-            }
-
-            Behavior on width {
-                enabled: brickDelegate.behaviorAnimationEnabled
-                NumberAnimation { properties: "width"; duration: 300; easing.type: Easing.InOutQuad }
-            }
-            Behavior on height {
-                enabled: brickDelegate.behaviorAnimationEnabled
-                SequentialAnimation {
-                    NumberAnimation { properties: "height"; duration: 300; easing.type: Easing.InOutQuad }
-                    ScriptAction {
-                        script: {
-//                            console.log("FINISHED")
-                            brickDelegate.singleMoveAnimationEnabled = false
-                        }
-                    }
-                }
             }
         }
 

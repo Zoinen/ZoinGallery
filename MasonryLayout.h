@@ -19,7 +19,11 @@ public:
 
     // QQuickItem interface
 protected:
-    void geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry); // Qt 6.3 no override;
+#if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
+    void geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry) override;
+#else
+    void geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry);
+#endif
 
 private:
     bool _isChangingGeometry;
@@ -79,8 +83,8 @@ private:
 
         MasonryBrick(int width, int height);
         MasonryBrick(ImageFile *image_, QSizeF originalSize_);
-        QRectF viewGeometry() const;
-        QSizeF thumbnailSize() const;
+        QRectF geometry() const;
+        QSize thumbnailSize() const;
     };
 
     BrickItem *createComponent();
@@ -96,7 +100,6 @@ private:
     void pushToCurrentRow(int index);
     void onThumbnailReadFinished();
     void onModelReset();
-    void onViewportChanged();
 
     void pushBrickItem(BrickItem *item);
     BrickItem *popBrickItem();

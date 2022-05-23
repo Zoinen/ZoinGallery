@@ -40,6 +40,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(QAbstractListModel *model READ model WRITE setModel NOTIFY modelChanged)
     Q_PROPERTY(QQmlComponent *delegate MEMBER _delegate)
     Q_PROPERTY(int currentIndex READ currentIndex WRITE setCurrentIndex NOTIFY currentIndexChanged)
+    Q_PROPERTY(int spacing READ spacing WRITE setSpacing NOTIFY spacingChanged)
 
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
@@ -59,6 +60,9 @@ public:
     int currentIndex() const;
     void setCurrentIndex(int newCurrentIndex);
 
+    static int spacing();
+    void setSpacing(int newSpacing);
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -66,6 +70,8 @@ signals:
     void modelChanged();
 
     void currentIndexChanged();
+
+    void spacingChanged();
 
 private:
     struct MasonryBrick {
@@ -90,7 +96,7 @@ private:
     BrickItem *createComponent();
 
     void rewrap();
-    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight);
+    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing);
     void updateProperties();
     void setContentYInternal(int newContentY);
 
@@ -122,6 +128,7 @@ private:
     QRect _lastViewportGeometry;
     QQmlComponent *_delegate;
     int _currentIndex;
+    static int _spacing;
 };
 
 #endif // MASONRYLAYOUT_H

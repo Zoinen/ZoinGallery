@@ -6,6 +6,8 @@
 #include <QQmlProperty>
 #include <QQuickWindow>
 
+int MasonryLayout::_spacing = 4; // Should be divisible by 4
+
 static void registerMyQmlTypes() {
     qmlRegisterType<MasonryLayout>("ZoinGallery", 1, 0, "MasonryLayout");
     qmlRegisterType<BrickItem>("ZoinGallery", 1, 0, "BrickItem");
@@ -14,7 +16,7 @@ static void registerMyQmlTypes() {
 Q_COREAPP_STARTUP_FUNCTION(registerMyQmlTypes)
 
 
-QRect roundRect(const QRectF &rectF) {
+QRectF roundRect(const QRectF &rectF) {
     // Rounding to floor
     return QRect(rectF.x(), rectF.y(), rectF.width(), rectF.height());
 }
@@ -88,7 +90,7 @@ BrickItem *MasonryLayout::createComponent() {
 
 void MasonryLayout::rewrap() {
 //    qDebug() << "rewrap" << width() << _bricks.size();
-    calcLayout(_bricks, width(), _targetHeight);
+    calcLayout(_bricks, width(), _targetHeight, _spacing * window()->devicePixelRatio());
 
     if (_bricks.size()) {
         setContentHeight(_bricks.last().y + _bricks.last().normalizedSize.height());
@@ -110,15 +112,24 @@ void MasonryLayout::rewrap() {
     }
 }
 
-void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight) {
+QSizeF scaleToWidthWithSpacing(const QSizeF &size, qreal toWidth, int spacing) {
+    qreal aspect = (size.width() - spacing) / (size.height() - spacing);
+    return QSizeF(toWidth, (toWidth - spacing) / aspect + spacing);
+}
+
+QSizeF scaleToHeightWithSpacing(const QSizeF &size, qreal toHeight, int spacing) {
+    qreal aspect = (size.width() - spacing) / (size.height() - spacing);
+    return QSizeF((toHeight - spacing) * aspect + spacing, toHeight);
+}
+
+void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing) {
     int currentRow = 0;
     int currentColumn = 0;
     qreal lastX = 0;
     qreal lastY = 0;
 
     for (int i = 0; i < bricks.size(); i++) {
-        qreal divider = bricks[i].originalSize.height() / qreal(rowTargetHeight);
-        bricks[i].normalizedSize = QSizeF(bricks[i].originalSize.width() / divider, bricks[i].originalSize.height() / divider);
+        bricks[i].normalizedSize = scaleToHeightWithSpacing(bricks[i].originalSize, rowTargetHeight, spacing);
         bricks[i].row = currentRow;
         bricks[i].column = currentColumn;
         bricks[i].x = lastX;
@@ -131,8 +142,7 @@ void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int
             lastX += bricks[i].normalizedSize.width();
         }
         else if (!currentColumn) {
-            qreal divider = bricks[i].originalSize.width() / qreal(canvasWidth);
-            bricks[i].normalizedSize = QSizeF(bricks[i].originalSize.width() / divider, bricks[i].originalSize.height() / divider);
+            bricks[i].normalizedSize = scaleToWidthWithSpacing(bricks[i].originalSize, canvasWidth, spacing);
 
             currentRow++;
             currentColumn = -1;
@@ -143,18 +153,22 @@ void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int
             }
         }
         else {
-            qreal stretchFactor = canvasWidth / qreal(lastX);
-            for (int reverseI = i - 1; reverseI >= 0; reverseI--) {
-                if (bricks[reverseI].row != currentRow) {
-                    break;
+            int bricksInRow = bricks[i-1].column + 1;
+
+            qreal totalWidthWithoutSpacing = lastX - (bricksInRow * spacing);
+            qreal stretchFactor = (canvasWidth - bricksInRow * spacing) / totalWidthWithoutSpacing;
+            qreal newRowHeight = (rowTargetHeight - spacing) * stretchFactor + spacing;
+
+            for (int rowIndex = i - bricksInRow; rowIndex < i; rowIndex++) {
+                bricks[rowIndex].normalizedSize = scaleToHeightWithSpacing(bricks[rowIndex].normalizedSize, newRowHeight, spacing);
+                if (bricks[rowIndex].column) {
+                    bricks[rowIndex].x = bricks[rowIndex - 1].x + bricks[rowIndex - 1].normalizedSize.width();
                 }
-                bricks[reverseI].normalizedSize *= stretchFactor;
-                bricks[reverseI].x *= stretchFactor;
             }
             currentRow++;
             currentColumn = -1;
             lastX = 0;
-            lastY += rowTargetHeight * stretchFactor;
+            lastY += newRowHeight;
             i--;
         }
 
@@ -310,7 +324,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
 //    }
 //    qDebug() << "==";
 
-    calcLayout(_currentLoadingRow, width(), _targetHeight);
+    calcLayout(_currentLoadingRow, width(), _targetHeight, _spacing * window()->devicePixelRatio());
     if (_currentLoadingRow.last().row > 0 || flushMode) {
 //        qDebug() << "REWRAP";
         QList<ThumbnailReadRequest> requests;
@@ -531,7 +545,7 @@ QRectF MasonryLayout::MasonryBrick::geometry() const {
 }
 
 QSize MasonryLayout::MasonryBrick::thumbnailSize() const {
-    return roundRect(geometry()).size() - QSize(4, 4);
+    return roundRect(geometry()).toRect().size() - QSize(MasonryLayout::spacing(), MasonryLayout::spacing());
 }
 
 QAbstractListModel *MasonryLayout::model() const {
@@ -569,4 +583,15 @@ void MasonryLayout::setCurrentIndex(int newCurrentIndex) {
     }
     _currentIndex = newCurrentIndex;
     emit currentIndexChanged();
+}
+
+int MasonryLayout::spacing() {
+    return _spacing;
+}
+
+void MasonryLayout::setSpacing(int newSpacing) {
+    if (_spacing == newSpacing)
+        return;
+    _spacing = newSpacing;
+    emit spacingChanged();
 }

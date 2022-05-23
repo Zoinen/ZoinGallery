@@ -19,27 +19,28 @@ Item {
     property alias targetHeight: masonryLayout.targetHeight
     property alias currentIndex: masonryLayout.currentIndex
 
-//    visible: topLevelWindow.masonryViewMode
+    Rectangle {
+        anchors {
+            fill: parent
+            topMargin: 1
+        }
+        color: "#202020"
+    }
 
     MasonryLayout {
         id: masonryLayout
         anchors {
             topMargin: 1
-            leftMargin: 2
+            leftMargin: masonryLayout.spacing / 2
 
             left: parent.left
             top: parent.top
             bottom: parent.bottom
             right: masonryScroll.left
-            rightMargin: 2
+            rightMargin: masonryLayout.spacing / 2
         }
         clip: true
         model: fileListModel
-
-        Rectangle {
-            anchors.fill: parent
-            color: "#202020"
-        }
 
         delegate: BrickItem {
             id: brickDelegate
@@ -48,30 +49,36 @@ Item {
             property int index
 
             Rectangle {
-                width: parent.width - 2
-                height: parent.height - 2
-                x: 1
-                y: 1
+                width: image.width + 2
+                height: image.height + 2
+                x: image.x - 1
+                y: image.y - 1
                 color: "#202020"
                 border.color: "#000"
             }
 
             Rectangle {
-                anchors.fill: parent
+                anchors {
+                    fill: image
+                    leftMargin: -2
+                    topMargin: -2
+                    rightMargin: -2
+                    bottomMargin: -2
+                }
                 color: "#2980b9"
                 visible: masonryLayout.currentIndex === index
             }
 
             Image {
                 id: image
-                width: parent.width - 4
-                height: parent.height - 4
-                x: 2
-                y: 2
+                width: parent.width - masonryLayout.spacing
+                height: parent.height - masonryLayout.spacing
+                x: masonryLayout.spacing / 2
+                y: masonryLayout.spacing / 2
                 visible: imageId !== ""
                 fillMode: Image.PreserveAspectCrop
                 source: imageId
-//                    opacity: 0.1
+//                    opacity: 0
 //                    asynchronous: true
             }
 
@@ -79,22 +86,32 @@ Item {
                 color: Qt.rgba(0, 0, 0, 0.5)
                 anchors {
                     left: parent.left
+                    leftMargin: masonryLayout.spacing / 2
                     right: parent.right
+                    rightMargin: masonryLayout.spacing / 2
                     bottom: parent.bottom
+                    bottomMargin: masonryLayout.spacing / 2
                 }
-                height: 22
+                height: textField.height + 10
                 visible: brickMouseArea.containsMouse || imageId === ""
+                z: 1
 
                 Text {
                     id: textField
-                    anchors.fill: parent
-                    anchors.margins: 5
+                    anchors{
+                        left: parent.left
+                        right: parent.right
+                        bottom: parent.bottom
+                        margins: 5
+                    }
 
                     text: brickDelegate.text
 
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideMiddle
                     color: "#d1d1d1"
+                    maximumLineCount: 4
+                    wrapMode: Text.Wrap
                 }
             }
 

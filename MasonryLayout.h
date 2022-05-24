@@ -40,11 +40,17 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(QAbstractListModel *model READ model WRITE setModel NOTIFY modelChanged)
     Q_PROPERTY(QQmlComponent *delegate MEMBER _delegate)
     Q_PROPERTY(int currentIndex READ currentIndex WRITE setCurrentIndex NOTIFY currentIndexChanged)
+    Q_PROPERTY(QQuickItem *currentItem READ currentItem NOTIFY currentIndexChanged)
     Q_PROPERTY(int spacing READ spacing WRITE setSpacing NOTIFY spacingChanged)
+    Q_PROPERTY(int count READ count NOTIFY countChanged)
 
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
     void componentComplete() override;
+
+    Q_INVOKABLE QQuickItem *itemAt(qreal x, qreal y) const;
+    Q_INVOKABLE int indexAt(qreal x, qreal y) const;
+    Q_INVOKABLE QRectF indexGeometry(int index) const;
 
     int targetHeight() const;
     void setTargetHeight(int newTargetHeight);
@@ -63,6 +69,10 @@ public:
     static int spacing();
     void setSpacing(int newSpacing);
 
+    QQuickItem *currentItem() const;
+
+    int count() const;
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -72,6 +82,8 @@ signals:
     void currentIndexChanged();
 
     void spacingChanged();
+
+    void countChanged();
 
 private:
     struct MasonryBrick {

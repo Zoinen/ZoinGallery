@@ -29,7 +29,6 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _visibleEnd = -1;
     _topItem = 0;
     _topItemOffset = 0;
-    setCurrentIndex(_topItem);
     _contentY = 0;
     _model = nullptr;
     _delegate = nullptr;
@@ -52,6 +51,31 @@ void MasonryLayout::componentComplete() {
             updateProperties();
         }
     });
+}
+
+QQuickItem *MasonryLayout::itemAt(qreal x, qreal y) const {
+    for (int i = 0; i < _bricks.size(); i++) {
+        if (_bricks[i].geometry().contains(x, y)) {
+            return _bricks[i].item;
+        }
+    }
+    return nullptr;
+}
+
+int MasonryLayout::indexAt(qreal x, qreal y) const {
+    for (int i = 0; i < _bricks.size(); i++) {
+        if (_bricks[i].geometry().contains(x, y)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+QRectF MasonryLayout::indexGeometry(int index) const {
+    if (index >= 0 && index < _bricks.size()) {
+        return _bricks[index].geometry();
+    }
+    return QRectF();
 }
 
 BrickItem *MasonryLayout::createComponent() {
@@ -386,6 +410,8 @@ void MasonryLayout::onModelReset() {
     }
 
     static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
+
+    emit countChanged();
 }
 
 void MasonryLayout::pushBrickItem(BrickItem *item) {
@@ -425,6 +451,7 @@ int MasonryLayout::contentY() const {
 }
 
 void MasonryLayout::setContentY(int newContentY) {
+    newContentY = qMax(0, qMin<int, int>(_contentHeight - height(), newContentY));
     setContentYInternal(newContentY);
     if (_visibleStart != -1) {
         for (_topItem = _visibleStart; _topItem < _visibleEnd && _topItem < _bricks.size(); _topItem++) {
@@ -578,6 +605,7 @@ int MasonryLayout::currentIndex() const {
 }
 
 void MasonryLayout::setCurrentIndex(int newCurrentIndex) {
+    newCurrentIndex = qMin(qMax(0, newCurrentIndex), _model->rowCount() - 1);
     if (_currentIndex == newCurrentIndex) {
         return;
     }
@@ -594,4 +622,18 @@ void MasonryLayout::setSpacing(int newSpacing) {
         return;
     _spacing = newSpacing;
     emit spacingChanged();
+}
+
+QQuickItem *MasonryLayout::currentItem() const {
+    if (_currentIndex < _bricks.size()) {
+        return _bricks[_currentIndex].item;
+    }
+    return nullptr;
+}
+
+int MasonryLayout::count() const {
+    if (_model) {
+        return _model->rowCount();
+    }
+    return 0;
 }

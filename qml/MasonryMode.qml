@@ -26,6 +26,136 @@ Item {
         }
         color: "#202020"
     }
+    focus: true
+
+
+    property real currentItemCenterX: 0
+    property real currentItemCenterY: 0
+
+    function setCurrentIndex(index, keepLastPosX = false, keepLastPosY = false) {
+        masonryLayout.currentIndex = index
+        let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
+        if (!keepLastPosX) {
+            currentItemCenterX = currentItemGeometry.x + currentItemGeometry.width / 2
+        }
+        if (!keepLastPosY) {
+            currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - masonryLayout.contentY
+        }
+
+        if (!keepLastPosY) {
+            ensureVisible(index)
+        }
+    }
+
+    function scrollBy(deltaY) {
+        let newContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY) + deltaY
+        newContentY = Math.max(0, Math.min(masonryLayout.contentHeight - masonryLayout.height, newContentY))
+        scrollAnimation2.from = masonryLayout.contentY
+        scrollAnimation2.to = newContentY
+        scrollAnimation2.restart()
+    }
+
+    function ensureVisible(index) {
+        let indexGeometry = masonryLayout.indexGeometry(index)
+        let newContentY = -1
+        if (indexGeometry.y < masonryLayout.contentY) {
+            newContentY = indexGeometry.y
+        }
+        else if (indexGeometry.y + indexGeometry.height > masonryLayout.contentY + masonryLayout.height) {
+            newContentY = indexGeometry.y + indexGeometry.height - masonryLayout.height
+        }
+
+        if (newContentY !== -1) {
+            newContentY = Math.max(0, Math.min(masonryLayout.contentHeight - masonryLayout.height, newContentY))
+            scrollAnimation2.from = masonryLayout.contentY
+            scrollAnimation2.to = newContentY
+            scrollAnimation2.restart()
+        }
+    }
+
+    Keys.onPressed: (event) => {
+                        event.accepted = true
+                        if (event.key === Qt.Key_Left) {
+                            setCurrentIndex(masonryLayout.currentIndex - 1)
+                        }
+                        else if (event.key === Qt.Key_Right) {
+                            setCurrentIndex(masonryLayout.currentIndex + 1)
+                        }
+                        else if (event.key === Qt.Key_Up) {
+                            let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
+                            let yAbove = currentItemGeometry.y - 2
+                            let indexAbove = masonryLayout.indexAt(currentItemCenterX, yAbove)
+                            if (indexAbove !== -1) {
+                                setCurrentIndex(indexAbove, true)
+                            }
+                        }
+                        else if (event.key === Qt.Key_Down) {
+                            let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
+                            let yBelow = currentItemGeometry.y + currentItemGeometry.height + 2
+                            let indexBelow = masonryLayout.indexAt(currentItemCenterX, yBelow)
+                            if (indexBelow !== -1) {
+                                setCurrentIndex(indexBelow, true)
+                            }
+                        }
+                        else if (event.key === Qt.Key_Home) {
+                            setCurrentIndex(0)
+                        }
+                        else if (event.key === Qt.Key_End) {
+                            setCurrentIndex(masonryLayout.count - 1)
+                        }
+                        else if (event.key === Qt.Key_PageUp) {
+                            let deltaY = (masonryLayout.height - masonryLayout.height / 8)
+                            let futureContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
+                            let prevPageY = futureContentY - deltaY + currentItemCenterY
+                            let newCurrentIndex = masonryLayout.indexAt(currentItemCenterX, prevPageY)
+                            if (newCurrentIndex === -1) {
+                                newCurrentIndex = 0
+                            }
+
+                            setCurrentIndex(newCurrentIndex, true, true)
+                            scrollBy(-deltaY)
+                        }
+                        else if (event.key === Qt.Key_PageDown) {
+                            let deltaY = (masonryLayout.height - masonryLayout.height / 8)
+                            let futureContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
+                            let nextPageY = futureContentY + deltaY + currentItemCenterY
+                            let newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, nextPageY)
+                            console.log("item at", currentItemCenterX, nextPageY, newCurrentIndex2, masonryLayout.contentY, deltaY, currentItemCenterY)
+                            if (newCurrentIndex2 === -1) {
+                                newCurrentIndex2 = masonryLayout.count - 1
+                            }
+
+                            setCurrentIndex(newCurrentIndex2, true, true)
+                            scrollBy(deltaY)
+                        }
+                        else if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier)) {
+                            setCurrentIndex(viewerController.up())
+                        }
+                        else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier)) {
+//                            if (currentItem.folderRoleProperty) {
+//                                gridView.highlightMoveDuration = 0
+//                                viewerController.cd(currentItem.displayRoleProperty)
+//                                currentIndex = 0
+//                                gridView.highlightMoveDuration = 150
+//                            }
+                        }
+//                        else if (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) {
+//                            gridRoot.zoom.value = Math.max(gridRoot.zoom.value - 1, gridRoot.zoomMax)
+//                        }
+//                        else if (event.key === Qt.Key_Minus) {
+//                            gridRoot.zoom.value = Math.min(gridRoot.zoom.value + 1, gridRoot.zoomMin)
+//                        }
+                        else {
+                            event.accepted = false
+                        }
+
+                        if (event.accepted ||
+                            event.key === Qt.Key_Left || event.key === Qt.Key_Right ||
+                            event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+//                            gridView.keyHeld = true
+                        }
+//                        delayedAnimationEnabler.stop()
+                    }
 
     MasonryLayout {
         id: masonryLayout
@@ -119,6 +249,10 @@ Item {
                 id: brickMouseArea
                 anchors.fill: parent
                 hoverEnabled: true
+
+                onPressed: {
+                    setCurrentIndex(index)
+                }
             }
         }
 
@@ -128,23 +262,16 @@ Item {
             anchors.fill: parent
             acceptedButtons: Qt.NoButton
             onWheel: (wheel) => {
-                         let deltaCell = wheel.angleDelta.y/* / 120*/
-
-//                         deltaCell *= masonryLayout.targetHeight
-                         var newContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY) - deltaCell
-                         newContentY = Math.max(0, Math.min(masonryLayout.contentHeight - masonryLayout.height, newContentY))
-                         scrollAnimation2.from = masonryLayout.contentY
-                         scrollAnimation2.to = newContentY
-                         scrollAnimation2.restart()
+                         scrollBy(-wheel.angleDelta.y)
                      }
+        }
 
-            NumberAnimation {
-                id: scrollAnimation2
-                target: masonryLayout
-                property: "contentY"
-                duration: 200
-                easing.type: Easing.OutSine
-            }
+        NumberAnimation {
+            id: scrollAnimation2
+            target: masonryLayout
+            property: "contentY"
+            duration: 150
+            easing.type: Easing.OutSine
         }
     }
 

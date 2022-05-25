@@ -7,7 +7,7 @@ import QtQuick.Controls.Basic as T
 
 import ZoinGallery 1.0
 
-Item {
+MouseArea {
     id: masonryView
 
     property bool scrolling: masonryScroll.pressed || scrollAnimation2.running // || flicking || dragging
@@ -28,23 +28,30 @@ Item {
     }
     focus: true
 
+    acceptedButtons: Qt.NoButton
+    hoverEnabled: true
+    onPositionChanged: {
+        hideHovered = false
+    }
 
+
+    property bool hideHovered: false
     property real currentItemCenterX: 0
     property real currentItemCenterY: 0
 
-    function setCurrentIndex(index, keepLastPosX = false, keepLastPosY = false) {
+    function setCurrentIndex(index, keepLastPosX = false, keepLastPosY = false, neverScroll = false) {
         masonryLayout.currentIndex = index
         let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
         if (!keepLastPosX) {
             currentItemCenterX = currentItemGeometry.x + currentItemGeometry.width / 2
         }
         if (!keepLastPosY) {
-            currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - masonryLayout.contentY
+            if (!neverScroll) {
+                ensureVisible(index)
+            }
+            currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
         }
-
-        if (!keepLastPosY) {
-            ensureVisible(index)
-        }
+        hideHovered = true
     }
 
     function scrollBy(deltaY) {
@@ -86,7 +93,15 @@ Item {
                             let yAbove = currentItemGeometry.y - 2
                             let indexAbove = masonryLayout.indexAt(currentItemCenterX, yAbove)
                             if (indexAbove !== -1) {
-                                setCurrentIndex(indexAbove, true)
+                                if (event.modifiers & Qt.ControlModifier) {
+                                    ensureVisible(masonryLayout.currentIndex)
+                                    setCurrentIndex(indexAbove, true, false, true)
+                                    let newCurrentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
+                                    scrollBy(newCurrentItemGeometry.y - currentItemGeometry.y)
+                                }
+                                else {
+                                    setCurrentIndex(indexAbove, true)
+                                }
                             }
                         }
                         else if (event.key === Qt.Key_Down) {
@@ -94,7 +109,15 @@ Item {
                             let yBelow = currentItemGeometry.y + currentItemGeometry.height + 2
                             let indexBelow = masonryLayout.indexAt(currentItemCenterX, yBelow)
                             if (indexBelow !== -1) {
-                                setCurrentIndex(indexBelow, true)
+                                if (event.modifiers & Qt.ControlModifier) {
+                                    ensureVisible(masonryLayout.currentIndex)
+                                    setCurrentIndex(indexBelow, true, false, true)
+                                    let newCurrentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
+                                    scrollBy(newCurrentItemGeometry.y - currentItemGeometry.y)
+                                }
+                                else {
+                                    setCurrentIndex(indexBelow, true)
+                                }
                             }
                         }
                         else if (event.key === Qt.Key_Home) {
@@ -106,32 +129,50 @@ Item {
                         else if (event.key === Qt.Key_PageUp) {
                             let deltaY = (masonryLayout.height - masonryLayout.height / 8)
                             let futureContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
-                            let prevPageY = futureContentY - deltaY + currentItemCenterY
+                            let prevPageY = Math.max(0, futureContentY - deltaY) + currentItemCenterY
                             let newCurrentIndex = masonryLayout.indexAt(currentItemCenterX, prevPageY)
                             if (newCurrentIndex === -1) {
                                 newCurrentIndex = 0
                             }
+                            let hitStart = newCurrentIndex === 0
+                            if (newCurrentIndex === masonryLayout.currentIndex) {
+                                newCurrentIndex = masonryLayout.indexAt(currentItemCenterX, 1)
+                                hitStart = true
 
-                            setCurrentIndex(newCurrentIndex, true, true)
+                                if (newCurrentIndex === masonryLayout.currentIndex) {
+                                    newCurrentIndex = 0
+                                }
+                            }
+
+                            setCurrentIndex(newCurrentIndex, !hitStart, !hitStart)
                             scrollBy(-deltaY)
                         }
                         else if (event.key === Qt.Key_PageDown) {
                             let deltaY = (masonryLayout.height - masonryLayout.height / 8)
                             let futureContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
-                            let nextPageY = futureContentY + deltaY + currentItemCenterY
+                            let nextPageY = Math.min(masonryLayout.contentHeight - masonryLayout.height, futureContentY + deltaY) + currentItemCenterY
                             let newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, nextPageY)
-                            console.log("item at", currentItemCenterX, nextPageY, newCurrentIndex2, masonryLayout.contentY, deltaY, currentItemCenterY)
                             if (newCurrentIndex2 === -1) {
                                 newCurrentIndex2 = masonryLayout.count - 1
                             }
+                            let hitEnd = newCurrentIndex2 === masonryLayout.count - 1
+                            if (newCurrentIndex2 === masonryLayout.currentIndex) {
+                                newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, masonryLayout.contentHeight - 1)
+                                hitEnd = true
 
-                            setCurrentIndex(newCurrentIndex2, true, true)
+                                if (newCurrentIndex2 === masonryLayout.currentIndex) {
+                                    newCurrentIndex2 = masonryLayout.count - 1
+                                }
+                            }
+
+                            setCurrentIndex(newCurrentIndex2, !hitEnd, !hitEnd)
                             scrollBy(deltaY)
                         }
                         else if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier)) {
                             setCurrentIndex(viewerController.up())
                         }
                         else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier)) {
+                            viewerController.cd(masonryLayout.currentItem.text)
 //                            if (currentItem.folderRoleProperty) {
 //                                gridView.highlightMoveDuration = 0
 //                                viewerController.cd(currentItem.displayRoleProperty)
@@ -223,7 +264,7 @@ Item {
                     bottomMargin: masonryLayout.spacing / 2
                 }
                 height: textField.height + 10
-                visible: brickMouseArea.containsMouse || imageId === ""
+                visible: (brickMouseArea.containsMouse && !hideHovered) || imageId === "" || masonryLayout.currentIndex === index
                 z: 1
 
                 Text {

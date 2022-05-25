@@ -58,9 +58,16 @@ void ThreadedThumbnailGenerator::prepareToClose() {
 void ThreadedThumbnailGenerator::setThumbnailReadQueue(QList<ThumbnailReadRequest> requests) {
     _benchmark.start();
     _requests = requests;
+    _thumbnailReadSet.clear();
+    _thumbnailDecodeQueue.clear();
     _lastRequestIndex = -1;
     _lastRequestIndexIncrement = 1;
     _readFinished = false;
+
+    for (int i = 0; i < _workers.size(); i++) {
+        _workers[i].isFinished = true;
+    }
+
     _queueId.fetchAndAddOrdered(1);
     for (int i = 0; i < _requests.size(); i++) {
         requestNextThumbnailRead();
@@ -240,7 +247,7 @@ void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResu
     _thumbnailReadSet[result.request.sourcePath] = result;
     emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
 
-    if (result.request.sourcePath == _requests.last().sourcePath) {
+    if (_requests.size() && result.request.sourcePath == _requests.last().sourcePath) {
         _readFinished = true;
         qDebug() << "read finished";
         emit readFinished();

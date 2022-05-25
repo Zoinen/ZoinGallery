@@ -137,12 +137,12 @@ void MasonryLayout::rewrap() {
 }
 
 QSizeF scaleToWidthWithSpacing(const QSizeF &size, qreal toWidth, int spacing) {
-    qreal aspect = (size.width() - spacing) / (size.height() - spacing);
+    qreal aspect = size.width() / size.height();
     return QSizeF(toWidth, (toWidth - spacing) / aspect + spacing);
 }
 
 QSizeF scaleToHeightWithSpacing(const QSizeF &size, qreal toHeight, int spacing) {
-    qreal aspect = (size.width() - spacing) / (size.height() - spacing);
+    qreal aspect = size.width() / size.height();
     return QSizeF((toHeight - spacing) * aspect + spacing, toHeight);
 }
 
@@ -184,7 +184,8 @@ void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int
             qreal newRowHeight = (rowTargetHeight - spacing) * stretchFactor + spacing;
 
             for (int rowIndex = i - bricksInRow; rowIndex < i; rowIndex++) {
-                bricks[rowIndex].normalizedSize = scaleToHeightWithSpacing(bricks[rowIndex].normalizedSize, newRowHeight, spacing);
+                bricks[rowIndex].normalizedSize = scaleToHeightWithSpacing(bricks[rowIndex].normalizedSize -
+                                                                           QSize(spacing, spacing), newRowHeight, spacing);
                 if (bricks[rowIndex].column) {
                     bricks[rowIndex].x = bricks[rowIndex - 1].x + bricks[rowIndex - 1].normalizedSize.width();
                 }

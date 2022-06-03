@@ -89,6 +89,8 @@ signals:
 
     void countChanged();
 
+    void layoutReset();
+
 private:
     struct MasonryBrick {
         QSizeF originalSize;

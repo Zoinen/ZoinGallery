@@ -344,7 +344,7 @@ void ReadWorker::readThumbnail(ThumbnailReadRequest request, int queueId) {
                 return;
             }
 
-            emit readResultReady(result);
+            emit readResultReady(result, queueId);
         }
     }
 

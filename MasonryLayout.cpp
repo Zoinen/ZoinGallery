@@ -81,6 +81,7 @@ QRectF MasonryLayout::indexGeometry(int index) const {
 void MasonryLayout::reReadAndDecodeThumbnails() {
     _currentLoadingRow.clear();
     static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
+    emit layoutReset();
 }
 
 void MasonryLayout::zoomIn() {

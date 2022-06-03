@@ -32,6 +32,15 @@ MouseArea {
     property real currentItemCenterX: 0
     property real currentItemCenterY: 0
 
+    Connections {
+        target: masonryLayout
+        function onLayoutReset() {
+            let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
+            currentItemCenterX = currentItemGeometry.x + currentItemGeometry.width / 2
+            currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
+        }
+    }
+
     function setCurrentIndex(index, keepLastPosX = false, keepLastPosY = false, neverScroll = false) {
         masonryLayout.currentIndex = index
         let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)

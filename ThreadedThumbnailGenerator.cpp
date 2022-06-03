@@ -243,7 +243,10 @@ int ThreadedThumbnailGenerator::prevPathIndex() {
     return -1;
 }
 
-void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResult &result) {
+void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResult &result, int queueId) {
+    if (queueId != _queueId.loadRelaxed()) {
+        return;
+    }
     _thumbnailReadSet[result.request.sourcePath] = result;
     emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
 

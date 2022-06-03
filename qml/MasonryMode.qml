@@ -166,7 +166,15 @@ MouseArea {
                 setCurrentIndex(viewerController.up())
             }
             else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier)) {
-                viewerController.cd(masonryLayout.currentItem.text)
+                if (currentItem.isFolder) {
+                    viewerController.cd(masonryLayout.currentItem.text)
+                }
+            }
+            else if (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) {
+                masonryLayout.zoomIn()
+            }
+            else if (event.key === Qt.Key_Minus) {
+                masonryLayout.zoomOut()
             }
         }
 
@@ -191,6 +199,7 @@ MouseArea {
             property string imageId
             property int index
             property bool isImage
+            property bool isFolder
             property string iconPath
 
             Rectangle {
@@ -292,9 +301,20 @@ MouseArea {
 
             anchors.fill: parent
             acceptedButtons: Qt.NoButton
-            onWheel: (wheel) => {
-                         scrollBy(-wheel.angleDelta.y)
-                     }
+            onWheel:
+                (wheel) => {
+                    if (wheel.modifiers & Qt.ControlModifier) {
+                        if (wheel.angleDelta.y < 0) {
+                            masonryLayout.zoomOut()
+                        }
+                        else {
+                            masonryLayout.zoomIn()
+                        }
+                    }
+                    else {
+                        scrollBy(-wheel.angleDelta.y)
+                    }
+                }
         }
 
         NumberAnimation {

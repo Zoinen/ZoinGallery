@@ -83,6 +83,14 @@ void MasonryLayout::reReadAndDecodeThumbnails() {
     static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
 }
 
+void MasonryLayout::zoomIn() {
+    zoom(true);
+}
+
+void MasonryLayout::zoomOut() {
+    zoom(false);
+}
+
 BrickItem *MasonryLayout::createComponent() {
     if (!_viewport) {
         QQmlComponent component(qmlEngine(this));
@@ -297,6 +305,9 @@ void MasonryLayout::updateProperties() {
                 _bricks[i].item->setProperty("iconPath", _bricks[i].image->iconPath);
             }
 
+            if (_bricks[i].item->property("isFolder").toBool() != _bricks[i].image->isFolder) {
+                _bricks[i].item->setProperty("isFolder", _bricks[i].image->isFolder);
+            }
         }
     }
 
@@ -435,6 +446,41 @@ void MasonryLayout::onModelReset() {
     static_cast<FileListModel *>(_model)->requestThumbnails(projectedSize.toSize() * window()->devicePixelRatio());
 
     emit countChanged();
+}
+
+void MasonryLayout::zoom(bool in) {
+    const int smallestHeight = 30;
+    const int largestHeight = 500;
+
+    QList<MasonryBrick> bricks;
+    QSize minSize = QSize(_targetHeight * 3 / 2, _targetHeight);
+    for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
+        bricks.append(MasonryBrick(3, 2));
+    }
+    int columns = -1;
+    int newTargetHeight = -1;
+    int increment = in ? 1 : -1;
+    for (int targetHeight = _targetHeight; targetHeight >= smallestHeight && targetHeight <= largestHeight; targetHeight += increment) {
+        calcLayout(bricks, width(), targetHeight, _spacing * window()->devicePixelRatio());
+        for (int i = 0; i < bricks.size(); i++) {
+            if (bricks[i].row && i) {
+                if (columns == -1) {
+                    columns = bricks[i - 1].column;
+                }
+                else if (bricks[i - 1].column != columns) {
+                    newTargetHeight = targetHeight;
+                }
+                break;
+            }
+        }
+        if (newTargetHeight != -1) {
+            break;
+        }
+    }
+    if (newTargetHeight != -1 || (_targetHeight != largestHeight && in) || (_targetHeight != smallestHeight && !in)) {
+        setTargetHeight(newTargetHeight != -1 ? newTargetHeight : (in ? largestHeight : smallestHeight));
+        reReadAndDecodeThumbnails();
+    }
 }
 
 void MasonryLayout::pushBrickItem(BrickItem *item) {

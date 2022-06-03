@@ -22,7 +22,7 @@ public:
    void readThumbnail(ThumbnailReadRequest request, int queueId);
 
 signals:
-   void readResultReady(const ThumbnailReadResult &result);
+   void readResultReady(const ThumbnailReadResult &result, int queueId);
 
 private:
     ThreadedThumbnailGenerator *_generator;
@@ -71,7 +71,7 @@ private:
     };
 
     void onThumbnailDecodeFinished(const QString &path, const QImage &image);
-    void onThumbnailReadFinished(const ThumbnailReadResult &result);
+    void onThumbnailReadFinished(const ThumbnailReadResult &result, int queueId);
     bool requestNextThumbnailRead();
     bool requestNextThumbnailDecode(WorkerInfo &worker);
     void checkIfFinished();

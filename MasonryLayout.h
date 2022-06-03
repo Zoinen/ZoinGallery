@@ -53,6 +53,8 @@ public:
     Q_INVOKABLE QRectF indexGeometry(int index) const;
 
     Q_INVOKABLE void reReadAndDecodeThumbnails();
+    Q_INVOKABLE void zoomIn();
+    Q_INVOKABLE void zoomOut();
 
     int targetHeight() const;
     void setTargetHeight(int newTargetHeight);
@@ -120,6 +122,7 @@ private:
     void pushToCurrentRow(int index);
     void onThumbnailReadFinished();
     void onModelReset();
+    void zoom(bool in);
 
     void pushBrickItem(BrickItem *item);
     BrickItem *popBrickItem();

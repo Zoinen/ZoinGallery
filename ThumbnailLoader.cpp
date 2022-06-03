@@ -262,7 +262,7 @@ QImage ThumbnailLoader::loadJpegFromData(const uint8_t *data, uint32_t size, QSi
     int res = tjDecompressHeader3(_jpegDecompressor, _compressedImage, _jpegSize, &width, &height, &jpegSubsamp, &jpegColorspace);
     if (res == -1) {
         if (tjGetErrorCode(_jpegDecompressor) == TJERR_FATAL) {
-            qDebug() << "JPEG header decode error:" << tjGetErrorStr2(_jpegDecompressor) << "," << _path;
+            qDebug() << "JPEG header decode error:" << tjGetErrorStr2(_jpegDecompressor) << "," << _path << _compressedImage << _jpegSize << width << height;
             tjDestroy(_jpegDecompressor);
             return QImage();
         }

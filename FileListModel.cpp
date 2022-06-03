@@ -107,6 +107,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
             ImageFile *item = new ImageFile();
             item->path = QDir::toNativeSeparators(drive.path());
             item->isFolder = true;
+            item->isImage = false;
             item->index = _items.size();
             _items.append(item);
 
@@ -122,7 +123,9 @@ int FileListModel::cd(QString path, QString itemToSelect) {
             ImageFile *item = new ImageFile();
             item->path = folder;
             item->isFolder = true;
+            item->isImage = false;
             item->index = _items.size();
+            item->iconPath = "qrc:/resources/FolderIcon.svg";
             _items.append(item);
 
             if (item->path == itemToSelect) {
@@ -137,10 +140,15 @@ int FileListModel::cd(QString path, QString itemToSelect) {
             item->isFolder = false;
 
             if (isImage(file)) {
+                item->isImage = true;
 //                updateImageId(item);
                 QString path = fullPath(file);
                 _fileToItem.insert(path, item);
                 _imagePaths.append(path);
+            }
+            else {
+                item->isImage = false;
+                item->iconPath = "qrc:/resources/FileIcon.svg";
             }
 
             item->index = _items.size();

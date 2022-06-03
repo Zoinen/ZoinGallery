@@ -52,6 +52,8 @@ public:
     Q_INVOKABLE int indexAt(qreal x, qreal y) const;
     Q_INVOKABLE QRectF indexGeometry(int index) const;
 
+    Q_INVOKABLE void reReadAndDecodeThumbnails();
+
     int targetHeight() const;
     void setTargetHeight(int newTargetHeight);
 

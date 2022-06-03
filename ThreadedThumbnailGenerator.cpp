@@ -287,9 +287,9 @@ void DecodeWorker::decodeThumbnail(const ThumbnailReadResult &readResult, int qu
         thumbnail = loader.decodeImage(readResult.thumbnailData, readResult.mimeType, rotateToOrientation(readResult.request.targetSize, readResult.orientation));
         delete[] readResult.thumbnailData.constData();
     }
-    if (thumbnail.isNull() ||
+    if (!readResult.fullImageData.isEmpty() && (thumbnail.isNull() ||
             readResult.thumbnailSize.width() < readResult.request.targetSize.width() ||
-            readResult.thumbnailSize.height() < readResult.request.targetSize.height()) {
+            readResult.thumbnailSize.height() < readResult.request.targetSize.height())) {
         QImage fullImage = loader.decodeImage(readResult.fullImageData, "image/jpeg", rotateToOrientation(readResult.request.targetSize, readResult.orientation)); // TODO: Support other formats
         if (!fullImage.isNull()) {
             thumbnail = fullImage;

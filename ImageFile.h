@@ -34,6 +34,8 @@ struct ImageFile {
     QString imageId;
     QSize fullSize;
     bool isFolder;
+    bool isImage;
+    QString iconPath;
     int index;
 
     ImageFile() : isFolder(false), index(-1) {}

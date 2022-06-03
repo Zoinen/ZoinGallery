@@ -78,6 +78,11 @@ QRectF MasonryLayout::indexGeometry(int index) const {
     return QRectF();
 }
 
+void MasonryLayout::reReadAndDecodeThumbnails() {
+    _currentLoadingRow.clear();
+    static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
+}
+
 BrickItem *MasonryLayout::createComponent() {
     if (!_viewport) {
         QQmlComponent component(qmlEngine(this));
@@ -283,6 +288,15 @@ void MasonryLayout::updateProperties() {
             if (_bricks[i].item->property("imageId").toString() != imageId) {
                 _bricks[i].item->setProperty("imageId", imageId);
             }
+
+            if (_bricks[i].item->property("isImage").toBool() != _bricks[i].image->isImage) {
+                _bricks[i].item->setProperty("isImage", _bricks[i].image->isImage);
+            }
+
+            if (_bricks[i].item->property("iconPath").toString() != _bricks[i].image->iconPath) {
+                _bricks[i].item->setProperty("iconPath", _bricks[i].image->iconPath);
+            }
+
         }
     }
 
@@ -410,7 +424,15 @@ void MasonryLayout::onModelReset() {
         _viewport->setY(-_contentY);
     }
 
-    static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
+    QList<MasonryBrick> bricks;
+    QSize minSize = QSize(_targetHeight * 3 / 2, _targetHeight);
+    for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
+        bricks.append(MasonryBrick(3, 2));
+    }
+    calcLayout(bricks, width(), _targetHeight, _spacing * window()->devicePixelRatio());
+    QSizeF projectedSize = bricks.first().normalizedSize;
+    qDebug() << "APPROX SIZE" << bricks.size() << minSize << projectedSize << _targetHeight << width();
+    static_cast<FileListModel *>(_model)->requestThumbnails(projectedSize.toSize() * window()->devicePixelRatio());
 
     emit countChanged();
 }

@@ -41,6 +41,8 @@ public:
 
     void addRequestThumbnails(QList<ThumbnailReadRequest> requests);
 
+    static bool isImage(QString fileName);
+
 signals:
     void generationFinishedChanged();
     void thumbnailReadFinished();
@@ -48,7 +50,6 @@ signals:
 private:
     QString generateNewId();
     void updateImageId(ImageFile *item);
-    bool isImage(QString fileName);
 
     QString _root;
     QHash<QString, ImageFile *> _fileToItem;

@@ -13,6 +13,7 @@ ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
     ThumbnailLoader::init();
     _fileListModel = nullptr;
+    _mainWindow = nullptr;
 
     engine->rootContext()->setContextProperty("viewerController", this);
 
@@ -78,4 +79,32 @@ int ViewerController::up() {
 
 void ViewerController::prepareToClose() {
     _fileListModel->prepareToClose();
+}
+
+QWindow *ViewerController::mainWindow() const {
+    return _mainWindow;
+}
+
+void ViewerController::setMainWindow(QWindow *mainWindow) {
+    _mainWindow = mainWindow;
+    _mainWindow->installEventFilter(this);
+}
+
+bool ViewerController::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == _mainWindow) {
+        if (event->type() == QEvent::NonClientAreaMouseButtonPress) {
+            _leftButtonPressed = true;
+            _lastSize = _mainWindow->size();
+        }
+        else if (event->type() == QEvent::NonClientAreaMouseButtonRelease && _leftButtonPressed) {
+            _leftButtonPressed = false;
+            if (_lastSize != _mainWindow->size()) {
+                emit mainWindowResized();
+            }
+        }
+        else if (event->type() == QEvent::Resize && !_leftButtonPressed) {
+            emit mainWindowResized();
+        }
+    }
+    return false;
 }

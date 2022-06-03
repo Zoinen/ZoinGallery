@@ -23,6 +23,18 @@ Window {
         viewerController.prepareToClose()
     }
 
+    Component.onCompleted: {
+        viewerController.mainWindow = topLevelWindow
+    }
+
+    Connections {
+        target: viewerController
+
+        function onMainWindowResized() {
+            masonryLayout.view.reReadAndDecodeThumbnails()
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
 
@@ -42,7 +54,7 @@ Window {
                 text: "Up"
 
                 onReleased: {
-                    masonryLayout.currentIndex = viewerController.up()
+                    masonryLayout.view.currentIndex = viewerController.up()
                 }
             }
 
@@ -73,11 +85,20 @@ Window {
                 Layout.rightMargin: 10
                 Layout.alignment: Qt.AlignVCenter
                 from: 30
-                value: masonryLayout.targetHeight
+                value: masonryLayout.view.targetHeight
                 to: 500
                 stepSize: 1
 
-                onValueChanged: masonryLayout.targetHeight = masonryZoomSlider.value
+                onValueChanged: masonryLayout.view.targetHeight = masonryZoomSlider.value
+                property int lastValue: value
+                onPressedChanged: {
+                    if (pressed) {
+                        lastValue = value
+                    }
+                    else if (lastValue !== value) {
+                        masonryLayout.view.reReadAndDecodeThumbnails()
+                    }
+                }
             }
         }
 

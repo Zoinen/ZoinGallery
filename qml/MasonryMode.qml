@@ -21,12 +21,85 @@ MouseArea {
     }
     focus: true
 
-    acceptedButtons: Qt.NoButton
-    hoverEnabled: true
-    onPositionChanged: {
+    // <Scrolling>
+    property bool scrollingStarted: false
+    property var scrollingStartedAtY
+    property bool scrollingMode: false
+
+    acceptedButtons: Qt.MiddleButton
+
+    function startScrolling() {
+        scrollingStarted = false
+        scrollingMode = true
+        scrollingStartedAtY = masonryView.mouseY
+        scrollingTimer.start()
+        masonryLayout.setScrollingMode(true)
+    }
+
+    function endScrolling() {
+        scrollingStarted = false
+        scrollingMode = false
+        scrollingTimer.stop()
+        masonryLayout.setScrollingMode(false)
+
         hideHovered = false
     }
 
+    onPressed: {
+        if (!scrollingStarted) {
+            startScrolling()
+        }
+        else {
+            endScrolling()
+        }
+    }
+
+    onReleased: {
+        if (scrollingStarted) {
+            endScrolling()
+        }
+    }
+
+    Timer {
+        id: scrollingTimer
+        repeat: true
+        interval: 1000/60
+        onTriggered: {
+            let distance = masonryView.mouseY - scrollingStartedAtY
+            distance = Math.min(Math.max(0, distance - 25), distance + 25)
+            let totalHeight = topLevelWindow.screen.height
+            let fraction = Math.abs(distance) / (totalHeight - 25)
+            if (fraction > 0) {
+                fraction += 0.05
+            }
+
+            let increment = Math.pow(fraction, 3) * totalHeight
+            masonryLayout.contentY += increment * (distance < 0 ? -1 : 1)
+
+            if (distance !== 0 && !scrollingStarted) {
+                scrollingStarted = true
+                hideHovered = true
+            }
+
+            if (distance > 0) {
+                masonryLayout.setScrollingMode(true, 1)
+            }
+            else if (distance < 0) {
+                masonryLayout.setScrollingMode(true, -1)
+            }
+            else {
+                masonryLayout.setScrollingMode(true)
+            }
+        }
+    }
+    // </Scrolling>
+
+    hoverEnabled: true
+    onPositionChanged: {
+        if (!scrollingMode) {
+            hideHovered = false
+        }
+    }
 
     property bool hideHovered: false
     property real currentItemCenterX: 0
@@ -175,8 +248,11 @@ MouseArea {
                 setCurrentIndex(viewerController.up())
             }
             else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier)) {
-                if (currentItem.isFolder) {
+                if (masonryLayout.currentItem.isFolder) {
                     viewerController.cd(masonryLayout.currentItem.text)
+                }
+                else {
+
                 }
             }
             else if (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) {
@@ -201,6 +277,15 @@ MouseArea {
         }
         clip: true
         model: fileListModel
+
+        Behavior on contentY {
+            enabled: scrollingMode
+
+            NumberAnimation {
+                id: contentYAnimation
+                duration: 1000/60
+            }
+        }
 
         delegate: BrickItem {
             id: brickDelegate
@@ -300,7 +385,12 @@ MouseArea {
                 }
 
                 onDoubleClicked: {
-                    viewerController.cd(text)
+                    if (isFolder) {
+                        viewerController.cd(text)
+                    }
+                    else {
+
+                    }
                 }
             }
         }

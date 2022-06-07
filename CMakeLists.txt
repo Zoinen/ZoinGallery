@@ -38,8 +38,8 @@ conan_cmake_install(PATH_OR_REFERENCE .
 include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
 conan_basic_setup(NO_OUTPUT_DIRS)
 
-find_package(QT NAMES Qt6 Qt5 COMPONENTS Core Quick Concurrent REQUIRED)
-find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Concurrent REQUIRED)
+find_package(QT NAMES Qt6 Qt5 COMPONENTS Core Quick Concurrent Svg REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Concurrent Svg REQUIRED)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DQT_QML_DEBUG ")
 
@@ -69,4 +69,5 @@ if(WIN32)
 endif()
 
 add_executable(ZoinGallery ${PROJECT_SOURCES} ${RESOURCE_FILES})
-target_link_libraries(ZoinGallery PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Quick Qt${QT_VERSION_MAJOR}::Concurrent ${CONAN_LIBS})
+target_link_libraries(ZoinGallery PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg ${CONAN_LIBS})

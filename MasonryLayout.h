@@ -35,7 +35,7 @@ private:
 class MasonryLayout : public QQuickItem {
     Q_OBJECT
     Q_PROPERTY(int targetHeight READ targetHeight WRITE setTargetHeight NOTIFY targetHeightChanged)
-    Q_PROPERTY(int contentY READ contentY WRITE setContentY NOTIFY contentYChanged)
+    Q_PROPERTY(qreal contentY READ contentY WRITE setContentY NOTIFY contentYChanged)
     Q_PROPERTY(int contentHeight READ contentHeight NOTIFY contentHeightChanged)
     Q_PROPERTY(QAbstractListModel *model READ model WRITE setModel NOTIFY modelChanged)
     Q_PROPERTY(QQmlComponent *delegate MEMBER _delegate)
@@ -56,11 +56,13 @@ public:
     Q_INVOKABLE void zoomIn();
     Q_INVOKABLE void zoomOut();
 
+    Q_INVOKABLE void setScrollingMode(bool scrollingMode, int direction = 0);
+
     int targetHeight() const;
     void setTargetHeight(int newTargetHeight);
 
-    int contentY() const;
-    void setContentY(int newContentY);
+    qreal contentY() const;
+    void setContentY(qreal newContentY);
 
     int contentHeight() const;
 
@@ -116,7 +118,7 @@ private:
     void rewrap();
     static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing);
     void updateProperties();
-    void setContentYInternal(int newContentY);
+    void setContentYInternal(qreal newContentY);
 
     void setContentHeight(int newContentHeight);
 
@@ -142,12 +144,15 @@ private:
     QQuickItem *_viewport;
 
     int _targetHeight;
-    int _contentY;
+    qreal _contentY;
     int _contentHeight;
     QRect _lastViewportGeometry;
     QQmlComponent *_delegate;
     int _currentIndex;
     static int _spacing;
+
+    bool _currentScrollingMode;
+    int _currentScrollingDirection;
 };
 
 #endif // MASONRYLAYOUT_H

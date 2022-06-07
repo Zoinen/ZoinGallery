@@ -10,5 +10,8 @@
         <file>resources/ThumbnailsShadow@2x.png</file>
         <file>resources/FileIcon.svg</file>
         <file>resources/FolderIcon.svg</file>
+        <file>resources/ScrollMode.svg</file>
+        <file>resources/ScrollModeDown.svg</file>
+        <file>resources/ScrollModeUp.svg</file>
     </qresource>
 </RCC>

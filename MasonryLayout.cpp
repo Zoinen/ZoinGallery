@@ -5,6 +5,9 @@
 #include <QQmlEngine>
 #include <QQmlProperty>
 #include <QQuickWindow>
+#include <QGuiApplication>
+#include <QtSvg/QSvgRenderer>
+#include <QPainter>
 
 int MasonryLayout::_spacing = 4; // Should be divisible by 4
 
@@ -34,6 +37,9 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _delegate = nullptr;
     _currentIndex = 0;
     _viewport = nullptr;
+
+    _currentScrollingMode = false;
+    _currentScrollingDirection = -2;
 }
 
 void MasonryLayout::componentComplete() {
@@ -43,7 +49,7 @@ void MasonryLayout::componentComplete() {
             this, &MasonryLayout::rewrap);
 
     connect(this, &MasonryLayout::heightChanged, this, [&] () {
-        int newContentY = qMin<int>(_contentY, qMax<int>(0, contentHeight() - height()));
+        int newContentY = qMin<qreal>(_contentY, qMax<qreal>(0, contentHeight() - height()));
         if (newContentY != _contentY) {
             setContentYInternal(newContentY);
         }
@@ -90,6 +96,52 @@ void MasonryLayout::zoomIn() {
 
 void MasonryLayout::zoomOut() {
     zoom(false);
+}
+
+void MasonryLayout::setScrollingMode(bool scrollingMode, int direction) {
+    static bool cursorOverridden = false;
+
+    if (_currentScrollingMode == scrollingMode && _currentScrollingDirection == direction) {
+        return;
+    }
+
+    if (scrollingMode) {
+        QString path;
+        if (direction == -1) {
+            path = ":/resources/ScrollModeUp.svg";
+        }
+        else if (direction == 1) {
+            path = ":/resources/ScrollModeDown.svg";
+        }
+        else {
+            path = ":/resources/ScrollMode.svg";
+        }
+
+        QSvgRenderer renderer(path);
+        QSize destSize = renderer.defaultSize() * window()->devicePixelRatio();
+
+        QPixmap pix(destSize);
+        pix.fill(Qt::transparent);
+
+        QPainter painter(&pix);
+        renderer.render(&painter);
+        pix.setDevicePixelRatio(window()->devicePixelRatio());
+
+        QCursor cursor(pix);
+        if (!cursorOverridden) {
+            cursorOverridden = true;
+            qApp->setOverrideCursor(cursor);
+        }
+        else {
+            qApp->changeOverrideCursor(cursor);
+        }
+    }
+    else {
+        cursorOverridden = false;
+        qApp->restoreOverrideCursor();
+    }
+    _currentScrollingMode = scrollingMode;
+    _currentScrollingDirection = direction;
 }
 
 BrickItem *MasonryLayout::createComponent() {
@@ -139,7 +191,7 @@ void MasonryLayout::rewrap() {
 
     qreal newContentY = _contentY;
     if (_topItem < _bricks.size()) {
-        newContentY = qMax<int>(0, qMin<int>(_bricks[_topItem].y - _topItemOffset, contentHeight() - height()));
+        newContentY = qMax<qreal>(0, qMin<qreal>(_bricks[_topItem].y - _topItemOffset, contentHeight() - height()));
 //        qDebug() << "new contentY" << newContentY << "top item" << _topItem << "offset" << _topItemOffset;
     }
     if (newContentY != _contentY) {
@@ -516,12 +568,12 @@ void MasonryLayout::setTargetHeight(int newTargetHeight) {
     emit targetHeightChanged();
 }
 
-int MasonryLayout::contentY() const {
+qreal MasonryLayout::contentY() const {
     return _contentY;
 }
 
-void MasonryLayout::setContentY(int newContentY) {
-    newContentY = qMax(0, qMin<int, int>(_contentHeight - height(), newContentY));
+void MasonryLayout::setContentY(qreal newContentY) {
+    newContentY = qMax(0.0, qMin<qreal, qreal>(_contentHeight - height(), newContentY));
     setContentYInternal(newContentY);
     if (_visibleStart != -1) {
         for (_topItem = _visibleStart; _topItem < _visibleEnd && _topItem < _bricks.size(); _topItem++) {
@@ -538,10 +590,10 @@ void MasonryLayout::setContentY(int newContentY) {
 //    setCurrentIndex(_topItem);
 }
 
-void MasonryLayout::setContentYInternal(int newContentY) {
+void MasonryLayout::setContentYInternal(qreal newContentY) {
     static int depth = 0;
     depth++;
-    if (_contentY == newContentY || depth > 1) {
+    if (qFuzzyCompare(_contentY, newContentY) || depth > 1) {
 //        qDebug() << "skip";
         depth--;
         return;

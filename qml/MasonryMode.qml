@@ -21,6 +21,8 @@ MouseArea {
     }
     focus: true
 
+    signal toggleViewer()
+
     // <Scrolling>
     property bool scrollingStarted: false
     property var scrollingStartedAtY
@@ -112,6 +114,19 @@ MouseArea {
             currentItemCenterX = currentItemGeometry.x + currentItemGeometry.width / 2
             currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
         }
+    }
+
+    function currentItemImageGeometry() {
+        let currentItemGeometry = Qt.rect(masonryLayout.currentItem.x,
+                                          masonryLayout.currentItem.y,
+                                          masonryLayout.currentItem.width,
+                                          masonryLayout.currentItem.height)
+        let spacing = masonryLayout.spacing
+        let imageGeometry = Qt.rect(currentItemGeometry.x + spacing / 2,
+                                    currentItemGeometry.y + spacing / 2 - masonryLayout.contentY,
+                                    currentItemGeometry.width - spacing,
+                                    currentItemGeometry.height - spacing)
+        return imageGeometry
     }
 
     function setCurrentIndex(index, keepLastPosX = false, keepLastPosY = false, neverScroll = false) {
@@ -252,7 +267,7 @@ MouseArea {
                     viewerController.cd(masonryLayout.currentItem.text)
                 }
                 else {
-
+                    masonryView.toggleViewer()
                 }
             }
             else if (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) {
@@ -389,7 +404,7 @@ MouseArea {
                         viewerController.cd(text)
                     }
                     else {
-
+                        masonryView.toggleViewer()
                     }
                 }
             }

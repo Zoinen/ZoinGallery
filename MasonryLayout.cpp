@@ -84,6 +84,17 @@ QRectF MasonryLayout::indexGeometry(int index) const {
     return QRectF();
 }
 
+QString MasonryLayout::indexImage(int index) const {
+    if (index >= 0 && index < _bricks.size()) {
+        QString imageId;
+        if (!_bricks[index].image->imageId.isEmpty()) {
+            imageId = QString("image://thumbnails/") + _bricks[index].image->imageId;
+        }
+        return imageId;
+    }
+    return QString();
+}
+
 void MasonryLayout::reReadAndDecodeThumbnails() {
     _currentLoadingRow.clear();
     static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
@@ -747,7 +758,7 @@ void MasonryLayout::setSpacing(int newSpacing) {
 }
 
 QQuickItem *MasonryLayout::currentItem() const {
-    if (_currentIndex < _bricks.size()) {
+    if (_currentIndex >= 0 && _currentIndex < _bricks.size()) {
         return _bricks[_currentIndex].item;
     }
     return nullptr;

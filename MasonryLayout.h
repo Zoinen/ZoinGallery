@@ -51,6 +51,7 @@ public:
     Q_INVOKABLE QQuickItem *itemAt(qreal x, qreal y) const;
     Q_INVOKABLE int indexAt(qreal x, qreal y) const;
     Q_INVOKABLE QRectF indexGeometry(int index) const;
+    Q_INVOKABLE QString indexImage(int index) const;
 
     Q_INVOKABLE void reReadAndDecodeThumbnails();
     Q_INVOKABLE void zoomIn();

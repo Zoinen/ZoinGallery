@@ -48,7 +48,7 @@ MouseArea {
     }
 
     onPressed: {
-        if (!scrollingStarted) {
+        if (!scrollingMode) {
             startScrolling()
         }
         else {
@@ -116,6 +116,12 @@ MouseArea {
         }
     }
 
+    function moveInImageList(forward, toEnd) {
+        let nextIndex = masonryLayout.nextImageIndex(forward, toEnd)
+        setCurrentIndex(nextIndex)
+        return nextIndex
+    }
+
     function currentItemImageGeometry() {
         let currentItemGeometry = Qt.rect(masonryLayout.currentItem.x,
                                           masonryLayout.currentItem.y,
@@ -137,7 +143,7 @@ MouseArea {
         }
         if (!keepLastPosY) {
             if (!neverScroll) {
-                ensureVisible(index)
+                ensureVisible(masonryLayout.currentIndex)
             }
             currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
         }
@@ -243,6 +249,7 @@ MouseArea {
                 let futureContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
                 let nextPageY = Math.min(masonryLayout.contentHeight - masonryLayout.height, futureContentY + deltaY) + currentItemCenterY
                 let newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, nextPageY)
+
                 if (newCurrentIndex2 === -1) {
                     newCurrentIndex2 = masonryLayout.count - 1
                 }
@@ -251,6 +258,9 @@ MouseArea {
                     newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, masonryLayout.contentHeight - 1)
                     hitEnd = true
 
+                    if (newCurrentIndex2 === -1) {
+                        newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, masonryLayout.contentHeight - masonryLayout.targetHeight)
+                    }
                     if (newCurrentIndex2 === masonryLayout.currentIndex) {
                         newCurrentIndex2 = masonryLayout.count - 1
                     }
@@ -396,6 +406,9 @@ MouseArea {
                 hoverEnabled: true
 
                 onPressed: {
+                    if (scrollingMode) {
+                        endScrolling()
+                    }
                     setCurrentIndex(index)
                 }
 

@@ -57,6 +57,7 @@ set(PROJECT_SOURCES
     MasonryLayout.cpp
     exiv2/Preview.cpp
     qml.qrc
+    ThreadSafeQueue.h
 )
 
 set(CMAKE_AUTOMOC ON)

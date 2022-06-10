@@ -4,11 +4,12 @@
 
 #include <QDir>
 #include <QDebug>
+#include <QSet>
 
 FileListModel::FileListModel(QObject *parent)
     : QAbstractListModel(parent) {
     _lastId = 0;
-    _lastRequestIndex = -1;
+    _currentViewIndex = -1;
 
     _generator = new ThreadedThumbnailGenerator(this);
 
@@ -32,6 +33,20 @@ FileListModel::FileListModel(QObject *parent)
 
             QModelIndex modelIndex = index(item->index, 0);
             emit dataChanged(modelIndex, modelIndex, {ImageIdRole});
+        }
+    });
+
+    connect(_generator, &ThreadedThumbnailGenerator::viewerReady, this, [&] (const QString &path, const QImage &image) {
+        QString imageId = generateNewId();
+        _viewerImages[path] = image;
+        _imageIdToViewer[imageId] = path;
+        _viewerToImageId[path] = imageId;
+        auto it = _fileToItem.find(path);
+        if (it != _fileToItem.end()) {
+            ImageFile *item = it.value();
+            if (item->index == _currentViewIndex) {
+                emit viewerImageIdChanged(QString("image://thumbnails/") + imageId);
+            }
         }
     });
 
@@ -63,7 +78,7 @@ int FileListModel::rowCount(const QModelIndex &parent) const {
 QVariant FileListModel::data(const QModelIndex &index, int role) const {
     if (index.row() < _items.size()) {
         if (role == Qt::DisplayRole) {
-            return _items[index.row()]->path;
+            return _items[index.row()]->fileName;
         }
         else if (role == ImageIdRole) {
             return _items[index.row()]->imageId;
@@ -93,10 +108,13 @@ int FileListModel::cd(QString path, QString itemToSelect) {
     int indexToSelect = 0;
 
     beginResetModel();
+    //Viewer
+    invalidateViewerImages();
+    _currentViewIndex = -1;
+
     _fileToItem.clear();
     _imageIdToItem.clear();
     _imagePaths.clear();
-    _lastRequestIndex = -1;
     for (int i = 0; i < _items.size(); i++) {
         delete _items[i];
     }
@@ -105,13 +123,13 @@ int FileListModel::cd(QString path, QString itemToSelect) {
     if (path == "Computer") {
         for (const auto &drive : QDir::drives()) {
             ImageFile *item = new ImageFile();
-            item->path = QDir::toNativeSeparators(drive.path());
+            item->fileName = QDir::toNativeSeparators(drive.path());
             item->isFolder = true;
             item->isImage = false;
             item->index = _items.size();
             _items.append(item);
 
-            if (item->path == itemToSelect) {
+            if (item->fileName == itemToSelect) {
                 indexToSelect = _items.size() - 1;
             }
         }
@@ -121,14 +139,14 @@ int FileListModel::cd(QString path, QString itemToSelect) {
         QStringList folders = dir.entryList(QDir::NoDotAndDotDot | QDir::Dirs | QDir::Hidden | QDir::System);
         for (const auto &folder : folders) {
             ImageFile *item = new ImageFile();
-            item->path = folder;
+            item->fileName = folder;
             item->isFolder = true;
             item->isImage = false;
             item->index = _items.size();
             item->iconPath = "qrc:/resources/FolderIcon.svg";
             _items.append(item);
 
-            if (item->path == itemToSelect) {
+            if (item->fileName == itemToSelect) {
                 indexToSelect = _items.size() - 1;
             }
         }
@@ -136,7 +154,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
         QStringList files = dir.entryList(QDir::NoDotAndDotDot | QDir::Files | QDir::Hidden | QDir::System);
         for (const auto &file : files) {
             ImageFile *item = new ImageFile();
-            item->path = file;
+            item->fileName = file;
             item->isFolder = false;
 
             if (isImage(file)) {
@@ -167,7 +185,8 @@ void FileListModel::requestThumbnails(QSize preferredSize) {
     for (const QString &path : _imagePaths) {
         requests.append(ThumbnailReadRequest(path, preferredSize));
     }
-    _generator->setThumbnailReadQueue(requests);
+    _generator->clearRequests();
+    _generator->requestRead(requests);
     _generationFinished = false;
     emit generationFinishedChanged();
 }
@@ -188,25 +207,8 @@ const ImageFile *FileListModel::itemForImageId(QString imageId) {
     return nullptr;
 }
 
-void FileListModel::setNextRequestIndex(int index_) {
-    for (int i = qMax(0, index_); i < _items.size(); i++) {
-        if (!_items[i]->imageId.isNull()) {
-            bool isForward = true;
-            if (_lastRequestIndex != -1 && _lastRequestIndex > index_) {
-                isForward = false;
-            }
-             _generator->setNextRequestImage(fullPath(_items[i]->path), isForward);
-             _lastRequestIndex = index_;
-            break;
-        }
-    }
-}
-
 void FileListModel::addRequestThumbnails(QList<ThumbnailReadRequest> requests) {
 //    qDebug() << "Add to queue" << requests.size();
-    for (int i = 0; i < requests.size(); i++) {
-        requests[i].sourcePath = fullPath(requests[i].sourcePath);
-    }
     _generator->requestDecode(requests);
     _generationFinished = false;
     emit generationFinishedChanged();
@@ -231,4 +233,66 @@ void FileListModel::updateImageId(ImageFile *item) {
 
 bool FileListModel::isImage(QString fileName) {
     return ThumbnailLoader::isJpeg(fileName) || ThumbnailLoader::isRawOrTiff(fileName) || ThumbnailLoader::isImageOther(fileName);
+}
+
+void FileListModel::requestViewer(int index, int width, int height) {
+    QString requestedPath = fullPath(_items[index]->fileName);
+    auto it = _viewerToImageId.find(requestedPath);
+    if (it != _viewerToImageId.end()) {
+        emit viewerImageIdChanged(QString("image://thumbnails/") + it.value());
+    }
+
+    QSize viewerSize(width, height);
+    qDebug() << "Request thumbnails" << index << viewerSize;
+    _currentViewIndex = index;
+
+    int queueSize = 16;
+
+    QList<ThumbnailReadRequest> requests;
+    for (int i = index; i < _items.size(); i++) {
+        if (requests.size() >= queueSize) {
+            break;
+        }
+        if (_items[i]->isImage) {
+            requests.append(ThumbnailReadRequest(fullPath(_items[i]->fileName), viewerSize, true));
+        }
+    }
+    int backwardInsertIndex = 1;
+    for (int i = index; i >= 0; i--) {
+        if (requests.size() >= queueSize * 1.5) {
+            break;
+        }
+        if (_items[i]->isImage) {
+            if (backwardInsertIndex >= _items.count()) {
+                backwardInsertIndex = _items.count();
+            }
+            requests.insert(backwardInsertIndex, ThumbnailReadRequest(fullPath(_items[i]->fileName), viewerSize, true));
+            backwardInsertIndex += 2;
+        }
+    }
+
+    QList<ThumbnailReadRequest> requestsUnique;
+    for (int i = 0; i < requests.size(); i++) {
+        if (!_requestedViewerImages.contains(requests[i].sourcePath)) {
+            _requestedViewerImages.insert(requests[i].sourcePath);
+            requestsUnique.append(requests[i]);
+        }
+    }
+    _generator->requestRead(requestsUnique);
+}
+
+QImage FileListModel::viewerForImageId(QString imageId) {
+    auto it = _imageIdToViewer.find(imageId);
+    if (it != _imageIdToViewer.end()) {
+        QString path = *it;
+        return _viewerImages[path];
+    }
+    return QImage();
+}
+
+void FileListModel::invalidateViewerImages() {
+    _viewerImages.clear();
+    _imageIdToViewer.clear();
+    _viewerToImageId.clear();
+    _requestedViewerImages.clear();
 }

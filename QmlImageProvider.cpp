@@ -20,6 +20,12 @@ QImage QmlImageProvider::requestImage(const QString &id, QSize *size, const QSiz
                 return img;
             }
         }
+        else {
+            QImage img = _model->viewerForImageId(id);
+            if (!img.isNull()) {
+                return img;
+            }
+        }
     }
 
     QImage empty(1, 1, QImage::Format_RGBA8888);

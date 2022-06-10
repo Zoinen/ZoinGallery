@@ -32,15 +32,10 @@ ThreadedThumbnailGenerator::ThreadedThumbnailGenerator(QObject *parent)
 //        info.thread->setPriority(QThread::LowPriority);
     }
 
-    _loaderThread = new QThread(this);
-    _loaderWorker = new ReadWorker(this);
-    _loaderWorker->moveToThread(_loaderThread);
-    _loaderThread->start();
-
-    connect(this, &ThreadedThumbnailGenerator::requestReadThumbnail,
-            _loaderWorker, &ReadWorker::readThumbnail);
-    connect(_loaderWorker, &ReadWorker::readResultReady,
+    _readWorker = new ReadWorker(this);
+    connect(_readWorker, &ReadWorker::readResultReady,
             this, &ThreadedThumbnailGenerator::onThumbnailReadFinished);
+    _readWorker->start();
 }
 
 void ThreadedThumbnailGenerator::prepareToClose() {
@@ -50,37 +45,30 @@ void ThreadedThumbnailGenerator::prepareToClose() {
 //        _workers[i].thread->quit();
 //        _workers[i].thread->wait(QDeadlineTimer(200ms));
     }
-    _loaderThread->terminate();
+    _readWorker->terminate();
 //    _loaderThread->quit();
-//    _loaderThread->wait(QDeadlineTimer(200ms));
+    //    _loaderThread->wait(QDeadlineTimer(200ms));
 }
 
-void ThreadedThumbnailGenerator::setThumbnailReadQueue(QList<ThumbnailReadRequest> requests) {
-    _benchmark.start();
-    _requests = requests;
+void ThreadedThumbnailGenerator::clearRequests() {
     _thumbnailReadSet.clear();
     _thumbnailDecodeQueue.clear();
-    _lastRequestIndex = -1;
-    _lastRequestIndexIncrement = 1;
     _readFinished = false;
+    _requests.clear();
 
     for (int i = 0; i < _workers.size(); i++) {
         _workers[i].isFinished = true;
     }
-
     _queueId.fetchAndAddOrdered(1);
-    for (int i = 0; i < _requests.size(); i++) {
-        requestNextThumbnailRead();
-    }
-    //    qDebug() << "FIRST QUEUE DONE ----------------------------";
 }
 
-template <class T>
-void insertList(QList<T> &listDst, int pos, const QList<T> &listSrc) {
-    listDst.insert(pos, listSrc.size(), T());
-    for (int i = 0; i < listSrc.size(); i++) {
-        listDst[pos + i] = listSrc[i];
+void ThreadedThumbnailGenerator::requestRead(QList<ThumbnailReadRequest> requests) {
+    _benchmark.start();
+    for (int i = 0; i < requests.size(); i++) {
+        requests[i].queueId = _queueId.loadAcquire(); // TODO: Make sure it's correct
     }
+    prependList(_requests, requests);
+    _readWorker->readQueue().prepend(requests);
 }
 
 void ThreadedThumbnailGenerator::requestDecode(QList<ThumbnailReadRequest> requests) {
@@ -104,95 +92,6 @@ void ThreadedThumbnailGenerator::requestDecode(QList<ThumbnailReadRequest> reque
             break;
         }
     }
-
-//    if (_lastRequestIndex != -2) {
-//        insertList(_requests, _lastRequestIndex, requests);
-//    }
-
-//    int lastQueueSize = _requests.size() - 1;
-//    _requests.append(requests);
-//    if (_lastRequestIndex == -2) {
-//        _lastRequestIndex = lastQueueSize;
-//        for (int i = 0; i < _workers.size(); i++) {
-//            if (_workers[i].isFinished) {
-//                requestNextThumbnailRead(_workers[i]);
-//            }
-//        }
-//    }
-}
-
-void ThreadedThumbnailGenerator::setNextRequestImage(QString path, bool isForward) {
-    for (int i = 0; i < _requests.size(); i++) {
-        if (_requests[i].sourcePath == path) {
-            _lastRequestIndex = i - 1;
-            qDebug() << "next:" << path << _lastRequestIndex << isForward;
-            _lastRequestIndexIncrement = (isForward ? 1 : -1);
-            break;
-        }
-    }
-}
-
-bool ThreadedThumbnailGenerator::requestNextThumbnailRead() {
-//    qDebug() << "lpi" << _lastPathIndex << _lastPathIndexIncrement;
-    if (_lastRequestIndex == -2) {
-        return false;
-    }
-
-    if (_lastRequestIndex > -1) {
-        if (_lastRequestIndexIncrement == 1) {
-            int next = nextPathIndex();
-            if (next == -1) {
-                int prev = prevPathIndex();
-                if (prev == -1) {
-                    _lastRequestIndex = -2;
-//                    qDebug() << "hard stop forward";
-                    return false;
-                }
-                else {
-                    _lastRequestIndex = prev;
-                }
-            }
-            else {
-                _lastRequestIndex = next;
-            }
-        }
-        else {
-            int prev = prevPathIndex();
-            if (prev == -1) {
-                int next = nextPathIndex();
-                if (next == -1) {
-                    _lastRequestIndex = -2;
-                    qDebug() << "hard stop backward";
-                    return false;
-                }
-                else {
-                    _lastRequestIndex = next;
-                }
-            }
-            else {
-                _lastRequestIndex = prev;
-            }
-        }
-    }
-    else {
-        if (_requests.size() > 0) {
-            _lastRequestIndex = 0;
-//            qDebug() << "zero" << _paths.size();
-        }
-        else {
-            _lastRequestIndex = -2;
-            return false;
-        }
-    }
-
-    if (_lastRequestIndex >= 0 && _lastRequestIndex < _requests.size()) {
-        _requests[_lastRequestIndex].requested = true;
-        emit requestReadThumbnail(_requests.at(_lastRequestIndex), _queueId.loadAcquire());
-    }
-    else {
-        return false;
-    }
-    return true;
 }
 
 bool ThreadedThumbnailGenerator::requestNextThumbnailDecode(WorkerInfo &worker) {
@@ -223,32 +122,19 @@ void ThreadedThumbnailGenerator::checkIfFinished() {
     }
 }
 
-int ThreadedThumbnailGenerator::nextPathIndex() {
-    int i = _lastRequestIndex;
-    for (; i < _requests.size(); i++) {
-        if (!_requests[i].requested) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-int ThreadedThumbnailGenerator::prevPathIndex() {
-    int i = _lastRequestIndex;
-    for (; i >= 0; i--) {
-        if (!_requests[i].requested) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResult &result, int queueId) {
-    if (queueId != _queueId.loadRelaxed()) {
+void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResult &result) {
+    if (result.request.queueId != _queueId.loadRelaxed()) {
         return;
     }
     _thumbnailReadSet[result.request.sourcePath] = result;
-    emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
+    if (!result.request.viewerRequest) {
+        emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
+    }
+    else {
+        QList<ThumbnailReadRequest> requests;
+        requests.append(ThumbnailReadRequest(result.request.sourcePath, result.request.targetSize));
+        requestDecode(requests);
+    }
 
     if (_requests.size() && result.request.sourcePath == _requests.last().sourcePath) {
         _readFinished = true;
@@ -258,9 +144,14 @@ void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResu
     }
 }
 
-void ThreadedThumbnailGenerator::onThumbnailDecodeFinished(const QString &path, const QImage &image) {
-//    qDebug() << "-------- on ready" << path;
-    emit thumbnailReady(path, image);
+void ThreadedThumbnailGenerator::onThumbnailDecodeFinished(const ThumbnailReadResult &readResult, const QImage &image) {
+    qDebug() << "-------- on ready" << readResult.request.sourcePath << readResult.request.viewerRequest;
+    if (!readResult.request.viewerRequest) {
+        emit thumbnailReady(readResult.request.sourcePath, image);
+    }
+    else {
+        emit viewerReady(readResult.request.sourcePath, image);
+    }
     DecodeWorker *worker = static_cast<DecodeWorker*>(sender());
     for (int i = 0; i < _workers.size(); i++) {
         if (_workers[i].worker == worker) {
@@ -293,6 +184,7 @@ void DecodeWorker::decodeThumbnail(const ThumbnailReadResult &readResult, int qu
     if (!readResult.fullImageData.isEmpty() && (thumbnail.isNull() ||
             readResult.thumbnailSize.width() < readResult.request.targetSize.width() ||
             readResult.thumbnailSize.height() < readResult.request.targetSize.height())) {
+//        qDebug() << "TRY#" << readResult.request.sourcePath << readResult.thumbnailSize << "OF" << readResult.request.targetSize;
         QImage fullImage = loader.decodeImage(readResult.fullImageData, "image/jpeg", rotateToOrientation(readResult.request.targetSize, readResult.orientation)); // TODO: Support other formats
         if (!fullImage.isNull()) {
             thumbnail = fullImage;
@@ -300,54 +192,58 @@ void DecodeWorker::decodeThumbnail(const ThumbnailReadResult &readResult, int qu
     }
 
     thumbnail = loader.rotateAndFlip(thumbnail, readResult.orientation);
-    thumbnail = loader.createThumbnail(thumbnail, readResult.request.targetSize);
+    thumbnail = loader.createThumbnail(thumbnail, readResult.request.targetSize, readResult.request.viewerRequest);
+//    if (!readResult.request.viewerRequest) {
     thumbnail = loader.unsharpMask(thumbnail);
-    //thumbnail.save(QString("c:\\temp\\%1+.png").arg(QFileInfo(readResult.request.sourcePath).baseName()));
+//    }
+//    thumbnail.save(QString("c:\\temp\\%1+.png").arg(QFileInfo(readResult.request.sourcePath).baseName()));
 
 
     if (queueId != _generator->_queueId.loadRelaxed()) {
         return;
     }
 
-    emit decodeResultReady(readResult.request.sourcePath, thumbnail);
+    emit decodeResultReady(readResult, thumbnail);
 }
 
 
-ReadWorker::ReadWorker(ThreadedThumbnailGenerator *generator) {
-    _generator = generator;
+ReadWorker::ReadWorker(QObject *parent)
+    : QThread(parent) {
 }
 
-void ReadWorker::readThumbnail(ThumbnailReadRequest request, int queueId) {
-    if (queueId != _generator->_queueId.loadRelaxed()) {
-        return;
-    }
+void ReadWorker::run() {
+    forever {
+        ThumbnailReadRequest request = _readQueue.dequeue();
 
-    ThumbnailLoader loader;
-    if (ThumbnailLoader::isExifCompatible(request.sourcePath)) {
-        ThumbnailReadResult result;
-        result.request = request;
-        bool fileLoaded = loader.readExifPreview(request.sourcePath, request.targetSize, result);
-        if ((!fileLoaded && !result.fullSize.isNull()) ||
-                (fileLoaded && (result.thumbnailSize.width() < request.targetSize.width() ||
-                                result.thumbnailSize.height() < request.targetSize.height()))) {
-            QFile f(request.sourcePath);
-            if (f.open(QFile::ReadOnly)) {
-//                result.fullImageData = QByteArray::fromRawData((const char *)f.map(0, f.size()), f.size());
+        ThumbnailLoader loader;
+        if (ThumbnailLoader::isExifCompatible(request.sourcePath)) {
+            ThumbnailReadResult result;
+            result.request = request;
+            qDebug() << "READ" << request.sourcePath << request.targetSize;
+            bool fileLoaded = loader.readExifPreview(request.sourcePath, request.targetSize, result);
+            if ((!fileLoaded && !result.fullSize.isNull()) ||
+                    (fileLoaded && (result.thumbnailSize.width() < request.targetSize.width() ||
+                                    result.thumbnailSize.height() < request.targetSize.height()))) {
+                QFile f(request.sourcePath);
+                if (f.open(QFile::ReadOnly)) {
+                    //                result.fullImageData = QByteArray::fromRawData((const char *)f.map(0, f.size()), f.size());
 
-                result.fullImageData = f.readAll();
-                f.close();
-                fileLoaded = true;
+                    result.fullImageData = f.readAll();
+                    f.close();
+                    fileLoaded = true;
+                }
+            }
+            if (fileLoaded) {
+                qDebug() << "READ LOADED";
+                emit readResultReady(result);
             }
         }
-        if (fileLoaded) {
-            if (queueId != _generator->_queueId.loadRelaxed()) {
-                return;
-            }
 
-            emit readResultReady(result, queueId);
-        }
+        qDebug() << "READ DONE" << request.sourcePath;
+        //    QThread::msleep(300);
     }
+}
 
-//    qDebug() << "READ" << request.sourcePath;
-//    QThread::msleep(300);
+ThreadSafeQueue<ThumbnailReadRequest> &ReadWorker::readQueue() {
+    return _readQueue;
 }

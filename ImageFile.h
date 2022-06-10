@@ -29,7 +29,7 @@ inline QSize rotateToOrientation(QSize size, ExifOrientation orientation) {
 }
 
 struct ImageFile {
-    QString path;
+    QString fileName;
     QImage image;
     QString imageId;
     QSize fullSize;
@@ -44,11 +44,11 @@ struct ImageFile {
 struct ThumbnailReadRequest {
     QString sourcePath;
     QSize targetSize;
-    bool requested;
+    bool viewerRequest;
+    int queueId;
 
-    ThumbnailReadRequest() : requested(false) {}
-    ThumbnailReadRequest(const QString &path) : sourcePath(path), requested(false) {}
-    ThumbnailReadRequest(const QString &path, const QSize &size) : sourcePath(path), targetSize(size), requested(false) {}
+    ThumbnailReadRequest(const QString &path = QString(), const QSize &size = QSize(), bool viewerRequest_ = false)
+        : sourcePath(path), targetSize(size), viewerRequest(viewerRequest_), queueId(-1) {}
 };
 
 struct ThumbnailReadResult {

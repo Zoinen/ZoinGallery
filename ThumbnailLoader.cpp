@@ -168,10 +168,10 @@ QImage ThumbnailLoader::loadImageOther(const QString &path) {
     return img;
 }
 
-QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions) {
+QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions, bool keepAspect) {
     //dimensions = image.size().scaled(dimensions, Qt::KeepAspectRatio);
 
-    return image.scaled(dimensions, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    return image.scaled(dimensions, keepAspect ? Qt::KeepAspectRatio : Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 }
 
 QImage ThumbnailLoader::unsharpMask(QImage &image) {

@@ -2,6 +2,7 @@
 #define THREADEDTHUMBNAILGENERATOR_H
 
 #include "ImageFile.h"
+#include "ThreadSafeQueue.h"
 
 #include <QObject>
 #include <QImage>
@@ -10,22 +11,26 @@
 #include <QElapsedTimer>
 #include <QQueue>
 #include <QSet>
+#include <QThread>
 
 class QThread;
 class ThreadedThumbnailGenerator;
 
 
-class ReadWorker : public QObject {
+class ReadWorker : public QThread {
     Q_OBJECT
 public:
-   ReadWorker(ThreadedThumbnailGenerator *generator);
-   void readThumbnail(ThumbnailReadRequest request, int queueId);
+    ReadWorker(QObject *parent);
+    ThreadSafeQueue<ThumbnailReadRequest> &readQueue();
 
 signals:
-   void readResultReady(const ThumbnailReadResult &result, int queueId);
+   void readResultReady(const ThumbnailReadResult &result);
+
+protected:
+    void run() override;
 
 private:
-    ThreadedThumbnailGenerator *_generator;
+    ThreadSafeQueue<ThumbnailReadRequest> _readQueue;
 };
 
 
@@ -36,7 +41,7 @@ public:
     void decodeThumbnail(const ThumbnailReadResult &readResult, int queueId);
 
 signals:
-    void decodeResultReady(const QString &path, const QImage &image);
+    void decodeResultReady(const ThumbnailReadResult &readResult, const QImage &image);
 
 private:
      ThreadedThumbnailGenerator *_generator;
@@ -49,16 +54,16 @@ public:
     explicit ThreadedThumbnailGenerator(QObject *parent = nullptr);
     void prepareToClose();
 
-    void setThumbnailReadQueue(QList<ThumbnailReadRequest> requests);
+    void clearRequests();
+    void requestRead(QList<ThumbnailReadRequest> requests);
     void requestDecode(QList<ThumbnailReadRequest> requests);
-    void setNextRequestImage(QString path, bool isForward);
 
     QAtomicInt _queueId;
 
 signals:
     void thumbnailReady(QString path, QImage thumbnail);
+    void viewerReady(QString path, QImage thumbnail);
     void thumbnailInfoReady(QString path, QSize fullSize);
-    void requestReadThumbnail(ThumbnailReadRequest request, int queueId);
     void requestDecodeThumbnail(ThumbnailReadResult request, int queueId);
     void readFinished();
     void decodeFinished();
@@ -70,22 +75,15 @@ private:
         bool isFinished;
     };
 
-    void onThumbnailDecodeFinished(const QString &path, const QImage &image);
-    void onThumbnailReadFinished(const ThumbnailReadResult &result, int queueId);
-    bool requestNextThumbnailRead();
+    void onThumbnailDecodeFinished(const ThumbnailReadResult &readResult, const QImage &image);
+    void onThumbnailReadFinished(const ThumbnailReadResult &result);
     bool requestNextThumbnailDecode(WorkerInfo &worker);
     void checkIfFinished();
 
-    int nextPathIndex();
-    int prevPathIndex();
-
     QList<ThumbnailReadRequest> _requests;
-    QThread *_loaderThread;
-    ReadWorker *_loaderWorker;
+    ReadWorker *_readWorker;
     QHash<QString, ThumbnailReadResult> _thumbnailReadSet;
     QQueue<ThumbnailReadResult> _thumbnailDecodeQueue;
-    int _lastRequestIndex;
-    int _lastRequestIndexIncrement;
     bool _readFinished;
 
     QList<WorkerInfo> _workers;

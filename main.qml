@@ -32,6 +32,7 @@ Window {
 
         function onMainWindowResized() {
             masonryLayout.view.reReadAndDecodeThumbnails()
+            fileListModel.invalidateViewerImages()
         }
     }
 
@@ -49,6 +50,7 @@ Window {
         }
 
         function switchToViewer() {
+            viewerMode.forceActiveFocus()
             root.state = "viewer"
 
             if (!viewerAnimation.running) {
@@ -61,6 +63,7 @@ Window {
             }
 
             viewerImage.source = masonryLayout.view.currentItem.imageId
+            fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
 
             viewerMode.visible = true
 
@@ -72,6 +75,7 @@ Window {
         }
 
         function switchToThumbnails() {
+            masonryLayout.forceActiveFocus()
             root.state = "thumbnails"
 
             if (masonryLayout.view.currentItem) {
@@ -175,6 +179,31 @@ Window {
             property int animationDuration: 150
             property int easingType: Easing.OutSine
 
+            Keys.onPressed:
+                (event) => {
+                    let nextIndex = -1
+                    let currentIndex = masonryLayout.view.currentIndex
+                    if (event.key === Qt.Key_Left || event.key === Qt.Key_PageUp || event.key === Qt.Key_Backspace || event.key === Qt.Key_Up) {
+                        nextIndex = masonryLayout.moveInImageList(false, false)
+                    }
+                    else if (event.key === Qt.Key_Right || event.key === Qt.Key_PageDown || event.key === Qt.Key_Space || event.key === Qt.Key_Down) {
+                        nextIndex = masonryLayout.moveInImageList(true, false)
+                    }
+                    else if (event.key === Qt.Key_Home) {
+                        nextIndex = masonryLayout.moveInImageList(false, true)
+                    }
+                    else if (event.key === Qt.Key_End) {
+                        nextIndex = masonryLayout.moveInImageList(true, true)
+                    }
+                    else if (event.key === Qt.Key_Enter || event.key === Qt.Key_Return || event.key === Qt.Key_Escape) {
+                        root.toggleViewer()
+                    }
+
+                    if (nextIndex !== -1 && nextIndex !== currentIndex) {
+                        fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+                    }
+            }
+
             Connections {
                 target: masonryLayout.view
                 function onCurrentIndexChanged() {
@@ -184,6 +213,13 @@ Window {
                             viewerImage.source = imageId
                         }
                     }
+                }
+            }
+
+            Connections {
+                target: fileListModel
+                function onViewerImageIdChanged(newImageId) {
+                    viewerImage.source = newImageId
                 }
             }
 
@@ -213,9 +249,21 @@ Window {
                         }
                     }
 
-                onWheel: {
+                onWheel:
+                    (wheel) => {
+                        let nextIndex = -1
+                        let currentIndex = masonryLayout.view.currentIndex
+                        if (wheel.angleDelta.y < 0) {
+                            nextIndex = masonryLayout.moveInImageList(true, false)
+                        }
+                        else {
+                            nextIndex = masonryLayout.moveInImageList(false, false)
+                        }
 
-                }
+                        if (nextIndex !== currentIndex) {
+                            fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+                        }
+                    }
 
                 acceptedButtons: Qt.AllButtons
             }

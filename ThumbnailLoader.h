@@ -21,7 +21,7 @@ public:
     QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize);
     QImage loadImageOther(const QString &path);
 
-    QImage createThumbnail(const QImage &image, QSize dimensions);
+    QImage createThumbnail(const QImage &image, QSize dimensions, bool keepAspect);
     QImage unsharpMask(QImage &image);
     QImage rotateAndFlip(const QImage &image, ExifOrientation orientation);
 

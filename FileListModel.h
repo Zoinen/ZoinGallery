@@ -37,15 +37,18 @@ public:
     QString fullPath(QString fileName);
     const ImageFile *itemForImageId(QString imageId);
 
-    Q_INVOKABLE void setNextRequestIndex(int index);
-
     void addRequestThumbnails(QList<ThumbnailReadRequest> requests);
 
     static bool isImage(QString fileName);
 
+    Q_INVOKABLE void requestViewer(int index, int width, int height);
+    QImage viewerForImageId(QString imageId);
+    Q_INVOKABLE void invalidateViewerImages();
+
 signals:
     void generationFinishedChanged();
     void thumbnailReadFinished();
+    void viewerImageIdChanged(QString imageId);
 
 private:
     QString generateNewId();
@@ -61,6 +64,13 @@ private:
 
     ThreadedThumbnailGenerator *_generator;
     bool _generationFinished;
+
+    // Viewer
+    QHash<QString, QImage> _viewerImages;
+    QHash<QString, QString> _imageIdToViewer;
+    QHash<QString, QString> _viewerToImageId;
+    QSet<QString> _requestedViewerImages;
+    int _currentViewIndex;
 };
 
 #endif // FILELISTMODEL_H

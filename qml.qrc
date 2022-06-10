@@ -1,7 +1,6 @@
 <RCC>
     <qresource prefix="/">
         <file>main.qml</file>
-        <file>qml/GridMode.qml</file>
         <file>qml/MasonryMode.qml</file>
         <file>qml/ScrollBar.qml</file>
         <file>qml/Slider.qml</file>

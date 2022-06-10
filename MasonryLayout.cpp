@@ -95,6 +95,19 @@ QString MasonryLayout::indexImage(int index) const {
     return QString();
 }
 
+int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
+    int nextIndex = _currentIndex;
+    for (int i = _currentIndex + (forward ? 1 : -1); i >= 0 && i < _bricks.size(); i += (forward ? 1 : -1)) {
+        if (_bricks[i].image->isImage) {
+            nextIndex = i;
+            if (!moveToEnd) {
+                break;
+            }
+        }
+    }
+    return nextIndex;
+}
+
 void MasonryLayout::reReadAndDecodeThumbnails() {
     _currentLoadingRow.clear();
     static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
@@ -343,8 +356,8 @@ void MasonryLayout::updateProperties() {
                 }
             }
 
-            if (_bricks[i].item->property("text").toString() != _bricks[i].image->path) {
-                _bricks[i].item->setProperty("text", _bricks[i].image->path);
+            if (_bricks[i].item->property("text").toString() != _bricks[i].image->fileName) {
+                _bricks[i].item->setProperty("text", _bricks[i].image->fileName);
             }
             if (_bricks[i].item->property("index").toInt() != i) {
                 _bricks[i].item->setProperty("index", i);
@@ -449,7 +462,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
                     _bricks[updIndex].originalSize = _bricks[updIndex].image->fullSize;
 
                     QSize thumbnailSize = _currentLoadingRow[i].thumbnailSize() * window()->devicePixelRatio();
-                    requests.append(ThumbnailReadRequest(_bricks[updIndex].image->path, thumbnailSize));
+                    requests.append(ThumbnailReadRequest(static_cast<FileListModel *>(_model)->fullPath(_bricks[updIndex].image->fileName), thumbnailSize));
                 }
             }
             else {

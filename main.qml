@@ -17,6 +17,25 @@ Window {
     color: "#333333"
     title: qsTr("Zoin Gallery")
 
+    visibility: Window.Maximized
+    property int lastVisibility
+
+    function toggleFullscreen() {
+        if (topLevelWindow.visibility === Window.FullScreen) {
+            if (topLevelWindow.lastVisibility !== undefined) {
+                topLevelWindow.visibility = lastVisibility
+            }
+            else {
+                topLevelWindow.visibility = Window.Maximized
+            }
+        }
+        else {
+            topLevelWindow.lastVisibility = topLevelWindow.visibility
+            topLevelWindow.visibility = Window.FullScreen
+        }
+    }
+
+
     property real dpr: topLevelWindow.screen.devicePixelRatio
 
     onClosing: (closeEvent) => {
@@ -27,12 +46,22 @@ Window {
         viewerController.mainWindow = topLevelWindow
     }
 
+    property bool viewerDirty: false
+    property bool thumbnailsDirty: false
+
     Connections {
         target: viewerController
 
         function onMainWindowResized() {
-            masonryLayout.view.reReadAndDecodeThumbnails()
-            fileListModel.invalidateViewerImages()
+            if (root.state === "thumbnails") {
+                masonryLayout.view.reReadAndDecodeThumbnails()
+                viewerDirty = true
+            }
+            else {
+                fileListModel.invalidateViewerImages()
+                fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+                thumbnailsDirty = true
+            }
         }
     }
 
@@ -42,10 +71,18 @@ Window {
 
         function toggleViewer() {
             if (root.state === "thumbnails") {
+                if (viewerDirty) {
+                    viewerDirty = false
+                    fileListModel.invalidateViewerImages()
+                }
                 switchToViewer()
             }
             else {
                 switchToThumbnails()
+                if (thumbnailsDirty) {
+                    thumbnailsDirty = false
+                    masonryLayout.view.reReadAndDecodeThumbnails()
+                }
             }
         }
 
@@ -72,6 +109,8 @@ Window {
             viewerAnimation.width = viewerMode.width
             viewerAnimation.height = viewerMode.height
             viewerAnimation.restart()
+
+            topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
         }
 
         function switchToThumbnails() {
@@ -87,6 +126,8 @@ Window {
                 viewerAnimation.height = mappedGeometry.height
                 viewerAnimation.restart()
             }
+
+            topLevelWindow.title = "ZoinGallery"
         }
 
         ColumnLayout {
@@ -195,12 +236,17 @@ Window {
                     else if (event.key === Qt.Key_End) {
                         nextIndex = masonryLayout.moveInImageList(true, true)
                     }
+                    else if (event.key === Qt.Key_F11 || event.key === Qt.Key_F ||
+                             (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier)) {
+                        topLevelWindow.toggleFullscreen()
+                    }
                     else if (event.key === Qt.Key_Enter || event.key === Qt.Key_Return || event.key === Qt.Key_Escape) {
                         root.toggleViewer()
                     }
 
                     if (nextIndex !== -1 && nextIndex !== currentIndex) {
                         fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+                        topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
                     }
             }
 
@@ -241,11 +287,19 @@ Window {
                 anchors.fill: parent
                 enabled: root.state === "viewer"
 
-                onDoubleClicked: root.toggleViewer()
+                onDoubleClicked:
+                    (mouse) => {
+                        if (mouse.button === Qt.LeftButton) {
+                            root.toggleViewer()
+                        }
+                    }
                 onPressed:
                     (mouse) => {
                         if (mouse.button === Qt.RightButton) {
                             root.toggleViewer()
+                        }
+                        else if (mouse.button === Qt.MiddleButton) {
+                            topLevelWindow.toggleFullscreen()
                         }
                     }
 
@@ -262,6 +316,7 @@ Window {
 
                         if (nextIndex !== currentIndex) {
                             fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+                            topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
                         }
                     }
 

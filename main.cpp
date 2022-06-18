@@ -1,5 +1,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QElapsedTimer>
+#include <QStandardPaths>
 
 #include "ViewerController.h"
 
@@ -30,7 +32,13 @@ int main(int argc, char *argv[])
 //    view->setGeometry(600, 400, 500, 500);
 //    view->show();
 
-    controller->doCd();
+    if (qApp->arguments().size() > 1) {
+        QString path = qApp->arguments()[1].replace("\"", "");
+        controller->cd(path);
+    }
+    else {
+        controller->cd(QStandardPaths::standardLocations(QStandardPaths::DocumentsLocation).first());
+    }
 
     return app.exec();
 }

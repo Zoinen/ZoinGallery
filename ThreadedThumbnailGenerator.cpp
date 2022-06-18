@@ -25,7 +25,7 @@ ThreadedThumbnailGenerator::ThreadedThumbnailGenerator(QObject *parent)
         info.isFinished = true;
         info.worker->moveToThread(info.thread);
         connect(info.worker, &DecodeWorker::decodeResultReady,
-                this, &ThreadedThumbnailGenerator::onThumbnailDecodeFinished);
+                this, &ThreadedThumbnailGenerator::onDecodeFinished);
         _workers.append(info);
 
         info.thread->start();
@@ -34,7 +34,7 @@ ThreadedThumbnailGenerator::ThreadedThumbnailGenerator(QObject *parent)
 
     _readWorker = new ReadWorker(this);
     connect(_readWorker, &ReadWorker::readResultReady,
-            this, &ThreadedThumbnailGenerator::onThumbnailReadFinished);
+            this, &ThreadedThumbnailGenerator::onReadFinished);
     _readWorker->start();
 }
 
@@ -51,10 +51,11 @@ void ThreadedThumbnailGenerator::prepareToClose() {
 }
 
 void ThreadedThumbnailGenerator::clearRequests() {
-    _thumbnailReadSet.clear();
-    _thumbnailDecodeQueue.clear();
+    _readSet.clear();
+    _decodeQueue.clear();
     _readFinished = false;
     _requests.clear();
+    _readWorker->readQueue().clear();
 
     for (int i = 0; i < _workers.size(); i++) {
         _workers[i].isFinished = true;
@@ -62,47 +63,75 @@ void ThreadedThumbnailGenerator::clearRequests() {
     _queueId.fetchAndAddOrdered(1);
 }
 
-void ThreadedThumbnailGenerator::requestRead(QList<ThumbnailReadRequest> requests) {
-    _benchmark.start();
-    for (int i = 0; i < requests.size(); i++) {
-        requests[i].queueId = _queueId.loadAcquire(); // TODO: Make sure it's correct
+void ThreadedThumbnailGenerator::requestRead(QList<ImageReadRequest> requests) {
+    if (!requests.size()) {
+        return;
     }
+
+    _benchmark.start();
+    int queueId = _queueId.loadAcquire();
+    for (int i = 0; i < requests.size(); i++) {
+        requests[i].queueId = queueId;
+    }
+
     prependList(_requests, requests);
-    _readWorker->readQueue().prepend(requests);
+    if (requests.first().viewerRequest) {
+        _readWorker->readQueue().prependNewAndPrioritizeDuplicates(requests);
+    }
+    else {
+        _readWorker->readQueue().prepend(requests);
+    }
 }
 
-void ThreadedThumbnailGenerator::requestDecode(QList<ThumbnailReadRequest> requests) {
+void ThreadedThumbnailGenerator::requestThumbnailDecode(QList<ImageReadRequest> requests) {
 //    qDebug() << "REQ ------------;";
 //    for (int i = 0; i < requests.size(); i++) {
 //        qDebug() << requests[i].sourcePath;
 //    }
 //    return;
     for (int i = 0; i < requests.size(); i++) {
-        auto it = _thumbnailReadSet.find(requests.at(i).sourcePath);
-        if (it != _thumbnailReadSet.end()) {
-            ThumbnailReadResult res = *it;
+        auto it = _readSet.find(requests.at(i).sourcePath);
+        if (it != _readSet.end()) {
+            ImageReadResult res = *it;
             res.request.targetSize = requests.at(i).targetSize;
-            _thumbnailDecodeQueue.enqueue(res);
-            _thumbnailReadSet.erase(it);
+            _decodeQueue.enqueue(res);
+            _readSet.erase(it);
         }
     }
     for (int i = 0; i < _workers.size(); i++) {
         if (_workers[i].isFinished) {
-            requestNextThumbnailDecode(_workers[i]);
+            requestNextDecode(_workers[i]);
             break;
         }
     }
 }
 
-bool ThreadedThumbnailGenerator::requestNextThumbnailDecode(WorkerInfo &worker) {
-    if (_thumbnailDecodeQueue.isEmpty()) {
+void ThreadedThumbnailGenerator::requestViewerDecode(ImageReadRequest request) {
+    auto it = _readSet.find(request.sourcePath);
+    if (it != _readSet.end()) {
+        ImageReadResult res = *it;
+        res.request.targetSize = request.targetSize;
+        _decodeQueue.prepend(res);
+        _readSet.erase(it);
+    }
+
+    for (int i = 0; i < _workers.size(); i++) {
+        if (_workers[i].isFinished) {
+            requestNextDecode(_workers[i]);
+            break;
+        }
+    }
+}
+
+bool ThreadedThumbnailGenerator::requestNextDecode(WorkerInfo &worker) {
+    if (_decodeQueue.isEmpty()) {
         return false;
     }
 
     worker.isFinished = false;
     QMetaObject::Connection connection = connect(this, &ThreadedThumbnailGenerator::requestDecodeThumbnail,
-                                                 worker.worker, &DecodeWorker::decodeThumbnail);
-    emit requestDecodeThumbnail(_thumbnailDecodeQueue.dequeue(), _queueId.loadAcquire());
+                                                 worker.worker, &DecodeWorker::decode);
+    emit requestDecodeThumbnail(_decodeQueue.dequeue(), _queueId.loadAcquire());
     disconnect(connection);
     return true;
 }
@@ -122,18 +151,16 @@ void ThreadedThumbnailGenerator::checkIfFinished() {
     }
 }
 
-void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResult &result) {
+void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
     if (result.request.queueId != _queueId.loadRelaxed()) {
         return;
     }
-    _thumbnailReadSet[result.request.sourcePath] = result;
+    _readSet[result.request.sourcePath] = result;
     if (!result.request.viewerRequest) {
         emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
     }
     else {
-        QList<ThumbnailReadRequest> requests;
-        requests.append(ThumbnailReadRequest(result.request.sourcePath, result.request.targetSize));
-        requestDecode(requests);
+        requestViewerDecode(ImageReadRequest(result.request.sourcePath, result.request.targetSize));
     }
 
     if (_requests.size() && result.request.sourcePath == _requests.last().sourcePath) {
@@ -144,7 +171,7 @@ void ThreadedThumbnailGenerator::onThumbnailReadFinished(const ThumbnailReadResu
     }
 }
 
-void ThreadedThumbnailGenerator::onThumbnailDecodeFinished(const ThumbnailReadResult &readResult, const QImage &image) {
+void ThreadedThumbnailGenerator::onDecodeFinished(const ImageReadResult &readResult, const QImage &image) {
     qDebug() << "-------- on ready" << readResult.request.sourcePath << readResult.request.viewerRequest;
     if (!readResult.request.viewerRequest) {
         emit thumbnailReady(readResult.request.sourcePath, image);
@@ -155,7 +182,7 @@ void ThreadedThumbnailGenerator::onThumbnailDecodeFinished(const ThumbnailReadRe
     DecodeWorker *worker = static_cast<DecodeWorker*>(sender());
     for (int i = 0; i < _workers.size(); i++) {
         if (_workers[i].worker == worker) {
-            if (!requestNextThumbnailDecode(_workers[i])) {
+            if (!requestNextDecode(_workers[i])) {
                 _workers[i].isFinished = true;
                 checkIfFinished();
             }
@@ -169,7 +196,7 @@ DecodeWorker::DecodeWorker(ThreadedThumbnailGenerator *generator) {
     _generator = generator;
 }
 
-void DecodeWorker::decodeThumbnail(const ThumbnailReadResult &readResult, int queueId) {
+void DecodeWorker::decode(const ImageReadResult &readResult, int queueId) {
     if (queueId != _generator->_queueId.loadRelaxed()) {
         return;
     }
@@ -213,11 +240,11 @@ ReadWorker::ReadWorker(QObject *parent)
 
 void ReadWorker::run() {
     forever {
-        ThumbnailReadRequest request = _readQueue.dequeue();
+        ImageReadRequest request = _readQueue.dequeue();
 
         ThumbnailLoader loader;
         if (ThumbnailLoader::isExifCompatible(request.sourcePath)) {
-            ThumbnailReadResult result;
+            ImageReadResult result;
             result.request = request;
             qDebug() << "READ" << request.sourcePath << request.targetSize;
             bool fileLoaded = loader.readExifPreview(request.sourcePath, request.targetSize, result);
@@ -244,6 +271,6 @@ void ReadWorker::run() {
     }
 }
 
-ThreadSafeQueue<ThumbnailReadRequest> &ReadWorker::readQueue() {
+ThreadSafeQueue &ReadWorker::readQueue() {
     return _readQueue;
 }

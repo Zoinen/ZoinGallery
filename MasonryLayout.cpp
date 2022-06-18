@@ -454,7 +454,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
     calcLayout(_currentLoadingRow, width(), _targetHeight, _spacing * window()->devicePixelRatio());
     if (_currentLoadingRow.last().row > 0 || flushMode) {
 //        qDebug() << "REWRAP";
-        QList<ThumbnailReadRequest> requests;
+        QList<ImageReadRequest> requests;
         for (int i = 0; i < _currentLoadingRow.size(); i++) {
             if (_currentLoadingRow[i].row != _currentLoadingRow.last().row || flushMode) {
                 int updIndex = _currentLoadingRow[i].globalIndex;
@@ -462,7 +462,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
                     _bricks[updIndex].originalSize = _bricks[updIndex].image->fullSize;
 
                     QSize thumbnailSize = _currentLoadingRow[i].thumbnailSize() * window()->devicePixelRatio();
-                    requests.append(ThumbnailReadRequest(static_cast<FileListModel *>(_model)->fullPath(_bricks[updIndex].image->fileName), thumbnailSize));
+                    requests.append(ImageReadRequest(static_cast<FileListModel *>(_model)->fullPath(_bricks[updIndex].image->fileName), thumbnailSize));
                 }
             }
             else {

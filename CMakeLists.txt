@@ -58,6 +58,7 @@ set(PROJECT_SOURCES
     exiv2/Preview.cpp
     qml.qrc
     ThreadSafeQueue.h
+    ThreadSafeQueue.cpp
 )
 
 set(CMAKE_AUTOMOC ON)

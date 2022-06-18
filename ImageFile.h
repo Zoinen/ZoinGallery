@@ -41,18 +41,26 @@ struct ImageFile {
     ImageFile() : isFolder(false), index(-1) {}
 };
 
-struct ThumbnailReadRequest {
+struct ImageReadRequest {
     QString sourcePath;
     QSize targetSize;
     bool viewerRequest;
     int queueId;
 
-    ThumbnailReadRequest(const QString &path = QString(), const QSize &size = QSize(), bool viewerRequest_ = false)
+    ImageReadRequest(const QString &path = QString(), const QSize &size = QSize(), bool viewerRequest_ = false)
         : sourcePath(path), targetSize(size), viewerRequest(viewerRequest_), queueId(-1) {}
+
+    bool operator==(const ImageReadRequest &other) const {
+        return sourcePath == other.sourcePath && viewerRequest == other.viewerRequest;
+    }
 };
 
-struct ThumbnailReadResult {
-    ThumbnailReadRequest request;
+inline uint qHash(const ImageReadRequest &key, uint seed = 0) {
+    return qHash(QString("%1|%2").arg(key.viewerRequest).arg(key.sourcePath)), seed;
+}
+
+struct ImageReadResult {
+    ImageReadRequest request;
     QSize fullSize;
     QSize thumbnailSize;
     ExifOrientation orientation;
@@ -60,7 +68,7 @@ struct ThumbnailReadResult {
     QByteArray thumbnailData;
     QByteArray fullImageData;
 
-    ThumbnailReadResult() : orientation(ExifOrientation::Horizontal) {}
+    ImageReadResult() : orientation(ExifOrientation::Horizontal) {}
 };
 
 Q_DECLARE_METATYPE(ImageFile *)

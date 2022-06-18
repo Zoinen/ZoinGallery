@@ -15,7 +15,6 @@ class ViewerController : public QObject {
 public:
     ViewerController(QQmlEngine *engine);
 
-    Q_INVOKABLE void doCd();
     Q_INVOKABLE void cd(QString folder);
     Q_INVOKABLE int up();
     Q_INVOKABLE void prepareToClose();

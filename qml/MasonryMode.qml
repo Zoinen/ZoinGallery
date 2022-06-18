@@ -106,6 +106,7 @@ MouseArea {
     property bool hideHovered: false
     property real currentItemCenterX: 0
     property real currentItemCenterY: 0
+    property bool alwaysShowFileNames: false
 
     Connections {
         target: masonryLayout
@@ -272,6 +273,10 @@ MouseArea {
             else if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier)) {
                 setCurrentIndex(viewerController.up())
             }
+            else if (event.key === Qt.Key_F11 || event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier) ||
+                     (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier)) {
+                topLevelWindow.toggleFullscreen()
+            }
             else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier)) {
                 if (masonryLayout.currentItem.isFolder) {
                     viewerController.cd(masonryLayout.currentItem.text)
@@ -285,6 +290,9 @@ MouseArea {
             }
             else if (event.key === Qt.Key_Minus) {
                 masonryLayout.zoomOut()
+            }
+            else if (event.key === Qt.Key_Backslash) {
+                masonryView.alwaysShowFileNames = !masonryView.alwaysShowFileNames
             }
         }
 
@@ -378,7 +386,8 @@ MouseArea {
                     bottomMargin: masonryLayout.spacing / 2
                 }
                 height: textField.height + 10
-                visible: (brickMouseArea.containsMouse && !hideHovered) || imageId === "" || masonryLayout.currentIndex === index
+                visible: (brickMouseArea.containsMouse && !hideHovered) || imageId === "" ||
+                         masonryLayout.currentIndex === index || masonryView.alwaysShowFileNames
                 z: 1
 
                 Text {

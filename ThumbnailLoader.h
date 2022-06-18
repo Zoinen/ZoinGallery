@@ -17,7 +17,7 @@ public:
 
     void setPath(const QString &path);
 
-    bool readExifPreview(const QString &path, QSize preferredSize, ThumbnailReadResult &outResult);
+    bool readExifPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult);
     QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize);
     QImage loadImageOther(const QString &path);
 

@@ -69,7 +69,7 @@ struct imemstream: virtual membuf, std::istream {
     }
 };
 
-bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, ThumbnailReadResult &outResult) {
+bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult) {
     _path = path;
 
     outResult.request.sourcePath = path;

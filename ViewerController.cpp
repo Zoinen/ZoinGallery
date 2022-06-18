@@ -27,21 +27,19 @@ ViewerController::ViewerController(QQmlEngine *engine)
     engine->addImageProvider("resources", resourcesProvider);
 }
 
-void ViewerController::doCd() {
-    //    _fileListModel->cd("C:\\Users\\xs\\Documents\\____");
-//    QString path = "C:\\Users\\xs\\Documents\\____\\new";
-    QString path = "B:\\_Photos\\[2022.01.29] Irina's DR in Gosti";
 //    QString path = "B:\\_Photos\\"; //[2021.12.29] New Year in Rostum\\pro\\1"; //"P:\\RAED";
 //    QString path = "P:\\[Year 2015]\\[2015.03.14] Sputnik";
 //    QString path = "C:\\";
-    _currentPath = path;
-    emit currentPathChanged();
 
-    _fileListModel->cd(_currentPath);
-}
 
 void ViewerController::cd(QString folder) {
-    if (_currentPath == "Computer") {
+    qDebug() << folder;
+    if (folder.contains("\\") || folder.contains("/")) {
+        _currentPath = QDir::toNativeSeparators(QDir(folder).absolutePath());
+        emit currentPathChanged();
+        _fileListModel->cd(_currentPath);
+    }
+    else if (_currentPath == "Computer") {
         QDir dir(folder);
         _currentPath = QDir::toNativeSeparators(dir.absolutePath());
         emit currentPathChanged();

@@ -37,7 +37,7 @@ public:
     QString fullPath(QString fileName);
     const ImageFile *itemForImageId(QString imageId);
 
-    void addRequestThumbnails(QList<ThumbnailReadRequest> requests);
+    void addRequestThumbnails(QList<ImageReadRequest> requests);
 
     static bool isImage(QString fileName);
 

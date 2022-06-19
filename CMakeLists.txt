@@ -41,8 +41,6 @@ conan_basic_setup(NO_OUTPUT_DIRS)
 find_package(QT NAMES Qt6 Qt5 COMPONENTS Core Quick Concurrent Svg REQUIRED)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Concurrent Svg REQUIRED)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DQT_QML_DEBUG ")
-
 set(PROJECT_SOURCES
     main.cpp
     ThumbnailLoader.cpp
@@ -61,6 +59,10 @@ set(PROJECT_SOURCES
     ThreadSafeQueue.cpp
 )
 
+if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DQT_QML_DEBUG ")
+endif()
+
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
@@ -70,6 +72,6 @@ if(WIN32)
     set(RESOURCE_FILES ${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery.rc)
 endif()
 
-add_executable(ZoinGallery ${PROJECT_SOURCES} ${RESOURCE_FILES})
+add_executable(ZoinGallery WIN32 ${PROJECT_SOURCES} ${RESOURCE_FILES})
 target_link_libraries(ZoinGallery PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Quick
     Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg ${CONAN_LIBS})

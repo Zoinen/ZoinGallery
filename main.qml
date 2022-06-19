@@ -236,7 +236,7 @@ Window {
                     else if (event.key === Qt.Key_End) {
                         nextIndex = masonryLayout.moveInImageList(true, true)
                     }
-                    else if (event.key === Qt.Key_F11 || event.key === Qt.Key_F ||
+                    else if (event.key === Qt.Key_F11 || event.key === Qt.Key_F || event.key === Qt.Key_Clear /*Num_5*/ ||
                              (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier)) {
                         topLevelWindow.toggleFullscreen()
                     }

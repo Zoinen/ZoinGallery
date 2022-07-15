@@ -102,7 +102,15 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         QSize preferredSizeRotated = rotateToOrientation(preferredSize, outResult.orientation);
 
         Exiv2::PreviewProperties previewProp;
-        Exiv2::DataBuf previewImg = Exiv2Preview::preview(*image.get(), preferredSizeRotated.width(), preferredSizeRotated.height(), &previewProp);
+
+        // Blacklisting second thumbnail in cr2 since it's a weird tif with very dark image
+        int ignoreThumbnailAt = -1;
+        if (path.endsWith(".cr2", Qt::CaseInsensitive)) {
+            ignoreThumbnailAt = 2;
+        }
+        qDebug() << ignoreThumbnailAt;
+        Exiv2::DataBuf previewImg = Exiv2Preview::preview(*image.get(), preferredSizeRotated.width(),
+                                                          preferredSizeRotated.height(), &previewProp, ignoreThumbnailAt);
         if (previewImg.pData_) {
             outResult.thumbnailData = QByteArray::fromRawData(reinterpret_cast<char *>(previewImg.pData_), previewImg.size_);
             outResult.mimeType = QString::fromStdString(previewProp.mimeType_);

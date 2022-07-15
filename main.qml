@@ -150,7 +150,7 @@ Window {
                     text: "Up"
 
                     onReleased: {
-                        masonryLayout.view.currentIndex = viewerController.up()
+                        masonryLayout.setCurrentIndex(viewerController.up())
                     }
                 }
 

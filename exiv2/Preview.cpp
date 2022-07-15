@@ -1414,7 +1414,8 @@ namespace {
 //    }
 //}                                       // namespace Exiv2
 
-Exiv2::DataBuf Exiv2Preview::preview(const Exiv2::Image& image, int targetWidth, int targetHeight, Exiv2::PreviewProperties *outPreviewProperties) {
+Exiv2::DataBuf Exiv2Preview::preview(const Exiv2::Image& image, int targetWidth, int targetHeight,
+                                     Exiv2::PreviewProperties *outPreviewProperties, int ignoreThumbnailAt) {
     PreviewProperties properties;
     DataBuf buf;
 
@@ -1422,10 +1423,14 @@ Exiv2::DataBuf Exiv2Preview::preview(const Exiv2::Image& image, int targetWidth,
     int previewWithMaxResolution = -1;
     int maxPreviewWidth = 0;
     int maxPreviewHeight = 0;
+    int thumbnailNumber = 0;
     for (PreviewId id = 0; id < Loader::getNumLoaders(); ++id) {
         Loader::AutoPtr loader = Loader::create(id, image);
         if (loader.get() && loader->readDimensions()) {
-
+            thumbnailNumber++;
+            if (thumbnailNumber == ignoreThumbnailAt) {
+                continue;
+            }
             PreviewProperties props = loader->getProperties();
             if (props.width_ > maxPreviewWidth && props.height_ > maxPreviewHeight) {
                 maxPreviewWidth = props.width_;

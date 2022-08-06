@@ -86,6 +86,7 @@ QWindow *ViewerController::mainWindow() const {
 void ViewerController::setMainWindow(QWindow *mainWindow) {
     _mainWindow = mainWindow;
     _mainWindow->installEventFilter(this);
+    _lastSize = _mainWindow->size();
 }
 
 bool ViewerController::eventFilter(QObject *watched, QEvent *event) {
@@ -101,7 +102,10 @@ bool ViewerController::eventFilter(QObject *watched, QEvent *event) {
             }
         }
         else if (event->type() == QEvent::Resize && !_leftButtonPressed) {
-            emit mainWindowResized();
+            if (_lastSize != _mainWindow->size()) {
+                emit mainWindowResized();
+            }
+            _lastSize = _mainWindow->size();
         }
     }
     return false;

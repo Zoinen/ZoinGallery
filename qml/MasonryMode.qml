@@ -28,7 +28,9 @@ MouseArea {
     property var scrollingStartedAtY
     property bool scrollingMode: false
 
-    acceptedButtons: Qt.MiddleButton
+    property bool disableAnimation: false
+
+    acceptedButtons: Qt.MiddleButton | Qt.RightButton
 
     function startScrolling() {
         scrollingStarted = false
@@ -48,7 +50,7 @@ MouseArea {
     }
 
     onPressed: {
-        if (!scrollingMode) {
+        if (mouse.button === Qt.MiddleButton && !scrollingMode) {
             startScrolling()
         }
         else {
@@ -171,9 +173,15 @@ MouseArea {
 
         if (newContentY !== -1) {
             newContentY = Math.max(0, Math.min(masonryLayout.contentHeight - masonryLayout.height, newContentY))
-            scrollAnimation2.from = masonryLayout.contentY
-            scrollAnimation2.to = newContentY
-            scrollAnimation2.restart()
+            if (!masonryView.disableAnimation) {
+                scrollAnimation2.from = masonryLayout.contentY
+                scrollAnimation2.to = newContentY
+                scrollAnimation2.restart()
+            }
+            else {
+                masonryLayout.contentY = newContentY
+            }
+
         }
     }
 
@@ -271,7 +279,9 @@ MouseArea {
                 scrollBy(deltaY)
             }
             else if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier)) {
+                masonryView.disableAnimation = true
                 setCurrentIndex(viewerController.up())
+                masonryView.disableAnimation = false
             }
             else if (event.key === Qt.Key_F11 || event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier) ||
                      (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier)) {
@@ -293,6 +303,9 @@ MouseArea {
             }
             else if (event.key === Qt.Key_Backslash) {
                 masonryView.alwaysShowFileNames = !masonryView.alwaysShowFileNames
+            }
+            else if (event.key === Qt.Key_Escape) {
+                endScrolling()
             }
         }
 

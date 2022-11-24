@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.13)
+
+set (CMAKE_OSX_DEPLOYMENT_TARGET, "10.13")
+
 project(ZoinGallery LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
@@ -6,7 +9,11 @@ list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Bringing back removed std::auto_ptr for msvc and clang
 add_compile_definitions(_HAS_AUTO_PTR_ETC=1)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_LIBCPP_ENABLE_CXX17_REMOVED_FEATURES -D_LIBCPP_ENABLE_CXX14_REMOVED_FEATURES")
+
 
 # conan
 if(NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
@@ -72,6 +79,35 @@ if(WIN32)
     set(RESOURCE_FILES ${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery.rc)
 endif()
 
-add_executable(ZoinGallery WIN32 ${PROJECT_SOURCES} ${RESOURCE_FILES})
+if(APPLE)
+    set(ICON_FILENAME ZoinGallery.icns)
+    set(ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/resources/${ICON_FILENAME})
+    set(RESOURCE_FILES ${ICON_PATH})
+endif()
+
+add_executable(ZoinGallery WIN32 MACOSX_BUNDLE ${PROJECT_SOURCES} ${RESOURCE_FILES})
+
+set_target_properties(${PROJECT_NAME}
+    PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
 target_link_libraries(ZoinGallery PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Quick
     Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg ${CONAN_LIBS})
+
+if(APPLE)
+    set(MACOSX_BUNDLE_ICON_FILE ${ICON_FILENAME})
+    set_source_files_properties(${ICON_PATH} PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources")
+    set_target_properties(ZoinGallery
+        PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist")
+
+    # configure RPATH to find Qt
+    find_package(Qt6 ${QT_REQUIRED_VERSION} COMPONENTS Core)
+    get_target_property(_qmake_executable Qt6::qmake IMPORTED_LOCATION)
+    get_filename_component(_qt_bin_dir "${_qmake_executable}" DIRECTORY)
+    target_link_options(${PROJECT_NAME} PRIVATE
+        "-Wl,-rpath,${_qt_bin_dir}/../lib/,-rpath,@loader_path/../Frameworks,-rpath,@executable_path/../,-rpath,@executable_path/../Frameworks"
+        )
+endif()

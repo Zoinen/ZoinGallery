@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSHighResolutionCapable</key>
+	<string>True</string>
+	<key>CFBundleIconFile</key>
+	<string>@ICON_FILENAME@</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleGetInfoString</key>
+	<string></string>
+	<key>CFBundleSignature</key>
+	<string>@TYPEINFO@</string>
+	<key>CFBundleExecutable</key>
+	<string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+	<key>CFBundleIdentifier</key>
+	<string>su.zoin</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@PROJECT_VERSION@.@BUILD_NUMBER@</string>
+	<key>CFBundleVersion</key>
+	<string>@PROJECT_VERSION@.@BUILD_NUMBER@</string>
+
+	<key>SUPublicDSAKeyFile</key>
+	<string>dsa_pub.pem</string>
+	<key>SUBundleName</key>
+	<string>ZoinGallery</string>
+	<key>NSRequiresAquaSystemAppearance</key>
+	<string>true</string>
+</dict>
+</plist>

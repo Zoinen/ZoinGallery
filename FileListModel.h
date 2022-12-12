@@ -66,9 +66,13 @@ private:
     bool _generationFinished;
 
     // Viewer
-    QHash<QString, QImage> _viewerImages;
+    struct ViewerImage {
+        QImage image;
+        QString imageId;
+        int requestIndex;
+    };
+    QHash<QString, ViewerImage> _viewerImages;
     QHash<QString, QString> _imageIdToViewer;
-    QHash<QString, QString> _viewerToImageId;
     QSet<QString> _requestedViewerImages;
     int _currentViewIndex;
 };

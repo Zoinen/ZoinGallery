@@ -24,10 +24,9 @@ QRectF roundRect(const QRectF &rectF) {
     return QRect(rectF.x(), rectF.y(), rectF.width(), rectF.height());
 }
 
-
 MasonryLayout::MasonryLayout(QQuickItem *parent)
     : QQuickItem(parent) {
-    _targetHeight = 200;
+    _targetHeight = 200;//87;//84;//30;
     _visibleStart = -1;
     _visibleEnd = -1;
     _topItem = 0;
@@ -105,6 +104,38 @@ int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
             }
         }
     }
+    return nextIndex;
+}
+
+int MasonryLayout::nextImageQuickSearch(bool forward, bool forceMoveToNext) {
+    if (_quickSearch.isEmpty()) {
+        return _currentIndex;
+    }
+
+    int nextIndex = _currentIndex;
+    bool foundMatch = false;
+    bool didWrap = false;
+    for (int i = _currentIndex + (forceMoveToNext ? (forward ? 1 : -1) : 0); i >= 0 && i < _bricks.size(); i += (forward ? 1 : -1)) {
+        if (indexMatchesQuickSearch(i)) {
+            nextIndex = i;
+            foundMatch = true;
+            break;
+        }
+    }
+    if (!foundMatch) {
+        for (int i = (forward ? 0 : _bricks.size() - 1); i >= 0 && i < _bricks.size() && i != _currentIndex; i += (forward ? 1 : -1)) {
+            if (indexMatchesQuickSearch(i)) {
+                nextIndex = i;
+                foundMatch = true;
+                didWrap = true;
+                break;
+            }
+        }
+    }
+    if (didWrap) {
+        qDebug() << "<<<< WRAP";
+    }
+    setQuickSearchMatches(foundMatch);
     return nextIndex;
 }
 
@@ -205,6 +236,11 @@ BrickItem *MasonryLayout::createComponent() {
 void MasonryLayout::rewrap() {
 //    qDebug() << "rewrap" << width() << _bricks.size();
     calcLayout(_bricks, width(), _targetHeight, _spacing * window()->devicePixelRatio());
+//    qDebug() << "--------------------";
+//    for (int i = 0; i < _bricks.size(); i++) {
+//        qDebug() << _bricks[i].image->path << _bricks[i].originalSize << _bricks[i].normalizedSize;
+//    }
+
 
     if (_bricks.size()) {
         setContentHeight(_bricks.last().y + _bricks.last().normalizedSize.height());
@@ -357,7 +393,7 @@ void MasonryLayout::updateProperties() {
             }
 
             if (_bricks[i].item->property("text").toString() != _bricks[i].image->fileName) {
-                _bricks[i].item->setProperty("text", _bricks[i].image->fileName);
+                _bricks[i].item->setProperty("text", indexTextWithQuickSearchApplied(i));
             }
             if (_bricks[i].item->property("index").toInt() != i) {
                 _bricks[i].item->setProperty("index", i);
@@ -412,6 +448,7 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
     if (index < _bricks.size()) {
         if (roles.contains(FileListModel::ImageIdRole)) {
             if (_bricks[index].item) {
+//                qDebug() << "upd imageid" << _bricks[index].image->path;
                 _bricks[index].item->setProperty("imageId", QString("image://thumbnails/") + _bricks[index].image->imageId);
             }
         }
@@ -519,7 +556,7 @@ void MasonryLayout::onModelReset() {
     }
     calcLayout(bricks, width(), _targetHeight, _spacing * window()->devicePixelRatio());
     QSizeF projectedSize = bricks.first().normalizedSize;
-    qDebug() << "APPROX SIZE" << bricks.size() << minSize << projectedSize << _targetHeight << width();
+//    qDebug() << "APPROX SIZE" << bricks.size() << minSize << projectedSize << _targetHeight << width();
     static_cast<FileListModel *>(_model)->requestThumbnails(projectedSize.toSize() * window()->devicePixelRatio());
 
     emit countChanged();
@@ -557,6 +594,42 @@ void MasonryLayout::zoom(bool in) {
     if (newTargetHeight != -1 || (_targetHeight != largestHeight && in) || (_targetHeight != smallestHeight && !in)) {
         setTargetHeight(newTargetHeight != -1 ? newTargetHeight : (in ? largestHeight : smallestHeight));
         reReadAndDecodeThumbnails();
+    }
+}
+
+bool MasonryLayout::indexMatchesQuickSearch(int index) {
+    if (index < 0 || index > _bricks.size() - 1) {
+        return false;
+    }
+    return _bricks[index].image->fileName.contains(_quickSearch, Qt::CaseInsensitive);
+}
+
+QString MasonryLayout::indexTextWithQuickSearchApplied(int index) {
+    if (index < 0 || index > _bricks.size() - 1) {
+        return QString();
+    }
+    if (!_quickSearch.isEmpty()) {
+        int matchStart = _bricks[index].image->fileName.indexOf(_quickSearch, 0, Qt::CaseInsensitive);
+        if (matchStart != -1) {
+            QString matchedText = _bricks[index].image->fileName;
+            matchedText.insert(matchStart + _quickSearch.size(), "</font>");
+            QString color = (index == _currentIndex ? "#ff9632" : "#ffff00");
+            matchedText.insert(matchStart, QString("<font color=\"#000000\" style=\"background-color: %1;\">").arg(color));
+            return matchedText;
+        }
+    }
+    return _bricks[index].image->fileName;
+}
+
+void MasonryLayout::updateVisualQuickSearch() {
+    for (int i = 0; i < _bricks.size(); i++) {
+        if (_usedBrickItems.contains(_bricks[i].item)) {
+            QString currentText = _bricks[i].item->property("text").toString();
+            QString newText = indexTextWithQuickSearchApplied(i);
+            if (currentText != newText) {
+                _bricks[i].item->setProperty("text", newText);
+            }
+        }
     }
 }
 
@@ -757,6 +830,10 @@ void MasonryLayout::setCurrentIndex(int newCurrentIndex) {
     }
     _currentIndex = newCurrentIndex;
     emit currentIndexChanged();
+
+    if (!_quickSearch.isEmpty()) {
+        updateVisualQuickSearch();
+    }
 }
 
 int MasonryLayout::spacing() {
@@ -782,4 +859,30 @@ int MasonryLayout::count() const {
         return _model->rowCount();
     }
     return 0;
+}
+
+const QString &MasonryLayout::quickSearch() const {
+    return _quickSearch;
+}
+
+void MasonryLayout::setQuickSearch(const QString &newQuickSearch) {
+    if (_quickSearch == newQuickSearch) {
+        return;
+    }
+    _quickSearch = newQuickSearch;
+    emit quickSearchChanged();
+
+    updateVisualQuickSearch();
+}
+
+bool MasonryLayout::quickSearchMatches() const {
+    return _quickSearchMatches;
+}
+
+void MasonryLayout::setQuickSearchMatches(bool newQuickSearchMatches) {
+    if (_quickSearchMatches == newQuickSearchMatches) {
+        return;
+    }
+    _quickSearchMatches = newQuickSearchMatches;
+    emit quickSearchMatchesChanged();
 }

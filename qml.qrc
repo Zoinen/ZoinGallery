@@ -5,6 +5,9 @@
         <file>qml/ScrollBar.qml</file>
         <file>qml/Slider.qml</file>
         <file>qml/Button.qml</file>
+        <file>qml/TextField.qml</file>
+        <file>qml/Style.qml</file>
+        <file>qml/qmldir</file>
         <file>resources/ThumbnailsShadow.png</file>
         <file>resources/ThumbnailsShadow@2x.png</file>
         <file>resources/FileIcon.svg</file>
@@ -12,5 +15,7 @@
         <file>resources/ScrollMode.svg</file>
         <file>resources/ScrollModeDown.svg</file>
         <file>resources/ScrollModeUp.svg</file>
+        <file>resources/Logo.svg</file>
+        <file>resources/DriveIcon.svg</file>
     </qresource>
 </RCC>

@@ -3,6 +3,8 @@
 import QtQuick
 import QtQuick.Controls.Basic as T
 
+import "."
+
 T.ScrollBar {
     id: scroll
     policy: T.ScrollBar.AlwaysOn
@@ -19,10 +21,10 @@ T.ScrollBar {
     contentItem: Rectangle {
         id: contentItem
         implicitWidth: 15
-        color: scroll.pressed ? "#676767" : "#474747"
+        color: scroll.pressed ? Style.midDarkLighter : Style.midDark
     }
 
     background: Rectangle {
-        color: "#292929"
+        color: Style.controlBackground
     }
 }

@@ -43,6 +43,8 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(QQuickItem *currentItem READ currentItem NOTIFY currentIndexChanged)
     Q_PROPERTY(int spacing READ spacing WRITE setSpacing NOTIFY spacingChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
+    Q_PROPERTY(QString quickSearch READ quickSearch WRITE setQuickSearch NOTIFY quickSearchChanged)
+    Q_PROPERTY(bool quickSearchMatches READ quickSearchMatches WRITE setQuickSearchMatches NOTIFY quickSearchMatchesChanged)
 
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
@@ -53,6 +55,7 @@ public:
     Q_INVOKABLE QRectF indexGeometry(int index) const;
     Q_INVOKABLE QString indexImage(int index) const;
     Q_INVOKABLE int nextImageIndex(bool forward, bool moveToEnd);
+    Q_INVOKABLE int nextImageQuickSearch(bool forward, bool forceMoveToNext);
 
     Q_INVOKABLE void reReadAndDecodeThumbnails();
     Q_INVOKABLE void zoomIn();
@@ -81,6 +84,12 @@ public:
 
     int count() const;
 
+    const QString &quickSearch() const;
+    void setQuickSearch(const QString &newQuickSearch);
+
+    bool quickSearchMatches() const;
+    void setQuickSearchMatches(bool newQuickSearchMatches);
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -94,6 +103,10 @@ signals:
     void countChanged();
 
     void layoutReset();
+
+    void quickSearchChanged();
+
+    void quickSearchMatchesChanged();
 
 private:
     struct MasonryBrick {
@@ -130,6 +143,10 @@ private:
     void onModelReset();
     void zoom(bool in);
 
+    bool indexMatchesQuickSearch(int index);
+    QString indexTextWithQuickSearchApplied(int index);
+    void updateVisualQuickSearch();
+
     void pushBrickItem(BrickItem *item);
     BrickItem *popBrickItem();
     QSet<BrickItem *> _usedBrickItems;
@@ -155,6 +172,8 @@ private:
 
     bool _currentScrollingMode;
     int _currentScrollingDirection;
+    QString _quickSearch;
+    bool _quickSearchMatches;
 };
 
 #endif // MASONRYLAYOUT_H

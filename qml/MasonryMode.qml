@@ -11,6 +11,7 @@ MouseArea {
     id: masonryView
 
     property alias view: masonryLayout
+    property alias focusProxy: quickSearchField
 
     Rectangle {
         anchors {
@@ -19,7 +20,6 @@ MouseArea {
         }
         color: "#202020"
     }
-    focus: true
 
     signal toggleViewer()
 
@@ -27,6 +27,7 @@ MouseArea {
     property bool scrollingStarted: false
     property var scrollingStartedAtY
     property bool scrollingMode: false
+    property bool quickSearchMode: false
 
     property bool disableAnimation: false
 
@@ -49,7 +50,7 @@ MouseArea {
         hideHovered = false
     }
 
-    onPressed: {
+    onPressed: (mouse) => {
         if (mouse.button === Qt.MiddleButton && !scrollingMode) {
             startScrolling()
         }
@@ -138,7 +139,7 @@ MouseArea {
         return imageGeometry
     }
 
-    function setCurrentIndex(index, keepLastPosX = false, keepLastPosY = false, neverScroll = false) {
+    function setCurrentIndex(index, keepLastPosX = false, keepLastPosY = false, neverScroll = false, keepQuickSearch = false) {
         masonryLayout.currentIndex = index
         let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
         if (!keepLastPosX) {
@@ -151,6 +152,9 @@ MouseArea {
             currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
         }
         hideHovered = true
+        if (!keepQuickSearch) {
+            hideQuickSearch()
+        }
     }
 
     function scrollBy(deltaY) {
@@ -185,6 +189,14 @@ MouseArea {
         }
     }
 
+    function hideQuickSearch() {
+        quickSearchField.text = ""
+        masonryLayout.quickSearch = quickSearchField.text
+        backspaceDisabledUntilKeyUp = true
+        quickSearchMode = false
+    }
+
+    property bool backspaceDisabledUntilKeyUp: false
     Keys.onPressed:
         (event) => {
             event.accepted = true
@@ -278,7 +290,7 @@ MouseArea {
                 setCurrentIndex(newCurrentIndex2, !hitEnd, !hitEnd)
                 scrollBy(deltaY)
             }
-            else if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier)) {
+            else if ((event.key === Qt.Key_Backspace && !quickSearchMode && !backspaceDisabledUntilKeyUp) || event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier)) {
                 masonryView.disableAnimation = true
                 setCurrentIndex(viewerController.up())
                 masonryView.disableAnimation = false
@@ -287,7 +299,8 @@ MouseArea {
                      (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier)) {
                 topLevelWindow.toggleFullscreen()
             }
-            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier)) {
+            else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ControlModifier) || event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier)) {
+                hideQuickSearch()
                 if (masonryLayout.currentItem.isFolder) {
                     viewerController.cd(masonryLayout.currentItem.text)
                 }
@@ -295,17 +308,31 @@ MouseArea {
                     masonryView.toggleViewer()
                 }
             }
-            else if (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) {
+            else if ((event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) && !quickSearchMode) {
                 masonryLayout.zoomIn()
             }
-            else if (event.key === Qt.Key_Minus) {
+            else if (event.key === Qt.Key_Minus && !quickSearchMode) {
                 masonryLayout.zoomOut()
             }
-            else if (event.key === Qt.Key_Backslash) {
+            else if (event.key === Qt.Key_Backslash && !quickSearchMode) {
                 masonryView.alwaysShowFileNames = !masonryView.alwaysShowFileNames
             }
             else if (event.key === Qt.Key_Escape) {
                 endScrolling()
+
+                if (quickSearchMode) {
+                    event.accepted = false
+                }
+            }
+            else {
+                event.accepted = false
+            }
+        }
+
+    Keys.onReleased:
+        (event) => {
+            if (!event.isAutoRepeat) {
+                backspaceDisabledUntilKeyUp = false
             }
         }
 
@@ -359,8 +386,20 @@ MouseArea {
                     rightMargin: -2
                     bottomMargin: -2
                 }
-                color: "#2980b9"
+                color: Style.focus
                 visible: masonryLayout.currentIndex === index
+            }
+
+            Rectangle {
+                anchors {
+                    fill: brickDelegate
+                    leftMargin: 2
+                    topMargin: 2
+                    rightMargin: 2
+                    bottomMargin: 2
+                }
+                color: "#1a4662"
+                visible: masonryLayout.currentIndex === index && !image.visible
             }
 
             Image {
@@ -400,7 +439,7 @@ MouseArea {
                 }
                 height: textField.height + 10
                 visible: (brickMouseArea.containsMouse && !hideHovered) || imageId === "" ||
-                         masonryLayout.currentIndex === index || masonryView.alwaysShowFileNames
+                         masonryLayout.currentIndex === index || masonryView.alwaysShowFileNames || masonryView.quickSearchMode
                 z: 1
 
                 Text {
@@ -413,6 +452,7 @@ MouseArea {
                     }
 
                     text: brickDelegate.text
+                    textFormat: quickSearchMode ? Text.RichText : Text.PlainText
 
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideMiddle
@@ -468,6 +508,7 @@ MouseArea {
 
         NumberAnimation {
             id: scrollAnimation2
+
             target: masonryLayout
             property: "contentY"
             duration: 150
@@ -503,6 +544,71 @@ MouseArea {
 
             function onHeightChanged() {
                 masonryScroll.size = masonryLayout.height / masonryLayout.contentHeight
+            }
+        }
+    }
+
+    Rectangle {
+        id: quickSearchArea
+        anchors {
+            left: parent.left
+            bottom: parent.bottom
+            leftMargin: 20
+            bottomMargin: 20
+        }
+        width: 200
+        height: 49
+        color: "#303030"
+        border.width: 1
+        border.color: "#404040"
+        radius: 4
+        visible: quickSearchMode
+
+        TextField {
+            id: quickSearchField
+            anchors.fill: parent
+
+            focus: true
+            hasBackground: false
+            color: masonryLayout.quickSearchMatches ? (hovered ? Style.hovered : "#f0f0f0") : Style.textError
+
+            Keys.forwardTo: masonryView
+
+            Keys.onPressed:
+                (event) => {
+                    delayedOnPressed.start()
+
+                    if (event.key === Qt.Key_Escape) {
+                        quickSearchField.text = ""
+                        event.accepted = false
+                    }
+                    else if ((event.key === Qt.Key_Enter || event.key === Qt.Key_Return) && (event.modifiers & Qt.ControlModifier) && (event.modifiers & Qt.ShiftModifier) ||
+                             event.key === Qt.Key_F3 && (event.modifiers & Qt.ShiftModifier)) {
+                        let nextIndex = masonryLayout.nextImageQuickSearch(false, true)
+                        setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
+                    }
+                    else if ((event.key === Qt.Key_Enter || event.key === Qt.Key_Return) && (event.modifiers & Qt.ControlModifier) ||
+                             event.key === Qt.Key_F3) {
+                        let nextIndex = masonryLayout.nextImageQuickSearch(true, true)
+                        setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
+                    }
+                }
+        }
+
+        Timer {
+            id: delayedOnPressed
+            interval: 0
+            onTriggered: {
+                if (quickSearchField.text !== "" && !quickSearchMode) {
+                    quickSearchMode = true
+                }
+                else if (quickSearchField.text === "" && quickSearchMode) {
+                    hideQuickSearch()
+                }
+
+                masonryLayout.quickSearch = quickSearchField.text
+                let nextIndex = masonryLayout.nextImageQuickSearch(true, false)
+                setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
             }
         }
     }

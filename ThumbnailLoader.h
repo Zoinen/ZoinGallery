@@ -18,8 +18,8 @@ public:
     void setPath(const QString &path);
 
     bool readExifPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult);
-    QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize);
-    QImage loadImageOther(const QString &path);
+    bool readGenericPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult);
+    QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize, const ImageReadResult &readResult);
 
     QImage createThumbnail(const QImage &image, QSize dimensions, bool keepAspect);
     QImage unsharpMask(QImage &image);
@@ -29,6 +29,7 @@ public:
     static bool isJpeg(const QString &path);
     static bool isRawOrTiff(const QString &path);
     static bool isImageOther(const QString &path);
+    static bool isVectorImage(const QString &path);
 
 private:
     QImage loadJpegFromData(const uint8_t *data, uint32_t size, QSize targetSize);

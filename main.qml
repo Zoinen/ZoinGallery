@@ -8,6 +8,7 @@ import QtQuick.Layouts
 import QtQuick.Controls.Basic as T
 
 import "qml"
+import "."
 
 Window {
     id: topLevelWindow
@@ -53,11 +54,13 @@ Window {
         target: viewerController
 
         function onMainWindowResized() {
+            console.log("ZZ MAIN RESIZED")
             if (root.state === "thumbnails") {
                 masonryLayout.view.reReadAndDecodeThumbnails()
                 viewerDirty = true
             }
             else {
+                console.log("onMainWindowResized")
                 fileListModel.invalidateViewerImages()
                 fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
                 thumbnailsDirty = true
@@ -73,6 +76,7 @@ Window {
             if (root.state === "thumbnails") {
                 if (viewerDirty) {
                     viewerDirty = false
+                    console.log("viewer dirty")
                     fileListModel.invalidateViewerImages()
                 }
                 switchToViewer()
@@ -114,7 +118,7 @@ Window {
         }
 
         function switchToThumbnails() {
-            masonryLayout.forceActiveFocus()
+            masonryLayout.focusProxy.forceActiveFocus()
             root.state = "thumbnails"
 
             if (masonryLayout.view.currentItem) {
@@ -164,7 +168,7 @@ Window {
 
                     elide: Text.ElideRight
                     text: viewerController.currentPath
-                    color: "#d1d1d1"
+                    color: Style.text
                 }
 
                 Text {
@@ -173,7 +177,7 @@ Window {
                     horizontalAlignment: Text.AlignRight
 
                     text: Math.round(masonryZoomSlider.value)
-                    color: "#d1d1d1"
+                    color: Style.text
                 }
 
                 Slider {

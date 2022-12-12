@@ -6,6 +6,9 @@
 #include <QString>
 #include <QFileInfo>
 #include <QElapsedTimer>
+#include <QImageReader>
+#include <QBuffer>
+#include <QMimeDatabase>
 
 #include <exiv2/exiv2.hpp>
 #include <exiv2/preview.hpp>
@@ -72,8 +75,6 @@ struct imemstream: virtual membuf, std::istream {
 bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult) {
     _path = path;
 
-    outResult.request.sourcePath = path;
-
     QFile f(path);
     if (!f.open(QFile::ReadOnly)) {
         return false;
@@ -96,6 +97,9 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         else {
             outResult.fullSize = readResolutionFromExif(image.get());
         }
+        qDebug() << "OUT FULL SIZE" << path << outResult.fullSize;
+
+//        qDebug() << outResult.request.sourcePath << outResult.fullSize;
 
 //        qDebug() << "Read exif preview" << path << outResult.request.targetSize << outResult.fullSize;
 
@@ -108,7 +112,7 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         if (path.endsWith(".cr2", Qt::CaseInsensitive)) {
             ignoreThumbnailAt = 2;
         }
-        qDebug() << ignoreThumbnailAt;
+//        qDebug() << "ignoreThumbnailAt" << ignoreThumbnailAt;
         Exiv2::DataBuf previewImg = Exiv2Preview::preview(*image.get(), preferredSizeRotated.width(),
                                                           preferredSizeRotated.height(), &previewProp, ignoreThumbnailAt);
         if (previewImg.pData_) {
@@ -119,6 +123,9 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
             f.unmap(mappedFile);
             return true;
         }
+        else {
+            outResult.mimeType = QString::fromStdString(image->mimeType());
+        }
     } catch (Exiv2::AnyError& e) {
         std::cout << "Caught Exiv2 exception '" << e << "'" << std::endl;
         f.unmap(mappedFile);
@@ -128,7 +135,24 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
     return false;
 }
 
-QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize) {
+bool ThumbnailLoader::readGenericPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult) {
+    QFile f(path);
+    if (f.open(QFile::ReadOnly)) {
+        outResult.fullImageData = f.readAll();
+        f.close();
+    }
+    else {
+        return false;
+    }
+
+    QImageReader reader(path);
+    outResult.fullSize = reader.size();
+    QMimeDatabase mimeDatabase;
+    outResult.mimeType = mimeDatabase.mimeTypeForData(outResult.fullImageData).name();
+    return reader.canRead();
+}
+
+QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize, const ImageReadResult &readResult) {
     if (mimeType == "image/tiff") {
         imemstream memStream(reinterpret_cast<const uint8_t *>(data.constData()), data.size());
 
@@ -165,15 +189,26 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
         return img;
     }
     else {
-        //thumbnail = loader.loadImageOther(request.sourcePath, &orientation, &fullSize);
-        qDebug() << "Could not decode image" << mimeType;
+        QBuffer buf(const_cast<QByteArray *>(&data));
+        buf.open(QIODevice::ReadOnly);
+
+        QImageReader reader(&buf);
+        QSize targetSizeWithAspect = targetSize;
+        if (readResult.request.viewerRequest) {
+            targetSizeWithAspect = readResult.fullSize.scaled(targetSize, Qt::KeepAspectRatio);
+        }
+        reader.setScaledSize(targetSizeWithAspect);
+
+        QImage img = reader.read();;
+        if (img.isNull()) {
+            qDebug() << "Could not decode image" << mimeType;
+        }
+        else {
+            qDebug() << "Using Qt decoder for" << mimeType;
+        }
+        return img;
     }
     return QImage();
-}
-
-QImage ThumbnailLoader::loadImageOther(const QString &path) {
-    QImage img(path);
-    return img;
 }
 
 QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions, bool keepAspect) {
@@ -249,6 +284,16 @@ bool ThumbnailLoader::isRawOrTiff(const QString &path) {
 
 bool ThumbnailLoader::isImageOther(const QString &path) {
     QStringList extensions = {"bmp", "png", "gif", "jp2", "jpc", "tga", "ico", "cur", "ppm", "pgm", "pbm", "svg", "wmf", "emf", "webp"};
+    for (const QString &ext : extensions) {
+        if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ThumbnailLoader::isVectorImage(const QString &path) {
+    QStringList extensions = {"svg", "wmf", "emf"};
     for (const QString &ext : extensions) {
         if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
             return true;

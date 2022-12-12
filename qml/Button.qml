@@ -3,6 +3,8 @@
 import QtQuick
 import QtQuick.Controls.Basic as T
 
+import "."
+
 T.Button {
     id: control
 
@@ -12,7 +14,7 @@ T.Button {
         text: control.text
         font: control.font
         opacity: enabled ? 1.0 : 0.3
-        color: control.hovered ? "#ffffff" : "#e1e1e1"
+        color: control.hovered ? Style.hovered : Style.buttonText
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
@@ -20,9 +22,9 @@ T.Button {
 
     background: Rectangle {
         opacity: enabled ? 1 : 0.3
-        border.color: control.hovered ? "#676767" : "#474747"
+        border.color: control.hovered ? Style.midDarkLighter : Style.midDark
         border.width: 1
-        color: control.down ? "#191919" : "#292929"
+        color: control.down ? Style.controlBackgroundPressed : Style.controlBackground
         radius: 2
         layer.enabled: true
     }

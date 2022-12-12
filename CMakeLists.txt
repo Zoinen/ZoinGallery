@@ -61,7 +61,6 @@ set(PROJECT_SOURCES
     QmlResourcesProvider.cpp
     MasonryLayout.cpp
     exiv2/Preview.cpp
-    qml.qrc
     ThreadSafeQueue.h
     ThreadSafeQueue.cpp
 )
@@ -78,6 +77,8 @@ if(WIN32)
     configure_file(ZoinGallery.rc.cmake ${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery.rc @ONLY)
     set(RESOURCE_FILES ${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery.rc)
 endif()
+
+qt_add_resources(PROJECT_SOURCES qml.qrc)
 
 if(APPLE)
     set(ICON_FILENAME ZoinGallery.icns)

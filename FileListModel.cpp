@@ -16,6 +16,7 @@ FileListModel::FileListModel(QObject *parent)
     connect(_generator, &ThreadedThumbnailGenerator::thumbnailInfoReady, this, [&] (const QString &path, QSize fullSize) {
         auto it = _fileToItem.find(path);
         if (it != _fileToItem.end()) {
+//            qDebug() << "found image" << path;
             ImageFile *item = it.value();
             item->fullSize = fullSize;
 
@@ -38,9 +39,8 @@ FileListModel::FileListModel(QObject *parent)
 
     connect(_generator, &ThreadedThumbnailGenerator::viewerReady, this, [&] (const QString &path, const QImage &image) {
         QString imageId = generateNewId();
-        _viewerImages[path] = image;
+        _viewerImages[path] = {image, imageId, (int)_viewerImages.size()};
         _imageIdToViewer[imageId] = path;
-        _viewerToImageId[path] = imageId;
         auto it = _fileToItem.find(path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
@@ -111,7 +111,6 @@ int FileListModel::cd(QString path, QString itemToSelect) {
     //Viewer
     _viewerImages.clear();
     _imageIdToViewer.clear();
-    _viewerToImageId.clear();
     _currentViewIndex = -1;
 
     _fileToItem.clear();
@@ -129,6 +128,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
             item->isFolder = true;
             item->isImage = false;
             item->index = _items.size();
+            item->iconPath = "qrc:/resources/DriveIcon.svg";
             _items.append(item);
 
             if (item->fileName == itemToSelect) {
@@ -180,7 +180,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
 }
 
 void FileListModel::requestThumbnails(QSize preferredSize) {
-    qDebug() << "Request thumbnails" << preferredSize;
+//    qDebug() << "Request thumbnails" << preferredSize;
 
     QList<ImageReadRequest> requests;
     requests.reserve(_imagePaths.size());
@@ -239,13 +239,13 @@ bool FileListModel::isImage(QString fileName) {
 
 void FileListModel::requestViewer(int index, int width, int height) {
     QString requestedPath = fullPath(_items[index]->fileName);
-    auto it = _viewerToImageId.find(requestedPath);
-    if (it != _viewerToImageId.end()) {
-        emit viewerImageIdChanged(QString("image://thumbnails/") + it.value());
+    auto it = _viewerImages.find(requestedPath);
+    if (it != _viewerImages.end()) {
+        emit viewerImageIdChanged(QString("image://thumbnails/") + it.value().imageId);
     }
 
     QSize viewerSize(width, height);
-    qDebug() << "Request thumbnails" << index << viewerSize;
+//    qDebug() << "Request thumbnails" << index << viewerSize;
     _currentViewIndex = index;
 
     int queueSize = 16;
@@ -280,7 +280,7 @@ QImage FileListModel::viewerForImageId(QString imageId) {
     auto it = _imageIdToViewer.find(imageId);
     if (it != _imageIdToViewer.end()) {
         QString path = *it;
-        return _viewerImages[path];
+        return _viewerImages[path].image;
     }
     return QImage();
 }

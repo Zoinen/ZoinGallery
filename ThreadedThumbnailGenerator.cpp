@@ -205,24 +205,29 @@ void DecodeWorker::decode(const ImageReadResult &readResult, int queueId) {
     loader.setPath(readResult.request.sourcePath);
     QImage thumbnail;
     if (!readResult.thumbnailData.isNull()) {
-        thumbnail = loader.decodeImage(readResult.thumbnailData, readResult.mimeType, rotateToOrientation(readResult.request.targetSize, readResult.orientation));
+        thumbnail = loader.decodeImage(readResult.thumbnailData, readResult.mimeType, rotateToOrientation(readResult.request.targetSize, readResult.orientation), readResult);
         delete[] readResult.thumbnailData.constData();
     }
     if (!readResult.fullImageData.isEmpty() && (thumbnail.isNull() ||
             readResult.thumbnailSize.width() < readResult.request.targetSize.width() ||
             readResult.thumbnailSize.height() < readResult.request.targetSize.height())) {
+        qDebug() << readResult.request.sourcePath << "full image";
 //        qDebug() << "TRY#" << readResult.request.sourcePath << readResult.thumbnailSize << "OF" << readResult.request.targetSize;
-        QImage fullImage = loader.decodeImage(readResult.fullImageData, "image/jpeg", rotateToOrientation(readResult.request.targetSize, readResult.orientation)); // TODO: Support other formats
+        QImage fullImage = loader.decodeImage(readResult.fullImageData, readResult.mimeType, rotateToOrientation(readResult.request.targetSize, readResult.orientation), readResult);
         if (!fullImage.isNull()) {
             thumbnail = fullImage;
         }
     }
 
     thumbnail = loader.rotateAndFlip(thumbnail, readResult.orientation);
-    thumbnail = loader.createThumbnail(thumbnail, readResult.request.targetSize, readResult.request.viewerRequest);
-//    if (!readResult.request.viewerRequest) {
-    thumbnail = loader.unsharpMask(thumbnail);
-//    }
+    if (!ThumbnailLoader::isVectorImage(readResult.request.sourcePath)) {
+        thumbnail = loader.createThumbnail(thumbnail, readResult.request.targetSize, readResult.request.viewerRequest);
+
+        // TODO: Remove this hack and fix alpha channel handling for pngs
+        if (!readResult.request.sourcePath.endsWith(".png", Qt::CaseInsensitive)) {
+            thumbnail = loader.unsharpMask(thumbnail);
+        }
+    }
 //    thumbnail.save(QString("c:\\temp\\%1+.png").arg(QFileInfo(readResult.request.sourcePath).baseName()));
 
 
@@ -243,12 +248,13 @@ void ReadWorker::run() {
         ImageReadRequest request = _readQueue.dequeue();
 
         ThumbnailLoader loader;
-        if (ThumbnailLoader::isExifCompatible(request.sourcePath)) {
+        //if (ThumbnailLoader::isExifCompatible(request.sourcePath)) {
+        {
             ImageReadResult result;
             result.request = request;
-            qDebug() << "READ" << request.sourcePath << request.targetSize;
+//            qDebug() << "READ" << request.sourcePath << request.targetSize;
             bool fileLoaded = loader.readExifPreview(request.sourcePath, request.targetSize, result);
-            if ((!fileLoaded && !result.fullSize.isNull()) ||
+            if ((!fileLoaded && result.fullSize.isValid()) ||
                     (fileLoaded && (result.thumbnailSize.width() < request.targetSize.width() ||
                                     result.thumbnailSize.height() < request.targetSize.height()))) {
                 QFile f(request.sourcePath);
@@ -257,16 +263,20 @@ void ReadWorker::run() {
 
                     result.fullImageData = f.readAll();
                     f.close();
+
                     fileLoaded = true;
                 }
             }
+            else if (!fileLoaded) {
+                fileLoaded = loader.readGenericPreview(request.sourcePath, request.targetSize, result);
+                qDebug() << "READING FULL" << result.request.sourcePath;
+            }
             if (fileLoaded) {
-                qDebug() << "READ LOADED";
                 emit readResultReady(result);
             }
         }
 
-        qDebug() << "READ DONE" << request.sourcePath;
+//        qDebug() << "READ DONE" << request.sourcePath;
         //    QThread::msleep(300);
     }
 }

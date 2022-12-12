@@ -27,13 +27,8 @@ ViewerController::ViewerController(QQmlEngine *engine)
     engine->addImageProvider("resources", resourcesProvider);
 }
 
-//    QString path = "B:\\_Photos\\"; //[2021.12.29] New Year in Rostum\\pro\\1"; //"P:\\RAED";
-//    QString path = "P:\\[Year 2015]\\[2015.03.14] Sputnik";
-//    QString path = "C:\\";
-
-
 void ViewerController::cd(QString folder) {
-    qDebug() << folder;
+//    qDebug() << folder;
     if (folder.contains("\\") || folder.contains("/")) {
         _currentPath = QDir::toNativeSeparators(QDir(folder).absolutePath());
         emit currentPathChanged();

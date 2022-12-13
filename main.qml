@@ -142,22 +142,28 @@ Window {
 
             RowLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 60
-                spacing: 10
+                Layout.preferredHeight: 46
+                spacing: 5
 
                 Button {
-                    Layout.leftMargin: 10
-                    Layout.preferredWidth: 80
-                    Layout.preferredHeight: 30
+                    Layout.leftMargin: 5
+                    Layout.preferredWidth: 46
+                    Layout.preferredHeight: 46
                     Layout.alignment: Qt.AlignVCenter
 
-                    text: "Up"
+                    icon.source: "qrc:/resources/Up.svg"
 
                     onReleased: {
                         masonryLayout.disableAnimation = true
                         masonryLayout.setCurrentIndex(viewerController.up())
                         masonryLayout.disableAnimation = false
                     }
+                }
+
+                Rectangle {
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: parent.height - 10
+                    color: "#474747"
                 }
 
                 Text {

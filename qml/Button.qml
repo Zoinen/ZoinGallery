@@ -2,6 +2,7 @@
 //import QtQuick.Controls 2.15 as T
 import QtQuick
 import QtQuick.Controls.Basic as T
+import QtQuick.Layouts
 
 import "."
 
@@ -9,23 +10,20 @@ T.Button {
     id: control
 
     focusPolicy: Qt.NoFocus
+    property real backgroundWidth: 36
+    property real backgroundHeight: 36
 
-    contentItem: Text {
-        text: control.text
-        font: control.font
-        opacity: enabled ? 1.0 : 0.3
-        color: control.hovered ? Style.hovered : Style.buttonText
-        horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
-        elide: Text.ElideRight
-    }
+    icon.color: Style.hovered
+    icon.width: 16
+    icon.height: 16
 
     background: Rectangle {
+        anchors.centerIn: control
+        width: backgroundWidth
+        height: backgroundHeight
         opacity: enabled ? 1 : 0.3
-        border.color: control.hovered ? Style.midDarkLighter : Style.midDark
-        border.width: 1
-        color: control.down ? Style.controlBackgroundPressed : Style.controlBackground
-        radius: 2
+        color: control.down ? Style.controlBackgroundPressed : (control.hovered ? Style.controlBackground : "transparent")
+        radius: 4
         layer.enabled: true
     }
 }

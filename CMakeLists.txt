@@ -93,6 +93,26 @@ set_target_properties(${PROJECT_NAME}
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
+if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
+    set_source_files_properties(qml/Style.qml PROPERTIES
+        QT_QML_SINGLETON_TYPE TRUE
+    )
+
+    qt6_add_qml_module(ZoinGallery
+        URI ZoinGallery
+        VERSION 1.0
+        RESOURCE_PREFIX /
+        QML_FILES
+            main.qml
+            qml/MasonryMode.qml
+            qml/ScrollBar.qml
+            qml/Slider.qml
+            qml/Button.qml
+            qml/TextField.qml
+            qml/Style.qml
+        )
+endif()
+
 target_link_libraries(ZoinGallery PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Quick
     Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg ${CONAN_LIBS})
 

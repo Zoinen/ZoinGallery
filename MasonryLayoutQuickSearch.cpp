@@ -1,0 +1,146 @@
+#include "MasonryLayoutQuickSearch.h"
+#include "MasonryLayout.h"
+
+MasonryLayoutQuickSearch::MasonryLayoutQuickSearch(MasonryLayout *parent)
+    : QObject(parent) {
+    _validator = new QuickSearchValidator(this);
+}
+
+int MasonryLayoutQuickSearch::nextImage(bool forward, bool forceMoveToNext) {
+    if (_mask.isEmpty()) {
+        return masonryLayout()->_currentIndex;
+    }
+
+    int nextIndex = masonryLayout()->_currentIndex;
+    bool foundMatch = false;
+    bool didWrap = false;
+    for (int i = masonryLayout()->_currentIndex + (forceMoveToNext ? (forward ? 1 : -1) : 0); i >= 0 && i < masonryLayout()->_bricks.size(); i += (forward ? 1 : -1)) {
+        if (indexMatches(i, _mask)) {
+            nextIndex = i;
+            foundMatch = true;
+            break;
+        }
+    }
+    if (!foundMatch) {
+        for (int i = (forward ? 0 : masonryLayout()->_bricks.size() - 1); i >= 0 && i < masonryLayout()->_bricks.size() && i != masonryLayout()->_currentIndex; i += (forward ? 1 : -1)) {
+            if (indexMatches(i, _mask)) {
+                nextIndex = i;
+                foundMatch = true;
+                didWrap = true;
+                break;
+            }
+        }
+    }
+    if (didWrap) {
+//        qDebug() << "<<<< WRAP";
+    }
+    if (!forceMoveToNext) {
+        setMatches(foundMatch);
+    }
+    return nextIndex;
+}
+
+bool MasonryLayoutQuickSearch::hasResults(QString search) {
+    if (search.isEmpty()) {
+        return true;
+    }
+
+    int foundMatches = 0;
+    for (int i = 0; i < masonryLayout()->_bricks.size(); i++) {
+        if (indexMatches(i, search)) {
+            foundMatches++;
+        }
+    }
+    if (foundMatches) {
+        _matchesInfo = QString("%1/%2").arg(foundMatches).arg(masonryLayout()->_bricks.size());
+        emit matchesInfoChanged();
+    }
+
+    return foundMatches != 0;
+}
+
+bool MasonryLayoutQuickSearch::indexMatches(int index, QString search) {
+    if (index < 0 || index > masonryLayout()->_bricks.size() - 1) {
+        return false;
+    }
+    return masonryLayout()->_bricks[index].image->fileName.contains(search, Qt::CaseInsensitive);
+}
+
+QString MasonryLayoutQuickSearch::indexTextWithQuickSearchApplied(int index) {
+    if (index < 0 || index > masonryLayout()->_bricks.size() - 1) {
+        return QString();
+    }
+    if (!_mask.isEmpty()) {
+        int matchStart = masonryLayout()->_bricks[index].image->fileName.indexOf(_mask, 0, Qt::CaseInsensitive);
+        if (matchStart != -1) {
+            QString matchedText = masonryLayout()->_bricks[index].image->fileName;
+            matchedText.insert(matchStart + _mask.size(), "</font>");
+            QString color = (index == masonryLayout()->_currentIndex ? "#ff9632" : "#ffff00");
+            matchedText.insert(matchStart, QString("<font color=\"#000000\" style=\"background-color: %1;\">").arg(color));
+            return matchedText;
+        }
+    }
+    return masonryLayout()->_bricks[index].image->fileName;
+}
+
+void MasonryLayoutQuickSearch::updateVisuals() {
+    for (int i = 0; i < masonryLayout()->_bricks.size(); i++) {
+        if (masonryLayout()->_usedBrickItems.contains(masonryLayout()->_bricks[i].item)) {
+            QString currentText = masonryLayout()->_bricks[i].item->property("text").toString();
+            QString newText = indexTextWithQuickSearchApplied(i);
+            if (currentText != newText) {
+                masonryLayout()->_bricks[i].item->setProperty("text", newText);
+            }
+        }
+    }
+}
+
+MasonryLayout *MasonryLayoutQuickSearch::masonryLayout() {
+    return static_cast<MasonryLayout *>(parent());
+}
+
+const QString &MasonryLayoutQuickSearch::mask() const {
+    return _mask;
+}
+
+void MasonryLayoutQuickSearch::setMask(const QString &newMask) {
+    if (_mask == newMask) {
+        return;
+    }
+    _mask = newMask;
+    emit maskChanged();
+
+    updateVisuals();
+}
+
+bool MasonryLayoutQuickSearch::matches() const {
+    return _matches;
+}
+
+void MasonryLayoutQuickSearch::setMatches(bool newMatches) {
+    if (_matches == newMatches) {
+        return;
+    }
+    _matches = newMatches;
+    emit matchesChanged();
+}
+
+QValidator *MasonryLayoutQuickSearch::validator() const {
+    return _validator;
+}
+
+QuickSearchValidator::QuickSearchValidator(MasonryLayoutQuickSearch *parent) :
+    QValidator(parent) {
+}
+
+QValidator::State QuickSearchValidator::validate(QString &input, int &pos) const {
+    MasonryLayoutQuickSearch *quickSearch = static_cast<MasonryLayoutQuickSearch *>(parent());
+    if (quickSearch->hasResults(input)) {
+        return Acceptable;
+    }
+    return Invalid;
+}
+
+const QString &MasonryLayoutQuickSearch::matchesInfo() const {
+    return _matchesInfo;
+}

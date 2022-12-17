@@ -1,0 +1,8 @@
+module ZGStyle
+
+singleton Style 1.0 Style.qml
+ScrollBar 1.0 ScrollBar.qml
+Slider 1.0 Slider.qml
+Button 1.0 Button.qml
+TextField 1.0 TextField.qml
+ToolTip 1.0 ToolTip.qml

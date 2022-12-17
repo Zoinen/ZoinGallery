@@ -2,6 +2,7 @@
 #include <QQmlApplicationEngine>
 #include <QElapsedTimer>
 #include <QStandardPaths>
+#include <QQuickStyle>
 
 #include "ViewerController.h"
 
@@ -12,8 +13,11 @@ int main(int argc, char *argv[])
 #endif
     QGuiApplication app(argc, argv);
 
+    QQuickStyle::setStyle("ZGStyle");
+
     QQmlApplicationEngine engine;
-    const QUrl url(QStringLiteral("qrc:/ZoinGallery/main.qml"));
+    engine.addImportPath(":/");
+    const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
                      &app, [url](QObject *obj, const QUrl &objUrl) {
         if (!obj && url == objUrl)

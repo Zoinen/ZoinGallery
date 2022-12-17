@@ -1,5 +1,6 @@
 #include "MasonryLayout.h"
 #include "FileListModel.h"
+#include "MasonryLayoutQuickSearch.h"
 
 #include <QQmlComponent>
 #include <QQmlEngine>
@@ -39,7 +40,8 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
 
     _currentScrollingMode = false;
     _currentScrollingDirection = -2;
-    _quickSearchValidatior = new QuickSearchValidator(this);
+
+    _quickSearch = new MasonryLayoutQuickSearch(this);
 }
 
 void MasonryLayout::componentComplete() {
@@ -106,51 +108,6 @@ int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
         }
     }
     return nextIndex;
-}
-
-int MasonryLayout::nextImageQuickSearch(bool forward, bool forceMoveToNext) {
-    if (_quickSearch.isEmpty()) {
-        return _currentIndex;
-    }
-
-    int nextIndex = _currentIndex;
-    bool foundMatch = false;
-    bool didWrap = false;
-    for (int i = _currentIndex + (forceMoveToNext ? (forward ? 1 : -1) : 0); i >= 0 && i < _bricks.size(); i += (forward ? 1 : -1)) {
-        if (indexMatchesQuickSearch(i, _quickSearch)) {
-            nextIndex = i;
-            foundMatch = true;
-            break;
-        }
-    }
-    if (!foundMatch) {
-        for (int i = (forward ? 0 : _bricks.size() - 1); i >= 0 && i < _bricks.size() && i != _currentIndex; i += (forward ? 1 : -1)) {
-            if (indexMatchesQuickSearch(i, _quickSearch)) {
-                nextIndex = i;
-                foundMatch = true;
-                didWrap = true;
-                break;
-            }
-        }
-    }
-    if (didWrap) {
-        qDebug() << "<<<< WRAP";
-    }
-    setQuickSearchMatches(foundMatch);
-    return nextIndex;
-}
-
-bool MasonryLayout::quickSearchHasResults(QString search) {
-    if (search.isEmpty()) {
-        return true;
-    }
-
-    for (int i = 0; i < _bricks.size(); i++) {
-        if (indexMatchesQuickSearch(i, search)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 void MasonryLayout::reReadAndDecodeThumbnails() {
@@ -407,7 +364,7 @@ void MasonryLayout::updateProperties() {
             }
 
             if (_bricks[i].item->property("text").toString() != _bricks[i].image->fileName) {
-                _bricks[i].item->setProperty("text", indexTextWithQuickSearchApplied(i));
+                _bricks[i].item->setProperty("text", _quickSearch->indexTextWithQuickSearchApplied(i));
             }
             if (_bricks[i].item->property("index").toInt() != i) {
                 _bricks[i].item->setProperty("index", i);
@@ -611,42 +568,6 @@ void MasonryLayout::zoom(bool in) {
     }
 }
 
-bool MasonryLayout::indexMatchesQuickSearch(int index, QString search) {
-    if (index < 0 || index > _bricks.size() - 1) {
-        return false;
-    }
-    return _bricks[index].image->fileName.contains(search, Qt::CaseInsensitive);
-}
-
-QString MasonryLayout::indexTextWithQuickSearchApplied(int index) {
-    if (index < 0 || index > _bricks.size() - 1) {
-        return QString();
-    }
-    if (!_quickSearch.isEmpty()) {
-        int matchStart = _bricks[index].image->fileName.indexOf(_quickSearch, 0, Qt::CaseInsensitive);
-        if (matchStart != -1) {
-            QString matchedText = _bricks[index].image->fileName;
-            matchedText.insert(matchStart + _quickSearch.size(), "</font>");
-            QString color = (index == _currentIndex ? "#ff9632" : "#ffff00");
-            matchedText.insert(matchStart, QString("<font color=\"#000000\" style=\"background-color: %1;\">").arg(color));
-            return matchedText;
-        }
-    }
-    return _bricks[index].image->fileName;
-}
-
-void MasonryLayout::updateVisualQuickSearch() {
-    for (int i = 0; i < _bricks.size(); i++) {
-        if (_usedBrickItems.contains(_bricks[i].item)) {
-            QString currentText = _bricks[i].item->property("text").toString();
-            QString newText = indexTextWithQuickSearchApplied(i);
-            if (currentText != newText) {
-                _bricks[i].item->setProperty("text", newText);
-            }
-        }
-    }
-}
-
 void MasonryLayout::pushBrickItem(BrickItem *item) {
     _usedBrickItems.remove(item);
     _freeBrickItems.insert(item);
@@ -845,8 +766,8 @@ void MasonryLayout::setCurrentIndex(int newCurrentIndex) {
     _currentIndex = newCurrentIndex;
     emit currentIndexChanged();
 
-    if (!_quickSearch.isEmpty()) {
-        updateVisualQuickSearch();
+    if (!_quickSearch->mask().isEmpty()) {
+        _quickSearch->updateVisuals();
     }
 }
 
@@ -875,44 +796,6 @@ int MasonryLayout::count() const {
     return 0;
 }
 
-const QString &MasonryLayout::quickSearch() const {
+MasonryLayoutQuickSearch *MasonryLayout::quickSearch() const {
     return _quickSearch;
-}
-
-void MasonryLayout::setQuickSearch(const QString &newQuickSearch) {
-    if (_quickSearch == newQuickSearch) {
-        return;
-    }
-    _quickSearch = newQuickSearch;
-    emit quickSearchChanged();
-
-    updateVisualQuickSearch();
-}
-
-bool MasonryLayout::quickSearchMatches() const {
-    return _quickSearchMatches;
-}
-
-void MasonryLayout::setQuickSearchMatches(bool newQuickSearchMatches) {
-    if (_quickSearchMatches == newQuickSearchMatches) {
-        return;
-    }
-    _quickSearchMatches = newQuickSearchMatches;
-    emit quickSearchMatchesChanged();
-}
-
-QValidator *MasonryLayout::quickSearchValidatior() const {
-    return _quickSearchValidatior;
-}
-
-QuickSearchValidator::QuickSearchValidator(MasonryLayout *parent) :
-    QValidator(parent) {
-}
-
-QValidator::State QuickSearchValidator::validate(QString &input, int &pos) const {
-    MasonryLayout *masonryLayout = static_cast<MasonryLayout *>(parent());
-    if (masonryLayout->quickSearchHasResults(input)) {
-        return Acceptable;
-    }
-    return Invalid;
 }

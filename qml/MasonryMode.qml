@@ -1,9 +1,6 @@
-//import QtQuick 2.15
-//import QtQuick.Layouts 1.15
-//import QtQuick.Controls 2.15 as T
 import QtQuick
 import QtQuick.Layouts
-import QtQuick.Controls.Basic as T
+import QtQuick.Controls
 
 import ZoinGallery 1.0
 
@@ -191,9 +188,14 @@ MouseArea {
 
     function hideQuickSearch() {
         quickSearchField.text = ""
-        masonryLayout.quickSearch = quickSearchField.text
+        masonryLayout.quickSearch.mask = quickSearchField.text
         backspaceDisabledUntilKeyUp = true
         quickSearchMode = false
+    }
+
+    function searchNext(forward) {
+        let nextIndex = masonryLayout.quickSearch.nextImage(forward, true)
+        setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
     }
 
     property bool backspaceDisabledUntilKeyUp: false
@@ -556,7 +558,7 @@ MouseArea {
             leftMargin: 20
             bottomMargin: 20
         }
-        width: 200
+        width: 330
         height: 49
         color: "#303030"
         border.width: 1
@@ -564,37 +566,95 @@ MouseArea {
         radius: 4
         visible: quickSearchMode
 
-        TextField {
-            id: quickSearchField
+        MouseArea {
             anchors.fill: parent
+        }
 
-            focus: true
-            hasBackground: false
-            color: masonryLayout.quickSearchMatches ? (hovered ? Style.hovered : "#f0f0f0") : Style.textError
+        RowLayout {
+            anchors.fill: parent
+            spacing: 0
 
-            validator: masonryLayout.quickSearchValidatior
+            TextField {
+                id: quickSearchField
+                Layout.fillWidth: true
+                Layout.fillHeight: true
 
-            Keys.forwardTo: masonryView
+                leftPadding: 17
+                rightPadding: 17
+                focus: true
+                hasBackground: false
+                color: masonryLayout.quickSearch.matches ? (hovered ? Style.hovered : "#f0f0f0") : Style.textError
 
-            Keys.onPressed:
-                (event) => {
-                    delayedOnPressed.start()
+                validator: masonryLayout.quickSearch.validator
 
-                    if (event.key === Qt.Key_Escape) {
-                        quickSearchField.text = ""
-                        event.accepted = false
+                Keys.forwardTo: masonryView
+
+                Keys.onPressed:
+                    (event) => {
+                        delayedOnPressed.start()
+
+                        if (event.key === Qt.Key_Escape) {
+                            quickSearchField.text = ""
+                            event.accepted = false
+                        }
+                        else if ((event.key === Qt.Key_Enter || event.key === Qt.Key_Return) && (event.modifiers & Qt.ControlModifier) && (event.modifiers & Qt.ShiftModifier) ||
+                                 event.key === Qt.Key_F3 && (event.modifiers & Qt.ShiftModifier)) {
+                            searchNext(false)
+                        }
+                        else if ((event.key === Qt.Key_Enter || event.key === Qt.Key_Return) && (event.modifiers & Qt.ControlModifier) ||
+                                 event.key === Qt.Key_F3) {
+                            searchNext(true)
+                        }
                     }
-                    else if ((event.key === Qt.Key_Enter || event.key === Qt.Key_Return) && (event.modifiers & Qt.ControlModifier) && (event.modifiers & Qt.ShiftModifier) ||
-                             event.key === Qt.Key_F3 && (event.modifiers & Qt.ShiftModifier)) {
-                        let nextIndex = masonryLayout.nextImageQuickSearch(false, true)
-                        setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
-                    }
-                    else if ((event.key === Qt.Key_Enter || event.key === Qt.Key_Return) && (event.modifiers & Qt.ControlModifier) ||
-                             event.key === Qt.Key_F3) {
-                        let nextIndex = masonryLayout.nextImageQuickSearch(true, true)
-                        setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
-                    }
-                }
+            }
+
+            Text {
+                id: matchesFoundText
+                Layout.fillHeight: true
+                Layout.preferredWidth: 34
+
+                horizontalAlignment: Text.AlignRight
+                verticalAlignment: Text.AlignVCenter
+                color: "#969696"
+                text: masonryLayout.quickSearch.matchesInfo
+            }
+
+            Rectangle {
+                color: "#505050"
+                Layout.preferredWidth: 1
+                Layout.preferredHeight: 32
+                Layout.leftMargin: 16
+                Layout.rightMargin: 8
+                Layout.alignment: Qt.AlignVCenter
+            }
+
+            component SearchButton : Button {
+                Layout.fillHeight: true
+                Layout.preferredWidth: 32
+
+                icon.width: 9
+                icon.height: 9
+            }
+
+            SearchButton {
+                icon.source: "qrc:/resources/SearchBack.svg"
+                onClicked: searchNext(false)
+
+//                ToolTip.visible: hovered
+//                ToolTip.delay: 500
+//                ToolTip.text: qsTr("Save the active project")
+            }
+
+            SearchButton {
+                icon.source: "qrc:/resources/SearchNext.svg"
+                onClicked: searchNext(true)
+            }
+
+            SearchButton {
+                Layout.rightMargin: 8
+                icon.source: "qrc:/resources/SearchClose.svg"
+                onClicked: hideQuickSearch()
+            }
         }
 
         Timer {
@@ -608,8 +668,8 @@ MouseArea {
                     hideQuickSearch()
                 }
 
-                masonryLayout.quickSearch = quickSearchField.text
-                let nextIndex = masonryLayout.nextImageQuickSearch(true, false)
+                masonryLayout.quickSearch.mask = quickSearchField.text
+                let nextIndex = masonryLayout.quickSearch.nextImage(true, false)
                 setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
             }
         }

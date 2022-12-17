@@ -3,19 +3,9 @@
 
 #include <QQuickItem>
 #include <QAbstractListModel>
-#include <QValidator>
 
+#include "MasonryLayoutQuickSearch.h"
 #include "ImageFile.h"
-
-class MasonryLayout;
-
-class QuickSearchValidator : public QValidator {
-public:
-    QuickSearchValidator(MasonryLayout *parent = nullptr);
-
-    State validate(QString &input, int &pos) const override;
-};
-
 
 class BrickItem : public QQuickItem {
     Q_OBJECT
@@ -29,7 +19,6 @@ public:
     int row() const;
     int column() const;
 
-    // QQuickItem interface
 protected:
 #if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
     void geometryChanged(const QRectF &newGeometry, const QRectF &oldGeometry) override;
@@ -55,9 +44,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(QQuickItem *currentItem READ currentItem NOTIFY currentIndexChanged)
     Q_PROPERTY(int spacing READ spacing WRITE setSpacing NOTIFY spacingChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
-    Q_PROPERTY(QString quickSearch READ quickSearch WRITE setQuickSearch NOTIFY quickSearchChanged)
-    Q_PROPERTY(bool quickSearchMatches READ quickSearchMatches WRITE setQuickSearchMatches NOTIFY quickSearchMatchesChanged)
-    Q_PROPERTY(QValidator* quickSearchValidatior READ quickSearchValidatior NOTIFY quickSearchValidatiorChanged)
+    Q_PROPERTY(MasonryLayoutQuickSearch *quickSearch READ quickSearch NOTIFY quickSearchChanged)
 
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
@@ -68,8 +55,6 @@ public:
     Q_INVOKABLE QRectF indexGeometry(int index) const;
     Q_INVOKABLE QString indexImage(int index) const;
     Q_INVOKABLE int nextImageIndex(bool forward, bool moveToEnd);
-    Q_INVOKABLE int nextImageQuickSearch(bool forward, bool forceMoveToNext);
-    bool quickSearchHasResults(QString search);
 
     Q_INVOKABLE void reReadAndDecodeThumbnails();
     Q_INVOKABLE void zoomIn();
@@ -98,13 +83,7 @@ public:
 
     int count() const;
 
-    const QString &quickSearch() const;
-    void setQuickSearch(const QString &newQuickSearch);
-
-    bool quickSearchMatches() const;
-    void setQuickSearchMatches(bool newQuickSearchMatches);
-
-    QValidator *quickSearchValidatior() const;
+    MasonryLayoutQuickSearch *quickSearch() const;
 
 signals:
     void targetHeightChanged();
@@ -122,11 +101,9 @@ signals:
 
     void quickSearchChanged();
 
-    void quickSearchMatchesChanged();
-
-    void quickSearchValidatiorChanged();
-
 private:
+    friend class MasonryLayoutQuickSearch;
+
     struct MasonryBrick {
         QSizeF originalSize;
         QSizeF normalizedSize;
@@ -161,10 +138,6 @@ private:
     void onModelReset();
     void zoom(bool in);
 
-    bool indexMatchesQuickSearch(int index, QString search);
-    QString indexTextWithQuickSearchApplied(int index);
-    void updateVisualQuickSearch();
-
     void pushBrickItem(BrickItem *item);
     BrickItem *popBrickItem();
     QSet<BrickItem *> _usedBrickItems;
@@ -190,9 +163,8 @@ private:
 
     bool _currentScrollingMode;
     int _currentScrollingDirection;
-    QString _quickSearch;
-    bool _quickSearchMatches;
-    QValidator *_quickSearchValidatior;
+
+    MasonryLayoutQuickSearch *_quickSearch;
 };
 
 #endif // MASONRYLAYOUT_H

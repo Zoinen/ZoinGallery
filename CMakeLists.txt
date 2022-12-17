@@ -45,8 +45,8 @@ conan_cmake_install(PATH_OR_REFERENCE .
 include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
 conan_basic_setup(NO_OUTPUT_DIRS)
 
-find_package(QT NAMES Qt6 Qt5 COMPONENTS Core Quick Concurrent Svg REQUIRED)
-find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Concurrent Svg REQUIRED)
+find_package(QT NAMES Qt6)
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Concurrent Svg QuickControls2 REQUIRED)
 
 set(PROJECT_SOURCES
     main.cpp
@@ -63,6 +63,8 @@ set(PROJECT_SOURCES
     exiv2/Preview.cpp
     ThreadSafeQueue.h
     ThreadSafeQueue.cpp
+    MasonryLayoutQuickSearch.h
+    MasonryLayoutQuickSearch.cpp
 )
 
 if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)
@@ -77,8 +79,6 @@ if(WIN32)
     configure_file(ZoinGallery.rc.cmake ${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery.rc @ONLY)
     set(RESOURCE_FILES ${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery.rc)
 endif()
-
-qt_add_resources(PROJECT_SOURCES qml.qrc)
 
 if(APPLE)
     set(ICON_FILENAME ZoinGallery.icns)
@@ -99,22 +99,38 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
     )
 
     qt6_add_qml_module(ZoinGallery
-        URI ZoinGallery
+        URI /
         VERSION 1.0
         RESOURCE_PREFIX /
         QML_FILES
-            main.qml
+            qml/main.qml
             qml/MasonryMode.qml
-            qml/ScrollBar.qml
-            qml/Slider.qml
-            qml/Button.qml
-            qml/TextField.qml
-            qml/Style.qml
+            ZGStyle/Style.qml
+            ZGStyle/ScrollBar.qml
+            ZGStyle/Slider.qml
+            ZGStyle/Button.qml
+            ZGStyle/TextField.qml
+            ZGStyle/ToolTip.qml
+            ZGStyle/qmldir
+        RESOURCES
+            resources/ThumbnailsShadow.png
+            resources/ThumbnailsShadow@2x.png
+            resources/FileIcon.svg
+            resources/FolderIcon.svg
+            resources/ScrollMode.svg
+            resources/ScrollModeDown.svg
+            resources/ScrollModeUp.svg
+            resources/Logo.svg
+            resources/DriveIcon.svg
+            resources/Up.svg
+            resources/SearchBack.svg
+            resources/SearchClose.svg
+            resources/SearchNext.svg
         )
 endif()
 
 target_link_libraries(ZoinGallery PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Quick
-    Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg ${CONAN_LIBS})
+    Qt${QT_VERSION_MAJOR}::Concurrent Qt${QT_VERSION_MAJOR}::Svg Qt${QT_VERSION_MAJOR}::QuickControls2 ${CONAN_LIBS})
 
 if(APPLE)
     set(MACOSX_BUNDLE_ICON_FILE ${ICON_FILENAME})

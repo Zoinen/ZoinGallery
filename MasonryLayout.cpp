@@ -39,6 +39,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
 
     _currentScrollingMode = false;
     _currentScrollingDirection = -2;
+    _quickSearchValidatior = new QuickSearchValidator(this);
 }
 
 void MasonryLayout::componentComplete() {
@@ -116,7 +117,7 @@ int MasonryLayout::nextImageQuickSearch(bool forward, bool forceMoveToNext) {
     bool foundMatch = false;
     bool didWrap = false;
     for (int i = _currentIndex + (forceMoveToNext ? (forward ? 1 : -1) : 0); i >= 0 && i < _bricks.size(); i += (forward ? 1 : -1)) {
-        if (indexMatchesQuickSearch(i)) {
+        if (indexMatchesQuickSearch(i, _quickSearch)) {
             nextIndex = i;
             foundMatch = true;
             break;
@@ -124,7 +125,7 @@ int MasonryLayout::nextImageQuickSearch(bool forward, bool forceMoveToNext) {
     }
     if (!foundMatch) {
         for (int i = (forward ? 0 : _bricks.size() - 1); i >= 0 && i < _bricks.size() && i != _currentIndex; i += (forward ? 1 : -1)) {
-            if (indexMatchesQuickSearch(i)) {
+            if (indexMatchesQuickSearch(i, _quickSearch)) {
                 nextIndex = i;
                 foundMatch = true;
                 didWrap = true;
@@ -137,6 +138,19 @@ int MasonryLayout::nextImageQuickSearch(bool forward, bool forceMoveToNext) {
     }
     setQuickSearchMatches(foundMatch);
     return nextIndex;
+}
+
+bool MasonryLayout::quickSearchHasResults(QString search) {
+    if (search.isEmpty()) {
+        return true;
+    }
+
+    for (int i = 0; i < _bricks.size(); i++) {
+        if (indexMatchesQuickSearch(i, search)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void MasonryLayout::reReadAndDecodeThumbnails() {
@@ -597,11 +611,11 @@ void MasonryLayout::zoom(bool in) {
     }
 }
 
-bool MasonryLayout::indexMatchesQuickSearch(int index) {
+bool MasonryLayout::indexMatchesQuickSearch(int index, QString search) {
     if (index < 0 || index > _bricks.size() - 1) {
         return false;
     }
-    return _bricks[index].image->fileName.contains(_quickSearch, Qt::CaseInsensitive);
+    return _bricks[index].image->fileName.contains(search, Qt::CaseInsensitive);
 }
 
 QString MasonryLayout::indexTextWithQuickSearchApplied(int index) {
@@ -885,4 +899,20 @@ void MasonryLayout::setQuickSearchMatches(bool newQuickSearchMatches) {
     }
     _quickSearchMatches = newQuickSearchMatches;
     emit quickSearchMatchesChanged();
+}
+
+QValidator *MasonryLayout::quickSearchValidatior() const {
+    return _quickSearchValidatior;
+}
+
+QuickSearchValidator::QuickSearchValidator(MasonryLayout *parent) :
+    QValidator(parent) {
+}
+
+QValidator::State QuickSearchValidator::validate(QString &input, int &pos) const {
+    MasonryLayout *masonryLayout = static_cast<MasonryLayout *>(parent());
+    if (masonryLayout->quickSearchHasResults(input)) {
+        return Acceptable;
+    }
+    return Invalid;
 }

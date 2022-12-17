@@ -572,6 +572,8 @@ MouseArea {
             hasBackground: false
             color: masonryLayout.quickSearchMatches ? (hovered ? Style.hovered : "#f0f0f0") : Style.textError
 
+            validator: masonryLayout.quickSearchValidatior
+
             Keys.forwardTo: masonryView
 
             Keys.onPressed:

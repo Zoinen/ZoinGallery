@@ -3,7 +3,19 @@
 
 #include <QQuickItem>
 #include <QAbstractListModel>
+#include <QValidator>
+
 #include "ImageFile.h"
+
+class MasonryLayout;
+
+class QuickSearchValidator : public QValidator {
+public:
+    QuickSearchValidator(MasonryLayout *parent = nullptr);
+
+    State validate(QString &input, int &pos) const override;
+};
+
 
 class BrickItem : public QQuickItem {
     Q_OBJECT
@@ -45,6 +57,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     Q_PROPERTY(QString quickSearch READ quickSearch WRITE setQuickSearch NOTIFY quickSearchChanged)
     Q_PROPERTY(bool quickSearchMatches READ quickSearchMatches WRITE setQuickSearchMatches NOTIFY quickSearchMatchesChanged)
+    Q_PROPERTY(QValidator* quickSearchValidatior READ quickSearchValidatior NOTIFY quickSearchValidatiorChanged)
 
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
@@ -56,6 +69,7 @@ public:
     Q_INVOKABLE QString indexImage(int index) const;
     Q_INVOKABLE int nextImageIndex(bool forward, bool moveToEnd);
     Q_INVOKABLE int nextImageQuickSearch(bool forward, bool forceMoveToNext);
+    bool quickSearchHasResults(QString search);
 
     Q_INVOKABLE void reReadAndDecodeThumbnails();
     Q_INVOKABLE void zoomIn();
@@ -90,6 +104,8 @@ public:
     bool quickSearchMatches() const;
     void setQuickSearchMatches(bool newQuickSearchMatches);
 
+    QValidator *quickSearchValidatior() const;
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -107,6 +123,8 @@ signals:
     void quickSearchChanged();
 
     void quickSearchMatchesChanged();
+
+    void quickSearchValidatiorChanged();
 
 private:
     struct MasonryBrick {
@@ -143,7 +161,7 @@ private:
     void onModelReset();
     void zoom(bool in);
 
-    bool indexMatchesQuickSearch(int index);
+    bool indexMatchesQuickSearch(int index, QString search);
     QString indexTextWithQuickSearchApplied(int index);
     void updateVisualQuickSearch();
 
@@ -174,6 +192,7 @@ private:
     int _currentScrollingDirection;
     QString _quickSearch;
     bool _quickSearchMatches;
+    QValidator *_quickSearchValidatior;
 };
 
 #endif // MASONRYLAYOUT_H

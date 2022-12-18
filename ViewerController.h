@@ -35,6 +35,7 @@ private:
     QWindow *_mainWindow;
     bool _leftButtonPressed;
     QSize _lastSize;
+    QRect _normalGeometry;
 };
 
 #endif // VIEWERCONTROLLER_H

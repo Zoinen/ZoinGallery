@@ -5,14 +5,11 @@ import QtQuick.Controls
 
 Window {
     id: topLevelWindow
-    width: 1640
-    height: 980
     visible: true
     color: "#333333"
-    title: qsTr("Zoin Gallery")
+    title: "Zoin Gallery"
 
-    visibility: Window.Maximized
-    property int lastVisibility
+    property int lastVisibility: Window.Windowed
 
     function toggleFullscreen() {
         if (topLevelWindow.visibility === Window.FullScreen) {

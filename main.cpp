@@ -12,6 +12,9 @@ int main(int argc, char *argv[])
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
 #endif
     QGuiApplication app(argc, argv);
+    app.setOrganizationName("Zoin");
+    app.setOrganizationDomain("zoingallery.com");
+    app.setApplicationName("ZoinGallery");
 
     QQuickStyle::setStyle("ZGStyle");
 

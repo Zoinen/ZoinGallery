@@ -8,6 +8,10 @@
 #include <QQmlContext>
 #include <QQmlEngine>
 #include <QDir>
+#include <QSettings>
+#include <QScreen>
+#include <QResizeEvent>
+#include <QMoveEvent>
 
 ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
@@ -82,6 +86,22 @@ void ViewerController::setMainWindow(QWindow *mainWindow) {
     _mainWindow = mainWindow;
     _mainWindow->installEventFilter(this);
     _lastSize = _mainWindow->size();
+
+    QSettings set;
+    QVariant normalGeometry = set.value("normalGeometry");
+    if (normalGeometry.isValid()) {
+        _normalGeometry = normalGeometry.toRect();
+    }
+    else {
+        QSize size(1250, 700);
+        _normalGeometry = QRect(_mainWindow->screen()->virtualGeometry().center() - QPoint(size.width() / 2, size.height() / 2), size);
+    }
+    _mainWindow->setGeometry(_normalGeometry);
+
+    QVariant windowState = set.value("windowState");
+    if (windowState.isValid()) {
+        _mainWindow->setWindowState(windowState.value<Qt::WindowState>());
+    }
 }
 
 bool ViewerController::eventFilter(QObject *watched, QEvent *event) {
@@ -101,6 +121,29 @@ bool ViewerController::eventFilter(QObject *watched, QEvent *event) {
                 emit mainWindowResized();
             }
             _lastSize = _mainWindow->size();
+        }
+
+        if (event->type() == QEvent::Resize) {
+            if (_mainWindow->windowState() == Qt::WindowNoState) {
+                if (static_cast<QResizeEvent *>(event)->size() != _normalGeometry.size()) {
+                    _normalGeometry.setSize(static_cast<QResizeEvent *>(event)->oldSize());
+                }
+            }
+        }
+        else if (event->type() == QEvent::Move) {
+            if (_mainWindow->windowState() == Qt::WindowNoState) {
+                if (static_cast<QMoveEvent *>(event)->pos() != _normalGeometry.topLeft()) {
+                    _normalGeometry.moveTopLeft(static_cast<QMoveEvent *>(event)->oldPos());
+                }
+            }
+        }
+        else if (event->type() == QEvent::Close) {
+            if (_mainWindow->windowState() == Qt::WindowNoState) {
+                _normalGeometry = _mainWindow->geometry();
+            }
+            QSettings set;
+            set.setValue("normalGeometry", _normalGeometry);
+            set.setValue("windowState", _mainWindow->windowState());
         }
     }
     return false;

@@ -640,20 +640,22 @@ MouseArea {
                 icon.source: "qrc:/resources/SearchBack.svg"
                 onClicked: searchNext(false)
 
-//                ToolTip.visible: hovered
-//                ToolTip.delay: 500
-//                ToolTip.text: qsTr("Save the active project")
+                ToolTip.text: "Previous\tShift+F3"
             }
 
             SearchButton {
                 icon.source: "qrc:/resources/SearchNext.svg"
                 onClicked: searchNext(true)
+
+                ToolTip.text: "Next\tF3"
             }
 
             SearchButton {
                 Layout.rightMargin: 8
                 icon.source: "qrc:/resources/SearchClose.svg"
                 onClicked: hideQuickSearch()
+
+                ToolTip.text: "Close quick search\tEsc"
             }
         }
 

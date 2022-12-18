@@ -15,6 +15,15 @@ T.Button {
     icon.width: 16
     icon.height: 16
 
+    property bool tooltipReady: false
+
+    onHoveredChanged: tooltipReady = hovered
+    onPressed: tooltipReady = false
+
+    ToolTip.visible: tooltipReady && ToolTip.text != ""
+    ToolTip.delay: 1000
+    ToolTip.timeout: 5000
+
     background: Rectangle {
         anchors.centerIn: control
         width: backgroundWidth

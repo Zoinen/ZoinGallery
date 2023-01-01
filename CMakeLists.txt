@@ -117,6 +117,7 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             resources/ThumbnailsShadow@2x.png
             resources/FileIcon.svg
             resources/FolderIcon.svg
+            resources/ImageIcon.svg
             resources/ScrollMode.svg
             resources/ScrollModeDown.svg
             resources/ScrollModeUp.svg

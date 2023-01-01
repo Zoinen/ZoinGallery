@@ -161,6 +161,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
 
             if (isImage(file)) {
                 item->isImage = true;
+                item->iconPath = "qrc:/resources/ImageIcon.svg";
 //                updateImageId(item);
                 QString path = fullPath(file);
                 _fileToItem.insert(path, item);

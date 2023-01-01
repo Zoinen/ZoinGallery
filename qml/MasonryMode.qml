@@ -314,7 +314,7 @@ MouseArea {
                 if (masonryLayout.currentItem.isFolder) {
                     viewerController.cd(masonryLayout.currentItem.text)
                 }
-                else {
+                else if (masonryLayout.currentItem.isImage) {
                     masonryView.toggleViewer()
                 }
             }
@@ -410,7 +410,7 @@ MouseArea {
                 height: parent.height - masonryLayout.spacing
                 x: masonryLayout.spacing / 2
                 y: masonryLayout.spacing / 2
-                visible: imageId !== "" && isImage
+                visible: imageId !== ""
                 fillMode: Image.PreserveAspectCrop
                 source: imageId
 //                    opacity: 0.1
@@ -424,13 +424,13 @@ MouseArea {
                 height: Math.min(parent.height - 26 - masonryLayout.spacing, 128)
                 sourceSize.height: height
                 fillMode: Image.PreserveAspectFit
-                visible: !isImage
+                visible: !imageId
                 source: iconPath
             }
 
             Rectangle {
                 id: infoPanel
-                color: isImage ? (masonryLayout.currentIndex === index ? "#B3002943" : Qt.rgba(0, 0, 0, 0.5)) : "transparent"
+                color: imageId ? (masonryLayout.currentIndex === index ? "#B3002943" : Qt.rgba(0, 0, 0, 0.5)) : "transparent"
                 anchors {
                     left: parent.left
                     leftMargin: masonryLayout.spacing / 2
@@ -481,7 +481,9 @@ MouseArea {
                         viewerController.cd(text)
                     }
                     else {
-                        masonryView.toggleViewer()
+                        if (masonryLayout.currentItem.isImage) {
+                            masonryView.toggleViewer()
+                        }
                     }
                 }
             }

@@ -145,8 +145,7 @@ void ThreadedThumbnailGenerator::checkIfFinished() {
         }
     }
     if (_readFinished && decodingFinished) {
-        qDebug() << "decode finished";
-        qDebug() << "took:" << _benchmark.restart() << "ms";
+        qDebug() << "decode finished. Took:" << _benchmark.restart() << "ms";
         emit decodeFinished();
     }
 }
@@ -165,14 +164,14 @@ void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
 
     if (_requests.size() && result.request.sourcePath == _requests.last().sourcePath) {
         _readFinished = true;
-        qDebug() << "read finished";
+//        qDebug() << "read finished";
         emit readFinished();
         checkIfFinished();
     }
 }
 
 void ThreadedThumbnailGenerator::onDecodeFinished(const ImageReadResult &readResult, const QImage &image) {
-    qDebug() << "-------- on ready" << readResult.request.sourcePath << readResult.request.viewerRequest;
+//    qDebug() << "-------- on ready" << readResult.request.sourcePath << readResult.request.viewerRequest;
     if (!readResult.request.viewerRequest) {
         emit thumbnailReady(readResult.request.sourcePath, image);
     }
@@ -211,7 +210,7 @@ void DecodeWorker::decode(const ImageReadResult &readResult, int queueId) {
     if (!readResult.fullImageData.isEmpty() && (thumbnail.isNull() ||
             readResult.thumbnailSize.width() < readResult.request.targetSize.width() ||
             readResult.thumbnailSize.height() < readResult.request.targetSize.height())) {
-        qDebug() << readResult.request.sourcePath << "full image";
+//        qDebug() << readResult.request.sourcePath << "full image";
 //        qDebug() << "TRY#" << readResult.request.sourcePath << readResult.thumbnailSize << "OF" << readResult.request.targetSize;
         QImage fullImage = loader.decodeImage(readResult.fullImageData, readResult.mimeType, rotateToOrientation(readResult.request.targetSize, readResult.orientation), readResult);
         if (!fullImage.isNull()) {

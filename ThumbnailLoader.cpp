@@ -97,7 +97,7 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         else {
             outResult.fullSize = readResolutionFromExif(image.get());
         }
-        qDebug() << "OUT FULL SIZE" << path << outResult.fullSize;
+//        qDebug() << "OUT FULL SIZE" << path << outResult.fullSize;
 
 //        qDebug() << outResult.request.sourcePath << outResult.fullSize;
 

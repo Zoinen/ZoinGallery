@@ -11,6 +11,8 @@ int main(int argc, char *argv[])
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
 #endif
+    qputenv("QT_QPA_PLATFORM", "windows:darkmode=2");
+
     QGuiApplication app(argc, argv);
     app.setOrganizationName("Zoin");
     app.setOrganizationDomain("zoingallery.com");

@@ -41,6 +41,10 @@ MouseArea {
     function endScrolling() {
         scrollingStarted = false
         scrollingMode = false
+        // This immediately stops behavior animation
+        masonryLayout.contentY += 0.01
+        masonryLayout.contentY -= 0.01
+
         scrollingTimer.stop()
         masonryLayout.setScrollingMode(false)
 
@@ -65,7 +69,8 @@ MouseArea {
     Timer {
         id: scrollingTimer
         repeat: true
-        interval: 1000/60
+        interval: animationInterval / 10
+        property real animationInterval: 250
         onTriggered: {
             let distance = masonryView.mouseY - scrollingStartedAtY
             distance = Math.min(Math.max(0, distance - 25), distance + 25)
@@ -75,7 +80,8 @@ MouseArea {
                 fraction += 0.05
             }
 
-            let increment = Math.pow(fraction, 3) * totalHeight
+            let speed = scrollingTimer.interval / (1000 / 60) * (animationInterval / scrollingTimer.interval)
+            let increment = (Math.pow(fraction, 3) * totalHeight) * speed * 2
             masonryLayout.contentY += increment * (distance < 0 ? -1 : 1)
 
             if (distance !== 0 && !scrollingStarted) {
@@ -187,10 +193,12 @@ MouseArea {
     }
 
     function hideQuickSearch() {
-        quickSearchField.text = ""
-        masonryLayout.quickSearch.mask = quickSearchField.text
-        backspaceDisabledUntilKeyUp = true
-        quickSearchMode = false
+        if (quickSearchMode) {
+            quickSearchField.text = ""
+            masonryLayout.quickSearch.mask = quickSearchField.text
+            backspaceDisabledUntilKeyUp = true
+            quickSearchMode = false
+        }
     }
 
     function searchNext(forward) {
@@ -358,7 +366,7 @@ MouseArea {
 
             NumberAnimation {
                 id: contentYAnimation
-                duration: 1000/60
+                duration: scrollingTimer.animationInterval * 2
             }
         }
 
@@ -371,14 +379,6 @@ MouseArea {
             property bool isFolder
             property string iconPath
 
-            Rectangle {
-                width: image.width + 2
-                height: image.height + 2
-                x: image.x - 1
-                y: image.y - 1
-                color: "#202020"
-                border.color: "#000"
-            }
 
             Rectangle {
                 anchors {
@@ -430,7 +430,7 @@ MouseArea {
 
             Rectangle {
                 id: infoPanel
-                color: masonryLayout.currentIndex === index ? "#B3002943" : Qt.rgba(0, 0, 0, 0.5)
+                color: isImage ? (masonryLayout.currentIndex === index ? "#B3002943" : Qt.rgba(0, 0, 0, 0.5)) : "transparent"
                 anchors {
                     left: parent.left
                     leftMargin: masonryLayout.spacing / 2
@@ -671,8 +671,10 @@ MouseArea {
                 }
 
                 masonryLayout.quickSearch.mask = quickSearchField.text
-                let nextIndex = masonryLayout.quickSearch.nextImage(true, false)
-                setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
+                if (quickSearchField.text) {
+                    let nextIndex = masonryLayout.quickSearch.nextImage(true, false)
+                    setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
+                }
             }
         }
     }

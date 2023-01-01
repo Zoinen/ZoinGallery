@@ -243,6 +243,27 @@ QSizeF scaleToHeightWithSpacing(const QSizeF &size, qreal toHeight, int spacing)
     return QSizeF((toHeight - spacing) * aspect + spacing, toHeight);
 }
 
+qreal MasonryLayout::scaleRow(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing,
+                             int lastRowIndex, qreal rowHeight) {
+    int i = lastRowIndex;
+    int bricksInRow = bricks[i].column + 1;
+
+    if (!rowHeight) {
+        qreal totalWidthWithoutSpacing = bricks[i].x + bricks[i].normalizedSize.width() - (bricksInRow * spacing);
+        qreal stretchFactor = (canvasWidth - bricksInRow * spacing) / totalWidthWithoutSpacing;
+        rowHeight = (rowTargetHeight - spacing) * stretchFactor + spacing;
+    }
+
+    for (int rowIndex = i - bricksInRow + 1; rowIndex <= i; rowIndex++) {
+        bricks[rowIndex].normalizedSize = scaleToHeightWithSpacing(bricks[rowIndex].normalizedSize -
+                                                                   QSize(spacing, spacing), rowHeight, spacing);
+        if (bricks[rowIndex].column) {
+            bricks[rowIndex].x = bricks[rowIndex - 1].x + bricks[rowIndex - 1].normalizedSize.width();
+        }
+    }
+    return rowHeight;
+}
+
 void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing) {
     int currentRow = 0;
     int currentColumn = 0;
@@ -259,10 +280,32 @@ void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int
         bool forceNewline = bricks[i].forceNewLine;
         bricks[i].forceNewLine = false;
 
+        // Row is not filled enough yet, growing
         if (lastX + bricks[i].normalizedSize.width() < canvasWidth && !forceNewline) {
             lastX += bricks[i].normalizedSize.width();
+
+            // Last row should have the same height as the previous one, or just fit in width if last height is too much
+            if (i == bricks.size() - 1 && currentRow) {
+                for (int rowIndex = i-1; rowIndex >= 0; rowIndex--) {
+                    if (bricks[rowIndex].row != currentRow) {
+                        scaleRow(bricks, canvasWidth, rowTargetHeight, spacing,
+                                 i, bricks[rowIndex].normalizedSize.height());
+                        if (bricks[i].x + bricks[i].normalizedSize.width() > canvasWidth) {
+                            for (int j = rowIndex + 1; j <= i; j++) {
+                                if (bricks[j].column) {
+                                    bricks[j].x = bricks[j - 1].x + bricks[j - 1].normalizedSize.width();
+                                }
+                                bricks[j].normalizedSize = scaleToHeightWithSpacing(bricks[j].originalSize,
+                                                                                    rowTargetHeight, spacing);
+                            }
+                            scaleRow(bricks, canvasWidth, rowTargetHeight, spacing, i);
+                        }
+                        break;
+                    }
+                }
+            }
         }
-        else if (!currentColumn) {
+        else if (!currentColumn) { // Single-item row
             bricks[i].normalizedSize = scaleToWidthWithSpacing(bricks[i].originalSize, canvasWidth, spacing);
 
             currentRow++;
@@ -272,21 +315,12 @@ void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int
             if (i != bricks.size() - 1) {
                 lastY += bricks[i].normalizedSize.height();
             }
-        }
+        } // Can't grow more, expanding current row and advancing to the next one
         else {
-            int bricksInRow = bricks[i-1].column + 1;
-
-            qreal totalWidthWithoutSpacing = lastX - (bricksInRow * spacing);
-            qreal stretchFactor = (canvasWidth - bricksInRow * spacing) / totalWidthWithoutSpacing;
-            qreal newRowHeight = (rowTargetHeight - spacing) * stretchFactor + spacing;
-
-            for (int rowIndex = i - bricksInRow; rowIndex < i; rowIndex++) {
-                bricks[rowIndex].normalizedSize = scaleToHeightWithSpacing(bricks[rowIndex].normalizedSize -
-                                                                           QSize(spacing, spacing), newRowHeight, spacing);
-                if (bricks[rowIndex].column) {
-                    bricks[rowIndex].x = bricks[rowIndex - 1].x + bricks[rowIndex - 1].normalizedSize.width();
-                }
+            if (currentColumn != bricks[i-1].column + 1 || currentColumn != bricks[i].column) {
+                qDebug() << "------------- ALARM ALARM!!!!" << currentColumn << bricks[i-1].column + 1;
             }
+            qreal newRowHeight = scaleRow(bricks, canvasWidth, rowTargetHeight, spacing, i - 1);
             currentRow++;
             currentColumn = -1;
             lastX = 0;
@@ -510,7 +544,7 @@ void MasonryLayout::onModelReset() {
         ImageFile *imageFile = _model->data(_model->index(i), FileListModel::ImageFileRole).value<ImageFile *>();
         QSize imgSize = imageFile->fullSize;
         if (imgSize.isEmpty()) {
-            imgSize = QSize(3, 2);
+            imgSize = QSize(DefaultAspectWidth, DefaultAspectHeight);
         }
         _bricks.append(MasonryBrick(imageFile, imgSize));
     }
@@ -521,9 +555,9 @@ void MasonryLayout::onModelReset() {
     }
 
     QList<MasonryBrick> bricks;
-    QSize minSize = QSize(_targetHeight * 3 / 2, _targetHeight);
+    QSize minSize = QSize(_targetHeight * DefaultAspectWidth / DefaultAspectHeight, _targetHeight);
     for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
-        bricks.append(MasonryBrick(3, 2));
+        bricks.append(MasonryBrick(DefaultAspectWidth, DefaultAspectHeight));
     }
     calcLayout(bricks, width(), _targetHeight, _spacing * window()->devicePixelRatio());
     QSizeF projectedSize = bricks.first().normalizedSize;
@@ -538,13 +572,17 @@ void MasonryLayout::zoom(bool in) {
     const int largestHeight = 500;
 
     QList<MasonryBrick> bricks;
-    QSize minSize = QSize(_targetHeight * 3 / 2, _targetHeight);
+    QSize minSize = QSize(_targetHeight * DefaultAspectWidth / DefaultAspectHeight, _targetHeight);
     for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
-        bricks.append(MasonryBrick(3, 2));
+        bricks.append(MasonryBrick(DefaultAspectWidth, DefaultAspectHeight));
     }
     int columns = -1;
     int newTargetHeight = -1;
     int increment = in ? 1 : -1;
+
+    int targetHeightRangeStart = -1;
+    int targetHeightRangeEnd = -1;
+
     for (int targetHeight = _targetHeight; targetHeight >= smallestHeight && targetHeight <= largestHeight; targetHeight += increment) {
         calcLayout(bricks, width(), targetHeight, _spacing * window()->devicePixelRatio());
         for (int i = 0; i < bricks.size(); i++) {
@@ -553,7 +591,14 @@ void MasonryLayout::zoom(bool in) {
                     columns = bricks[i - 1].column;
                 }
                 else if (bricks[i - 1].column != columns) {
-                    newTargetHeight = targetHeight;
+                    columns = bricks[i - 1].column;
+                    if (targetHeightRangeStart == -1) {
+                        targetHeightRangeStart = targetHeight;
+                    }
+                    else {
+                        targetHeightRangeEnd = targetHeight;
+                        newTargetHeight = (targetHeightRangeStart + targetHeightRangeEnd) / 2;
+                    }
                 }
                 break;
             }

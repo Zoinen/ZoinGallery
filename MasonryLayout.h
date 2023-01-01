@@ -126,6 +126,7 @@ private:
     BrickItem *createComponent();
 
     void rewrap();
+    static qreal scaleRow(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, int lastRowIndex, qreal rowHeight = 0);
     static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing);
     void updateProperties();
     void setContentYInternal(qreal newContentY);
@@ -152,6 +153,9 @@ private:
     int _topItem;
     int _topItemOffset;
     QQuickItem *_viewport;
+
+    const int DefaultAspectWidth = 2;
+    const int DefaultAspectHeight = 3;
 
     int _targetHeight;
     qreal _contentY;

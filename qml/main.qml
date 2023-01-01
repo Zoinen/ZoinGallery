@@ -391,4 +391,27 @@ Window {
             }
         ]
     }
+
+    Item {
+        transitions: [
+            Transition {
+                to: "inactive"
+                ColorAnimation {
+                    duration: 150
+                    easing.type: Easing.InOutQuad
+                }
+            }
+        ]
+
+        states: [
+            State {
+                name: "inactive"
+                when: !topLevelWindow.active
+                PropertyChanges {
+                    target: topLevelWindow
+                    color: "#202020"
+                }
+            }
+        ]
+    }
 }

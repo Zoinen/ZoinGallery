@@ -37,6 +37,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _delegate = nullptr;
     _currentIndex = 0;
     _viewport = nullptr;
+    _needScroll = false;
 
     _currentScrollingMode = false;
     _currentScrollingDirection = -2;
@@ -58,6 +59,7 @@ void MasonryLayout::componentComplete() {
         else {
             updateProperties();
         }
+        updateNeedScroll();
     });
 }
 
@@ -446,6 +448,7 @@ void MasonryLayout::setContentHeight(int newContentHeight) {
         _viewport->setHeight(_contentHeight);
     }
     emit contentHeightChanged();
+    updateNeedScroll();
 }
 
 void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles) {
@@ -610,6 +613,26 @@ void MasonryLayout::zoom(bool in) {
     if (newTargetHeight != -1 || (_targetHeight != largestHeight && in) || (_targetHeight != smallestHeight && !in)) {
         setTargetHeight(newTargetHeight != -1 ? newTargetHeight : (in ? largestHeight : smallestHeight));
         reReadAndDecodeThumbnails();
+    }
+}
+
+void MasonryLayout::updateNeedScroll() {
+    if (!_bricks.size()) {
+        return;
+    }
+
+    bool newNeedScroll = _contentHeight > height();
+    if (newNeedScroll != _needScroll) {
+        QList<MasonryBrick> bricks = _bricks;
+        // TODO: Scrollbar height is hardcoded here
+        calcLayout(bricks, width() + (newNeedScroll ? 0 : 16), _targetHeight, _spacing * window()->devicePixelRatio());
+
+        int newContentHeight = (bricks.last().y + bricks.last().normalizedSize.height());
+        newNeedScroll = newContentHeight > height();
+        if (newNeedScroll != _needScroll) {
+            _needScroll = newNeedScroll;
+            emit needScrollChanged();
+        }
     }
 }
 
@@ -843,4 +866,8 @@ int MasonryLayout::count() const {
 
 MasonryLayoutQuickSearch *MasonryLayout::quickSearch() const {
     return _quickSearch;
+}
+
+bool MasonryLayout::needScroll() const {
+    return _needScroll;
 }

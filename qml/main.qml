@@ -200,18 +200,18 @@ Window {
                 }
             }
 
-
             Rectangle {
                 Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: "#474747"
+            }
+
+            MasonryMode {
+                id: masonryLayout
+                Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: "#111111"
 
-                MasonryMode {
-                    id: masonryLayout
-                    anchors.fill: parent
-
-                    onToggleViewer: root.toggleViewer()
-                }
+                onToggleViewer: root.toggleViewer()
             }
         }
 

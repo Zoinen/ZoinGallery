@@ -13,7 +13,6 @@ MouseArea {
     Rectangle {
         anchors {
             fill: parent
-            topMargin: 1
         }
         color: "#202020"
     }
@@ -349,7 +348,6 @@ MouseArea {
     MasonryLayout {
         id: masonryLayout
         anchors {
-            topMargin: 1
             leftMargin: masonryLayout.spacing / 2
 
             left: parent.left
@@ -381,12 +379,15 @@ MouseArea {
 
 
             Rectangle {
+                id: delegateOutline
                 anchors {
                     fill: image
                     leftMargin: -2
                     topMargin: -2
                     rightMargin: -2
-                    bottomMargin: -2
+                    bottomMargin: -2 +
+                                  (quickSearchMode ? (fileInfoPanel.height - fileName.contentHeight - icon.y) :
+                                                     Math.max(0, fileName.height - fileName.contentHeight + icon.sizeBase / 40 - icon.y))
                 }
                 color: Style.focus
                 visible: masonryLayout.currentIndex === index
@@ -398,7 +399,7 @@ MouseArea {
                     leftMargin: 2
                     topMargin: 2
                     rightMargin: 2
-                    bottomMargin: 2
+                    bottomMargin: 2 + delegateOutline.anchors.bottomMargin + 2
                 }
                 color: "#1a4662"
                 visible: masonryLayout.currentIndex === index && !image.visible
@@ -418,19 +419,54 @@ MouseArea {
             }
 
             Image {
+                id: icon
                 x: parent.width / 2 - width / 2
-                y: Math.max(masonryLayout.spacing, (parent.height - 26) / 2 - height / 2)
-                width: Math.min(parent.width - masonryLayout.spacing, 128)
-                height: Math.min(parent.height - 26 - masonryLayout.spacing, 128)
+                y: sizeBase / 10
+                property real sizeBase: Math.min(parent.width, parent.height - 26) - masonryLayout.spacing
+                width: sizeBase - sizeBase / 10
+                height: width
                 sourceSize.height: height
                 fillMode: Image.PreserveAspectFit
                 visible: !imageId
                 source: iconPath
             }
 
+            Item {
+                id: fileInfoPanel
+                anchors {
+                    left: parent.left
+                    leftMargin: masonryLayout.spacing / 2
+                    right: parent.right
+                    rightMargin: masonryLayout.spacing / 2
+                    top: icon.bottom
+                    bottom: parent.bottom
+                    bottomMargin: masonryLayout.spacing / 2
+                }
+                visible: imageId === ""
+                z: 1
+
+                Text {
+                    id: fileName
+                    anchors{
+                        fill: parent
+                        margins: icon.sizeBase / 40
+                    }
+                    width: parent.width
+
+                    text: brickDelegate.text
+                    textFormat: quickSearchMode ? Text.RichText : Text.PlainText
+
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideRight
+                    color: "#d1d1d1"
+                    maximumLineCount: 4
+                    wrapMode: Text.Wrap
+                }
+            }
+
             Rectangle {
-                id: infoPanel
-                color: imageId ? (masonryLayout.currentIndex === index ? "#B3002943" : Qt.rgba(0, 0, 0, 0.5)) : "transparent"
+                id: imageInfoPanel
+                color: masonryLayout.currentIndex === index ? "#B3002943" : Qt.rgba(0, 0, 0, 0.5)
                 anchors {
                     left: parent.left
                     leftMargin: masonryLayout.spacing / 2
@@ -439,13 +475,13 @@ MouseArea {
                     bottom: parent.bottom
                     bottomMargin: masonryLayout.spacing / 2
                 }
-                height: textField.height + 10
-                visible: (brickMouseArea.containsMouse && !hideHovered) || imageId === "" ||
-                         masonryLayout.currentIndex === index || masonryView.alwaysShowFileNames || masonryView.quickSearchMode
+                height: imageText.height + 10
+                visible: imageId !== "" && ((brickMouseArea.containsMouse && !hideHovered) ||
+                         masonryLayout.currentIndex === index || masonryView.alwaysShowFileNames || masonryView.quickSearchMode)
                 z: 1
 
                 Text {
-                    id: textField
+                    id: imageText
                     anchors{
                         left: parent.left
                         right: parent.right
@@ -527,7 +563,8 @@ MouseArea {
             bottom: masonryLayout.bottom
             right: parent.right
         }
-        visible: true
+        visible: masonryLayout.needScroll
+        width: masonryLayout.needScroll ? 16 : 0
 
         onPositionChanged: {
             if (pressed) {

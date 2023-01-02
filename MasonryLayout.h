@@ -45,6 +45,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(int spacing READ spacing WRITE setSpacing NOTIFY spacingChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     Q_PROPERTY(MasonryLayoutQuickSearch *quickSearch READ quickSearch NOTIFY quickSearchChanged)
+    Q_PROPERTY(bool needScroll READ needScroll NOTIFY needScrollChanged)
 
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
@@ -85,6 +86,8 @@ public:
 
     MasonryLayoutQuickSearch *quickSearch() const;
 
+    bool needScroll() const;
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -100,6 +103,8 @@ signals:
     void layoutReset();
 
     void quickSearchChanged();
+
+    void needScrollChanged();
 
 private:
     friend class MasonryLayoutQuickSearch;
@@ -138,6 +143,7 @@ private:
     void onThumbnailReadFinished();
     void onModelReset();
     void zoom(bool in);
+    void updateNeedScroll();
 
     void pushBrickItem(BrickItem *item);
     BrickItem *popBrickItem();
@@ -169,6 +175,7 @@ private:
     int _currentScrollingDirection;
 
     MasonryLayoutQuickSearch *_quickSearch;
+    bool _needScroll;
 };
 
 #endif // MASONRYLAYOUT_H

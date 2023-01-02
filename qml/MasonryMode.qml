@@ -506,6 +506,8 @@ MouseArea {
                 hoverEnabled: true
 
                 onPressed: {
+                    focusProxy.forceActiveFocus()
+
                     if (scrollingMode) {
                         endScrolling()
                     }

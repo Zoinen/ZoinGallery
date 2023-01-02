@@ -105,12 +105,16 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
         QML_FILES
             qml/main.qml
             qml/MasonryMode.qml
+            qml/PathControl.qml
             ZGStyle/Style.qml
             ZGStyle/ScrollBar.qml
             ZGStyle/Slider.qml
             ZGStyle/Button.qml
             ZGStyle/TextField.qml
             ZGStyle/ToolTip.qml
+            ZGStyle/Menu.qml
+            ZGStyle/MenuItem.qml
+            ZGStyle/MenuSeparator.qml
             ZGStyle/qmldir
         RESOURCES
             resources/ThumbnailsShadow.png
@@ -127,6 +131,7 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             resources/SearchBack.svg
             resources/SearchClose.svg
             resources/SearchNext.svg
+            resources/PathSeparator.svg
         )
 endif()
 

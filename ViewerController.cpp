@@ -32,11 +32,28 @@ ViewerController::ViewerController(QQmlEngine *engine)
 }
 
 void ViewerController::cd(QString folder) {
-//    qDebug() << folder;
-    if (folder.contains("\\") || folder.contains("/")) {
-        _currentPath = QDir::toNativeSeparators(QDir(folder).absolutePath());
+    folder = folder.trimmed();
+    if (folder.startsWith("\"")) {
+        folder = folder.right(folder.size() - 1);
+    }
+    if (folder.endsWith("\"")) {
+        folder = folder.left(folder.size() - 1);
+    }
+    folder = folder.trimmed();
+
+    qDebug() << folder;
+    if (folder == "Computer\\") {
+        _currentPath = "Computer";
         emit currentPathChanged();
-        _fileListModel->cd(_currentPath);
+        _fileListModel->cd(_currentPath, "");
+    }
+    else if (folder.contains("\\") || folder.contains("/")) {
+        QString newCurrentPath = QDir::toNativeSeparators(QDir(folder).absolutePath());
+        if (QDir(newCurrentPath).exists()) {
+            _currentPath = newCurrentPath;
+            emit currentPathChanged();
+            _fileListModel->cd(_currentPath);
+        }
     }
     else if (_currentPath == "Computer") {
         QDir dir(folder);

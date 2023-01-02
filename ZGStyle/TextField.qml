@@ -28,4 +28,60 @@ T.TextField {
 
     leftPadding: 10
     rightPadding: 10
+
+    onReleased: (event) => {
+        if (event.button === Qt.RightButton)
+            textEditMenu.popup()
+    }
+
+    Menu {
+        id: textEditMenu
+
+        MenuItem {
+            text: qsTr("Cut")
+            enabled: control.selectedText.length > 0
+            onTriggered: {
+                control.cut()
+                control.forceActiveFocus()
+            }
+        }
+
+        MenuItem {
+            text: qsTr("Copy")
+            enabled: control.selectedText.length > 0
+            onTriggered: {
+                control.copy()
+                control.forceActiveFocus()
+            }
+        }
+
+        MenuItem {
+            text: qsTr("Paste")
+            enabled: control.canPaste
+            onTriggered: {
+                control.paste()
+                control.forceActiveFocus()
+            }
+        }
+
+        MenuSeparator {}
+
+        MenuItem {
+            text: qsTr("Undo")
+            enabled: control.canUndo
+            onTriggered: {
+                control.undo()
+                control.forceActiveFocus()
+            }
+        }
+
+        MenuItem {
+            text: qsTr("Redo")
+            enabled: control.canRedo
+            onTriggered: {
+                control.redo()
+                control.forceActiveFocus()
+            }
+        }
+    }
 }

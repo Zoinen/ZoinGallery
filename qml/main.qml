@@ -156,15 +156,17 @@ Window {
                     color: "#474747"
                 }
 
-                Text {
-                    Layout.leftMargin: 10
+                PathControl {
+                    onEditModeChanged: {
+                        if (!editMode) {
+                            masonryLayout.focusProxy.forceActiveFocus()
+                        }
+                    }
                     Layout.rightMargin: 10
                     Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignVCenter
+                    Layout.preferredHeight: 46
 
-                    elide: Text.ElideRight
                     text: viewerController.currentPath
-                    color: Style.text
                 }
 
                 Text {

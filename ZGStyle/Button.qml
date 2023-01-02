@@ -31,6 +31,5 @@ T.Button {
         opacity: enabled ? 1 : 0.3
         color: control.down ? Style.controlBackgroundPressed : (control.hovered ? Style.controlBackground : "transparent")
         radius: 4
-        layer.enabled: true
     }
 }

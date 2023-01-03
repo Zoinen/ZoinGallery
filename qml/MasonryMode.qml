@@ -27,7 +27,7 @@ MouseArea {
 
     property bool disableAnimation: false
 
-    acceptedButtons: Qt.MiddleButton | Qt.RightButton
+    acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
 
     function startScrolling() {
         scrollingStarted = false
@@ -51,17 +51,24 @@ MouseArea {
     }
 
     onPressed: (mouse) => {
-        if (mouse.button === Qt.MiddleButton && !scrollingMode) {
-            startScrolling()
+        if (mouse.button === Qt.LeftButton) {
+            focusProxy.forceActiveFocus()
         }
         else {
-            endScrolling()
+            if (mouse.button === Qt.MiddleButton && !scrollingMode) {
+                startScrolling()
+            }
+            else {
+                endScrolling()
+            }
         }
     }
 
-    onReleased: {
-        if (scrollingStarted) {
-            endScrolling()
+    onReleased: (mouse) => {
+        if (mouse.button !== Qt.LeftButton) {
+            if (scrollingStarted) {
+                endScrolling()
+            }
         }
     }
 

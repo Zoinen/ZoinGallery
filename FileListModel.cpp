@@ -289,3 +289,12 @@ QImage FileListModel::viewerForImageId(QString imageId) {
 void FileListModel::invalidateViewerImages() {
     _generator->clearRequests();
 }
+
+int FileListModel::fileIndex(QString fileName) const {
+    for (int i = 0; i < _items.size(); i++) {
+        if (!_items[i]->fileName.compare(fileName, Qt::CaseInsensitive)) {
+            return i;
+        }
+    }
+    return -1;
+}

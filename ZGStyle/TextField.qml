@@ -29,9 +29,14 @@ T.TextField {
     leftPadding: 10
     rightPadding: 10
 
+    function showContextMenu() {
+        textEditMenu.popup()
+    }
+
     onReleased: (event) => {
-        if (event.button === Qt.RightButton)
-            textEditMenu.popup()
+        if (event.button === Qt.RightButton) {
+            showContextMenu()
+        }
     }
 
     Menu {

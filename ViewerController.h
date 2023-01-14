@@ -18,6 +18,8 @@ public:
     Q_INVOKABLE void cd(QString folder);
     Q_INVOKABLE int up();
     Q_INVOKABLE void prepareToClose();
+    Q_INVOKABLE void clipboardCopyIndexName(int index);
+    Q_INVOKABLE void clipboardCopyIndexFullPath(int index);
 
     QWindow *mainWindow() const;
     void setMainWindow(QWindow *mainWindow);
@@ -27,6 +29,7 @@ public:
 signals:
     void currentPathChanged();
     void mainWindowResized();
+    void setCurrentIndex(int index);
 
 private:
     FileListModel *_fileListModel;

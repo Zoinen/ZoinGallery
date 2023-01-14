@@ -12,6 +12,9 @@
 #include <QScreen>
 #include <QResizeEvent>
 #include <QMoveEvent>
+#include <QTimer>
+#include <QClipboard>
+#include <QGuiApplication>
 
 ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
@@ -54,6 +57,14 @@ void ViewerController::cd(QString folder) {
             emit currentPathChanged();
             _fileListModel->cd(_currentPath);
         }
+        else if (QFile::exists(newCurrentPath)) {
+            _currentPath = QDir::toNativeSeparators(QDir(QFileInfo(newCurrentPath).path()).absolutePath());
+            emit currentPathChanged();
+            _fileListModel->cd(_currentPath);
+            QTimer::singleShot(10, this, [=] {
+                emit setCurrentIndex(_fileListModel->fileIndex(QFileInfo(newCurrentPath).fileName()));
+            });
+        }
     }
     else if (_currentPath == "Computer") {
         QDir dir(folder);
@@ -93,6 +104,16 @@ int ViewerController::up() {
 
 void ViewerController::prepareToClose() {
     _fileListModel->prepareToClose();
+}
+
+void ViewerController::clipboardCopyIndexName(int index) {
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    clipboard->setText(_fileListModel->index(index).data().toString());
+}
+
+void ViewerController::clipboardCopyIndexFullPath(int index) {
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    clipboard->setText(QDir::toNativeSeparators(_fileListModel->fullPath(_fileListModel->index(index).data().toString())));
 }
 
 QWindow *ViewerController::mainWindow() const {

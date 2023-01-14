@@ -45,6 +45,8 @@ public:
     QImage viewerForImageId(QString imageId);
     Q_INVOKABLE void invalidateViewerImages();
 
+    int fileIndex(QString fileName) const;
+
 signals:
     void generationFinishedChanged();
     void thumbnailReadFinished();

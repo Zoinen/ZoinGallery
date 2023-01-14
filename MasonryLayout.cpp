@@ -208,6 +208,11 @@ BrickItem *MasonryLayout::createComponent() {
 
 void MasonryLayout::rewrap() {
 //    qDebug() << "rewrap" << width() << _bricks.size();
+    int currentIndexOffset = -1;
+    if (_currentIndex != -1 && _currentIndex >= _visibleStart && _currentIndex <= _visibleEnd) {
+        currentIndexOffset = _contentY - _bricks[_currentIndex].y;
+    }
+
     calcLayout(_bricks, width(), _targetHeight, _spacing * window()->devicePixelRatio());
 //    qDebug() << "--------------------";
 //    for (int i = 0; i < _bricks.size(); i++) {
@@ -223,9 +228,14 @@ void MasonryLayout::rewrap() {
     }
 
     qreal newContentY = _contentY;
-    if (_topItem < _bricks.size()) {
-        newContentY = qMax<qreal>(0, qMin<qreal>(_bricks[_topItem].y - _topItemOffset, contentHeight() - height()));
-//        qDebug() << "new contentY" << newContentY << "top item" << _topItem << "offset" << _topItemOffset;
+    // If selected index is on screen, we keep view relative to it. Otherwise, we keep top item
+    if (currentIndexOffset != -1) {
+        newContentY = qMax<qreal>(0, qMin<qreal>(_bricks[_currentIndex].y + currentIndexOffset, contentHeight() - height()));
+    }
+    else {
+        if (_topItem < _bricks.size()) {
+            newContentY = qMax<qreal>(0, qMin<qreal>(_bricks[_topItem].y - _topItemOffset, contentHeight() - height()));
+        }
     }
     if (newContentY != _contentY) {
         setContentYInternal(newContentY);
@@ -344,7 +354,7 @@ void MasonryLayout::updateProperties() {
 
     int newVisibleStart = -1;
     int newVisibleEnd = -1;
-    QRectF boundingRect_ = boundingRect().adjusted(0, -_targetHeight*2 + _contentY, 0, _targetHeight*2 + _contentY);
+    QRectF boundingRect_ = boundingRect().adjusted(0, _contentY, 0, _contentY);
 
     int currentRow = -1;
     for (int i = 0; i < _bricks.size(); i++) {

@@ -37,8 +37,14 @@ Item {
         id: pathMouse
         anchors.fill: parent
         hoverEnabled: true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
 
-        onClicked: editMode = !editMode
+        onPressed: editMode = !editMode
+        onReleased: (event) => {
+            if (editMode && event.button & Qt.RightButton) {
+                pathField.showContextMenu()
+            }
+        }
     }
 
     component FolderDelegate : Item {

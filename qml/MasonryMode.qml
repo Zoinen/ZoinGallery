@@ -129,6 +129,22 @@ MouseArea {
         }
     }
 
+    Connections {
+        target: viewerController
+        function onSetCurrentIndex(index) {
+            masonryLayout.currentIndex = index
+            let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
+            currentItemCenterX = currentItemGeometry.x + currentItemGeometry.width / 2
+            let indexGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
+            let newContentY = indexGeometry.y + indexGeometry.height / 2 - masonryLayout.height / 2
+            newContentY = Math.max(0, Math.min(masonryLayout.contentHeight - masonryLayout.height, newContentY))
+            masonryLayout.contentY = newContentY
+
+            currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
+            hideHovered = true
+        }
+    }
+
     function moveInImageList(forward, toEnd) {
         let nextIndex = masonryLayout.nextImageIndex(forward, toEnd)
         setCurrentIndex(nextIndex)
@@ -340,6 +356,12 @@ MouseArea {
                     event.accepted = false
                 }
             }
+            else if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_C || event.key === Qt.Key_Insert)) {
+                viewerController.clipboardCopyIndexName(masonryLayout.currentIndex)
+            }
+            else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_D) {
+                viewerController.clipboardCopyIndexFullPath(masonryLayout.currentIndex)
+            }
             else {
                 event.accepted = false
             }
@@ -392,9 +414,9 @@ MouseArea {
                     leftMargin: -2
                     topMargin: -2
                     rightMargin: -2
-                    bottomMargin: -2 +
+                    bottomMargin: -2 + (imageId === "" ?
                                   (quickSearchMode ? (fileInfoPanel.height - fileName.contentHeight - icon.y) :
-                                                     Math.max(0, fileName.height - fileName.contentHeight + icon.sizeBase / 40 - icon.y))
+                                                     Math.max(0, fileName.height - fileName.contentHeight + icon.sizeBase / 40 - icon.y)) : 0)
                 }
                 color: Style.focus
                 visible: masonryLayout.currentIndex === index

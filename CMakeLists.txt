@@ -116,6 +116,7 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             qml/MasonryMode.qml
             qml/PathControl.qml
             qml/BrickDelegate.qml
+            qml/ViewerMode.qml
             ZGStyle/Style.qml
             ZGStyle/ScrollBar.qml
             ZGStyle/Slider.qml

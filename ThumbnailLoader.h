@@ -25,7 +25,8 @@ public:
     QImage unsharpMask(QImage &image);
     QImage rotateAndFlip(const QImage &image, ExifOrientation orientation);
 
-    static bool isExifCompatible(const QString &path);
+    static QStringList supportedFormats();
+
     static bool isJpeg(const QString &path);
     static bool isRawOrTiff(const QString &path);
     static bool isImageOther(const QString &path);

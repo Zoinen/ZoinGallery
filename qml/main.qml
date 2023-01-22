@@ -50,7 +50,7 @@ Window {
                 viewerDirty = true
             }
             else {
-                console.log("onMainWindowResized")
+                console.log("onMainWindowResized", viewerMode.width * dpr, viewerMode.height * dpr)
                 fileListModel.invalidateViewerImages()
                 fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
                 thumbnailsDirty = true
@@ -131,15 +131,23 @@ Window {
             spacing: 0
 
             RowLayout {
+                id: toolbarLayout
                 Layout.fillWidth: true
                 Layout.preferredHeight: 46
                 spacing: 5
 
+                component Separator : Rectangle {
+                    implicitWidth: 1
+                    implicitHeight: 46 - 10
+                    color: "#474747"
+                }
+
                 Button {
                     Layout.leftMargin: 5
-                    Layout.preferredWidth: 46
-                    Layout.preferredHeight: 46
                     Layout.alignment: Qt.AlignVCenter
+
+                    implicitWidth: 46
+                    implicitHeight: 46
 
                     icon.source: "qrc:/resources/Up.svg"
 
@@ -150,11 +158,7 @@ Window {
                     }
                 }
 
-                Rectangle {
-                    Layout.preferredWidth: 1
-                    Layout.preferredHeight: parent.height - 10
-                    color: "#474747"
-                }
+                Separator {}
 
                 PathControl {
                     onEditModeChanged: {
@@ -197,6 +201,42 @@ Window {
                         }
                         else if (lastValue !== value) {
                             masonryLayout.view.reReadAndDecodeThumbnails()
+                        }
+                    }
+                }
+
+                Separator {}
+
+                TabBar {
+                    spacing: 0
+                    Layout.alignment: Qt.AlignVCenter
+
+                    TabButton {
+                        implicitWidth: 46
+                        implicitHeight: 46
+
+                        icon.source: "qrc:/resources/ListView.svg"
+                        icon.width: 16
+                        icon.height: 16
+
+                        checked: masonryLayout.view.listView
+
+                        onReleased: {
+                            masonryLayout.view.listView = true
+                        }
+                    }
+                    TabButton {
+                        implicitWidth: 46
+                        implicitHeight: 46
+
+                        icon.source: "qrc:/resources/GridView.svg"
+                        icon.width: 16
+                        icon.height: 16
+
+                        checked: !masonryLayout.view.listView
+
+                        onReleased: {
+                            masonryLayout.view.listView = false
                         }
                     }
                 }
@@ -253,7 +293,9 @@ Window {
 
                     if (nextIndex !== -1 && nextIndex !== currentIndex) {
                         fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
-                        topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
+                        if (masonryLayout.view.currentItem) {
+                            topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
+                        }
                     }
             }
 
@@ -323,7 +365,9 @@ Window {
 
                         if (nextIndex !== currentIndex) {
                             fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
-                            topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
+                            if (masonryLayout.view.currentItem) {
+                                topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
+                            }
                         }
                     }
 

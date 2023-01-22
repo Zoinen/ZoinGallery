@@ -9,3 +9,5 @@ ToolTip 1.0 ToolTip.qml
 Menu 1.0 Menu.qml
 MenuItem 1.0 MenuItem.qml
 MenuSeparator 1.0 MenuSeparator.qml
+TabBar 1.0 TabBar.qml
+TabButton 1.0 TabButton.qml

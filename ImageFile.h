@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QMetaType>
 #include <QSharedPointer>
+#include <QDir>
 
 enum ExifOrientation {
     Horizontal = 1,
@@ -29,6 +30,7 @@ inline QSize rotateToOrientation(QSize size, ExifOrientation orientation) {
 }
 
 struct ImageFile {
+    QString folderPath;
     QString fileName;
     QImage image;
     QString imageId;
@@ -38,17 +40,32 @@ struct ImageFile {
     QString iconPath;
     int index;
 
-    ImageFile() : isFolder(false), index(-1) {}
+    QList<ImageFile *> subfiles;
+    ImageFile *parent;
+
+    ImageFile() : isFolder(false), index(-1), parent(nullptr) {}
+
+    QString fullPath() const {
+        return folderPath + QDir::separator() + fileName;
+    }
+
+    bool folderView() const {
+        return subfiles.size() != 0;
+    }
 };
 
 struct ImageReadRequest {
     QString sourcePath;
     QSize targetSize;
     bool viewerRequest;
+    bool folderRequest;
+    bool inFolderRequest;
     int queueId;
 
-    ImageReadRequest(const QString &path = QString(), const QSize &size = QSize(), bool viewerRequest_ = false)
-        : sourcePath(path), targetSize(size), viewerRequest(viewerRequest_), queueId(-1) {}
+    ImageReadRequest(const QString &path = QString(), const QSize &size = QSize(), bool viewerRequest_ = false,
+                     bool folderRequest_ = false, bool inFolderRequest_ = false)
+        : sourcePath(path), targetSize(size), viewerRequest(viewerRequest_), folderRequest(folderRequest_),
+          inFolderRequest(inFolderRequest_), queueId(-1) {}
 
     bool operator==(const ImageReadRequest &other) const {
         return sourcePath == other.sourcePath && viewerRequest == other.viewerRequest;

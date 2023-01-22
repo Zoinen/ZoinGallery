@@ -258,8 +258,11 @@ QImage ThumbnailLoader::rotateAndFlip(const QImage &image, ExifOrientation orien
     return image;
 }
 
-bool ThumbnailLoader::isExifCompatible(const QString &path) {
-    return isRawOrTiff(path) || isJpeg(path);
+QStringList ThumbnailLoader::supportedFormats() {
+    return {"*.jpg", "*.jpeg", "*.jpe", "*.jfif",
+            "*.tiff", "*.tif", "*.cr2", "*.dng", "*.crw", "*.nef", "*.arw", "*.arq",
+            "*.bmp", "*.png", "*.gif", "*.jp2", "*.jpc", "*.tga", "*.ico", "*.cur", "*.ppm", "*.pgm", "*.pbm", "*.svg", "*.wmf", "*.emf", "*.webp",
+            "*.svg", "*.wmf", "*.emf"};
 }
 
 bool ThumbnailLoader::isJpeg(const QString &path) {

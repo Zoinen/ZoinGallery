@@ -2,7 +2,7 @@
 #define MASONRYLAYOUT_H
 
 #include <QQuickItem>
-#include <QAbstractListModel>
+#include <QAbstractItemModel>
 
 #include "MasonryLayoutQuickSearch.h"
 #include "ImageFile.h"
@@ -38,7 +38,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(int targetHeight READ targetHeight WRITE setTargetHeight NOTIFY targetHeightChanged)
     Q_PROPERTY(qreal contentY READ contentY WRITE setContentY NOTIFY contentYChanged)
     Q_PROPERTY(int contentHeight READ contentHeight NOTIFY contentHeightChanged)
-    Q_PROPERTY(QAbstractListModel *model READ model WRITE setModel NOTIFY modelChanged)
+    Q_PROPERTY(QAbstractItemModel *model READ model WRITE setModel NOTIFY modelChanged)
     Q_PROPERTY(QQmlComponent *delegate MEMBER _delegate)
     Q_PROPERTY(int currentIndex READ currentIndex WRITE setCurrentIndex NOTIFY currentIndexChanged)
     Q_PROPERTY(QQuickItem *currentItem READ currentItem NOTIFY currentIndexChanged)
@@ -46,6 +46,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(int count READ count NOTIFY countChanged)
     Q_PROPERTY(MasonryLayoutQuickSearch *quickSearch READ quickSearch NOTIFY quickSearchChanged)
     Q_PROPERTY(bool needScroll READ needScroll NOTIFY needScrollChanged)
+    Q_PROPERTY(bool listView READ listView WRITE setListView NOTIFY listViewChanged)
 
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
@@ -71,13 +72,13 @@ public:
 
     int contentHeight() const;
 
-    QAbstractListModel *model() const;
-    void setModel(QAbstractListModel *newModel);
+    QAbstractItemModel *model() const;
+    void setModel(QAbstractItemModel *newModel);
 
     int currentIndex() const;
     void setCurrentIndex(int newCurrentIndex);
 
-    static int spacing();
+    int spacing() const;
     void setSpacing(int newSpacing);
 
     QQuickItem *currentItem() const;
@@ -87,6 +88,9 @@ public:
     MasonryLayoutQuickSearch *quickSearch() const;
 
     bool needScroll() const;
+
+    bool listView() const;
+    void setListView(bool isListView);
 
 signals:
     void targetHeightChanged();
@@ -105,6 +109,11 @@ signals:
     void quickSearchChanged();
 
     void needScrollChanged();
+
+    void listViewChanged();
+
+private slots:
+    void onThumbnailReadFinished(ImageFile *root);
 
 private:
     friend class MasonryLayoutQuickSearch;
@@ -125,7 +134,7 @@ private:
         MasonryBrick(int width, int height);
         MasonryBrick(ImageFile *image_, QSizeF originalSize_);
         QRectF geometry() const;
-        QSize thumbnailSize() const;
+        QSize thumbnailSize(int spacing) const;
     };
 
     BrickItem *createComponent();
@@ -140,17 +149,19 @@ private:
 
     void onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles = QVector<int>());
     void pushToCurrentRow(int index);
-    void onThumbnailReadFinished();
     void onModelReset();
     void zoom(bool in);
     void updateNeedScroll();
 
     void pushBrickItem(BrickItem *item);
     BrickItem *popBrickItem();
+
+    qreal dp();
+
     QSet<BrickItem *> _usedBrickItems;
     QSet<BrickItem *> _freeBrickItems;
 
-    QAbstractListModel *_model;
+    QAbstractItemModel *_model;
 
     QList<MasonryBrick> _bricks;
     QList<MasonryBrick> _currentLoadingRow;
@@ -160,8 +171,9 @@ private:
     int _topItemOffset;
     QQuickItem *_viewport;
 
-    const int DefaultAspectWidth = 2;
-    const int DefaultAspectHeight = 3;
+    const QSizeF BrickSize = QSize(2, 3);
+    const QSizeF BrickFolderSize = QSize(130, 3);
+    const QSizeF BrickFolderViewSize = QSize(30, 3);
 
     int _targetHeight;
     qreal _contentY;
@@ -169,13 +181,16 @@ private:
     QRect _lastViewportGeometry;
     QQmlComponent *_delegate;
     int _currentIndex;
-    static int _spacing;
+    int _spacing;
 
     bool _currentScrollingMode;
     int _currentScrollingDirection;
 
     MasonryLayoutQuickSearch *_quickSearch;
     bool _needScroll;
+
+    qreal _dp;
+    bool _listView;
 };
 
 #endif // MASONRYLAYOUT_H

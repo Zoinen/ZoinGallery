@@ -25,11 +25,13 @@ public:
 
 signals:
    void readResultReady(const ImageReadResult &result);
+   void folderListReady(const QString &path, const QStringList &result);
 
 protected:
     void run() override;
 
 private:
+    void readImage(ImageReadRequest &request);
     ThreadSafeQueue _readQueue;
 };
 
@@ -64,6 +66,7 @@ public:
 signals:
     void thumbnailReady(QString path, QImage thumbnail);
     void viewerReady(QString path, QImage thumbnail);
+    void folderListReady(const QString &path, const QStringList &images);
     void thumbnailInfoReady(QString path, QSize fullSize);
     void requestDecodeThumbnail(ImageReadResult request, int queueId);
     void readFinished();

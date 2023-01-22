@@ -10,8 +10,6 @@
 #include <QtSvg/QSvgRenderer>
 #include <QPainter>
 
-int MasonryLayout::_spacing = 4; // Should be divisible by 4
-
 static void registerMyQmlTypes() {
     qmlRegisterType<MasonryLayout>("ZoinGallery", 1, 0, "MasonryLayout");
     qmlRegisterType<BrickItem>("ZoinGallery", 1, 0, "BrickItem");
@@ -38,6 +36,9 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _currentIndex = 0;
     _viewport = nullptr;
     _needScroll = false;
+    _dp = 1;
+    _spacing = 8; // Should be divisible by 4
+    _listView = false;
 
     _currentScrollingMode = false;
     _currentScrollingDirection = -2;
@@ -114,7 +115,7 @@ int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
 
 void MasonryLayout::reReadAndDecodeThumbnails() {
     _currentLoadingRow.clear();
-    static_cast<FileListModel *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * window()->devicePixelRatio());
+    dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * dp());
     emit layoutReset();
 }
 
@@ -146,14 +147,14 @@ void MasonryLayout::setScrollingMode(bool scrollingMode, int direction) {
         }
 
         QSvgRenderer renderer(path);
-        QSize destSize = renderer.defaultSize() * window()->devicePixelRatio();
+        QSize destSize = renderer.defaultSize() * dp();
 
         QPixmap pix(destSize);
         pix.fill(Qt::transparent);
 
         QPainter painter(&pix);
         renderer.render(&painter);
-        pix.setDevicePixelRatio(window()->devicePixelRatio());
+        pix.setDevicePixelRatio(dp());
 
         QCursor cursor(pix);
         if (!cursorOverridden) {
@@ -213,7 +214,7 @@ void MasonryLayout::rewrap() {
         currentIndexOffset = _contentY - _bricks[_currentIndex].y;
     }
 
-    calcLayout(_bricks, width(), _targetHeight, _spacing * window()->devicePixelRatio());
+    calcLayout(_bricks, width(), _targetHeight, _spacing * dp());
 //    qDebug() << "--------------------";
 //    for (int i = 0; i < _bricks.size(); i++) {
 //        qDebug() << _bricks[i].image->path << _bricks[i].originalSize << _bricks[i].normalizedSize;
@@ -416,6 +417,10 @@ void MasonryLayout::updateProperties() {
                 _bricks[i].item->setProperty("index", i);
             }
 
+            if (_bricks[i].item->property("folderView").toBool() != _bricks[i].image->folderView()) {
+                _bricks[i].item->setProperty("folderView", _bricks[i].image->folderView());
+            }
+
             QString imageId;
             if (_bricks[i].image->imageId.isEmpty()) {
                 imageId = "";
@@ -462,6 +467,10 @@ void MasonryLayout::setContentHeight(int newContentHeight) {
 }
 
 void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles) {
+    auto *modelRoot = dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem();
+    if (!modelRoot && FileListModel::itemFromIndex(topLeft.parent()) != dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()) {
+        return;
+    }
     int index = topLeft.row();
     if (index < _bricks.size()) {
         if (roles.contains(FileListModel::ImageIdRole)) {
@@ -472,6 +481,18 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
         }
         if (roles.contains(FileListModel::ImageFullSizeRole)) {
             pushToCurrentRow(index);
+        }
+        if (roles.contains(FileListModel::FolderViewRole)) {
+            if (_bricks[index].item) {
+                _bricks[index].item->setProperty("folderView", _bricks[index].image->folderView());
+
+            }
+            QSize folderViewSize = _listView ? BrickFolderViewSize.toSize() : BrickSize.toSize();
+            if (_bricks[index].originalSize != folderViewSize) {
+                _bricks[index].originalSize = folderViewSize;
+                rewrap();
+                updateProperties();
+            }
         }
     }
 }
@@ -506,7 +527,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
 //    }
 //    qDebug() << "==";
 
-    calcLayout(_currentLoadingRow, width(), _targetHeight, _spacing * window()->devicePixelRatio());
+    calcLayout(_currentLoadingRow, width(), _targetHeight, _spacing * dp());
     if (_currentLoadingRow.last().row > 0 || flushMode) {
 //        qDebug() << "REWRAP";
         QList<ImageReadRequest> requests;
@@ -516,8 +537,8 @@ void MasonryLayout::pushToCurrentRow(int index) {
                 if (_bricks[updIndex].image && _bricks[updIndex].image->fullSize.isValid()) {
                     _bricks[updIndex].originalSize = _bricks[updIndex].image->fullSize;
 
-                    QSize thumbnailSize = _currentLoadingRow[i].thumbnailSize() * window()->devicePixelRatio();
-                    requests.append(ImageReadRequest(static_cast<FileListModel *>(_model)->fullPath(_bricks[updIndex].image->fileName), thumbnailSize));
+                    QSize thumbnailSize = _currentLoadingRow[i].thumbnailSize(spacing()) * dp();
+                    requests.append(ImageReadRequest(_bricks[updIndex].image->fullPath(), thumbnailSize));
                 }
             }
             else {
@@ -530,13 +551,16 @@ void MasonryLayout::pushToCurrentRow(int index) {
             }
         }
         rewrap();
+        // TODO: Possible duplicate call, rewrap already updates properties
         updateProperties();
-        static_cast<FileListModel *>(_model)->addRequestThumbnails(requests);
+        dynamic_cast<ThumbnailsRequestInterface *>(_model)->addRequestThumbnails(requests);
     }
 }
 
-void MasonryLayout::onThumbnailReadFinished() {
-    pushToCurrentRow(_bricks.count());
+void MasonryLayout::onThumbnailReadFinished(ImageFile *root) {
+    if (_bricks.count() && root == dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()) {
+        pushToCurrentRow(_bricks.count());
+    }
 }
 
 void MasonryLayout::onModelReset() {
@@ -550,14 +574,26 @@ void MasonryLayout::onModelReset() {
     }
     _freeBrickItems.unite(_usedBrickItems);
     _usedBrickItems.clear();
+    for (auto it = _freeBrickItems.begin(); it != _freeBrickItems.end(); ++it) {
+        (*it)->setProperty("folderView", false);
+    }
 
     _bricks.clear();
-    qDebug() << "model reset";
+    auto *modelRoot = dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem();
+    bool needToRender = false;
     for (int i = 0; i < _model->rowCount(); i++) {
-        ImageFile *imageFile = _model->data(_model->index(i), FileListModel::ImageFileRole).value<ImageFile *>();
+        ImageFile *imageFile = FileListModel::itemFromIndex(_model->index(i, 0));
         QSize imgSize = imageFile->fullSize;
         if (imgSize.isEmpty()) {
-            imgSize = QSize(DefaultAspectWidth, DefaultAspectHeight);
+            if (imageFile->isFolder && _listView) {
+                imgSize = BrickFolderSize.toSize();
+            }
+            else {
+                imgSize = BrickSize.toSize();
+            }
+        }
+        if (imageFile->imageId.isEmpty()) {
+            needToRender = true;
         }
         _bricks.append(MasonryBrick(imageFile, imgSize));
     }
@@ -567,15 +603,18 @@ void MasonryLayout::onModelReset() {
         _viewport->setY(-_contentY);
     }
 
-    QList<MasonryBrick> bricks;
-    QSize minSize = QSize(_targetHeight * DefaultAspectWidth / DefaultAspectHeight, _targetHeight);
-    for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
-        bricks.append(MasonryBrick(DefaultAspectWidth, DefaultAspectHeight));
+    if (needToRender) {
+        QList<MasonryBrick> bricks;
+        QSize minSize = QSize(_targetHeight * BrickSize.width() / BrickSize.height(), _targetHeight);
+        for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
+            bricks.append(MasonryBrick(BrickSize.width(), BrickSize.height()));
+        }
+        calcLayout(bricks, width(), _targetHeight, _spacing * dp());
+        if (bricks.size()) {
+            QSizeF projectedSize = bricks.first().normalizedSize;
+            dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestThumbnails(projectedSize.toSize() * dp());
+        }
     }
-    calcLayout(bricks, width(), _targetHeight, _spacing * window()->devicePixelRatio());
-    QSizeF projectedSize = bricks.first().normalizedSize;
-//    qDebug() << "APPROX SIZE" << bricks.size() << minSize << projectedSize << _targetHeight << width();
-    static_cast<FileListModel *>(_model)->requestThumbnails(projectedSize.toSize() * window()->devicePixelRatio());
 
     emit countChanged();
 }
@@ -585,9 +624,9 @@ void MasonryLayout::zoom(bool in) {
     const int largestHeight = 500;
 
     QList<MasonryBrick> bricks;
-    QSize minSize = QSize(_targetHeight * DefaultAspectWidth / DefaultAspectHeight, _targetHeight);
+    QSize minSize = QSize(_targetHeight * BrickSize.width() / BrickSize.height(), _targetHeight);
     for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
-        bricks.append(MasonryBrick(DefaultAspectWidth, DefaultAspectHeight));
+        bricks.append(MasonryBrick(BrickSize.width(), BrickSize.height()));
     }
     int columns = -1;
     int newTargetHeight = -1;
@@ -597,7 +636,7 @@ void MasonryLayout::zoom(bool in) {
     int targetHeightRangeEnd = -1;
 
     for (int targetHeight = _targetHeight; targetHeight >= smallestHeight && targetHeight <= largestHeight; targetHeight += increment) {
-        calcLayout(bricks, width(), targetHeight, _spacing * window()->devicePixelRatio());
+        calcLayout(bricks, width(), targetHeight, _spacing * dp());
         for (int i = 0; i < bricks.size(); i++) {
             if (bricks[i].row && i) {
                 if (columns == -1) {
@@ -635,7 +674,7 @@ void MasonryLayout::updateNeedScroll() {
     if (newNeedScroll != _needScroll) {
         QList<MasonryBrick> bricks = _bricks;
         // TODO: Scrollbar height is hardcoded here
-        calcLayout(bricks, width() + (newNeedScroll ? 0 : 16), _targetHeight, _spacing * window()->devicePixelRatio());
+        calcLayout(bricks, width() + (newNeedScroll ? 0 : 16), _targetHeight, _spacing * dp());
 
         int newContentHeight = (bricks.last().y + bricks.last().normalizedSize.height());
         newNeedScroll = newContentHeight > height();
@@ -663,6 +702,14 @@ BrickItem *MasonryLayout::popBrickItem() {
     }
     _usedBrickItems.insert(item);
     return item;
+}
+
+qreal MasonryLayout::dp() {
+    QWindow *window_ = window();
+    if (window_) {
+        _dp = window_->devicePixelRatio();
+    }
+    return _dp;
 }
 
 int MasonryLayout::targetHeight() const {
@@ -803,31 +850,30 @@ QRectF MasonryLayout::MasonryBrick::geometry() const {
     return QRectF(QPointF(x, y), normalizedSize);
 }
 
-QSize MasonryLayout::MasonryBrick::thumbnailSize() const {
-    return roundRect(geometry()).toRect().size() - QSize(MasonryLayout::spacing(), MasonryLayout::spacing());
+QSize MasonryLayout::MasonryBrick::thumbnailSize(int spacing) const {
+    return roundRect(geometry()).toRect().size() - QSize(spacing, spacing);
 }
 
-QAbstractListModel *MasonryLayout::model() const {
+QAbstractItemModel *MasonryLayout::model() const {
     return _model;
 }
 
-void MasonryLayout::setModel(QAbstractListModel *newModel) {
-    FileListModel *fileModel = static_cast<FileListModel *>(newModel);
+void MasonryLayout::setModel(QAbstractItemModel *newModel) {
     if (_model) {
-        disconnect(_model, &QAbstractListModel::dataChanged,
+        disconnect(_model, &QAbstractItemModel::dataChanged,
                    this, &MasonryLayout::onDataChanged);
-        disconnect(_model, &QAbstractListModel::modelReset,
+        disconnect(_model, &QAbstractItemModel::modelReset,
                    this, &MasonryLayout::onModelReset);
-        disconnect(fileModel, &FileListModel::thumbnailReadFinished,
-                   this, &MasonryLayout::onThumbnailReadFinished);
+        disconnect(_model, SIGNAL(thumbnailReadFinished(ImageFile*)),
+                   this, SLOT(onThumbnailReadFinished(ImageFile*)));
     }
     _model = newModel;
-    connect(_model, &QAbstractListModel::dataChanged,
+    connect(_model, &QAbstractItemModel::dataChanged,
             this, &MasonryLayout::onDataChanged);
-    connect(_model, &QAbstractListModel::modelReset,
+    connect(_model, &QAbstractItemModel::modelReset,
             this, &MasonryLayout::onModelReset);
-    connect(fileModel, &FileListModel::thumbnailReadFinished,
-               this, &MasonryLayout::onThumbnailReadFinished);
+    connect(_model, SIGNAL(thumbnailReadFinished(ImageFile*)),
+               this, SLOT(onThumbnailReadFinished(ImageFile*)));
 
     onModelReset();
 }
@@ -849,7 +895,7 @@ void MasonryLayout::setCurrentIndex(int newCurrentIndex) {
     }
 }
 
-int MasonryLayout::spacing() {
+int MasonryLayout::spacing() const {
     return _spacing;
 }
 
@@ -880,4 +926,30 @@ MasonryLayoutQuickSearch *MasonryLayout::quickSearch() const {
 
 bool MasonryLayout::needScroll() const {
     return _needScroll;
+}
+
+bool MasonryLayout::listView() const {
+    return _listView;
+}
+
+void MasonryLayout::setListView(bool isListView) {
+    if (_listView == isListView) {
+        return;
+    }
+    _listView = isListView;
+
+    for (int i = 0; i < _bricks.size(); i++) {
+        if (_bricks[i].image->isFolder) {
+            if (!_listView) {
+                _bricks[i].originalSize = BrickSize;
+            }
+            else {
+                _bricks[i].originalSize = _bricks[i].image->folderView() ? BrickFolderViewSize : BrickFolderSize;
+            }
+        }
+    }
+    rewrap();
+    updateProperties();
+
+    emit listViewChanged();
 }

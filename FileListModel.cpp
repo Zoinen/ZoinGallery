@@ -5,9 +5,10 @@
 #include <QDir>
 #include <QDebug>
 #include <QSet>
+#include <QFileInfo>
 
 FileListModel::FileListModel(QObject *parent)
-    : QAbstractListModel(parent) {
+    : QAbstractItemModel(parent) {
     _lastId = 0;
     _currentViewIndex = -1;
 
@@ -20,8 +21,12 @@ FileListModel::FileListModel(QObject *parent)
             ImageFile *item = it.value();
             item->fullSize = fullSize;
 
-            QModelIndex modelIndex = index(item->index, 0);
+            QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
             emit dataChanged(modelIndex, modelIndex, {ImageFullSizeRole});
+
+            if (item->parent && item->parent->subfiles.last() == item) {
+                emit thumbnailReadFinished(item->parent);
+            }
         }
     });
 
@@ -32,7 +37,7 @@ FileListModel::FileListModel(QObject *parent)
             item->image = thumbnail;
             updateImageId(item);
 
-            QModelIndex modelIndex = index(item->index, 0);
+            QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
             emit dataChanged(modelIndex, modelIndex, {ImageIdRole});
         }
     });
@@ -50,13 +55,57 @@ FileListModel::FileListModel(QObject *parent)
         }
     });
 
+    connect(_generator, &ThreadedThumbnailGenerator::folderListReady, this, [&] (const QString &path, const QStringList &images) {
+        if (!images.size()) {
+            return;
+        }
+
+        auto it = _fileToItem.find(path);
+        if (it != _fileToItem.end()) {
+            ImageFile *item = it.value();
+
+            QList<ImageFile *> subImages;
+            subImages.reserve(images.size());
+            for (int i = 0; i < images.size(); i++) {
+                ImageFile *subItem = new ImageFile();
+                subItem->folderPath = path;
+                subItem->fileName = images.at(i);
+                subItem->isFolder = false;
+                subItem->parent = item;
+
+                QString fullPath = subItem->fullPath();
+                if (isImage(fullPath)) {
+                    subItem->isImage = true;
+                    subItem->iconPath = "qrc:/resources/ImageIcon.svg";
+
+                    _fileToItem.insert(fullPath, subItem);
+                }
+
+                subItem->index = subImages.size();
+                subImages.append(subItem);
+            }
+
+            beginInsertRows(indexFromItem(item), 0, subImages.size() - 1);
+            item->subfiles = subImages;
+            endInsertRows();
+            if (_folderModels.contains(item->index)) {
+                _folderModels[item->index]->resetModel();
+            }
+
+            QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
+            emit dataChanged(modelIndex, modelIndex, {FolderViewRole});
+        }
+
+    });
+
     connect(_generator, &ThreadedThumbnailGenerator::decodeFinished, this, [&] () {
         _generationFinished = true;
         emit generationFinishedChanged();
     });
 
-    connect(_generator, &ThreadedThumbnailGenerator::readFinished,
-            this, &FileListModel::thumbnailReadFinished);
+    connect(_generator, &ThreadedThumbnailGenerator::readFinished, this, [&] () {
+        emit thumbnailReadFinished(nullptr);
+    });
 }
 
 QHash<int, QByteArray> FileListModel::roleNames() const {
@@ -72,31 +121,72 @@ QHash<int, QByteArray> FileListModel::roleNames() const {
 }
 
 int FileListModel::rowCount(const QModelIndex &parent) const {
+    if (parent.isValid()) {
+        ImageFile *imageFile = itemFromIndex(parent);
+        if (imageFile) {
+            return imageFile->subfiles.size();
+        }
+        return 0;
+    }
     return _items.size();
 }
 
 QVariant FileListModel::data(const QModelIndex &index, int role) const {
-    if (index.row() < _items.size()) {
+    ImageFile *imageFile = itemFromIndex(index);
+    if (imageFile) {
         if (role == Qt::DisplayRole) {
-            return _items[index.row()]->fileName;
+            return imageFile->fileName;
         }
         else if (role == ImageIdRole) {
-            return _items[index.row()]->imageId;
+            return imageFile->imageId;
         }
         else if (role == FolderRole) {
-            return _items[index.row()]->isFolder;
+            return imageFile->isFolder;
         }
         else if (role == ImageRole) {
-            return _items[index.row()]->image;
+            return imageFile->image;
         }
         else if (role == ImageFullSizeRole) {
-            return _items[index.row()]->fullSize;
+            return imageFile->fullSize;
         }
         else if (role == ImageFileRole) {
-            return QVariant::fromValue(_items[index.row()]);
+            return QVariant::fromValue(imageFile);
+        }
+        else if (role == FolderViewRole) {
+            return imageFile->subfiles.size() != 0;
         }
     }
     return QVariant();
+}
+
+QModelIndex FileListModel::index(int row, int column, const QModelIndex &parent) const {
+    if (hasIndex(row, column, parent)) {
+        if (parent.isValid()) {
+            ImageFile *imageFile = itemFromIndex(parent);
+            if (row < imageFile->subfiles.size()) {
+                return createIndex(row, column, imageFile->subfiles.at(row));
+            }
+        }
+        else if (row < _items.size()) {
+            return createIndex(row, column, _items.at(row));
+        }
+    }
+
+    // Invalid index, root element
+    return QModelIndex();
+}
+
+QModelIndex FileListModel::parent(const QModelIndex &child) const {
+    ImageFile *imageFile = itemFromIndex(child);
+    if (!imageFile || !imageFile->parent) {
+        return QModelIndex();
+    }
+
+    return index(imageFile->parent->index, 0, QModelIndex());
+}
+
+int FileListModel::columnCount(const QModelIndex &parent) const {
+    return 1;
 }
 
 void FileListModel::prepareToClose() {
@@ -113,10 +203,19 @@ int FileListModel::cd(QString path, QString itemToSelect) {
     _imageIdToViewer.clear();
     _currentViewIndex = -1;
 
+    for (auto it = _folderModels.begin(); it != _folderModels.end(); ++it) {
+        it.value()->deleteLater();
+    }
+    _folderModels.clear();
+
     _fileToItem.clear();
     _imageIdToItem.clear();
     _imagePaths.clear();
+    _folderImagePaths.clear();
     for (int i = 0; i < _items.size(); i++) {
+        for (int j = 0; j < _items[i]->subfiles.size(); j++) {
+            delete _items[i]->subfiles[j];
+        }
         delete _items[i];
     }
     _items.clear();
@@ -141,12 +240,17 @@ int FileListModel::cd(QString path, QString itemToSelect) {
         QStringList folders = dir.entryList(QDir::NoDotAndDotDot | QDir::Dirs | QDir::Hidden | QDir::System);
         for (const auto &folder : folders) {
             ImageFile *item = new ImageFile();
+            item->folderPath = _root;
             item->fileName = folder;
             item->isFolder = true;
             item->isImage = false;
             item->index = _items.size();
             item->iconPath = "qrc:/resources/FolderIcon.svg";
             _items.append(item);
+
+            QString path = item->fullPath();
+            _fileToItem.insert(path, item);
+            _folderImagePaths.append(path);
 
             if (item->fileName == itemToSelect) {
                 indexToSelect = _items.size() - 1;
@@ -156,6 +260,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
         QStringList files = dir.entryList(QDir::NoDotAndDotDot | QDir::Files | QDir::Hidden | QDir::System);
         for (const auto &file : files) {
             ImageFile *item = new ImageFile();
+            item->folderPath = _root;
             item->fileName = file;
             item->isFolder = false;
 
@@ -163,7 +268,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
                 item->isImage = true;
                 item->iconPath = "qrc:/resources/ImageIcon.svg";
 //                updateImageId(item);
-                QString path = fullPath(file);
+                QString path = item->fullPath();
                 _fileToItem.insert(path, item);
                 _imagePaths.append(path);
             }
@@ -180,14 +285,30 @@ int FileListModel::cd(QString path, QString itemToSelect) {
     return indexToSelect;
 }
 
+void FileListModel::requestThumbnails(QStringList files, QSize preferredSize) {
+
+    QList<ImageReadRequest> requests;
+    requests.reserve(files.size());
+    for (const QString &path : files) {
+        requests.append(ImageReadRequest(path, preferredSize));
+    }
+    _generator->requestRead(requests);
+    _generationFinished = false;
+    emit generationFinishedChanged();
+}
+
 void FileListModel::requestThumbnails(QSize preferredSize) {
 //    qDebug() << "Request thumbnails" << preferredSize;
 
     QList<ImageReadRequest> requests;
-    requests.reserve(_imagePaths.size());
+    requests.reserve(_imagePaths.size() + _folderImagePaths.size());
+    for (const QString &path : _folderImagePaths) {
+        requests.append(ImageReadRequest(path, preferredSize, false, true));
+    }
     for (const QString &path : _imagePaths) {
         requests.append(ImageReadRequest(path, preferredSize));
     }
+    _folderImagePaths.clear();
     _generator->clearRequests();
     _generator->requestRead(requests);
     _generationFinished = false;
@@ -196,10 +317,6 @@ void FileListModel::requestThumbnails(QSize preferredSize) {
 
 QString FileListModel::rootPath() const {
     return _root;
-}
-
-QString FileListModel::fullPath(QString fileName) {
-    return _root + "/" + fileName;
 }
 
 const ImageFile *FileListModel::itemForImageId(QString imageId) {
@@ -231,7 +348,29 @@ void FileListModel::updateImageId(ImageFile *item) {
     QString newImageId = generateNewId();
     _imageIdToItem.insert(newImageId, item);
     item->imageId = newImageId;
-//    qDebug() << "image id saved" << item->imageId << item;
+}
+
+ImageFile *FileListModel::itemFromIndex(const QModelIndex &index) {
+    return static_cast<ImageFile*>(index.internalPointer());
+}
+
+QModelIndex FileListModel::indexFromItem(const ImageFile *item) const {
+    if (!item) {
+        return QModelIndex();
+    }
+    return index(item->index, 0, indexFromItem(item->parent));
+}
+
+QAbstractItemModel *FileListModel::folderModel(int index_) {
+    auto it = _folderModels.find(index_);
+    if (it == _folderModels.end()) {
+        RootProxyModel *proxy = new RootProxyModel(this);
+        proxy->setRoot(_items[index_]);
+        proxy->setSourceModel(this);
+        _folderModels[index_] = proxy;
+        return proxy;
+    }
+    return *it;
 }
 
 bool FileListModel::isImage(QString fileName) {
@@ -239,7 +378,7 @@ bool FileListModel::isImage(QString fileName) {
 }
 
 void FileListModel::requestViewer(int index, int width, int height) {
-    QString requestedPath = fullPath(_items[index]->fileName);
+    QString requestedPath = _items[index]->fullPath();
     auto it = _viewerImages.find(requestedPath);
     if (it != _viewerImages.end()) {
         emit viewerImageIdChanged(QString("image://thumbnails/") + it.value().imageId);
@@ -257,7 +396,7 @@ void FileListModel::requestViewer(int index, int width, int height) {
             break;
         }
         if (_items[i]->isImage) {
-            requests.append(ImageReadRequest(fullPath(_items[i]->fileName), viewerSize, true));
+            requests.append(ImageReadRequest(_items[i]->fullPath(), viewerSize, true));
         }
     }
     int backwardInsertIndex = 1;
@@ -269,7 +408,7 @@ void FileListModel::requestViewer(int index, int width, int height) {
             if (backwardInsertIndex >= _items.count()) {
                 backwardInsertIndex = _items.count();
             }
-            requests.insert(backwardInsertIndex, ImageReadRequest(fullPath(_items[i]->fileName), viewerSize, true));
+            requests.insert(backwardInsertIndex, ImageReadRequest(_items[i]->fullPath(), viewerSize, true));
             backwardInsertIndex += 2;
         }
     }
@@ -297,4 +436,103 @@ int FileListModel::fileIndex(QString fileName) const {
         }
     }
     return -1;
+}
+
+RootProxyModel::RootProxyModel(QObject *parent)
+    : QAbstractProxyModel(parent) {
+    _sourceRoot = nullptr;
+}
+
+void RootProxyModel::setRoot(ImageFile *root) {
+    _sourceRoot = root;
+}
+
+void RootProxyModel::setSourceModel(QAbstractItemModel *sourceModel) {
+    QAbstractProxyModel::setSourceModel(sourceModel);
+
+    connect(sourceModel, &QAbstractItemModel::dataChanged, this,
+            [&] (const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles = QList<int>()) {
+        if (FileListModel::itemFromIndex(topLeft.parent()) == _sourceRoot) {
+            emit dataChanged(mapFromSource(topLeft), mapFromSource(bottomRight), roles);
+        }
+    });
+
+    connect(sourceModel, SIGNAL(thumbnailReadFinished(ImageFile*)),
+            this, SIGNAL(thumbnailReadFinished(ImageFile*)));
+}
+
+QModelIndex RootProxyModel::index(int row, int column, const QModelIndex &parent) const {
+    if (!_sourceRoot || !sourceModel()) {
+        return QModelIndex();
+    }
+    return createIndex(row, column, _sourceRoot->subfiles[row]);
+}
+
+QModelIndex RootProxyModel::parent(const QModelIndex &child) const {
+    return QModelIndex();
+}
+
+int RootProxyModel::rowCount(const QModelIndex &parent) const {
+    if (!_sourceRoot || !sourceModel()) {
+        return 0;
+    }
+    return sourceModel()->rowCount(sourceModel()->indexFromItem(_sourceRoot));
+}
+
+int RootProxyModel::columnCount(const QModelIndex &parent) const {
+    return 1;
+}
+
+QModelIndex RootProxyModel::mapToSource(const QModelIndex &proxyIndex) const {
+    if (!_sourceRoot || !sourceModel()) {
+        return QModelIndex();
+    }
+
+    return sourceModel()->index(proxyIndex.row(), proxyIndex.column(), sourceModel()->indexFromItem(_sourceRoot));
+}
+
+QModelIndex RootProxyModel::mapFromSource(const QModelIndex &sourceIndex) const {
+    if (!_sourceRoot || !sourceModel()) {
+        return QModelIndex();
+    }
+
+    if (sourceIndex.parent() != sourceModel()->indexFromItem(_sourceRoot)) {
+        return QModelIndex();
+    }
+
+    return index(sourceIndex.row());
+}
+
+FileListModel *RootProxyModel::sourceModel() const {
+    return static_cast<FileListModel *>(QAbstractProxyModel::sourceModel());
+}
+
+void RootProxyModel::requestThumbnails(QSize preferredSize) {
+    if (!sourceModel()) {
+        return;
+    }
+    QStringList files;
+    for (int i = 0; i < rowCount(); i++) {
+        ImageFile *imageFile = index(i).data(FileListModel::ImageFileRole).value<ImageFile *>();
+
+        qDebug() << "Proxy requests thumbnails" << imageFile->fullPath();
+        files.append(imageFile->fullPath());
+    }
+    dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())->requestThumbnails(files, preferredSize);
+}
+
+void RootProxyModel::addRequestThumbnails(QList<ImageReadRequest> requests) {
+    if (!sourceModel()) {
+        return;
+    }
+    dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())->addRequestThumbnails(requests);
+}
+
+ImageFile *RootProxyModel::rootItem() const {
+    return _sourceRoot;
+}
+
+void RootProxyModel::resetModel() {
+    beginResetModel();
+    endResetModel();
 }

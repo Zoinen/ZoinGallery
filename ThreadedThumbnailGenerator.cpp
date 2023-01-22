@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <QTimer>
 #include <QFileInfo>
+#include <QDir>
 #include <QDeadlineTimer>
 
 #include <chrono>
@@ -35,6 +36,8 @@ ThreadedThumbnailGenerator::ThreadedThumbnailGenerator(QObject *parent)
     _readWorker = new ReadWorker(this);
     connect(_readWorker, &ReadWorker::readResultReady,
             this, &ThreadedThumbnailGenerator::onReadFinished);
+    connect(_readWorker, &ReadWorker::folderListReady,
+            this, &ThreadedThumbnailGenerator::folderListReady);
     _readWorker->start();
 }
 
@@ -155,16 +158,19 @@ void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
         return;
     }
     _readSet[result.request.sourcePath] = result;
-    if (!result.request.viewerRequest) {
-        emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
+    if (result.request.viewerRequest) {
+        requestViewerDecode(ImageReadRequest(result.request.sourcePath, result.request.targetSize));
+    }
+    else if (result.request.inFolderRequest) {
+
     }
     else {
-        requestViewerDecode(ImageReadRequest(result.request.sourcePath, result.request.targetSize));
+        emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
     }
 
     if (_requests.size() && result.request.sourcePath == _requests.last().sourcePath) {
         _readFinished = true;
-//        qDebug() << "read finished";
+        qDebug() << "Generator: read finished";
         emit readFinished();
         checkIfFinished();
     }
@@ -246,37 +252,50 @@ void ReadWorker::run() {
     forever {
         ImageReadRequest request = _readQueue.dequeue();
 
-        ThumbnailLoader loader;
-        //if (ThumbnailLoader::isExifCompatible(request.sourcePath)) {
-        {
-            ImageReadResult result;
-            result.request = request;
-//            qDebug() << "READ" << request.sourcePath << request.targetSize;
-            bool fileLoaded = loader.readExifPreview(request.sourcePath, request.targetSize, result);
-            if ((!fileLoaded && result.fullSize.isValid()) ||
-                    (fileLoaded && (result.thumbnailSize.width() < request.targetSize.width() ||
-                                    result.thumbnailSize.height() < request.targetSize.height()))) {
-                QFile f(request.sourcePath);
-                if (f.open(QFile::ReadOnly)) {
-                    //                result.fullImageData = QByteArray::fromRawData((const char *)f.map(0, f.size()), f.size());
-
-                    result.fullImageData = f.readAll();
-                    f.close();
-
-                    fileLoaded = true;
-                }
+        if (!request.folderRequest) {
+            readImage(request);
+        }
+        else {
+            QDir dir(request.sourcePath);
+            QStringList images = dir.entryList(ThumbnailLoader::supportedFormats(), QDir::Files, QDir::Name);
+            int totalImages = 16;
+            QStringList imagesFiltered;
+            for (float i = 0; i < images.size(); i += qMax(1.0f, float(images.size()) / totalImages)) {
+                imagesFiltered.append(images.at(i));
             }
-            else if (!fileLoaded) {
-                fileLoaded = loader.readGenericPreview(request.sourcePath, request.targetSize, result);
-                qDebug() << "READING FULL" << result.request.sourcePath;
-            }
-            if (fileLoaded) {
-                emit readResultReady(result);
-            }
+            emit folderListReady(request.sourcePath, imagesFiltered);
         }
 
 //        qDebug() << "READ DONE" << request.sourcePath;
-        //    QThread::msleep(300);
+//            QThread::msleep(300);
+    }
+}
+
+void ReadWorker::readImage(ImageReadRequest &request) {
+    ThumbnailLoader loader;
+    ImageReadResult result;
+    result.request = request;
+//            qDebug() << "READ" << request.sourcePath << request.targetSize;
+    bool fileLoaded = loader.readExifPreview(request.sourcePath, request.targetSize, result);
+    if ((!fileLoaded && result.fullSize.isValid()) ||
+            (fileLoaded && (result.thumbnailSize.width() < request.targetSize.width() ||
+                            result.thumbnailSize.height() < request.targetSize.height()))) {
+        QFile f(request.sourcePath);
+        if (f.open(QFile::ReadOnly)) {
+            //                result.fullImageData = QByteArray::fromRawData((const char *)f.map(0, f.size()), f.size());
+
+            result.fullImageData = f.readAll();
+            f.close();
+
+            fileLoaded = true;
+        }
+    }
+    else if (!fileLoaded) {
+        fileLoaded = loader.readGenericPreview(request.sourcePath, request.targetSize, result);
+        qDebug() << "READING FULL" << result.request.sourcePath;
+    }
+    if (fileLoaded) {
+        emit readResultReady(result);
     }
 }
 

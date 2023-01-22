@@ -50,16 +50,25 @@ find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Concurrent Svg QuickCon
 
 set(PROJECT_SOURCES
     main.cpp
+    ThumbnailLoader.h
     ThumbnailLoader.cpp
+    FileListModel.h
     FileListModel.cpp
     ImageFile.h
+    QmlImageProvider.h
     QmlImageProvider.cpp
+    ViewerController.h
     ViewerController.cpp
+    ThreadedThumbnailGenerator.h
     ThreadedThumbnailGenerator.cpp
+    Unsharp/Unsharp.h
     Unsharp/Unsharp.cpp
     Unsharp/Utilities.h
+    QmlResourcesProvider.h
     QmlResourcesProvider.cpp
+    MasonryLayout.h
     MasonryLayout.cpp
+    exiv2/Preview.h
     exiv2/Preview.cpp
     ThreadSafeQueue.h
     ThreadSafeQueue.cpp
@@ -106,6 +115,7 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             qml/main.qml
             qml/MasonryMode.qml
             qml/PathControl.qml
+            qml/BrickDelegate.qml
             ZGStyle/Style.qml
             ZGStyle/ScrollBar.qml
             ZGStyle/Slider.qml
@@ -115,6 +125,8 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             ZGStyle/Menu.qml
             ZGStyle/MenuItem.qml
             ZGStyle/MenuSeparator.qml
+            ZGStyle/TabBar.qml
+            ZGStyle/TabButton.qml
             ZGStyle/qmldir
         RESOURCES
             resources/ThumbnailsShadow.png
@@ -132,6 +144,8 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             resources/SearchClose.svg
             resources/SearchNext.svg
             resources/PathSeparator.svg
+            resources/ListView.svg
+            resources/GridView.svg
         )
 endif()
 

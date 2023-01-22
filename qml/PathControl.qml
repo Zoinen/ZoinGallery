@@ -120,6 +120,7 @@ Item {
 
                 source: "qrc:/resources/FolderIcon.svg"
                 sourceSize.width: 18
+                sourceSize.height: 18
             }
         }
 

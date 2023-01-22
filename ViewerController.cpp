@@ -24,7 +24,7 @@ ViewerController::ViewerController(QQmlEngine *engine)
 
     engine->rootContext()->setContextProperty("viewerController", this);
 
-    _fileListModel = new FileListModel(engine);
+    _fileListModel = new FileListModel(this);
     engine->rootContext()->setContextProperty("fileListModel", _fileListModel);
 
     QmlImageProvider *imageProvider = new QmlImageProvider("thumbnails", _fileListModel);
@@ -113,7 +113,7 @@ void ViewerController::clipboardCopyIndexName(int index) {
 
 void ViewerController::clipboardCopyIndexFullPath(int index) {
     QClipboard *clipboard = QGuiApplication::clipboard();
-    clipboard->setText(QDir::toNativeSeparators(_fileListModel->fullPath(_fileListModel->index(index).data().toString())));
+    clipboard->setText(QDir::toNativeSeparators(_fileListModel->itemFromIndex(_fileListModel->index(index))->fullPath()));
 }
 
 QWindow *ViewerController::mainWindow() const {
@@ -151,12 +151,16 @@ bool ViewerController::eventFilter(QObject *watched, QEvent *event) {
         else if (event->type() == QEvent::NonClientAreaMouseButtonRelease && _leftButtonPressed) {
             _leftButtonPressed = false;
             if (_lastSize != _mainWindow->size()) {
-                emit mainWindowResized();
+                QTimer::singleShot(0, this, [&] () {
+                    emit mainWindowResized();
+                });
             }
         }
         else if (event->type() == QEvent::Resize && !_leftButtonPressed) {
             if (_lastSize != _mainWindow->size()) {
-                emit mainWindowResized();
+                QTimer::singleShot(0, this, [&] () {
+                    emit mainWindowResized();
+                });
             }
             _lastSize = _mainWindow->size();
         }

@@ -21,6 +21,7 @@ ViewerController::ViewerController(QQmlEngine *engine)
     ThumbnailLoader::init();
     _fileListModel = nullptr;
     _mainWindow = nullptr;
+    _leftButtonPressed = false;
 
     engine->rootContext()->setContextProperty("viewerController", this);
 
@@ -44,7 +45,6 @@ void ViewerController::cd(QString folder) {
     }
     folder = folder.trimmed();
 
-    qDebug() << folder;
     if (folder == "Computer\\") {
         _currentPath = "Computer";
         emit currentPathChanged();
@@ -146,10 +146,12 @@ bool ViewerController::eventFilter(QObject *watched, QEvent *event) {
     if (watched == _mainWindow) {
         if (event->type() == QEvent::NonClientAreaMouseButtonPress) {
             _leftButtonPressed = true;
+            emit isResizingChanged();
             _lastSize = _mainWindow->size();
         }
         else if (event->type() == QEvent::NonClientAreaMouseButtonRelease && _leftButtonPressed) {
             _leftButtonPressed = false;
+            emit isResizingChanged();
             if (_lastSize != _mainWindow->size()) {
                 QTimer::singleShot(0, this, [&] () {
                     emit mainWindowResized();
@@ -189,4 +191,8 @@ bool ViewerController::eventFilter(QObject *watched, QEvent *event) {
         }
     }
     return false;
+}
+
+bool ViewerController::isResizing() const {
+    return _leftButtonPressed;
 }

@@ -5,11 +5,22 @@ import QtQuick.Controls
 Item {
     id: viewerMode
 
+    visible: false
+
     property int animationDuration: 150
     property int easingType: Easing.OutSine
 
     property alias animation: viewerAnimation
     property alias image: viewerImage
+    property alias imageContainer: imageContainerItem
+
+    function onCurrentIndexChanged() {
+        fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.imageContainer.width * dpr, viewerMode.imageContainer.height * dpr)
+        if (masonryLayout.view.currentItem) {
+            topLevelWindow.title = masonryLayout.view.currentItem.text + " [" +
+                    (masonryLayout.view.currentImageIndex + 1) + "/" + masonryLayout.view.imageCount + "] - ZoinGallery"
+        }
+    }
 
     Keys.onPressed:
         (event) => {
@@ -39,10 +50,7 @@ Item {
             }
 
             if (nextIndex !== -1 && nextIndex !== currentIndex) {
-                fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
-                if (masonryLayout.view.currentItem) {
-                    topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
-                }
+                onCurrentIndexChanged()
             }
     }
 
@@ -74,9 +82,33 @@ Item {
         }
     }
 
-    Image {
-        id: viewerImage
-        fillMode: Image.PreserveAspectFit
+    Item {
+        id: imageContainerItem
+
+        anchors {
+            left: parent.left
+            top: parent.top
+            bottom: parent.bottom
+            right: sliderContainer.left
+        }
+
+        Image {
+            id: viewerImage
+            fillMode: Image.PreserveAspectFit
+            cache: false
+
+            // Dirty hack to workaround blurry output. Remove someday
+            property bool needScaling: {
+                let actualWidth = Math.round(viewerImage.width * dpr)
+                let actualHeight = Math.round(viewerImage.height * dpr)
+                let useHeight = (viewerImage.sourceSize.height * actualWidth / actualHeight) <= viewerImage.sourceSize.width
+
+                return useHeight ?
+                            (Math.abs(viewerImage.sourceSize.width - actualWidth) > 1) :
+                            (Math.abs(viewerImage.sourceSize.height - actualHeight) > 1)
+            }
+            smooth: needScaling
+        }
     }
 
     MouseArea {
@@ -111,10 +143,7 @@ Item {
                 }
 
                 if (nextIndex !== currentIndex) {
-                    fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
-                    if (masonryLayout.view.currentItem) {
-                        topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
-                    }
+                    onCurrentIndexChanged()
                 }
             }
 
@@ -166,8 +195,62 @@ Item {
                 viewerMode.visible = false
             }
             else {
-                viewerImage.width = Qt.binding(function() {return viewerMode.width})
-                viewerImage.height = Qt.binding(function() {return viewerMode.height})
+                viewerImage.width = Qt.binding(function() {return imageContainer.width})
+                viewerImage.height = Qt.binding(function() {return imageContainer.height})
+            }
+        }
+    }
+
+    Item {
+        id: sliderContainer
+        anchors {
+            top: parent.top
+            right: parent.right
+            bottom: parent.bottom
+        }
+        width: 20
+
+        opacity: root.state === "viewer"
+        Behavior on opacity {
+            NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
+        }
+
+        Slider {
+            id: currentImageSlider
+            x: 20
+            y: 0
+            width: parent.height
+            height: 20
+            leftPadding: 0
+            rightPadding: 0
+            topPadding: 0
+            bottomPadding: 0
+
+            rectangular: true
+
+            from: 0
+            to: masonryLayout.view.imageCount - 1
+            value: masonryLayout.view.currentImageIndex
+            stepSize: 1
+            snapMode: Slider.SnapAlways
+
+            rotation: 90
+            transformOrigin: Item.TopLeft
+
+            onValueChanged: {
+                if (pressed) {
+                    masonryLayout.view.currentImageIndex = Math.round(value)
+                    masonryLayout.setCurrentIndex(masonryLayout.view.currentIndex)
+                    onCurrentIndexChanged()
+
+                }
+            }
+
+            Connections {
+                target: masonryLayout.view
+                function onCurrentImageIndexChanged() {
+                    currentImageSlider.value = masonryLayout.view.currentImageIndex
+                }
             }
         }
     }

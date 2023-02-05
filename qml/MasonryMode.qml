@@ -441,6 +441,16 @@ MouseArea {
         visible: masonryLayout.needScroll
         width: masonryLayout.needScroll ? 16 : 0
 
+        Connections {
+            target: masonryLayout
+
+            function onNeedScrollChanged() {
+                if (!viewerController.isResizing) {
+                    masonryLayout.reReadAndDecodeThumbnails()
+                }
+            }
+        }
+
         onPositionChanged: {
             if (pressed) {
                 masonryLayout.contentY = masonryScroll.position * masonryLayout.contentHeight

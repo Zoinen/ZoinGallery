@@ -399,8 +399,8 @@ void FileListModel::requestViewer(int index, int width, int height) {
             requests.append(ImageReadRequest(_items[i]->fullPath(), viewerSize, true));
         }
     }
-    int backwardInsertIndex = 1;
-    for (int i = index; i >= 0; i--) {
+    int backwardInsertIndex = 2;
+    for (int i = index - 1; i >= 0; i--) {
         if (requests.size() >= queueSize * 1.5) {
             break;
         }

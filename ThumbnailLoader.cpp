@@ -113,12 +113,17 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
             ignoreThumbnailAt = 2;
         }
 //        qDebug() << "ignoreThumbnailAt" << ignoreThumbnailAt;
+        bool largerImageAvailable = false;
         Exiv2::DataBuf previewImg = Exiv2Preview::preview(*image.get(), preferredSizeRotated.width(),
-                                                          preferredSizeRotated.height(), &previewProp, ignoreThumbnailAt);
+                                                          preferredSizeRotated.height(), &previewProp, ignoreThumbnailAt,
+                                                          &largerImageAvailable);
         if (previewImg.pData_) {
             outResult.thumbnailData = QByteArray::fromRawData(reinterpret_cast<char *>(previewImg.pData_), previewImg.size_);
             outResult.mimeType = QString::fromStdString(previewProp.mimeType_);
             outResult.thumbnailSize = QSize(previewProp.width_, previewProp.height_);
+            if (!outResult.request.higherThumbnailRequest) {
+                outResult.largerImageAvailable = largerImageAvailable;
+            }
             previewImg.release();
             f.unmap(mappedFile);
             return true;

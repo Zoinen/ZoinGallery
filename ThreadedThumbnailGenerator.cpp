@@ -134,7 +134,21 @@ bool ThreadedThumbnailGenerator::requestNextDecode(WorkerInfo &worker) {
     worker.isFinished = false;
     QMetaObject::Connection connection = connect(this, &ThreadedThumbnailGenerator::requestDecodeThumbnail,
                                                  worker.worker, &DecodeWorker::decode);
-    emit requestDecodeThumbnail(_decodeQueue.dequeue(), _queueId.loadAcquire());
+    ImageReadResult request = _decodeQueue.dequeue();
+    if ((request.thumbnailSize.width() < request.request.targetSize.width() ||
+        request.thumbnailSize.height() < request.request.targetSize.height()) && request.largerImageAvailable &&
+            !request.request.viewerRequest) {
+        _readSet.remove(request.request.sourcePath);
+
+        ImageReadRequest readHigher = ImageReadRequest(request.request.sourcePath, request.request.targetSize);
+        readHigher.higherThumbnailRequest = true;
+        requestRead(QList<ImageReadRequest>({readHigher}));
+
+        worker.isFinished = true;
+    }
+    else {
+        emit requestDecodeThumbnail(request, _queueId.loadAcquire());
+    }
     disconnect(connection);
     return true;
 }
@@ -158,7 +172,11 @@ void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
         return;
     }
     _readSet[result.request.sourcePath] = result;
-    if (result.request.viewerRequest) {
+    if (result.request.higherThumbnailRequest) {
+        ImageReadRequest decodeHigherRequest(result.request.sourcePath, result.request.targetSize);
+        requestThumbnailDecode(QList<ImageReadRequest>{decodeHigherRequest});
+    }
+    else if (result.request.viewerRequest) {
         requestViewerDecode(ImageReadRequest(result.request.sourcePath, result.request.targetSize));
     }
     else if (result.request.inFolderRequest) {

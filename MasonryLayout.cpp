@@ -20,7 +20,8 @@ Q_COREAPP_STARTUP_FUNCTION(registerMyQmlTypes)
 
 QRectF roundRect(const QRectF &rectF) {
     // Rounding to floor
-    return QRect(rectF.x(), rectF.y(), rectF.width(), rectF.height());
+    return rectF.toRect();
+    //return QRect(rectF.x(), rectF.y(), rectF.width(), rectF.height());
 }
 
 MasonryLayout::MasonryLayout(QQuickItem *parent)
@@ -39,6 +40,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _dp = 1;
     _spacing = 8; // Should be divisible by 4
     _listView = false;
+    _imageCount = 0;
 
     _currentScrollingMode = false;
     _currentScrollingDirection = -2;
@@ -115,7 +117,7 @@ int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
 
 void MasonryLayout::reReadAndDecodeThumbnails() {
     _currentLoadingRow.clear();
-    dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestThumbnails(QSize(_targetHeight * 3 / 2, _targetHeight) * dp());
+    dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestThumbnails(dp(QSizeF(_targetHeight * 3.0 / 2, _targetHeight)));
     emit layoutReset();
 }
 
@@ -147,14 +149,14 @@ void MasonryLayout::setScrollingMode(bool scrollingMode, int direction) {
         }
 
         QSvgRenderer renderer(path);
-        QSize destSize = renderer.defaultSize() * dp();
+        QSize destSize(dp(renderer.defaultSize()));
 
         QPixmap pix(destSize);
         pix.fill(Qt::transparent);
 
         QPainter painter(&pix);
         renderer.render(&painter);
-        pix.setDevicePixelRatio(dp());
+        pix.setDevicePixelRatio(dpValue());
 
         QCursor cursor(pix);
         if (!cursorOverridden) {
@@ -214,7 +216,7 @@ void MasonryLayout::rewrap() {
         currentIndexOffset = _contentY - _bricks[_currentIndex].y;
     }
 
-    calcLayout(_bricks, width(), _targetHeight, _spacing * dp());
+    calcLayout(_bricks, width(), _targetHeight, _spacing);
 //    qDebug() << "--------------------";
 //    for (int i = 0; i < _bricks.size(); i++) {
 //        qDebug() << _bricks[i].image->path << _bricks[i].originalSize << _bricks[i].normalizedSize;
@@ -527,18 +529,21 @@ void MasonryLayout::pushToCurrentRow(int index) {
 //    }
 //    qDebug() << "==";
 
-    calcLayout(_currentLoadingRow, width(), _targetHeight, _spacing * dp());
+    calcLayout(_currentLoadingRow, width(), _targetHeight, _spacing);
     if (_currentLoadingRow.last().row > 0 || flushMode) {
+//        qDebug() << "//// pushing" << _currentLoadingRow.first().globalIndex << flushMode << _currentLoadingRow.size();
 //        qDebug() << "REWRAP";
-        QList<ImageReadRequest> requests;
+        QList<int> requestsIndexes;
         for (int i = 0; i < _currentLoadingRow.size(); i++) {
             if (_currentLoadingRow[i].row != _currentLoadingRow.last().row || flushMode) {
                 int updIndex = _currentLoadingRow[i].globalIndex;
                 if (_bricks[updIndex].image && _bricks[updIndex].image->fullSize.isValid()) {
                     _bricks[updIndex].originalSize = _bricks[updIndex].image->fullSize;
-
-                    QSize thumbnailSize = _currentLoadingRow[i].thumbnailSize(spacing()) * dp();
-                    requests.append(ImageReadRequest(_bricks[updIndex].image->fullPath(), thumbnailSize));
+                    // When pushing single item that fills the whole row we need to add a line break
+                    if (!flushMode && !_bricks[updIndex].column && i == _currentLoadingRow.size() - 2) {
+                        _bricks[updIndex].forceNewLine = true;
+                    }
+                    requestsIndexes.append(updIndex);
                 }
             }
             else {
@@ -550,15 +555,27 @@ void MasonryLayout::pushToCurrentRow(int index) {
                 break;
             }
         }
+        if (flushMode) {
+            _currentLoadingRow.clear();
+        }
         rewrap();
         // TODO: Possible duplicate call, rewrap already updates properties
         updateProperties();
+
+        QList<ImageReadRequest> requests;
+        for (int i = 0; i < requestsIndexes.size(); i++) {
+            int index = requestsIndexes[i];
+            QSize thumbnailSize = _bricks[index].thumbnailSize(spacing());
+            thumbnailSize = dp(thumbnailSize);
+            requests.append(ImageReadRequest(_bricks[index].image->fullPath(), thumbnailSize));
+        }
         dynamic_cast<ThumbnailsRequestInterface *>(_model)->addRequestThumbnails(requests);
     }
 }
 
 void MasonryLayout::onThumbnailReadFinished(ImageFile *root) {
-    if (_bricks.count() && root == dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()) {
+    if (_bricks.count() && root == dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem() &&
+        _currentLoadingRow.size()) {
         pushToCurrentRow(_bricks.count());
     }
 }
@@ -609,12 +626,20 @@ void MasonryLayout::onModelReset() {
         for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
             bricks.append(MasonryBrick(BrickSize.width(), BrickSize.height()));
         }
-        calcLayout(bricks, width(), _targetHeight, _spacing * dp());
+        calcLayout(bricks, width(), _targetHeight, _spacing);
         if (bricks.size()) {
             QSizeF projectedSize = bricks.first().normalizedSize;
-            dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestThumbnails(projectedSize.toSize() * dp());
+            dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestThumbnails(dp(projectedSize));
         }
     }
+
+    _imageCount = 0;
+    for (int i = 0; i < _bricks.size(); i++) {
+        if (_bricks[i].image->isImage) {
+            _imageCount++;
+        }
+    }
+    emit imageCountChanged();
 
     emit countChanged();
 }
@@ -636,7 +661,7 @@ void MasonryLayout::zoom(bool in) {
     int targetHeightRangeEnd = -1;
 
     for (int targetHeight = _targetHeight; targetHeight >= smallestHeight && targetHeight <= largestHeight; targetHeight += increment) {
-        calcLayout(bricks, width(), targetHeight, _spacing * dp());
+        calcLayout(bricks, width(), targetHeight, _spacing);
         for (int i = 0; i < bricks.size(); i++) {
             if (bricks[i].row && i) {
                 if (columns == -1) {
@@ -674,7 +699,7 @@ void MasonryLayout::updateNeedScroll() {
     if (newNeedScroll != _needScroll) {
         QList<MasonryBrick> bricks = _bricks;
         // TODO: Scrollbar height is hardcoded here
-        calcLayout(bricks, width() + (newNeedScroll ? 0 : 16), _targetHeight, _spacing * dp());
+        calcLayout(bricks, width() + (newNeedScroll ? 0 : 16), _targetHeight, _spacing);
 
         int newContentHeight = (bricks.last().y + bricks.last().normalizedSize.height());
         newNeedScroll = newContentHeight > height();
@@ -704,7 +729,15 @@ BrickItem *MasonryLayout::popBrickItem() {
     return item;
 }
 
-qreal MasonryLayout::dp() {
+QSize MasonryLayout::dp(QSizeF value) {
+    return QSize(dp(value.width()), dp(value.height()));
+}
+
+qreal MasonryLayout::dp(qreal value) {
+    return qRound(value * dpValue());
+}
+
+qreal MasonryLayout::dpValue() {
     QWindow *window_ = window();
     if (window_) {
         _dp = window_->devicePixelRatio();
@@ -890,6 +923,14 @@ void MasonryLayout::setCurrentIndex(int newCurrentIndex) {
     _currentIndex = newCurrentIndex;
     emit currentIndexChanged();
 
+    _currentImageIndex = 0;
+    for (int i = 0; i < _currentIndex; i++) {
+        if (_bricks[i].image->isImage) {
+            _currentImageIndex++;
+        }
+    }
+    emit currentImageIndexChanged();
+
     if (!_quickSearch->mask().isEmpty()) {
         _quickSearch->updateVisuals();
     }
@@ -952,4 +993,27 @@ void MasonryLayout::setListView(bool isListView) {
     updateProperties();
 
     emit listViewChanged();
+}
+
+int MasonryLayout::imageCount() const {
+    return _imageCount;
+}
+
+int MasonryLayout::currentImageIndex() const {
+    return _currentImageIndex;
+}
+
+void MasonryLayout::setCurrentImageIndex(int newCurrentImageIndex) {
+    if (_currentImageIndex == newCurrentImageIndex) {
+        return;
+    }
+    for (int i = 0, imageIndex = 0; i < _bricks.size(); i++) {
+        if (_bricks[i].image->isImage) {
+            if (imageIndex == newCurrentImageIndex) {
+                setCurrentIndex(i);
+                break;
+            }
+            imageIndex++;
+        }
+    }
 }

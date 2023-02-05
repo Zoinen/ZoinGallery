@@ -1415,7 +1415,8 @@ namespace {
 //}                                       // namespace Exiv2
 
 Exiv2::DataBuf Exiv2Preview::preview(const Exiv2::Image& image, int targetWidth, int targetHeight,
-                                     Exiv2::PreviewProperties *outPreviewProperties, int ignoreThumbnailAt) {
+                                     Exiv2::PreviewProperties *outPreviewProperties, int ignoreThumbnailAt,
+                                     bool *outLargerImageAvailable) {
     PreviewProperties properties;
     DataBuf buf;
 
@@ -1455,6 +1456,8 @@ Exiv2::DataBuf Exiv2Preview::preview(const Exiv2::Image& image, int targetWidth,
             properties.size_ = buf.size_;         //     update the size
         }
     }
+
+    *outLargerImageAvailable = thumbnailNumber < 3;
     *outPreviewProperties = properties;
     return buf;
 }

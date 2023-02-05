@@ -11,6 +11,7 @@ class ViewerController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString currentPath MEMBER _currentPath NOTIFY currentPathChanged)
     Q_PROPERTY(QWindow *mainWindow READ mainWindow WRITE setMainWindow)
+    Q_PROPERTY(bool isResizing READ isResizing NOTIFY isResizingChanged)
 
 public:
     ViewerController(QQmlEngine *engine);
@@ -26,10 +27,14 @@ public:
 
     bool eventFilter(QObject *watched, QEvent *event) override;
 
+    bool isResizing() const;
+
 signals:
     void currentPathChanged();
     void mainWindowResized();
     void setCurrentIndex(int index);
+
+    void isResizingChanged();
 
 private:
     FileListModel *_fileListModel;

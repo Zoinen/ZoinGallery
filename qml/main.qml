@@ -94,17 +94,15 @@ Window {
             }
 
             viewerMode.image.source = masonryLayout.view.currentItem.imageId
-            fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+            viewerMode.onCurrentIndexChanged()
 
             viewerMode.visible = true
 
             viewerMode.animation.x = 0
             viewerMode.animation.y = 0
-            viewerMode.animation.width = viewerMode.width
-            viewerMode.animation.height = viewerMode.height
+            viewerMode.animation.width = viewerMode.imageContainer.width
+            viewerMode.animation.height = viewerMode.imageContainer.height
             viewerMode.animation.restart()
-
-            topLevelWindow.title = masonryLayout.view.currentItem.text + " - ZoinGallery"
         }
 
         function switchToThumbnails() {

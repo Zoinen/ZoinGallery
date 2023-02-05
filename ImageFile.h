@@ -60,15 +60,16 @@ struct ImageReadRequest {
     bool viewerRequest;
     bool folderRequest;
     bool inFolderRequest;
+    bool higherThumbnailRequest;
     int queueId;
 
     ImageReadRequest(const QString &path = QString(), const QSize &size = QSize(), bool viewerRequest_ = false,
                      bool folderRequest_ = false, bool inFolderRequest_ = false)
         : sourcePath(path), targetSize(size), viewerRequest(viewerRequest_), folderRequest(folderRequest_),
-          inFolderRequest(inFolderRequest_), queueId(-1) {}
+          inFolderRequest(inFolderRequest_), higherThumbnailRequest(false), queueId(-1) {}
 
     bool operator==(const ImageReadRequest &other) const {
-        return sourcePath == other.sourcePath && viewerRequest == other.viewerRequest;
+        return sourcePath == other.sourcePath && viewerRequest == other.viewerRequest && higherThumbnailRequest == other.higherThumbnailRequest;
     }
 };
 
@@ -84,8 +85,9 @@ struct ImageReadResult {
     QString mimeType;
     QByteArray thumbnailData;
     QByteArray fullImageData;
+    bool largerImageAvailable;
 
-    ImageReadResult() : orientation(ExifOrientation::Horizontal) {}
+    ImageReadResult() : orientation(ExifOrientation::Horizontal), largerImageAvailable(false) {}
 };
 
 Q_DECLARE_METATYPE(ImageFile *)

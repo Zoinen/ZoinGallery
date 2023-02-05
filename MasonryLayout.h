@@ -41,9 +41,11 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(QAbstractItemModel *model READ model WRITE setModel NOTIFY modelChanged)
     Q_PROPERTY(QQmlComponent *delegate MEMBER _delegate)
     Q_PROPERTY(int currentIndex READ currentIndex WRITE setCurrentIndex NOTIFY currentIndexChanged)
+    Q_PROPERTY(int currentImageIndex READ currentImageIndex WRITE setCurrentImageIndex NOTIFY currentImageIndexChanged)
     Q_PROPERTY(QQuickItem *currentItem READ currentItem NOTIFY currentIndexChanged)
     Q_PROPERTY(int spacing READ spacing WRITE setSpacing NOTIFY spacingChanged)
     Q_PROPERTY(int count READ count NOTIFY countChanged)
+    Q_PROPERTY(int imageCount READ imageCount NOTIFY imageCountChanged)
     Q_PROPERTY(MasonryLayoutQuickSearch *quickSearch READ quickSearch NOTIFY quickSearchChanged)
     Q_PROPERTY(bool needScroll READ needScroll NOTIFY needScrollChanged)
     Q_PROPERTY(bool listView READ listView WRITE setListView NOTIFY listViewChanged)
@@ -92,6 +94,11 @@ public:
     bool listView() const;
     void setListView(bool isListView);
 
+    int imageCount() const;
+
+    int currentImageIndex() const;
+    void setCurrentImageIndex(int newCurrentImageIndex);
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -111,6 +118,10 @@ signals:
     void needScrollChanged();
 
     void listViewChanged();
+
+    void imageCountChanged();
+
+    void currentImageIndexChanged();
 
 private slots:
     void onThumbnailReadFinished(ImageFile *root);
@@ -156,7 +167,9 @@ private:
     void pushBrickItem(BrickItem *item);
     BrickItem *popBrickItem();
 
-    qreal dp();
+    QSize dp(QSizeF value);
+    qreal dp(qreal value);
+    qreal dpValue();
 
     QSet<BrickItem *> _usedBrickItems;
     QSet<BrickItem *> _freeBrickItems;
@@ -191,6 +204,8 @@ private:
 
     qreal _dp;
     bool _listView;
+    int _imageCount;
+    int _currentImageIndex;
 };
 
 #endif // MASONRYLAYOUT_H

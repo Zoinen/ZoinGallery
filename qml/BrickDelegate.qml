@@ -159,11 +159,18 @@ BrickItem {
 
             Image {
                 id: image
-                width: parent.width - masonryLayout.spacing
-                height: parent.height - masonryLayout.spacing
+
+                // Dirty hack to workaround blurry output. Remove someday
+                property bool needScaling: image.sourceSize.width !== Math.round(image.width * dpr) ||
+                                           image.sourceSize.height !== Math.round(image.height * dpr)
+                width: Math.round((parent.width - masonryLayout.spacing) * dpr) / dpr
+                height: Math.round((parent.height - masonryLayout.spacing) * dpr) / dpr
+                smooth: needScaling
+
                 x: masonryLayout.spacing / 2
                 y: masonryLayout.spacing / 2
                 fillMode: Image.PreserveAspectCrop
+                cache: false
                 source: imageId
                 //                    opacity: 0.1
                 //                    asynchronous: true
@@ -252,6 +259,14 @@ BrickItem {
 
                 MasonryLayout {
                     id: masonryLayout2
+
+                    Connections {
+                        target: masonryLayout
+                        function onLayoutReset() {
+                            masonryLayout2.reReadAndDecodeThumbnails()
+                        }
+                    }
+
                     anchors {
                         fill: folderBackground
                         margins: sizeBase / 20
@@ -274,8 +289,14 @@ BrickItem {
 
                         Image {
                             id: image2
-                            width: parent.width - masonryLayout2.spacing
-                            height: parent.height - masonryLayout2.spacing
+
+                            // Dirty hack to workaround blurry output. Remove someday
+                            property bool needScaling: false
+                            width: Math.round((parent.width - masonryLayout2.spacing) * dpr) / dpr
+                            height: Math.round((parent.height - masonryLayout2.spacing) * dpr) / dpr
+                            smooth: needScaling
+                            cache: false
+
                             x: masonryLayout2.spacing / 2
                             y: masonryLayout2.spacing / 2
                             fillMode: Image.PreserveAspectCrop

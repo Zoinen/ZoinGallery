@@ -60,40 +60,56 @@ FileListModel::FileListModel(QObject *parent)
             return;
         }
 
+        _folderImagePaths.removeOne(path);
         auto it = _fileToItem.find(path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
 
-            QList<ImageFile *> subImages;
-            subImages.reserve(images.size());
-            for (int i = 0; i < images.size(); i++) {
-                ImageFile *subItem = new ImageFile();
-                subItem->folderPath = path;
-                subItem->fileName = images.at(i);
-                subItem->isFolder = false;
-                subItem->parent = item;
+            bool contentChanged = false;
+            if (item->subfiles.size() == images.size()) {
+                for (int i = 0; i < images.size(); i++) {
+                    if (images[i] != item->subfiles[i]->fileName) {
+                        contentChanged = true;
+                    }
+                }
+            }
+            else {
+                contentChanged = true;
+            }
+            if (contentChanged) {
+                QList<ImageFile *> subImages;
+                subImages.reserve(images.size());
+                for (int i = 0; i < images.size(); i++) {
+                    ImageFile *subItem = new ImageFile();
+                    subItem->folderPath = path;
+                    subItem->fileName = images.at(i);
+                    subItem->isFolder = false;
+                    subItem->parent = item;
 
-                QString fullPath = subItem->fullPath();
-                if (isImage(fullPath)) {
-                    subItem->isImage = true;
-                    subItem->iconPath = "qrc:/resources/ImageIcon.svg";
+                    QString fullPath = subItem->fullPath();
+                    if (isImage(fullPath)) {
+                        subItem->isImage = true;
+                        subItem->iconPath = "qrc:/resources/ImageIcon.svg";
 
-                    _fileToItem.insert(fullPath, subItem);
+                        _fileToItem.insert(fullPath, subItem);
+                        //                    _imagePaths.append(fullPath);
+                    }
+
+                    subItem->index = subImages.size();
+                    subImages.append(subItem);
                 }
 
-                subItem->index = subImages.size();
-                subImages.append(subItem);
-            }
+                beginInsertRows(indexFromItem(item), 0, subImages.size() - 1);
+                item->subfiles = subImages;
+                endInsertRows();
+                if (_folderModels.contains(item->index)) {
+                    _folderModels[item->index]->resetModel();
+                }
+                //            updateImageId(item);
 
-            beginInsertRows(indexFromItem(item), 0, subImages.size() - 1);
-            item->subfiles = subImages;
-            endInsertRows();
-            if (_folderModels.contains(item->index)) {
-                _folderModels[item->index]->resetModel();
+                QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
+                emit dataChanged(modelIndex, modelIndex, {FolderViewRole});
             }
-
-            QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
-            emit dataChanged(modelIndex, modelIndex, {FolderViewRole});
         }
 
     });
@@ -308,7 +324,6 @@ void FileListModel::requestThumbnails(QSize preferredSize) {
     for (const QString &path : _imagePaths) {
         requests.append(ImageReadRequest(path, preferredSize));
     }
-    _folderImagePaths.clear();
     _generator->clearRequests();
     _generator->requestRead(requests);
     _generationFinished = false;

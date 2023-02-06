@@ -220,7 +220,10 @@ Window {
                         checked: masonryLayout.view.listView
 
                         onReleased: {
-                            masonryLayout.view.listView = true
+                            if (!masonryLayout.view.listView) {
+                                masonryLayout.view.listView = true
+                                masonryLayout.view.layoutReset()
+                            }
                         }
                     }
                     TabButton {
@@ -234,7 +237,10 @@ Window {
                         checked: !masonryLayout.view.listView
 
                         onReleased: {
-                            masonryLayout.view.listView = false
+                            if (masonryLayout.view.listView) {
+                                masonryLayout.view.listView = false
+                                masonryLayout.view.layoutReset()
+                            }
                         }
                     }
                 }

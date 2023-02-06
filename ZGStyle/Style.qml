@@ -13,4 +13,6 @@ QtObject {
     property color text: "#d1d1d1"
     property color textError: "#ff4f32"
     property color focus: "#2980b9"
+
+    property color buttonFocus: "#43b5ff"
 }

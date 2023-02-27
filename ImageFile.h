@@ -32,25 +32,27 @@ inline QSize rotateToOrientation(QSize size, ExifOrientation orientation) {
 struct ImageFile {
     QString folderPath;
     QString fileName;
+    QDateTime lastModified;
     QImage image;
     QString imageId;
     QSize fullSize;
     bool isFolder;
     bool isImage;
+    bool isFolderView;
     QString iconPath;
     int index;
 
     QList<ImageFile *> subfiles;
     ImageFile *parent;
 
-    ImageFile() : isFolder(false), index(-1), parent(nullptr) {}
+    ImageFile() : isFolder(false), isFolderView(false), index(-1), parent(nullptr) {}
 
     QString fullPath() const {
         return folderPath + QDir::separator() + fileName;
     }
 
     bool folderView() const {
-        return subfiles.size() != 0;
+        return subfiles.size() != 0 || isFolderView;
     }
 };
 

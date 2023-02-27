@@ -3,45 +3,23 @@ import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls
 
-Window {
+import ZoinGallery.MainWindow 1.0
+
+MainWindow {
     id: topLevelWindow
     visible: true
     color: "#333333"
     title: "Zoin Gallery"
 
-    property int lastVisibility: Window.Windowed
-
-    function toggleFullscreen() {
-        if (topLevelWindow.visibility === Window.FullScreen) {
-            if (topLevelWindow.lastVisibility !== undefined) {
-                topLevelWindow.visibility = lastVisibility
-            }
-            else {
-                topLevelWindow.visibility = Window.Maximized
-            }
-        }
-        else {
-            topLevelWindow.lastVisibility = topLevelWindow.visibility
-            topLevelWindow.visibility = Window.FullScreen
-        }
-    }
-
-
-    property real dpr: topLevelWindow.screen.devicePixelRatio
-
-    onClosing: (closeEvent) => {
-                   viewerController.prepareToClose()
-               }
-
-    Component.onCompleted: {
-        viewerController.mainWindow = topLevelWindow
-    }
-
     property bool viewerDirty: false
     property bool thumbnailsDirty: false
 
+    onClosing: (closeEvent) => {
+        viewerController.prepareToClose()
+    }
+
     Connections {
-        target: viewerController
+        target: topLevelWindow
 
         function onMainWindowResized() {
             console.log("ZZ MAIN RESIZED")

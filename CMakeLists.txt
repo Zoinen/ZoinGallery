@@ -74,6 +74,10 @@ set(PROJECT_SOURCES
     ThreadSafeQueue.cpp
     MasonryLayoutQuickSearch.h
     MasonryLayoutQuickSearch.cpp
+    ThumbnailCache.h
+    ThumbnailCache.cpp
+    MainWindow.h
+    MainWindow.cpp
 )
 
 if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)

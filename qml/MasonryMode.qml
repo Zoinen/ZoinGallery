@@ -80,7 +80,7 @@ MouseArea {
         onTriggered: {
             let distance = masonryView.mouseY - scrollingStartedAtY
             distance = Math.min(Math.max(0, distance - 25), distance + 25)
-            let totalHeight = topLevelWindow.screen.height
+            let totalHeight = topLevelWindow.availableScreenHeight()
             let fraction = Math.abs(distance) / (totalHeight - 25)
             if (fraction > 0) {
                 fraction += 0.05
@@ -306,13 +306,13 @@ MouseArea {
                 if (newCurrentIndex2 === -1) {
                     newCurrentIndex2 = masonryLayout.count - 1
                 }
-                let hitEnd = newCurrentIndex2 === masonryLayout.count - 1
+                let hitEnd = newCurrentIndex2 >= masonryLayout.count - 1
                 if (newCurrentIndex2 === masonryLayout.currentIndex) {
                     newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, masonryLayout.contentHeight - 1)
                     hitEnd = true
 
                     if (newCurrentIndex2 === -1) {
-                        newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, masonryLayout.contentHeight - masonryLayout.targetHeight)
+                        newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, masonryLayout.contentHeight - masonryLayout.targetHeight * 1.5)
                     }
                     if (newCurrentIndex2 === masonryLayout.currentIndex) {
                         newCurrentIndex2 = masonryLayout.count - 1
@@ -445,7 +445,7 @@ MouseArea {
             target: masonryLayout
 
             function onNeedScrollChanged() {
-                if (!viewerController.isResizing) {
+                if (!topLevelWindow.isResizing) {
                     masonryLayout.reReadAndDecodeThumbnails()
                 }
             }

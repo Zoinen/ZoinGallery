@@ -1,0 +1,39 @@
+#ifndef MAINWINDOW_H
+#define MAINWINDOW_H
+
+#include <QQuickWindow>
+
+class MainWindow : public QQuickWindow {
+    Q_OBJECT
+    Q_PROPERTY(bool isResizing READ isResizing NOTIFY isResizingChanged)
+    Q_PROPERTY(qreal dpr MEMBER _dpr NOTIFY dprChanged)
+
+public:
+    MainWindow(QWindow *parent = nullptr);
+
+    bool event(QEvent *event) override;
+
+    Q_INVOKABLE int availableScreenHeight() const;
+    Q_INVOKABLE void toggleFullscreen();
+
+    bool isResizing() const;
+
+signals:
+    void mainWindowResized();
+    void isResizingChanged();
+    void dprChanged();
+
+protected:
+    void showEvent(QShowEvent *event) override;
+
+private:
+    void updateDpr();
+
+    bool _leftButtonPressed;
+    QSize _lastSize;
+    QRect _normalGeometry;
+    bool _ignoreNormalGeometryChange;
+    qreal _dpr;
+};
+
+#endif // MAINWINDOW_H

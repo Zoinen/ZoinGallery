@@ -275,9 +275,9 @@ void ReadWorker::run() {
         }
         else {
             QDir dir(request.sourcePath);
-            QStringList images = dir.entryList(ThumbnailLoader::supportedFormats(), QDir::Files, QDir::Name);
+            auto images = dir.entryInfoList(ThumbnailLoader::supportedFormats(), QDir::Files, QDir::Name);
             int totalImages = 16;
-            QStringList imagesFiltered;
+            QList<QFileInfo> imagesFiltered;
             for (float i = 0; i < images.size(); i += qMax(1.0f, float(images.size()) / totalImages)) {
                 imagesFiltered.append(images.at(i));
             }
@@ -295,9 +295,10 @@ void ReadWorker::readImage(ImageReadRequest &request) {
     result.request = request;
 //            qDebug() << "READ" << request.sourcePath << request.targetSize;
     bool fileLoaded = loader.readExifPreview(request.sourcePath, request.targetSize, result);
+    QSize rotatedThumbnailSize = rotateToOrientation(result.thumbnailSize, result.orientation);;
     if ((!fileLoaded && result.fullSize.isValid()) ||
-            (fileLoaded && (result.thumbnailSize.width() < request.targetSize.width() ||
-                            result.thumbnailSize.height() < request.targetSize.height()))) {
+            (fileLoaded && (rotatedThumbnailSize.width() < request.targetSize.width() ||
+                            rotatedThumbnailSize.height() < request.targetSize.height()))) {
         QFile f(request.sourcePath);
         if (f.open(QFile::ReadOnly)) {
             //                result.fullImageData = QByteArray::fromRawData((const char *)f.map(0, f.size()), f.size());

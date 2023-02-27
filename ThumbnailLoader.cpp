@@ -267,7 +267,7 @@ QStringList ThumbnailLoader::supportedFormats() {
     return {"*.jpg", "*.jpeg", "*.jpe", "*.jfif",
             "*.tiff", "*.tif", "*.cr2", "*.dng", "*.crw", "*.nef", "*.arw", "*.arq",
             "*.bmp", "*.png", "*.gif", "*.jp2", "*.jpc", "*.tga", "*.ico", "*.cur", "*.ppm", "*.pgm", "*.pbm", "*.svg", "*.wmf", "*.emf", "*.webp",
-            "*.svg", "*.wmf", "*.emf"};
+            "*.svg", "*.wmf", "*.emf", "*.heic"};
 }
 
 bool ThumbnailLoader::isJpeg(const QString &path) {
@@ -291,7 +291,7 @@ bool ThumbnailLoader::isRawOrTiff(const QString &path) {
 }
 
 bool ThumbnailLoader::isImageOther(const QString &path) {
-    QStringList extensions = {"bmp", "png", "gif", "jp2", "jpc", "tga", "ico", "cur", "ppm", "pgm", "pbm", "svg", "wmf", "emf", "webp"};
+    QStringList extensions = {"bmp", "png", "gif", "jp2", "jpc", "tga", "ico", "cur", "ppm", "pgm", "pbm", "svg", "wmf", "emf", "webp", "heic"};
     for (const QString &ext : extensions) {
         if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
             return true;

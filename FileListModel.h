@@ -9,6 +9,7 @@
 
 class ThreadedThumbnailGenerator;
 class FileListModel;
+class ThumbnailCache;
 
 class ThumbnailsRequestInterface {
 public:
@@ -16,6 +17,10 @@ public:
     virtual void requestThumbnails(QSize preferredSize) = 0;
     virtual void addRequestThumbnails(QList<ImageReadRequest> requests) = 0;
     virtual ImageFile *rootItem() const { return nullptr; }
+
+    virtual void reRenderOnNextReset() {}
+    virtual void reRenderRequestSent() {}
+    virtual bool isReRenderQueued() const { return false; }
 };
 
 class RootProxyModel : public QAbstractProxyModel, public ThumbnailsRequestInterface {
@@ -41,6 +46,9 @@ public:
     void requestThumbnails(QStringList files, QSize preferredSize) override {}
     void requestThumbnails(QSize preferredSize) override;
     void addRequestThumbnails(QList<ImageReadRequest> requests) override;
+    void reRenderOnNextReset() override;
+    bool isReRenderQueued() const override;
+    void reRenderRequestSent() override;
     ImageFile *rootItem() const override;
 
     void resetModel();
@@ -50,6 +58,7 @@ signals:
 
 private:
     ImageFile *_sourceRoot;
+    bool _reRenderQueued;
 };
 
 class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterface {
@@ -106,10 +115,13 @@ signals:
     void generationFinishedChanged();
     void thumbnailReadFinished(ImageFile *root);
     void viewerImageIdChanged(QString imageId);
+    void addToCache(const QString &path, const QDateTime &lastModified, const QImage &thumbnail);
+    void requestThumbnailFromCache(const QString &path, const QDateTime &lastModified);
 
 private:
     QString generateNewId();
     void updateImageId(ImageFile *item);
+    ImageFile *createFileItem(const QString &folderPath, const QString &fileName, const QDateTime &lastModified = QDateTime());
 
     QString _root;
     QHash<QString, ImageFile *> _fileToItem;
@@ -120,6 +132,7 @@ private:
     int _lastRequestIndex;
     int _lastId;
 
+    ThumbnailCache *_thumbnailCache;
     ThreadedThumbnailGenerator *_generator;
     bool _generationFinished;
 

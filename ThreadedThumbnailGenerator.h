@@ -25,7 +25,7 @@ public:
 
 signals:
    void readResultReady(const ImageReadResult &result);
-   void folderListReady(const QString &path, const QStringList &result);
+   void folderListReady(const QString &path, const QList<QFileInfo> &result);
 
 protected:
     void run() override;
@@ -66,7 +66,7 @@ public:
 signals:
     void thumbnailReady(QString path, QImage thumbnail);
     void viewerReady(QString path, QImage thumbnail);
-    void folderListReady(const QString &path, const QStringList &images);
+    void folderListReady(const QString &path, const QList<QFileInfo> &images);
     void thumbnailInfoReady(QString path, QSize fullSize);
     void requestDecodeThumbnail(ImageReadResult request, int queueId);
     void readFinished();

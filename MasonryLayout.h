@@ -152,9 +152,10 @@ private:
 
     void rewrap();
     static qreal scaleRow(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, int lastRowIndex, qreal rowHeight = 0);
-    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing);
+    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, bool lastRowMatchesPrevious);
     void updateProperties();
     void setContentYInternal(qreal newContentY);
+    void startRender();
 
     void setContentHeight(int newContentHeight);
 

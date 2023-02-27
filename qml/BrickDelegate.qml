@@ -10,6 +10,7 @@ BrickItem {
     property string imageId
     property int index
     property bool isImage
+    property bool isDecodedImage
     property bool isFolder
     property string iconPath
     property bool folderView: false
@@ -383,7 +384,7 @@ BrickItem {
             PropertyChanges { loader.sourceComponent: folderViewDelegate }
         },
         State {
-            when: imageId !== ""
+            when: imageId !== "" || isDecodedImage
             PropertyChanges { loader.sourceComponent: imageDelegate }
         },
         State {

@@ -39,7 +39,7 @@ void ViewerController::cd(QString folder) {
     }
     folder = folder.trimmed();
 
-    if (folder == "Computer\\") {
+    if (folder == "Computer\\" || folder == "Computer/") {
         _currentPath = "Computer";
         emit currentPathChanged();
         _fileListModel->cd(_currentPath, "");

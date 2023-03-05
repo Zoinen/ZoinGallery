@@ -38,7 +38,9 @@ void ThumbnailLoader::init() {
     Exiv2::enableBMFF();
 #endif
 
+#if defined(Q_OS_WIN)
     freopen(NULL_DEVICE, "w", stderr);
+#endif
 }
 
 void ThumbnailLoader::setPath(const QString &path) {

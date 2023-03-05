@@ -9,6 +9,7 @@
 #include <QGuiApplication>
 #include <QtSvg/QSvgRenderer>
 #include <QPainter>
+#include <QSettings>
 
 static void registerMyQmlTypes() {
     qmlRegisterType<MasonryLayout>("ZoinGallery", 1, 0, "MasonryLayout");
@@ -39,7 +40,8 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _needScroll = false;
     _dp = 1;
     _spacing = 8; // Should be divisible by 4
-    _listView = false;
+    QSettings set;
+    _listView = set.value("listView", false).toBool();
     _imageCount = 0;
 
     _currentScrollingMode = false;
@@ -56,7 +58,7 @@ void MasonryLayout::componentComplete() {
 
     connect(this, &MasonryLayout::widthChanged, this, [&] () {
         auto *modelRoot = dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem();
-        if (width() && dynamic_cast<ThumbnailsRequestInterface *>(_model)->isReRenderQueued()) {
+        if (width() && dynamic_cast<ThumbnailsRequestInterface *>(_model)->isRenderRequested()) {
             startRender();
         }
     });
@@ -124,7 +126,7 @@ int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
 
 void MasonryLayout::reReadAndDecodeThumbnails() {
     _currentLoadingRow.clear();
-    dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestThumbnails(dp(QSizeF(_targetHeight * 3.0 / 2, _targetHeight)));
+    dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestThumbnails(dp(QSizeF(_targetHeight * 3.0 / 2, _targetHeight)), true);
     emit layoutReset();
 }
 
@@ -586,6 +588,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
 }
 
 void MasonryLayout::onThumbnailReadFinished(ImageFile *root) {
+    auto *modelRoot = dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem();
     if (_bricks.count() && root == dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem() &&
         _currentLoadingRow.size()) {
         pushToCurrentRow(_bricks.count());
@@ -632,8 +635,12 @@ void MasonryLayout::onModelReset() {
         _viewport->setY(-_contentY);
     }
 
-    if (width() && (needToRender || dynamic_cast<ThumbnailsRequestInterface *>(_model)->isReRenderQueued())) {
+    if (width() && (needToRender || dynamic_cast<ThumbnailsRequestInterface *>(_model)->isRenderRequested())) {
         startRender();
+    }
+    else if (needToRender) {
+        dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestRender();
+        auto *modelRoot = dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem();
     }
 
     _imageCount = 0;
@@ -807,7 +814,8 @@ void MasonryLayout::setContentYInternal(qreal newContentY) {
 }
 
 void MasonryLayout::startRender() {
-    dynamic_cast<ThumbnailsRequestInterface *>(_model)->reRenderRequestSent();
+    auto *modelRoot = dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem();
+    dynamic_cast<ThumbnailsRequestInterface *>(_model)->renderRequestComplete();
     QList<MasonryBrick> bricks;
     QSize minSize = QSize(_targetHeight * BrickSize.width() / BrickSize.height(), _targetHeight);
     for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
@@ -999,6 +1007,8 @@ void MasonryLayout::setListView(bool isListView) {
         return;
     }
     _listView = isListView;
+    QSettings set;
+    set.setValue("listView", isListView);
 
     for (int i = 0; i < _bricks.size(); i++) {
         if (_bricks[i].image->isFolder) {

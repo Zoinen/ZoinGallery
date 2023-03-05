@@ -147,7 +147,7 @@ FileListModel::FileListModel(QObject *parent)
             }
             else if (dateChanged) {
                 RootProxyModel *folderModel_ = static_cast<RootProxyModel *>(folderModel(item->index));
-                folderModel_->reRenderOnNextReset();
+                folderModel_->requestRender();
                 folderModel_->resetModel();
             }
         }
@@ -255,6 +255,8 @@ int FileListModel::cd(QString path, QString itemToSelect) {
     int indexToSelect = 0;
 
     beginResetModel();
+    _generator->clearRequests();
+
     //Viewer
     _viewerImages.clear();
     _imageIdToViewer.clear();
@@ -363,7 +365,7 @@ void FileListModel::requestThumbnails(QStringList files, QSize preferredSize) {
     emit generationFinishedChanged();
 }
 
-void FileListModel::requestThumbnails(QSize preferredSize) {
+void FileListModel::requestThumbnails(QSize preferredSize, bool reset) {
 //    qDebug() << "Request thumbnails" << preferredSize;
 
     QList<ImageReadRequest> requests;
@@ -374,7 +376,9 @@ void FileListModel::requestThumbnails(QSize preferredSize) {
     for (const QString &path : _imagePaths) {
         requests.append(ImageReadRequest(path, preferredSize));
     }
-    _generator->clearRequests();
+    if (reset) {
+        _generator->clearRequests();
+    }
     _generator->requestRead(requests);
     _generationFinished = false;
     emit generationFinishedChanged();
@@ -546,7 +550,7 @@ int FileListModel::fileIndex(QString fileName) const {
 RootProxyModel::RootProxyModel(QObject *parent)
     : QAbstractProxyModel(parent) {
     _sourceRoot = nullptr;
-    _reRenderQueued = false;
+    _renderQueued = false;
 }
 
 void RootProxyModel::setRoot(ImageFile *root) {
@@ -613,7 +617,7 @@ FileListModel *RootProxyModel::sourceModel() const {
     return static_cast<FileListModel *>(QAbstractProxyModel::sourceModel());
 }
 
-void RootProxyModel::requestThumbnails(QSize preferredSize) {
+void RootProxyModel::requestThumbnails(QSize preferredSize, bool reset) {
     if (!sourceModel()) {
         return;
     }
@@ -633,16 +637,16 @@ void RootProxyModel::addRequestThumbnails(QList<ImageReadRequest> requests) {
     dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())->addRequestThumbnails(requests);
 }
 
-void RootProxyModel::reRenderOnNextReset() {
-    _reRenderQueued = true;
+void RootProxyModel::requestRender() {
+    _renderQueued = true;
 }
 
-bool RootProxyModel::isReRenderQueued() const {
-    return _reRenderQueued;
+bool RootProxyModel::isRenderRequested() const {
+    return _renderQueued;
 }
 
-void RootProxyModel::reRenderRequestSent() {
-    _reRenderQueued = false;
+void RootProxyModel::renderRequestComplete() {
+    _renderQueued = false;
 }
 
 ImageFile *RootProxyModel::rootItem() const {

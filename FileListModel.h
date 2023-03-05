@@ -14,13 +14,13 @@ class ThumbnailCache;
 class ThumbnailsRequestInterface {
 public:
     virtual void requestThumbnails(QStringList files, QSize preferredSize) = 0;
-    virtual void requestThumbnails(QSize preferredSize) = 0;
+    virtual void requestThumbnails(QSize preferredSize, bool reset = false) = 0;
     virtual void addRequestThumbnails(QList<ImageReadRequest> requests) = 0;
     virtual ImageFile *rootItem() const { return nullptr; }
 
-    virtual void reRenderOnNextReset() {}
-    virtual void reRenderRequestSent() {}
-    virtual bool isReRenderQueued() const { return false; }
+    virtual void requestRender() {}
+    virtual void renderRequestComplete() {}
+    virtual bool isRenderRequested() const { return false; }
 };
 
 class RootProxyModel : public QAbstractProxyModel, public ThumbnailsRequestInterface {
@@ -44,11 +44,11 @@ public:
 
     // ThumbnailsRequestInterface interface
     void requestThumbnails(QStringList files, QSize preferredSize) override {}
-    void requestThumbnails(QSize preferredSize) override;
+    void requestThumbnails(QSize preferredSize, bool reset = false) override;
     void addRequestThumbnails(QList<ImageReadRequest> requests) override;
-    void reRenderOnNextReset() override;
-    bool isReRenderQueued() const override;
-    void reRenderRequestSent() override;
+    void requestRender() override;
+    bool isRenderRequested() const override;
+    void renderRequestComplete() override;
     ImageFile *rootItem() const override;
 
     void resetModel();
@@ -58,7 +58,7 @@ signals:
 
 private:
     ImageFile *_sourceRoot;
-    bool _reRenderQueued;
+    bool _renderQueued;
 };
 
 class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterface {
@@ -95,7 +95,7 @@ public:
 
     // ThumbnailsRequestInterface
     void requestThumbnails(QStringList files, QSize preferredSize) override;
-    void requestThumbnails(QSize preferredSize) override;
+    void requestThumbnails(QSize preferredSize, bool reset = false) override;
     void addRequestThumbnails(QList<ImageReadRequest> requests) override;
 
     static bool isImage(QString fileName);

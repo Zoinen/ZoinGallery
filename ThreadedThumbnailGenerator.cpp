@@ -168,10 +168,10 @@ void ThreadedThumbnailGenerator::checkIfFinished() {
 }
 
 void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
+    _readSet[result.request.sourcePath] = result;
     if (result.request.queueId != _queueId.loadRelaxed()) {
         return;
     }
-    _readSet[result.request.sourcePath] = result;
     if (result.request.higherThumbnailRequest) {
         ImageReadRequest decodeHigherRequest(result.request.sourcePath, result.request.targetSize);
         requestThumbnailDecode(QList<ImageReadRequest>{decodeHigherRequest});
@@ -186,7 +186,7 @@ void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
         emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
     }
 
-    if (_requests.size() && result.request.sourcePath == _requests.last().sourcePath) {
+    if (!_readWorker->readQueue().size() && !_readFinished) {
         _readFinished = true;
         qDebug() << "Generator: read finished";
         emit readFinished();
@@ -268,6 +268,9 @@ ReadWorker::ReadWorker(QObject *parent)
 
 void ReadWorker::run() {
     forever {
+        if (QThread::currentThread()->isInterruptionRequested()) {
+            return;
+        }
         ImageReadRequest request = _readQueue.dequeue();
 
         if (!request.folderRequest) {

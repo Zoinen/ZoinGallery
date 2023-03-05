@@ -12,7 +12,10 @@ int main(int argc, char *argv[])
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
 #endif
+
+#if defined(Q_OS_WIN)
     qputenv("QT_QPA_PLATFORM", "windows:darkmode=2");
+#endif
 
     QGuiApplication app(argc, argv);
     app.setOrganizationName("Zoin");

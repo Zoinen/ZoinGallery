@@ -5,6 +5,7 @@ import QtQuick.Controls
 Item {
     id: pathRoot
     property string text
+    property string pathSeparator: Qt.platform.os === "windows" ? "\\" : "/"
 
     property bool editMode: false
     onEditModeChanged: {
@@ -30,7 +31,7 @@ Item {
     }
 
     function folderClicked(path) {
-        viewerController.cd(rootFolder.text + "\\" + path)
+        viewerController.cd(rootFolder.text + pathSeparator + path)
     }
 
     MouseArea {
@@ -127,7 +128,7 @@ Item {
         FolderDelegate {
             id: rootFolder
             visible: !editMode
-            text: (pathRoot.text.endsWith('\\') ? pathRoot.text.slice(0, -1) : pathRoot.text).split("\\")[0]
+            text: (pathRoot.text.endsWith(pathSeparator) ? pathRoot.text.slice(0, -1) : pathRoot.text).split(pathSeparator)[0]
             onClicked: (index) => pathRoot.folderClicked("")
         }
     }
@@ -150,14 +151,14 @@ Item {
 
             Repeater {
                 id: repeater
-                model: (text.endsWith('\\') ? text.slice(0, -1) : text).split("\\").slice(1)
+                model: (text.endsWith(pathSeparator) ? text.slice(0, -1) : text).split(pathSeparator).slice(1)
 
                 FolderDelegate {
                     text: modelData
                     needArrow: index !== repeater.model.length - 1
                     splitIndex: index
 
-                    onClicked: (index) => pathRoot.folderClicked(repeater.model.slice(0, index + 1).join("\\"))
+                    onClicked: (index) => pathRoot.folderClicked(repeater.model.slice(0, index + 1).join(pathSeparator))
                 }
             }
         }

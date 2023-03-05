@@ -38,3 +38,8 @@ ImageReadRequest ThreadSafeQueue::dequeue() {
     _processedQueue.insert(var);
     return var;
 }
+
+int ThreadSafeQueue::size() {
+    std::unique_lock<std::mutex> lock(_mutex);
+    return _queue.size();
+}

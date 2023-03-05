@@ -29,6 +29,7 @@ public:
     void prepend(const QList<ImageReadRequest> &requests);
     void prependNewAndPrioritizeDuplicates(const QList<ImageReadRequest> &requests);
     ImageReadRequest dequeue();
+    int size();
 
 private:
     QList<ImageReadRequest> _queue;

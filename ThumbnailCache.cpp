@@ -15,6 +15,17 @@ void ThumbnailCache::add(const QString &path, const QDateTime &lastModified, con
     if (_cache.contains(path)) {
         return;
     }
+
+    // Don't cache png/svg images with transparency. We check corners for better speed
+    if (thumbnail.hasAlphaChannel()) {
+        if (thumbnail.pixel(0, 0) != UCHAR_MAX ||
+                thumbnail.pixel(thumbnail.width() - 1, 0) != UCHAR_MAX ||
+                thumbnail.pixel(0, thumbnail.height() - 1) != UCHAR_MAX ||
+                thumbnail.pixel(thumbnail.width() - 1, thumbnail.height() - 1) != UCHAR_MAX) {
+            return;
+        }
+    }
+
     QImage img = thumbnail.scaled(thumbnail.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
     QByteArray *bytes = new QByteArray();
     QBuffer buffer(bytes);

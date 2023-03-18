@@ -8,6 +8,11 @@
 #include <QSet>
 #include <QFileInfo>
 #include <QSettings>
+#include <QDeadlineTimer>
+#include <QGuiApplication>
+
+#include <chrono>
+using namespace std::chrono_literals;
 
 FileListModel::FileListModel(QObject *parent)
     : QAbstractItemModel(parent) {
@@ -246,8 +251,11 @@ int FileListModel::columnCount(const QModelIndex &parent) const {
 }
 
 void FileListModel::prepareToClose() {
+    _thumbnailCache->thread()->quit();
     _generator->prepareToClose();
-    _thumbnailCache->thread()->terminate();
+
+    _thumbnailCache->thread()->wait(QDeadlineTimer(2000ms));
+    qApp->exit(0);
 }
 
 int FileListModel::cd(QString path, QString itemToSelect) {

@@ -43,3 +43,8 @@ int ThreadSafeQueue::size() {
     std::unique_lock<std::mutex> lock(_mutex);
     return _queue.size();
 }
+
+void ThreadSafeQueue::unlock() {
+    _mutex.unlock();
+    _condVar.notify_one();
+}

@@ -97,7 +97,9 @@ int ViewerController::up() {
 }
 
 void ViewerController::prepareToClose() {
-    _fileListModel->prepareToClose();
+    QTimer::singleShot(0, this, [&] () {
+        _fileListModel->prepareToClose();
+    });
 }
 
 void ViewerController::clipboardCopyIndexName(int index) {

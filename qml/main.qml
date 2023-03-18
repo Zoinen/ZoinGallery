@@ -15,6 +15,8 @@ MainWindow {
     property bool thumbnailsDirty: false
 
     onClosing: (closeEvent) => {
+        closeEvent.accepted = false
+        topLevelWindow.hide()
         viewerController.prepareToClose()
     }
 

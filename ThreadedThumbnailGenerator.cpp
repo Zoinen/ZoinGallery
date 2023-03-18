@@ -42,15 +42,17 @@ ThreadedThumbnailGenerator::ThreadedThumbnailGenerator(QObject *parent)
 }
 
 void ThreadedThumbnailGenerator::prepareToClose() {
-    // TODO: Terminate threads when closing app since they don't just stop
+    _readWorker->requestInterruption();
+    _readWorker->readQueue().unlock();
     for (int i = 0; i < _workers.size(); i++) {
-        _workers[i].thread->terminate();
-//        _workers[i].thread->quit();
-//        _workers[i].thread->wait(QDeadlineTimer(200ms));
+        _workers[i].thread->quit();
     }
-    _readWorker->terminate();
-//    _loaderThread->quit();
-    //    _loaderThread->wait(QDeadlineTimer(200ms));
+
+    for (int i = 0; i < _workers.size(); i++) {
+        _workers[i].thread->wait(QDeadlineTimer(2000ms));
+    }
+    _readWorker->wait(QDeadlineTimer(2000ms));
+    qDebug() << "Prepare to close";
 }
 
 void ThreadedThumbnailGenerator::clearRequests() {
@@ -268,7 +270,7 @@ ReadWorker::ReadWorker(QObject *parent)
 
 void ReadWorker::run() {
     forever {
-        if (QThread::currentThread()->isInterruptionRequested()) {
+        if (isInterruptionRequested()) {
             return;
         }
         ImageReadRequest request = _readQueue.dequeue();

@@ -132,8 +132,8 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             ZGStyle/MenuSeparator.qml
             ZGStyle/TabBar.qml
             ZGStyle/TabButton.qml
-            ZGStyle/qmldir
         RESOURCES
+            ZGStyle/qmldir
             resources/ThumbnailsShadow.png
             resources/ThumbnailsShadow@2x.png
             resources/FileIcon.svg

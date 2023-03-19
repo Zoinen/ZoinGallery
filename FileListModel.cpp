@@ -522,8 +522,8 @@ void FileListModel::requestViewer(int index, int width, int height) {
             break;
         }
         if (_items[i]->isImage) {
-            if (backwardInsertIndex >= _items.count()) {
-                backwardInsertIndex = _items.count();
+            if (backwardInsertIndex >= requests.count()) {
+                backwardInsertIndex = requests.count();
             }
             requests.insert(backwardInsertIndex, ImageReadRequest(_items[i]->fullPath(), viewerSize, true));
             backwardInsertIndex += 2;

@@ -391,26 +391,54 @@ QSize ThumbnailLoader::readResolutionFromExif(Exiv2::Image *image) {
     QSize size;
     const Exiv2::ExifData &exifData = image->exifData();
     if (!exifData.empty()) {
-        auto widthIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.PixelXDimension"));
-        auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.PixelYDimension"));
-        if (widthIt != exifData.end() && heightIt != exifData.end()) {
-            size = QSize(widthIt->toLong(), heightIt->toLong());
+        if (!size.isValid()) {
+            auto widthIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.PixelXDimension"));
+            auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.PixelYDimension"));
+            if (widthIt != exifData.end() && heightIt != exifData.end()) {
+                size = QSize(widthIt->toLong(), heightIt->toLong());
+            }
         }
-        else {
+
+        if (!size.isValid()) {
+            auto widthIt = exifData.findKey(Exiv2::ExifKey("Exif.SubImage3.ImageWidth"));
+            auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.SubImage3.ImageLength"));
+            if (widthIt != exifData.end() && heightIt != exifData.end()) {
+                size = QSize(widthIt->toLong(), heightIt->toLong());
+            }
+        }
+
+        if (!size.isValid()) {
+            auto widthIt = exifData.findKey(Exiv2::ExifKey("Exif.SubImage2.ImageWidth"));
+            auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.SubImage2.ImageLength"));
+            if (widthIt != exifData.end() && heightIt != exifData.end()) {
+                size = QSize(widthIt->toLong(), heightIt->toLong());
+            }
+        }
+
+        if (!size.isValid()) {
+            auto widthIt = exifData.findKey(Exiv2::ExifKey("Exif.SubImage1.ImageWidth"));
+            auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.SubImage1.ImageLength"));
+            if (widthIt != exifData.end() && heightIt != exifData.end()) {
+                size = QSize(widthIt->toLong(), heightIt->toLong());
+            }
+        }
+
+        if (!size.isValid()) {
             auto sizeIt = exifData.findKey(Exiv2::ExifKey("Exif.SubImage1.DefaultCropSize"));
             if (sizeIt != exifData.end() && sizeIt->count() == 2) {
                 size = QSize(sizeIt->toLong(0), sizeIt->toLong(1));
             }
-            else {
-                auto widthIt = exifData.findKey(Exiv2::ExifKey("Exif.Image.ImageWidth"));
-                auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.Image.ImageLength"));
-                if (widthIt != exifData.end() && heightIt != exifData.end()) {
-                    size = QSize(widthIt->toLong(), heightIt->toLong());
-                }
+        }
+
+        if (!size.isValid()) {
+            auto widthIt = exifData.findKey(Exiv2::ExifKey("Exif.Image.ImageWidth"));
+            auto heightIt = exifData.findKey(Exiv2::ExifKey("Exif.Image.ImageLength"));
+            if (widthIt != exifData.end() && heightIt != exifData.end()) {
+                size = QSize(widthIt->toLong(), heightIt->toLong());
             }
         }
     }
-    if (size.isEmpty()) {
+    if (!size.isValid()) {
         size = QSize(image->pixelWidth(), image->pixelHeight());
     }
     return size;

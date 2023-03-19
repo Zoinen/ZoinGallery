@@ -188,7 +188,7 @@ void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
         emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
     }
 
-    if (!_readWorker->readQueue().size() && !_readFinished) {
+    if (!_readWorker->readQueue().size()) {
         _readFinished = true;
         qDebug() << "Generator: read finished";
         emit readFinished();

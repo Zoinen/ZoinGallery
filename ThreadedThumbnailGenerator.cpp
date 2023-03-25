@@ -319,8 +319,9 @@ void ReadWorker::readImage(ImageReadRequest &request) {
         qDebug() << "READING FULL" << result.request.sourcePath;
     }
     if (fileLoaded) {
-        emit readResultReady(result);
+        result.success = true;
     }
+    emit readResultReady(result);
 }
 
 ThreadSafeQueue &ReadWorker::readQueue() {

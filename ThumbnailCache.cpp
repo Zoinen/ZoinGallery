@@ -18,10 +18,10 @@ void ThumbnailCache::add(const QString &path, const QDateTime &lastModified, con
 
     // Don't cache png/svg images with transparency. We check corners for better speed
     if (thumbnail.hasAlphaChannel()) {
-        if (thumbnail.pixel(0, 0) != UCHAR_MAX ||
-                thumbnail.pixel(thumbnail.width() - 1, 0) != UCHAR_MAX ||
-                thumbnail.pixel(0, thumbnail.height() - 1) != UCHAR_MAX ||
-                thumbnail.pixel(thumbnail.width() - 1, thumbnail.height() - 1) != UCHAR_MAX) {
+        if (qAlpha(thumbnail.pixel(0, 0)) != UCHAR_MAX ||
+            qAlpha(thumbnail.pixel(thumbnail.width() - 1, 0)) != UCHAR_MAX ||
+            qAlpha(thumbnail.pixel(0, thumbnail.height() - 1)) != UCHAR_MAX ||
+            qAlpha(thumbnail.pixel(thumbnail.width() - 1, thumbnail.height() - 1)) != UCHAR_MAX) {
             return;
         }
     }

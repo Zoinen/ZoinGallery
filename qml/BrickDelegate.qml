@@ -221,6 +221,7 @@ BrickItem {
         id: folderViewDelegate
 
         Item {
+            id: folderViewDelegateRoot
             Rectangle {
                 anchors {
                     fill: parent
@@ -261,6 +262,11 @@ BrickItem {
                 MasonryLayout {
                     id: masonryLayout2
 
+                    onHeightChanged: {
+                        if (height > 0) {
+                            targetHeight = height
+                        }
+                    }
                     Connections {
                         target: masonryLayout
                         function onLayoutReset() {
@@ -275,7 +281,6 @@ BrickItem {
                     clip: true
                     model: fileListModel.folderModel(index)
 
-                    targetHeight: 100
                     spacing: 2
 
                     delegate: BrickItem {

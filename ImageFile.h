@@ -39,13 +39,14 @@ struct ImageFile {
     bool isFolder;
     bool isImage;
     bool isFolderView;
+    bool isCachedThumbnail;
     QString iconPath;
     int index;
 
     QList<ImageFile *> subfiles;
     ImageFile *parent;
 
-    ImageFile() : isFolder(false), isFolderView(false), index(-1), parent(nullptr) {}
+    ImageFile() : isFolder(false), isFolderView(false), isCachedThumbnail(false), index(-1), parent(nullptr) {}
 
     QString fullPath() const {
         return folderPath + QDir::separator() + fileName;
@@ -88,8 +89,9 @@ struct ImageReadResult {
     QByteArray thumbnailData;
     QByteArray fullImageData;
     bool largerImageAvailable;
+    bool success;
 
-    ImageReadResult() : orientation(ExifOrientation::Horizontal), largerImageAvailable(false) {}
+    ImageReadResult() : orientation(ExifOrientation::Horizontal), largerImageAvailable(false), success(false) {}
 };
 
 Q_DECLARE_METATYPE(ImageFile *)

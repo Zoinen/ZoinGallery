@@ -624,7 +624,7 @@ void MasonryLayout::onModelReset() {
                 imgSize = BrickSize.toSize();
             }
         }
-        if (imageFile->imageId.isEmpty()) {
+        if (imageFile->imageId.isEmpty() || imageFile->isCachedThumbnail) {
             needToRender = true;
         }
         _bricks.append(MasonryBrick(imageFile, imgSize));

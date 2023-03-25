@@ -31,6 +31,7 @@ FileListModel::FileListModel(QObject *parent)
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
             if (item->image.isNull()) {
+                item->isCachedThumbnail = true;
                 item->image = thumbnail;
                 updateImageId(item);
 

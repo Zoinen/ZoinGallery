@@ -446,7 +446,8 @@ MouseArea {
 
             function onNeedScrollChanged() {
                 if (!topLevelWindow.isResizing) {
-                    masonryLayout.reReadAndDecodeThumbnails()
+                    console.log("_need scroll changed")
+                    masonryLayout.model.requestRender()
                 }
             }
         }

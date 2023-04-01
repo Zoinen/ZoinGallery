@@ -561,8 +561,8 @@ void MasonryLayout::pushToCurrentRow(int index) {
                 }
             }
             else {
-                int forceNewLineFrom = _currentLoadingRow[i].globalIndex;
-                _bricks[forceNewLineFrom].forceNewLine = true;
+//                int forceNewLineFrom = _currentLoadingRow[i].globalIndex;
+//                _bricks[forceNewLineFrom].forceNewLine = true;
                 for (int delIndex = 0; delIndex < i; delIndex++) {
                     _currentLoadingRow.removeFirst();
                 }

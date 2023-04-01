@@ -13,14 +13,18 @@ class ThumbnailCache;
 
 class ThumbnailsRequestInterface {
 public:
+    ThumbnailsRequestInterface();
     virtual void requestThumbnails(QStringList files, QSize preferredSize) = 0;
     virtual void requestThumbnails(QSize preferredSize, bool reset = false) = 0;
     virtual void addRequestThumbnails(QList<ImageReadRequest> requests) = 0;
     virtual ImageFile *rootItem() const { return nullptr; }
 
-    virtual void requestRender() {}
-    virtual void renderRequestComplete() {}
-    virtual bool isRenderRequested() const { return false; }
+    virtual void requestRender();
+    void renderRequestComplete();
+    bool isRenderRequested() const;
+
+protected:
+    bool _renderQueued;
 };
 
 class RootProxyModel : public QAbstractProxyModel, public ThumbnailsRequestInterface {
@@ -46,9 +50,6 @@ public:
     void requestThumbnails(QStringList files, QSize preferredSize) override {}
     void requestThumbnails(QSize preferredSize, bool reset = false) override;
     void addRequestThumbnails(QList<ImageReadRequest> requests) override;
-    void requestRender() override;
-    bool isRenderRequested() const override;
-    void renderRequestComplete() override;
     ImageFile *rootItem() const override;
 
     void resetModel();
@@ -58,7 +59,6 @@ signals:
 
 private:
     ImageFile *_sourceRoot;
-    bool _renderQueued;
 };
 
 class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterface {
@@ -97,6 +97,8 @@ public:
     void requestThumbnails(QStringList files, QSize preferredSize) override;
     void requestThumbnails(QSize preferredSize, bool reset = false) override;
     void addRequestThumbnails(QList<ImageReadRequest> requests) override;
+
+    Q_INVOKABLE void requestRender() override;
 
     static bool isImage(QString fileName);
 

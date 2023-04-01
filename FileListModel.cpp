@@ -50,15 +50,18 @@ FileListModel::FileListModel(QObject *parent)
         if (it != _fileToItem.end()) {
 //            qDebug() << "found image" << path;
             ImageFile *item = it.value();
+            bool sizeChanged = item->fullSize != fullSize;
             item->fullSize = fullSize;
 
             QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
             emit dataChanged(modelIndex, modelIndex, {ImageFullSizeRole});
 
-            QSettings set;
-            set.beginGroup("imageCache");
-            set.setValue(item->fullPath() + "/FullSize", item->fullSize);
-            set.endGroup();
+            if (sizeChanged) {
+                QSettings set;
+                set.beginGroup("imageCache");
+                set.setValue(item->fullPath() + "/FullSize", item->fullSize);
+                set.endGroup();
+            }
 
             if (item->parent && item->parent->subfiles.last() == item) {
                 emit thumbnailReadFinished(item->parent);
@@ -412,6 +415,14 @@ void FileListModel::addRequestThumbnails(QList<ImageReadRequest> requests) {
     emit generationFinishedChanged();
 }
 
+void FileListModel::requestRender() {
+    ThumbnailsRequestInterface::requestRender();
+
+    for (auto it = _folderModels.begin(); it != _folderModels.end(); ++it) {
+        it.value()->requestRender();
+    }
+}
+
 QString FileListModel::generateNewId() {
     QString id = QString::number(_lastId);
     _lastId++;
@@ -559,7 +570,6 @@ int FileListModel::fileIndex(QString fileName) const {
 RootProxyModel::RootProxyModel(QObject *parent)
     : QAbstractProxyModel(parent) {
     _sourceRoot = nullptr;
-    _renderQueued = false;
 }
 
 void RootProxyModel::setRoot(ImageFile *root) {
@@ -646,18 +656,6 @@ void RootProxyModel::addRequestThumbnails(QList<ImageReadRequest> requests) {
     dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())->addRequestThumbnails(requests);
 }
 
-void RootProxyModel::requestRender() {
-    _renderQueued = true;
-}
-
-bool RootProxyModel::isRenderRequested() const {
-    return _renderQueued;
-}
-
-void RootProxyModel::renderRequestComplete() {
-    _renderQueued = false;
-}
-
 ImageFile *RootProxyModel::rootItem() const {
     return _sourceRoot;
 }
@@ -665,4 +663,20 @@ ImageFile *RootProxyModel::rootItem() const {
 void RootProxyModel::resetModel() {
     beginResetModel();
     endResetModel();
+}
+
+ThumbnailsRequestInterface::ThumbnailsRequestInterface() {
+    _renderQueued = false;
+}
+
+void ThumbnailsRequestInterface::requestRender() {
+    _renderQueued = true;
+}
+
+bool ThumbnailsRequestInterface::isRenderRequested() const {
+    return _renderQueued;
+}
+
+void ThumbnailsRequestInterface::renderRequestComplete() {
+    _renderQueued = false;
 }

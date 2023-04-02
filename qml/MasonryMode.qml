@@ -232,7 +232,13 @@ MouseArea {
     Keys.onPressed:
         (event) => {
             event.accepted = true
-            if (event.key === Qt.Key_Left) {
+            if (event.key === Qt.Key_Left && (event.modifiers & Qt.AltModifier)) {
+                viewerController.back()
+            }
+            else if (event.key === Qt.Key_Right && (event.modifiers & Qt.AltModifier)) {
+                viewerController.forward()
+            }
+            else if (event.key === Qt.Key_Left) {
                 setCurrentIndex(masonryLayout.currentIndex - 1)
             }
             else if (event.key === Qt.Key_Right) {

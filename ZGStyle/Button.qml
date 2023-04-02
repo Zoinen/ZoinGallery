@@ -10,8 +10,9 @@ T.Button {
     focusPolicy: Qt.NoFocus
     property real backgroundWidth: 36
     property real backgroundHeight: 36
+    property real centerOffset: 0
 
-    icon.color: Style.hovered
+    icon.color: enabled ? Style.hovered : Style.buttonDisabled
     icon.width: 16
     icon.height: 16
 
@@ -26,10 +27,11 @@ T.Button {
 
     background: Rectangle {
         anchors.centerIn: control
+        anchors.horizontalCenterOffset: control.centerOffset
         width: backgroundWidth
         height: backgroundHeight
         opacity: enabled ? 1 : 0.3
-        color: control.down ? Style.controlBackgroundPressed : (control.hovered ? Style.controlBackground : "transparent")
+        color: control.enabled ? (control.down ? Style.controlBackgroundPressed : (control.hovered ? Style.controlBackground : "transparent")) : "transparent"
         radius: 4
     }
 }

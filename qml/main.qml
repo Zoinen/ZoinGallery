@@ -112,22 +112,116 @@ MainWindow {
                 id: toolbarLayout
                 Layout.fillWidth: true
                 Layout.preferredHeight: 46
-                spacing: 5
+                spacing: 0
 
                 component Separator : Rectangle {
+                    Layout.leftMargin: 5
+                    Layout.rightMargin: 5
                     implicitWidth: 1
                     implicitHeight: 46 - 10
                     color: "#474747"
                 }
 
-                Button {
-                    Layout.leftMargin: 5
+                component ToolbarButton : Button {
+                    id: toolbarButton
                     Layout.alignment: Qt.AlignVCenter
 
-                    implicitWidth: 46
+                    implicitWidth: 36
                     implicitHeight: 46
 
+                    signal rightReleased
+
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.RightButton
+                        onClicked: toolbarButton.rightReleased()
+                    }
+                }
+
+                ToolbarButton {
+                    icon.source: "qrc:/resources/Back.svg"
+                    ToolTip.text: "Go Back\tAlt+←"
+                    enabled: viewerController.canBack
+
+                    implicitWidth: 46
+                    centerOffset: 5
+                    leftPadding: 18
+
+                    onReleased: {
+                        viewerController.back()
+                    }
+
+                    onRightReleased: {
+                        backMenu.popup()
+                    }
+
+                    Menu {
+                        id: backMenu
+
+                        Timer {
+                            id: delayedBackRightClick
+                            property int index: -1
+                            interval: 0
+                            onTriggered: viewerController.jumpBack(index)
+                        }
+
+                        Repeater {
+                            model: viewerController.backMenu
+
+                            MenuItem {
+                                text: modelData
+                                onTriggered: {
+                                    delayedBackRightClick.index = index
+                                    delayedBackRightClick.start()
+                                    masonryLayout.focusProxy.forceActiveFocus()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ToolbarButton {
+                    icon.source: "qrc:/resources/Forward.svg"
+                    ToolTip.text: "Go Forward\tAlt+→"
+                    enabled: viewerController.canForward
+
+                    onReleased: {
+                        viewerController.forward()
+                    }
+
+                    onRightReleased: {
+                        forwardMenu.popup()
+                    }
+
+                    Menu {
+                        id: forwardMenu
+
+                        Timer {
+                            id: delayedForwardRightClick
+                            property int index: -1
+                            interval: 0
+                            onTriggered: viewerController.jumpForward(index)
+                        }
+
+                        Repeater {
+                            model: viewerController.forwardMenu
+
+                            MenuItem {
+                                text: modelData
+                                onTriggered: {
+                                    delayedForwardRightClick.index = index
+                                    delayedForwardRightClick.start()
+                                    masonryLayout.focusProxy.forceActiveFocus()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ToolbarButton {
                     icon.source: "qrc:/resources/Up.svg"
+                    ToolTip.text: "Go Up\tBackspace"
+                    enabled: viewerController.canUp
 
                     onReleased: {
                         masonryLayout.disableAnimation = true
@@ -152,6 +246,8 @@ MainWindow {
                 }
 
                 Text {
+                    Layout.leftMargin: 5
+                    Layout.rightMargin: 5
                     Layout.alignment: Qt.AlignVCenter
                     Layout.preferredWidth: 50
                     horizontalAlignment: Text.AlignRight

@@ -15,4 +15,5 @@ QtObject {
     property color focus: "#2980b9"
 
     property color buttonFocus: "#43b5ff"
+    property color buttonDisabled: "#484848"
 }

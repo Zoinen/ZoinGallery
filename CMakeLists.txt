@@ -145,6 +145,8 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             resources/Logo.svg
             resources/DriveIcon.svg
             resources/Up.svg
+            resources/Back.svg
+            resources/Forward.svg
             resources/SearchBack.svg
             resources/SearchClose.svg
             resources/SearchNext.svg

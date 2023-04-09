@@ -45,7 +45,8 @@ Item {
                 topLevelWindow.toggleFullscreen()
             }
             else if (event.key === Qt.Key_Enter || event.key === Qt.Key_Return || event.key === Qt.Key_Escape ||
-                     event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier)) {
+                     event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier) ||
+                     event.key === Qt.Key_PageUp && (event.modifiers & Qt.ControlModifier)) {
                 root.toggleViewer()
             }
 

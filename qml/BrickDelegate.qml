@@ -367,6 +367,7 @@ BrickItem {
 
         onDoubleClicked: {
             if (isFolder) {
+                viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                 viewerController.cd(text)
             }
             else {

@@ -211,7 +211,7 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
             qDebug() << "Could not decode image" << mimeType;
         }
         else {
-            qDebug() << "Using Qt decoder for" << mimeType;
+//            qDebug() << "Using Qt decoder for" << mimeType;
         }
         return img;
     }

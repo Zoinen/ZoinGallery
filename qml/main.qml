@@ -148,7 +148,9 @@ MainWindow {
                     leftPadding: 18
 
                     onReleased: {
+                        viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
                         viewerController.back()
+                        masonryLayout.view.loadSavedState()
                     }
 
                     onRightReleased: {
@@ -162,7 +164,11 @@ MainWindow {
                             id: delayedBackRightClick
                             property int index: -1
                             interval: 0
-                            onTriggered: viewerController.jumpBack(index)
+                            onTriggered: {
+                                viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
+                                viewerController.jumpBack(index)
+                                masonryLayout.view.loadSavedState()
+                            }
                         }
 
                         Repeater {
@@ -186,7 +192,9 @@ MainWindow {
                     enabled: viewerController.canForward
 
                     onReleased: {
+                        viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
                         viewerController.forward()
+                        masonryLayout.view.loadSavedState()
                     }
 
                     onRightReleased: {
@@ -200,7 +208,11 @@ MainWindow {
                             id: delayedForwardRightClick
                             property int index: -1
                             interval: 0
-                            onTriggered: viewerController.jumpForward(index)
+                            onTriggered: {
+                                viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
+                                viewerController.jumpForward(index)
+                                masonryLayout.view.loadSavedState()
+                            }
                         }
 
                         Repeater {
@@ -225,8 +237,10 @@ MainWindow {
 
                     onReleased: {
                         masonryLayout.disableAnimation = true
+                        viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
                         masonryLayout.setCurrentIndex(viewerController.up())
                         masonryLayout.disableAnimation = false
+                        masonryLayout.view.loadSavedState()
                     }
                 }
 

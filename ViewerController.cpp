@@ -20,6 +20,8 @@ ViewerController::ViewerController(QQmlEngine *engine)
     _canBack = false;
     _canForward = false;
     _indexInHistory = -1;
+    _savedContentY = -1;
+    _savedCurrentIndex = -1;
 
     engine->rootContext()->setContextProperty("viewerController", this);
 
@@ -78,6 +80,7 @@ void ViewerController::cd(QString folder, bool changeHistory) {
             _fileListModel->cd(_currentPath);
         }
     }
+    loadSavedState();
     updateHistory(changeHistory);
 }
 
@@ -98,6 +101,7 @@ int ViewerController::up() {
             indexToSelect = _fileListModel->cd(_currentPath, previousFolder);
         }
     }
+    loadSavedState();
     updateHistory(true);
     return indexToSelect;
 }
@@ -106,10 +110,25 @@ bool ViewerController::canUp() const {
     return _canUp;
 }
 
+void ViewerController::saveCurrentState(qreal contentY, int currentIndex) {
+    if (_indexInHistory >= 0 && _indexInHistory <= _history.size() - 1) {
+        _history[_indexInHistory].contentY = contentY;
+        _history[_indexInHistory].currentIndex = currentIndex;
+    }
+}
+
+qreal ViewerController::savedContentY() const {
+    return _savedContentY;
+}
+
+int ViewerController::savedCurrentIndex() const {
+    return _savedCurrentIndex;
+}
+
 void ViewerController::back() {
     if (_indexInHistory > 0) {
         _indexInHistory--;
-        cd(_history[_indexInHistory], false);
+        cd(_history[_indexInHistory].path, false);
     }
 }
 
@@ -119,11 +138,15 @@ bool ViewerController::canBack() const {
 
 QStringList ViewerController::backMenu() const {
     if (_indexInHistory >= 0 && _indexInHistory <= _history.size() - 1) {
-        QStringList backList = _history.first(_indexInHistory);
-        for (int i = 0; i < backList.size(); i++) {
-            QString fileName = QFileInfo(backList[i]).fileName();
+        QList<HistoryEntity> backHistoryList = _history.first(_indexInHistory);
+        QStringList backList;
+        for (int i = 0; i < backHistoryList.size(); i++) {
+            QString fileName = QFileInfo(backHistoryList[i].path).fileName();
             if (!fileName.isEmpty()) {
-                backList[i] = fileName;
+                backList.append(fileName);
+            }
+            else {
+                backList.append(backHistoryList[i].path);
             }
         }
         std::reverse(backList.begin(), backList.end());
@@ -135,7 +158,7 @@ QStringList ViewerController::backMenu() const {
 void ViewerController::forward() {
     if (_indexInHistory < _history.size() - 1) {
         _indexInHistory++;
-        cd(_history[_indexInHistory], false);
+        cd(_history[_indexInHistory].path, false);
     }
 }
 
@@ -145,11 +168,15 @@ bool ViewerController::canForward() const {
 
 QStringList ViewerController::forwardMenu() const {
     if (_indexInHistory >= 0 && _indexInHistory <= _history.size() - 1) {
-        QStringList forwardList = _history.last(_history.size() - _indexInHistory - 1);
-        for (int i = 0; i < forwardList.size(); i++) {
-            QString fileName = QFileInfo(forwardList[i]).fileName();
+        QList<HistoryEntity> forwardHistoryList = _history.last(_history.size() - _indexInHistory - 1);
+        QStringList forwardList;
+        for (int i = 0; i < forwardHistoryList.size(); i++) {
+            QString fileName = QFileInfo(forwardHistoryList[i].path).fileName();
             if (!fileName.isEmpty()) {
-                forwardList[i] = fileName;
+                forwardList.append(fileName);
+            }
+            else {
+                forwardList.append(forwardHistoryList[i].path);
             }
         }
         return forwardList;
@@ -161,7 +188,7 @@ void ViewerController::jumpBack(int backIndex) {
     int index = _indexInHistory - backIndex - 1;
     if (index >= 0 && index <= _history.size() - 1) {
         _indexInHistory = index;
-        cd(_history[_indexInHistory], false);
+        cd(_history[_indexInHistory].path, false);
     }
 }
 
@@ -169,7 +196,7 @@ void ViewerController::jumpForward(int forwardIndex) {
     int index = _indexInHistory + forwardIndex + 1;
     if (index >= 0 && index <= _history.size() - 1) {
         _indexInHistory = index;
-        cd(_history[_indexInHistory], false);
+        cd(_history[_indexInHistory].path, false);
     }
 }
 
@@ -194,7 +221,7 @@ void ViewerController::updateHistory(bool changeHistory) {
         if (_history.size() - 1 != _indexInHistory) {
             _history.resize(_indexInHistory + 1);
         }
-        _history.append(_currentPath);
+        _history.append(HistoryEntity(_currentPath));
         _indexInHistory = _history.size() - 1;
     }
 
@@ -214,4 +241,16 @@ void ViewerController::updateHistory(bool changeHistory) {
     }
 
     emit historyChanged();
+}
+
+void ViewerController::loadSavedState() {
+    _savedContentY = -1;
+    _savedCurrentIndex = -1;
+    for (int i = _indexInHistory; i >= 0; i--) {
+        if (_history[i].path == _currentPath) {
+            _savedContentY = _history[i].contentY;
+            _savedCurrentIndex = _history[i].currentIndex;
+            break;
+        }
+    }
 }

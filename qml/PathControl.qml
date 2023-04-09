@@ -31,7 +31,9 @@ Item {
     }
 
     function folderClicked(path) {
+        viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
         viewerController.cd(rootFolder.text + pathSeparator + path)
+        masonryLayout.view.loadSavedState()
     }
 
     MouseArea {
@@ -190,7 +192,9 @@ Item {
         Keys.onEscapePressed: editMode = false
 
         function accept() {
+            viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
             viewerController.cd(pathField.text)
+            masonryLayout.view.loadSavedState()
             editMode = false
         }
 

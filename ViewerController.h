@@ -24,6 +24,10 @@ public:
     Q_INVOKABLE int up();
     bool canUp() const;
 
+    Q_INVOKABLE void saveCurrentState(qreal contentY, int currentIndex);
+    Q_INVOKABLE qreal savedContentY() const;
+    Q_INVOKABLE int savedCurrentIndex() const;
+
     Q_INVOKABLE void back();
     bool canBack() const;
     Q_INVOKABLE QStringList backMenu() const;
@@ -50,15 +54,28 @@ signals:
 
 private:
     void updateHistory(bool changeHistory);
+    void loadSavedState();
 
     FileListModel *_fileListModel;
 
     QString _currentPath;
-    QStringList _history;
+    struct HistoryEntity {
+        QString path;
+        int currentIndex;
+        qreal contentY;
+
+        HistoryEntity() : currentIndex(0), contentY(0) {}
+        HistoryEntity(QString path_) : path(path_), currentIndex(0), contentY(0) {}
+    };
+
+    QList<HistoryEntity> _history;
     bool _canUp;
     bool _canBack;
     bool _canForward;
     int _indexInHistory;
+
+    qreal _savedContentY;
+    int _savedCurrentIndex;
 };
 
 #endif // VIEWERCONTROLLER_H

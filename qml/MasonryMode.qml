@@ -233,10 +233,14 @@ MouseArea {
         (event) => {
             event.accepted = true
             if (event.key === Qt.Key_Left && (event.modifiers & Qt.AltModifier)) {
+                viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                 viewerController.back()
+                masonryLayout.loadSavedState()
             }
             else if (event.key === Qt.Key_Right && (event.modifiers & Qt.AltModifier)) {
+                viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                 viewerController.forward()
+                masonryLayout.loadSavedState()
             }
             else if (event.key === Qt.Key_Left) {
                 setCurrentIndex(masonryLayout.currentIndex - 1)
@@ -282,7 +286,7 @@ MouseArea {
             else if (event.key === Qt.Key_End) {
                 setCurrentIndex(masonryLayout.count - 1)
             }
-            else if (event.key === Qt.Key_PageUp) {
+            else if (event.key === Qt.Key_PageUp && !(event.modifiers & Qt.ControlModifier)) {
                 let deltaY = (masonryLayout.height - masonryLayout.height / 8)
                 let futureContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
                 let prevPageY = Math.max(0, futureContentY - deltaY) + currentItemCenterY
@@ -303,7 +307,7 @@ MouseArea {
                 setCurrentIndex(newCurrentIndex, !hitStart, !hitStart)
                 scrollBy(-deltaY)
             }
-            else if (event.key === Qt.Key_PageDown) {
+            else if (event.key === Qt.Key_PageDown && !(event.modifiers & Qt.ControlModifier)) {
                 let deltaY = (masonryLayout.height - masonryLayout.height / 8)
                 let futureContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
                 let nextPageY = Math.min(masonryLayout.contentHeight - masonryLayout.height, futureContentY + deltaY) + currentItemCenterY
@@ -328,18 +332,25 @@ MouseArea {
                 setCurrentIndex(newCurrentIndex2, !hitEnd, !hitEnd)
                 scrollBy(deltaY)
             }
-            else if ((event.key === Qt.Key_Backspace && !quickSearchMode && !backspaceDisabledUntilKeyUp) || event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier)) {
+            else if ((event.key === Qt.Key_Backspace && !quickSearchMode && !backspaceDisabledUntilKeyUp) ||
+                     event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier) ||
+                     event.key === Qt.Key_PageUp && (event.modifiers & Qt.ControlModifier)) {
                 masonryView.disableAnimation = true
+                viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                 setCurrentIndex(viewerController.up())
                 masonryView.disableAnimation = false
+                masonryLayout.loadSavedState()
             }
             else if (event.key === Qt.Key_F11 || event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier) ||
                      (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier)) {
                 topLevelWindow.toggleFullscreen()
             }
-            else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ControlModifier) || event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier)) {
+            else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ControlModifier) ||
+                     event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier) ||
+                     event.key === Qt.Key_PageDown && (event.modifiers & Qt.ControlModifier)) {
                 hideQuickSearch()
                 if (masonryLayout.currentItem.isFolder) {
+                    viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                     viewerController.cd(masonryLayout.currentItem.text)
                 }
                 else if (masonryLayout.currentItem.isImage) {
@@ -405,6 +416,21 @@ MouseArea {
         }
 
         delegate: BrickDelegate {}
+
+        function loadSavedState() {
+            masonryView.disableAnimation = true
+            let savedContentY = viewerController.savedContentY()
+            if (savedContentY !== -1) {
+                masonryLayout.contentY = savedContentY
+                console.log("RESTORING SAVED CONTENTY", savedContentY)
+            }
+            let savedCurrentIndex = viewerController.savedCurrentIndex()
+            if (savedCurrentIndex !== -1) {
+                setCurrentIndex(savedCurrentIndex, false, false, true)
+                console.log("RESTORING CURRENT INDEX", savedContentY)
+            }
+            masonryView.disableAnimation = false
+        }
 
         MouseArea {
             property alias animation: scrollAnimation2

@@ -1,1 +1,20 @@
-<?xml version="1.0" ?><svg height="24" version="1.1" width="24" xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><g transform="translate(0 -1028.4)"><path d="m5 1030.4c-1.1046 0-2 0.9-2 2v8 4 6c0 1.1 0.8954 2 2 2h14c1.105 0 2-0.9 2-2v-6-4-4l-6-6h-10z" fill="#8c9fae"/><path d="m5 1029.4c-1.1046 0-2 0.9-2 2v8 4 6c0 1.1 0.8954 2 2 2h14c1.105 0 2-0.9 2-2v-6-4-4l-6-6h-10z" fill="#b8c4cd"/><path d="m21 1035.4-6-6v4c0 1.1 0.895 2 2 2h4z" fill="#8c9fae"/></g></svg>
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Generator: Adobe Illustrator 23.0.2, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
+<svg version="1.1"
+	 id="Layer_1" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+	 xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 24 24"
+	 style="enable-background:new 0 0 24 24;" xml:space="preserve">
+<style type="text/css">
+	.st0{fill:url(#SVGID_1_);}
+	.st1{fill:#889EAA;}
+</style>
+<g transform="translate(0 -1028.4)">
+	<linearGradient id="SVGID_1_" gradientUnits="userSpaceOnUse" x1="12" y1="1052.4" x2="12" y2="1042.0267">
+		<stop  offset="0" style="stop-color:#ACBDC9"/>
+		<stop  offset="0.3425" style="stop-color:#B4C5D0"/>
+		<stop  offset="1" style="stop-color:#B6C7D2"/>
+	</linearGradient>
+	<path class="st0" d="M5,1029.4c-1.1,0-2,0.9-2,2v8v4v7c0,1.1,0.9,2,2,2h14c1.1,0,2-0.9,2-2v-7v-4v-4l-6-6H5z"/>
+	<path class="st1" d="M21,1035.4l-6-6v4c0,1.1,0.9,2,2,2H21z"/>
+</g>
+</svg>

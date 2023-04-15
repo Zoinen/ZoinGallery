@@ -16,4 +16,6 @@ QtObject {
 
     property color buttonFocus: "#43b5ff"
     property color buttonDisabled: "#484848"
+
+    property color selectedBrick: "#244c6b"
 }

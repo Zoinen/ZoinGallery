@@ -31,7 +31,7 @@ BrickItem {
                     bottomMargin: -2 + (quickSearchMode ? (fileInfoPanel.height - fileName.contentHeight - icon.y) :
                                                           Math.max(0, fileName.height - fileName.contentHeight + sizeBase / 40 - icon.y))
                 }
-                color: Style.focus
+                color: Style.selectedBrick
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -43,7 +43,7 @@ BrickItem {
                     rightMargin: 2
                     bottomMargin: 2 + delegateOutline.anchors.bottomMargin + 2
                 }
-                color: "#1a4662"
+                color: Style.selectedBrick
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -85,7 +85,7 @@ BrickItem {
 
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
-                    color: brickMouseArea.containsMouse ? "#fff" : "#d1d1d1"
+                    color: brickMouseArea.containsMouse || masonryLayout.currentIndex === index ? "#fff" : "#d1d1d1"
                     maximumLineCount: 4
                     wrapMode: Text.Wrap
                 }
@@ -106,7 +106,7 @@ BrickItem {
                     rightMargin: 2
                     bottomMargin: 2
                 }
-                color: "#1a4662"
+                color: Style.selectedBrick
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -135,7 +135,7 @@ BrickItem {
                 textFormat: quickSearchMode ? Text.RichText : Text.PlainText
 
                 elide: Text.ElideRight
-                color: brickMouseArea.containsMouse ? "#fff" : "#d1d1d1"
+                color: brickMouseArea.containsMouse || masonryLayout.currentIndex === index ? "#fff" : "#d1d1d1"
                 maximumLineCount: 1
             }
         }
@@ -154,7 +154,7 @@ BrickItem {
                     rightMargin: -2
                     bottomMargin: -2
                 }
-                color: Style.focus
+                color: Style.selectedBrick
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -179,7 +179,7 @@ BrickItem {
 
             Rectangle {
                 id: imageInfoPanel
-                color: masonryLayout.currentIndex === index ? "#B3002943" : Qt.rgba(0, 0, 0, 0.5)
+                color: masonryLayout.currentIndex === index ? "#B31a384e" : Qt.rgba(0, 0, 0, 0.5)
                 anchors {
                     left: parent.left
                     leftMargin: masonryLayout.spacing / 2
@@ -209,7 +209,7 @@ BrickItem {
 
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideMiddle
-                    color: brickMouseArea.containsMouse ? "#fff" : "#d1d1d1"
+                    color: brickMouseArea.containsMouse || masonryLayout.currentIndex === index ? "#fff" : "#d1d1d1"
                     maximumLineCount: 4
                     wrapMode: Text.Wrap
                 }
@@ -230,33 +230,31 @@ BrickItem {
                     rightMargin: 2
                     bottomMargin: 2
                 }
-                color: "#1a4662"
+                color: Style.selectedBrick
                 visible: masonryLayout.currentIndex === index
             }
 
             Item {
                 anchors {
                     fill: parent //icon
-                    leftMargin: masonryLayout.spacing / 2
-                    rightMargin: masonryLayout.spacing / 2
                     topMargin: masonryLayout.spacing / 2
-                    bottomMargin: masonryLayout.spacing / 2 + imageInfoPanel.height
+                    bottomMargin: masonryLayout.spacing / 2
                 }
 
                 Rectangle {
                     id: folderBackground
                     anchors.fill: parent
-                    anchors.topMargin: sizeBase / 27
-                    color: Style.focus
+                    anchors.topMargin: imageInfoPanel.height
+                    color: "#2d2d2d"
                     radius: 10
                 }
 
                 Rectangle {
-                    width: Math.min(110, parent.width * 0.44)
-                    height: sizeBase / 27 + 10*2
+                    width: imageInfoPanel.width
+                    height: imageInfoPanel.height + 20
                     radius: 10
 
-                    color: Style.focus
+                    color: "#2d2d2d"
                 }
 
                 MasonryLayout {
@@ -316,38 +314,40 @@ BrickItem {
 
             Item {
                 id: imageInfoPanel
-                anchors {
-                    left: parent.left
-                    leftMargin: masonryLayout.spacing / 2
-                    right: parent.right
-                    rightMargin: masonryLayout.spacing / 2
-                    bottom: parent.bottom
-                    bottomMargin: masonryLayout.spacing / 2
+                anchors.top: parent.top
+                anchors.left: parent.left
+                width: childrenRect.width + 20
+                height: 52
+
+                Image {
+                    id: icon
+                    anchors {
+                        verticalCenter: parent.verticalCenter
+                        left: imageInfoPanel.left
+                        leftMargin: 10
+                    }
+                    height: parent.height - 10
+                    sourceSize.height: height
+                    fillMode: Image.PreserveAspectFit
+                    source: iconPath
                 }
-                height: imageText.height + 10
-                z: 1
 
                 Text {
-                    id: imageText
-                    anchors{
-                        left: parent.left
-                        leftMargin: /*masonryLayout.listView ? 45 :*/ 5
-                        right: parent.right
-                        rightMargin: 5
-                        bottom: parent.bottom
-                        bottomMargin: 5
+                    id: fileName
+                    anchors {
+                        left: icon.right
+                        leftMargin: 5
+                        verticalCenter: parent.verticalCenter
                     }
-
                     text: brickDelegate.text
                     textFormat: quickSearchMode ? Text.RichText : Text.PlainText
 
-                    horizontalAlignment: masonryLayout.listView ? Text.AlignLeft : Text.AlignHCenter
-                    elide: Text.ElideMiddle
-                    color: brickMouseArea.containsMouse ? "#fff" : "#d1d1d1"
-                    maximumLineCount: 4
-                    wrapMode: Text.Wrap
+                    elide: Text.ElideRight
+                    color: brickMouseArea.containsMouse || masonryLayout.currentIndex === index ? "#fff" : "#d1d1d1"
+                    maximumLineCount: 1
                 }
             }
+
         }
     }
 

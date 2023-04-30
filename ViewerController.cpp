@@ -11,6 +11,7 @@
 #include <QTimer>
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QSettings>
 
 ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
@@ -46,38 +47,27 @@ void ViewerController::cd(QString folder, bool changeHistory) {
     folder = folder.trimmed();
 
     if (folder == "Computer\\" || folder == "Computer/" || folder == "Computer") {
-        _currentPath = "Computer";
-        emit currentPathChanged();
-        _fileListModel->cd(_currentPath, "");
+        setCurrentPath("Computer");
     }
     else if (folder.contains("\\") || folder.contains("/")) {
         QString newCurrentPath = QDir::toNativeSeparators(QDir(folder).absolutePath());
         if (QDir(newCurrentPath).exists()) {
-            _currentPath = newCurrentPath;
-            emit currentPathChanged();
-            _fileListModel->cd(_currentPath);
+            setCurrentPath(newCurrentPath);
         }
         else if (QFile::exists(newCurrentPath)) {
-            _currentPath = QDir::toNativeSeparators(QDir(QFileInfo(newCurrentPath).path()).absolutePath());
-            emit currentPathChanged();
-            _fileListModel->cd(_currentPath);
+            setCurrentPath(QDir::toNativeSeparators(QDir(QFileInfo(newCurrentPath).path()).absolutePath()));
             QTimer::singleShot(10, this, [=] {
                 emit setCurrentIndex(_fileListModel->fileIndex(QFileInfo(newCurrentPath).fileName()));
             });
         }
     }
     else if (_currentPath == "Computer") {
-        QDir dir(folder);
-        _currentPath = QDir::toNativeSeparators(dir.absolutePath());
-        emit currentPathChanged();
-        _fileListModel->cd(_currentPath);
+        setCurrentPath(QDir::toNativeSeparators(QDir(folder).absolutePath()));
     }
     else {
         QDir dir(_currentPath);
         if (dir.cd(folder)) {
-            _currentPath = QDir::toNativeSeparators(dir.absolutePath());
-            emit currentPathChanged();
-            _fileListModel->cd(_currentPath);
+            setCurrentPath(QDir::toNativeSeparators(dir.absolutePath()));
         }
     }
     loadSavedState();
@@ -90,15 +80,10 @@ int ViewerController::up() {
         QString previousFolder = QFileInfo(_currentPath).fileName();
         QDir dir(_currentPath);
         if (dir.cdUp()) {
-            _currentPath = QDir::toNativeSeparators(dir.absolutePath());
-            emit currentPathChanged();
-            indexToSelect = _fileListModel->cd(_currentPath, previousFolder);
+            setCurrentPath(QDir::toNativeSeparators(dir.absolutePath()), previousFolder);
         }
         else {
-            previousFolder = _currentPath;
-            _currentPath = "Computer";
-            emit currentPathChanged();
-            indexToSelect = _fileListModel->cd(_currentPath, previousFolder);
+            setCurrentPath("Computer", _currentPath);
         }
     }
     loadSavedState();
@@ -253,4 +238,12 @@ void ViewerController::loadSavedState() {
             break;
         }
     }
+}
+
+void ViewerController::setCurrentPath(const QString &newPath, const QString &itemToSelect) {
+    _currentPath = newPath;
+    emit currentPathChanged();
+    _fileListModel->cd(_currentPath, itemToSelect);
+    QSettings set;
+    set.setValue("currentPath", _currentPath);
 }

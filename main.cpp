@@ -3,6 +3,7 @@
 #include <QElapsedTimer>
 #include <QStandardPaths>
 #include <QQuickStyle>
+#include <QSettings>
 
 #include "ViewerController.h"
 #include "MainWindow.h"
@@ -40,9 +41,15 @@ int main(int argc, char *argv[])
     ViewerController *controller = new ViewerController(&engine);
     engine.load(url);
 
+    QSettings set;
+    QString savedPath = set.value("currentPath").toString();
+
     if (qApp->arguments().size() > 1) {
         QString path = qApp->arguments()[1].replace("\"", "");
         controller->cd(path);
+    }
+    else if (!savedPath.isEmpty()) {
+        controller->cd(savedPath);
     }
     else {
         controller->cd(QStandardPaths::standardLocations(QStandardPaths::DocumentsLocation).first());

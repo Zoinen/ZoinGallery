@@ -31,6 +31,14 @@
 #define NULL_DEVICE "/dev/null"
 #endif
 
+
+static const QStringList VectorImageExtensions = {"svg", "wmf", "emf"};
+//static const QStringList ImageQtExtensions = {"bmp", "png", "gif", "jp2", "jpc", "tga", "ico", "cur", "ppm", "pgm", "pbm", "svg", "wmf", "emf", "webp", "heic"};
+static const QStringList TiffRawExtensions = {"tiff", "tif", "cr2", "dng", "crw", "nef", "arw", "arq"};
+static const QStringList JpegExtensions = {"jpg", "jpeg", "jpe", "jfif"};
+
+QStringList ThumbnailLoader::ImageQtExtensions;
+
 void ThumbnailLoader::init() {
     Exiv2::XmpParser::initialize();
     ::atexit(Exiv2::XmpParser::terminate);
@@ -41,6 +49,16 @@ void ThumbnailLoader::init() {
 #if defined(Q_OS_WIN)
     freopen(NULL_DEVICE, "w", stderr);
 #endif
+
+    if (ImageQtExtensions.isEmpty()) {
+        for (QByteArray arr : QImageReader::supportedImageFormats()) {
+            QString ext = QString::fromLatin1(arr);
+            if (!TiffRawExtensions.contains(ext) && !JpegExtensions.contains(ext)) {
+                ImageQtExtensions.append(ext);
+            }
+        }
+        qDebug() << "Qt plugin formats:" << ImageQtExtensions;
+    }
 }
 
 void ThumbnailLoader::setPath(const QString &path) {
@@ -266,35 +284,35 @@ QImage ThumbnailLoader::rotateAndFlip(const QImage &image, ExifOrientation orien
 }
 
 QStringList ThumbnailLoader::supportedFormats() {
-    return {"*.jpg", "*.jpeg", "*.jpe", "*.jfif",
-            "*.tiff", "*.tif", "*.cr2", "*.dng", "*.crw", "*.nef", "*.arw", "*.arq",
-            "*.bmp", "*.png", "*.gif", "*.jp2", "*.jpc", "*.tga", "*.ico", "*.cur", "*.ppm", "*.pgm", "*.pbm", "*.svg", "*.wmf", "*.emf", "*.webp",
-            "*.svg", "*.wmf", "*.emf", "*.heic"};
+    static QStringList formats;
+    if (formats.isEmpty()) {
+        for (const auto &extensions : {JpegExtensions, TiffRawExtensions, ImageQtExtensions, VectorImageExtensions}) {
+            for (const QString &extension : extensions) {
+                formats.append(QString("*.%1").arg(extension));
+            }
+        }
+    }
+    return formats;
 }
 
 bool ThumbnailLoader::isJpeg(const QString &path) {
-    QStringList extensions = {"jpg", "jpeg", "jpe", "jfif"};
-    for (const QString &ext : extensions) {
-        if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
-            return true;
-        }
-    }
-    return false;
+    return isExtensionMatch(path, JpegExtensions);
 }
 
 bool ThumbnailLoader::isRawOrTiff(const QString &path) {
-    QStringList extensions = {"tiff", "tif", "cr2", "dng", "crw", "nef", "arw", "arq"};
-    for (const QString &ext : extensions) {
-        if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
-            return true;
-        }
-    }
-    return false;
+    return isExtensionMatch(path, TiffRawExtensions);
 }
 
 bool ThumbnailLoader::isImageOther(const QString &path) {
-    QStringList extensions = {"bmp", "png", "gif", "jp2", "jpc", "tga", "ico", "cur", "ppm", "pgm", "pbm", "svg", "wmf", "emf", "webp", "heic"};
-    for (const QString &ext : extensions) {
+    return isExtensionMatch(path, ImageQtExtensions);
+}
+
+bool ThumbnailLoader::isVectorImage(const QString &path) {
+    return isExtensionMatch(path, VectorImageExtensions);
+}
+
+bool ThumbnailLoader::isExtensionMatch(const QString &path, const QStringList &pattern) {
+    for (const QString &ext : pattern) {
         if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
             return true;
         }
@@ -302,15 +320,6 @@ bool ThumbnailLoader::isImageOther(const QString &path) {
     return false;
 }
 
-bool ThumbnailLoader::isVectorImage(const QString &path) {
-    QStringList extensions = {"svg", "wmf", "emf"};
-    for (const QString &ext : extensions) {
-        if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
-            return true;
-        }
-    }
-    return false;
-}
 
 QImage ThumbnailLoader::loadJpegFromData(const uint8_t *data, uint32_t size, QSize targetSize) {
     const int COLOR_COMPONENTS = 3;

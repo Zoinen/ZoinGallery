@@ -33,9 +33,13 @@ public:
     static bool isVectorImage(const QString &path);
 
 private:
+    static QStringList ImageQtExtensions;
+
     QImage loadJpegFromData(const uint8_t *data, uint32_t size, QSize targetSize);
     ExifOrientation readOrientationFromExif(Exiv2::Image *image);
     QSize readResolutionFromExif(Exiv2::Image *image);
+
+    static bool isExtensionMatch(const QString &path, const QStringList &pattern);
 
     QString _path;
 };

@@ -439,8 +439,9 @@ MouseArea {
             acceptedButtons: Qt.NoButton
             onWheel:
                 (wheel) => {
+                    let delta = (Qt.platform.os === "osx" ? wheel.pixelDelta.y : wheel.angleDelta.y)
                     if (wheel.modifiers & Qt.ControlModifier) {
-                        if (wheel.angleDelta.y < 0) {
+                        if (delta < 0) {
                             masonryLayout.zoomOut()
                         }
                         else {
@@ -448,9 +449,28 @@ MouseArea {
                         }
                     }
                     else {
-                        scrollBy(-wheel.angleDelta.y)
+                        scrollBy(-delta)
                     }
                 }
+        }
+
+        PinchArea {
+            anchors.fill: parent
+            property int startTargetHeight: 0
+
+            onPinchStarted: {
+                startTargetHeight = masonryLayout.targetHeight
+            }
+
+            onPinchUpdated: (pinch) => {
+                masonryLayout.targetHeight = Math.min(500, Math.max(30, startTargetHeight * pinch.scale))
+            }
+
+            onPinchFinished: {
+                if (startTargetHeight != masonryLayout.targetHeight) {
+                    masonryLayout.reReadAndDecodeThumbnails()
+                }
+            }
         }
 
         NumberAnimation {
@@ -458,7 +478,7 @@ MouseArea {
 
             target: masonryLayout
             property: "contentY"
-            duration: 150
+            duration: Qt.platform.os === "osx" ? 15 : 150
             easing.type: Easing.OutSine
         }
     }

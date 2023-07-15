@@ -3,6 +3,7 @@
 #include <QSettings>
 #include <QTimer>
 #include <QDebug>
+#include <QGuiApplication>
 
 MainWindow::MainWindow(QWindow *parent)
     : QQuickWindow(parent) {
@@ -16,6 +17,25 @@ MainWindow::MainWindow(QWindow *parent)
     QVariant savedGeometryVar = set.value("normalGeometry");
     if (savedGeometryVar.isValid()) {
         _normalGeometry = savedGeometryVar.toRect();
+        QRect availableRect = QGuiApplication::primaryScreen()->availableGeometry();
+        if (_normalGeometry.right() > availableRect.right()) {
+            _normalGeometry.moveRight(availableRect.right());
+        }
+        if (_normalGeometry.bottom() > availableRect.bottom()) {
+            _normalGeometry.moveBottom(availableRect.bottom());
+        }
+        if (_normalGeometry.left() < availableRect.left()) {
+            _normalGeometry.moveLeft(availableRect.left());
+        }
+        if (_normalGeometry.top() < availableRect.top()) {
+            _normalGeometry.moveTop(availableRect.top());
+        }
+        if (_normalGeometry.width() > availableRect.width()) {
+            _normalGeometry.setWidth(availableRect.width());
+        }
+        if (_normalGeometry.height() > availableRect.height()) {
+            _normalGeometry.setHeight(availableRect.height());
+        }
     }
     else if (screen()) {
         QSize size(1250, 700);

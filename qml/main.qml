@@ -299,6 +299,13 @@ MainWindow {
                     spacing: 0
                     Layout.alignment: Qt.AlignVCenter
 
+                    Shortcut {
+                        sequence: "F8"
+                        onActivated: {
+                            masonryLayout.view.listView = !masonryLayout.view.listView
+                        }
+                    }
+
                     TabButton {
                         implicitWidth: 46
                         implicitHeight: 46

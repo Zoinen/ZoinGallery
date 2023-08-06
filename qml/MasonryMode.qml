@@ -432,6 +432,13 @@ MouseArea {
             masonryView.disableAnimation = false
         }
 
+        Shortcut {
+            sequence: "F9"
+            onActivated: {
+                masonryLayout.showTransparentGrid = !masonryLayout.showTransparentGrid
+            }
+        }
+
         MouseArea {
             property alias animation: scrollAnimation2
 

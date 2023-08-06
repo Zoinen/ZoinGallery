@@ -36,6 +36,7 @@ static const QStringList VectorImageExtensions = {"svg", "wmf", "emf"};
 //static const QStringList ImageQtExtensions = {"bmp", "png", "gif", "jp2", "jpc", "tga", "ico", "cur", "ppm", "pgm", "pbm", "svg", "wmf", "emf", "webp", "heic"};
 static const QStringList TiffRawExtensions = {"tiff", "tif", "cr2", "dng", "crw", "nef", "arw", "arq"};
 static const QStringList JpegExtensions = {"jpg", "jpeg", "jpe", "jfif"};
+QStringList Exiv2Extensions = {"exv", "mrw", "webp", "pef", "rw2", "sr2", "srw", "orf", "png", "pgf", "raf", "eps", "xmp", "gif", "psd", "tga", "bmp", "jp2"};
 
 QStringList ThumbnailLoader::ImageQtExtensions;
 
@@ -58,6 +59,10 @@ void ThumbnailLoader::init() {
             }
         }
         qDebug() << "Qt plugin formats:" << ImageQtExtensions;
+
+        Exiv2Extensions.append(JpegExtensions);
+        Exiv2Extensions.append(TiffRawExtensions);
+
     }
 }
 
@@ -94,6 +99,10 @@ struct imemstream: virtual membuf, std::istream {
 
 bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult) {
     _path = path;
+
+    if (!isExiv2Compatible(path)) {
+        return false;
+    }
 
     QFile f(path);
     if (!f.open(QFile::ReadOnly)) {
@@ -309,6 +318,10 @@ bool ThumbnailLoader::isImageOther(const QString &path) {
 
 bool ThumbnailLoader::isVectorImage(const QString &path) {
     return isExtensionMatch(path, VectorImageExtensions);
+}
+
+bool ThumbnailLoader::isExiv2Compatible(const QString &path) {
+    return isExtensionMatch(path, Exiv2Extensions);
 }
 
 bool ThumbnailLoader::isExtensionMatch(const QString &path, const QStringList &pattern) {

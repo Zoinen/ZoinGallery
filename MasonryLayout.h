@@ -49,6 +49,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(MasonryLayoutQuickSearch *quickSearch READ quickSearch NOTIFY quickSearchChanged)
     Q_PROPERTY(bool needScroll READ needScroll NOTIFY needScrollChanged)
     Q_PROPERTY(bool listView READ listView WRITE setListView NOTIFY listViewChanged)
+    Q_PROPERTY(bool showTransparentGrid READ showTransparentGrid WRITE setShowTransparentGrid NOTIFY showTransparentGridChanged)
 
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
@@ -99,6 +100,9 @@ public:
     int currentImageIndex() const;
     void setCurrentImageIndex(int newCurrentImageIndex);
 
+    bool showTransparentGrid() const;
+    void setShowTransparentGrid(bool newShowTransparentGrid);
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -122,6 +126,8 @@ signals:
     void imageCountChanged();
 
     void currentImageIndexChanged();
+
+    void showTransparentGridChanged();
 
 private slots:
     void onThumbnailReadFinished(ImageFile *root);
@@ -207,6 +213,7 @@ private:
     bool _listView;
     int _imageCount;
     int _currentImageIndex;
+    bool _showTransparentGrid;
 };
 
 #endif // MASONRYLAYOUT_H

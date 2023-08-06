@@ -31,6 +31,7 @@ public:
     static bool isRawOrTiff(const QString &path);
     static bool isImageOther(const QString &path);
     static bool isVectorImage(const QString &path);
+    static bool isExiv2Compatible(const QString &path);
 
 private:
     static QStringList ImageQtExtensions;

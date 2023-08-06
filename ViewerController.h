@@ -42,6 +42,7 @@ public:
     Q_INVOKABLE void prepareToClose();
     Q_INVOKABLE void clipboardCopyIndexName(int index);
     Q_INVOKABLE void clipboardCopyIndexFullPath(int index);
+    Q_INVOKABLE QUrl indexUrl(int index);
 
 signals:
     void currentPathChanged();

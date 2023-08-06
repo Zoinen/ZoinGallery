@@ -42,6 +42,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _spacing = 8; // Should be divisible by 4
     QSettings set;
     _listView = set.value("listView", false).toBool();
+    _showTransparentGrid = set.value("showTransparentGrid", true).toBool();
     _imageCount = 0;
 
     _currentScrollingMode = false;
@@ -1047,4 +1048,21 @@ void MasonryLayout::setCurrentImageIndex(int newCurrentImageIndex) {
             imageIndex++;
         }
     }
+}
+
+bool MasonryLayout::showTransparentGrid() const {
+    return _showTransparentGrid;
+}
+
+void MasonryLayout::setShowTransparentGrid(bool newShowTransparentGrid) {
+    if (_showTransparentGrid == newShowTransparentGrid) {
+        return;
+    }
+
+    _showTransparentGrid = newShowTransparentGrid;
+
+    QSettings set;
+    set.setValue("showTransparentGrid", _showTransparentGrid);
+
+    emit showTransparentGridChanged();
 }

@@ -201,6 +201,10 @@ void ViewerController::clipboardCopyIndexFullPath(int index) {
     clipboard->setText(QDir::toNativeSeparators(_fileListModel->itemFromIndex(_fileListModel->index(index))->fullPath()));
 }
 
+QUrl ViewerController::indexUrl(int index) {
+    return QUrl::fromLocalFile(_fileListModel->itemFromIndex(_fileListModel->index(index))->fullPath());
+}
+
 void ViewerController::updateHistory(bool changeHistory) {
     if (changeHistory) {
         if (_history.size() - 1 != _indexInHistory) {

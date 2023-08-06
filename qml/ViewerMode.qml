@@ -93,20 +93,43 @@ Item {
             right: sliderContainer.left
         }
 
+        Item {
+            clip: true
+            x: Math.floor(viewerImage.x + viewerImage.width / 2 - width / 2) + (viewerAnimation.running ? 0.5 : 0)
+            y: Math.floor(viewerImage.y + viewerImage.height / 2 - height / 2) + (viewerAnimation.running ? 0.5 : 0)
+
+            width: Math.floor(viewerImage.useHeight ? viewerImage.width : (viewerImage.height * viewerImage.aspect)) - (viewerAnimation.running ? 2.5 : 0)
+            height: Math.floor(viewerImage.useHeight ? (viewerImage.width / viewerImage.aspect) : viewerImage.height) - (viewerAnimation.running ? 2.5 : 0)
+            visible: masonryLayout.view.showTransparentGrid
+
+            Image {
+                x: viewerAnimation.running ? -0.5 : 0
+                y: viewerAnimation.running ? -0.5 : 0
+                width: parent.width + (viewerAnimation.running ? 0.5 : 0)
+                height: parent.height + (viewerAnimation.running ? 0.5 : 0)
+                source: "image://resources/transparent_grid|" + dpr
+                sourceSize.width: 16 * dpr
+                sourceSize.height: 16 * dpr
+                fillMode: Image.Tile
+                verticalAlignment: Image.AlignTop
+                horizontalAlignment: Image.AlignLeft
+            }
+        }
+
         Image {
             id: viewerImage
             fillMode: Image.PreserveAspectFit
             cache: false
 
+            property int actualWidth: Math.round(viewerImage.width * dpr)
+            property int actualHeight: Math.round(viewerImage.height * dpr)
+            property real aspect: viewerImage.sourceSize.width / viewerImage.sourceSize.height
+            property bool useHeight: (viewerImage.sourceSize.height * actualWidth / actualHeight) <= viewerImage.sourceSize.width
+
             // Dirty hack to workaround blurry output. Remove someday
             property bool needScaling: {
-                let actualWidth = Math.round(viewerImage.width * dpr)
-                let actualHeight = Math.round(viewerImage.height * dpr)
-                let useHeight = (viewerImage.sourceSize.height * actualWidth / actualHeight) <= viewerImage.sourceSize.width
-
-                return useHeight ?
-                            (Math.abs(viewerImage.sourceSize.width - actualWidth) > 1) :
-                            (Math.abs(viewerImage.sourceSize.height - actualHeight) > 1)
+                return useHeight ? (Math.abs(viewerImage.sourceSize.width - actualWidth) > 1) :
+                                   (Math.abs(viewerImage.sourceSize.height - actualHeight) > 1)
             }
             smooth: needScaling
         }

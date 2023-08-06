@@ -17,6 +17,47 @@ BrickItem {
 
     property real sizeBase: Math.min(width, height - 26) - masonryLayout.spacing
 
+    property var imageItem: brickDelegate
+
+    component ImageView : Item {
+        property alias source: image.source
+        property real padding
+        property bool needScaling: image.sourceSize.width !== Math.round(image.width * dpr) ||
+                                   image.sourceSize.height !== Math.round(image.height * dpr)
+        property alias image: image
+
+        x: padding / 2
+        y: padding / 2
+        width: Math.round((parent.width - padding) * dpr) / dpr
+        height: Math.round((parent.height - padding) * dpr) / dpr
+
+        Image {
+            visible: masonryLayout.showTransparentGrid
+            width: parent.width
+            height: parent.height
+            source: "image://resources/transparent_grid|" + dpr
+            sourceSize.width: 16 * dpr
+            sourceSize.height: 16 * dpr
+            fillMode: Image.Tile
+            verticalAlignment: Image.AlignTop
+            horizontalAlignment: Image.AlignLeft
+        }
+
+        Image {
+            id: image
+
+            // Dirty hack to workaround blurry output. Remove someday
+            smooth: needScaling
+            width: parent.width
+            height: parent.height
+
+            fillMode: Image.PreserveAspectCrop
+            cache: false
+            //                    opacity: 0.1
+            //                    asynchronous: true
+        }
+    }
+
     Component {
         id: fileDelegate
 
@@ -90,6 +131,10 @@ BrickItem {
                     wrapMode: Text.Wrap
                 }
             }
+
+            Component.onCompleted: {
+                brickDelegate.imageItem = icon
+            }
         }
     }
 
@@ -138,6 +183,10 @@ BrickItem {
                 color: brickMouseArea.containsMouse || masonryLayout.currentIndex === index ? "#fff" : "#d1d1d1"
                 maximumLineCount: 1
             }
+
+            Component.onCompleted: {
+                brickDelegate.imageItem = icon
+            }
         }
     }
 
@@ -158,23 +207,10 @@ BrickItem {
                 visible: masonryLayout.currentIndex === index
             }
 
-            Image {
+            ImageView {
                 id: image
-
-                // Dirty hack to workaround blurry output. Remove someday
-                property bool needScaling: image.sourceSize.width !== Math.round(image.width * dpr) ||
-                                           image.sourceSize.height !== Math.round(image.height * dpr)
-                width: Math.round((parent.width - masonryLayout.spacing) * dpr) / dpr
-                height: Math.round((parent.height - masonryLayout.spacing) * dpr) / dpr
-                smooth: needScaling
-
-                x: masonryLayout.spacing / 2
-                y: masonryLayout.spacing / 2
-                fillMode: Image.PreserveAspectCrop
-                cache: false
+                padding: masonryLayout.spacing
                 source: imageId
-                //                    opacity: 0.1
-                //                    asynchronous: true
             }
 
             Rectangle {
@@ -213,6 +249,10 @@ BrickItem {
                     maximumLineCount: 4
                     wrapMode: Text.Wrap
                 }
+            }
+
+            Component.onCompleted: {
+                brickDelegate.imageItem = image.image
             }
         }
     }
@@ -291,22 +331,12 @@ BrickItem {
                         property string iconPath
                         property bool folderView: false
 
-                        Image {
+                        ImageView {
                             id: image2
 
-                            // Dirty hack to workaround blurry output. Remove someday
-                            property bool needScaling: false
-                            width: Math.round((parent.width - masonryLayout2.spacing) * dpr) / dpr
-                            height: Math.round((parent.height - masonryLayout2.spacing) * dpr) / dpr
-                            smooth: needScaling
-                            cache: false
-
-                            x: masonryLayout2.spacing / 2
-                            y: masonryLayout2.spacing / 2
-                            fillMode: Image.PreserveAspectCrop
+                            needScaling: false
+                            padding: masonryLayout2.spacing
                             source: imageId
-                            //                    opacity: 0.1
-                            //                    asynchronous: true
                         }
                     }
                 }
@@ -348,6 +378,9 @@ BrickItem {
                 }
             }
 
+            Component.onCompleted: {
+                brickDelegate.imageItem = masonryLayout2
+            }
         }
     }
 
@@ -427,22 +460,12 @@ BrickItem {
                         property string iconPath
                         property bool folderView: false
 
-                        Image {
+                        ImageView {
                             id: image2
 
-                            // Dirty hack to workaround blurry output. Remove someday
-                            property bool needScaling: false
-                            width: Math.round((parent.width - masonryLayout2.spacing) * dpr) / dpr
-                            height: Math.round((parent.height - masonryLayout2.spacing) * dpr) / dpr
-                            smooth: needScaling
-                            cache: false
-
-                            x: masonryLayout2.spacing / 2
-                            y: masonryLayout2.spacing / 2
-                            fillMode: Image.PreserveAspectCrop
+                            needScaling: false
+                            padding: masonryLayout2.spacing
                             source: imageId
-                            //                    opacity: 0.1
-                            //                    asynchronous: true
                         }
                     }
                 }
@@ -482,16 +505,39 @@ BrickItem {
                     wrapMode: Text.Wrap
                 }
             }
+
+            Component.onCompleted: {
+                brickDelegate.imageItem = masonryLayout2
+            }
         }
     }
 
+    Item {
+        id: draggable
+
+        anchors.fill: parent
+        Drag.active: brickMouseArea.drag.active
+        Drag.dragType: Drag.Automatic
+        Drag.mimeData: {
+            "text/uri-list": [viewerController.indexUrl(masonryLayout.currentIndex)]
+        }
+    }
 
     MouseArea {
         id: brickMouseArea
         anchors.fill: parent
         hoverEnabled: true
 
-        onPressed: {
+        drag.target: draggable
+
+        onPressed: (mouse) => {
+            let mappedPos = imageItem.mapFromItem(brickMouseArea, mouse.x, mouse.y)
+            draggable.Drag.hotSpot.x = mappedPos.x
+            draggable.Drag.hotSpot.y = mappedPos.y
+            imageItem.grabToImage(function(result) {
+                draggable.Drag.imageSource = result.url
+            })
+
             focusProxy.forceActiveFocus()
 
             if (scrollingMode) {

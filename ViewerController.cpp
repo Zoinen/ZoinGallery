@@ -202,6 +202,9 @@ void ViewerController::clipboardCopyIndexFullPath(int index) {
 }
 
 QUrl ViewerController::indexUrl(int index) {
+    if (index < 0) {
+        return QUrl();
+    }
     return QUrl::fromLocalFile(_fileListModel->itemFromIndex(_fileListModel->index(index))->fullPath());
 }
 

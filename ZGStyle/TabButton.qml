@@ -9,9 +9,16 @@ T.TabButton {
 
     focusPolicy: Qt.NoFocus
 
-    icon.color: checked ? Style.buttonFocus : Style.hovered
+    icon.color: checked ? (control.down ? Style.buttonFocusPressed : Style.buttonFocus) :
+                          (control.down ? Style.textPressed : Style.text)
 
-    background: Rectangle {
-        color: control.down ? Style.controlBackgroundPressed : (control.hovered ? Style.controlBackground : "transparent")
+    background: Item{
+        Rectangle {
+            anchors.centerIn: parent
+            width: 32
+            height: 32
+            radius: 4
+            color: control.down ? Style.controlBackgroundPressed : (control.hovered ? Style.controlBackground : "transparent")
+        }
     }
 }

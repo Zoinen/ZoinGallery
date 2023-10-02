@@ -14,7 +14,7 @@ MouseArea {
         anchors {
             fill: parent
         }
-        color: "#202020"
+        color: Style.background
     }
 
     signal toggleViewer()
@@ -405,6 +405,11 @@ MouseArea {
         }
         clip: true
         model: fileListModel
+
+        paddingLeft: 9
+        paddingRight: 9
+        paddingTop: 11
+        paddingBottom: 11
 
         Behavior on contentY {
             enabled: scrollingMode

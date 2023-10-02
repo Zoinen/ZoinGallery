@@ -40,13 +40,15 @@ struct ImageFile {
     bool isImage;
     bool isFolderView;
     bool isCachedThumbnail;
+    bool canHaveTransparency;
     QString iconPath;
     int index;
 
     QList<ImageFile *> subfiles;
     ImageFile *parent;
 
-    ImageFile() : isFolder(false), isFolderView(false), isCachedThumbnail(false), index(-1), parent(nullptr) {}
+    ImageFile() : isFolder(false), isFolderView(false), isCachedThumbnail(false), index(-1), parent(nullptr),
+        canHaveTransparency(false) {}
 
     QString fullPath() const {
         return folderPath + QDir::separator() + fileName;

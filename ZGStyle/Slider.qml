@@ -15,7 +15,7 @@ T.Slider {
         width: control.orientation === Qt.Horizontal ? control.availableWidth : control.width
         height: control.orientation === Qt.Horizontal ? (rectangular ? control.height : 6) : control.availableHeight
         radius: !rectangular ? 2 : 0
-        color: "#292929"
+        color: "#1f1f1f"
 
         Rectangle {
             width: control.orientation === Qt.Horizontal ? control.visualPosition * parent.width : parent.width
@@ -32,6 +32,6 @@ T.Slider {
         implicitWidth: !rectangular ? 18 : 0
         implicitHeight: 18
         radius: 18
-        color: control.pressed ? "#878787" : "#676767"
+        color: control.pressed ? "#808080" : "#595959"
     }
 }

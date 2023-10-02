@@ -25,8 +25,8 @@ Item {
             right: parent.right
             verticalCenter: parent.verticalCenter
         }
-        height: 36
-        color: pathMouse.containsMouse ? "#3e3e3e" : "transparent"
+        height: 32
+        color: pathMouse.containsMouse ? "#3e3e3e" : "#373737"
         radius: 4
     }
 
@@ -58,13 +58,13 @@ Item {
 
         signal clicked(index: int)
 
-        implicitWidth: folder.width + 7
+        implicitWidth: folder.width + 12
         implicitHeight: parent.height
 
         Rectangle {
             anchors.centerIn: parent
             width: parent.width
-            height: 36
+            height: 32
             color: folderMouse.containsMouse ? (folderMouse.pressed ? Style.controlBackgroundPressed : Style.controlBackground) : "transparent"
             radius: 4
         }
@@ -72,11 +72,11 @@ Item {
         Row {
             id: folder
             anchors.centerIn: parent
-            spacing: 7
+            spacing: 12
 
             Text {
                 id: folderText
-                color: folderMouse.containsMouse ? Style.hovered : Style.text
+                color: folderMouse.containsMouse ? (folderMouse.pressed ? Style.textPressed : Style.hovered) : Style.text
             }
 
             Image {
@@ -110,15 +110,15 @@ Item {
         spacing: 0
 
         Item {
-            Layout.leftMargin: 10
-            Layout.preferredWidth: 20
+            Layout.leftMargin: 15
+            Layout.preferredWidth: 24
             Layout.preferredHeight: parent.height
 
             Image {
                 anchors {
                     verticalCenter: parent.verticalCenter
                     right: parent.right
-                    rightMargin: 3
+                    rightMargin: 7
                 }
 
                 source: "qrc:/resources/FolderIcon.svg"

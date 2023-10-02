@@ -8,7 +8,7 @@ import ZoinGallery.MainWindow 1.0
 MainWindow {
     id: topLevelWindow
     visible: true
-    color: "#333333"
+    color: Style.toolbarBackground
     title: "Zoin Gallery"
 
     property bool viewerDirty: false
@@ -112,14 +112,14 @@ MainWindow {
                 id: toolbarLayout
                 Layout.fillWidth: true
                 Layout.preferredHeight: 46
-                spacing: 0
+                spacing: 12
 
                 component Separator : Rectangle {
                     Layout.leftMargin: 5
                     Layout.rightMargin: 5
                     implicitWidth: 1
-                    implicitHeight: 46 - 10
-                    color: "#474747"
+                    implicitHeight: 46 - 15
+                    color: Style.separator
                 }
 
                 component ToolbarButton : Button {
@@ -244,23 +244,19 @@ MainWindow {
                     }
                 }
 
-                Separator {}
-
                 PathControl {
                     onEditModeChanged: {
                         if (!editMode) {
                             masonryLayout.focusProxy.forceActiveFocus()
                         }
                     }
-                    Layout.rightMargin: 10
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 46
+                    Layout.preferredHeight: 32
 
                     text: viewerController.currentPath
                 }
 
                 Text {
-                    Layout.leftMargin: 5
                     Layout.rightMargin: 5
                     Layout.alignment: Qt.AlignVCenter
                     Layout.preferredWidth: 50
@@ -274,7 +270,6 @@ MainWindow {
                     id: masonryZoomSlider
                     Layout.preferredWidth: 100
                     Layout.preferredHeight: 30
-                    Layout.rightMargin: 10
                     Layout.alignment: Qt.AlignVCenter
                     from: 30
                     value: masonryLayout.view.targetHeight
@@ -298,6 +293,8 @@ MainWindow {
                 TabBar {
                     spacing: 0
                     Layout.alignment: Qt.AlignVCenter
+                    Layout.leftMargin: -12
+                    Layout.rightMargin: 5
 
                     Shortcut {
                         sequence: "F8"
@@ -346,7 +343,7 @@ MainWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 1
-                color: "#474747"
+                color: Style.separator
             }
 
             MasonryMode {
@@ -392,7 +389,7 @@ MainWindow {
                 when: !topLevelWindow.active
                 PropertyChanges {
                     target: topLevelWindow
-                    color: "#202020"
+                    color: Style.background
                 }
             }
         ]

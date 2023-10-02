@@ -27,7 +27,7 @@ QRectF roundRect(const QRectF &rectF) {
 
 MasonryLayout::MasonryLayout(QQuickItem *parent)
     : QQuickItem(parent) {
-    _targetHeight = 200;//87;//84;//30;
+    _targetHeight = 150;//87;//84;//30;
     _visibleStart = -1;
     _visibleEnd = -1;
     _topItem = 0;
@@ -39,7 +39,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _viewport = nullptr;
     _needScroll = false;
     _dp = 1;
-    _spacing = 8; // Should be divisible by 4
+    _spacing = 12; // Should be divisible by 4
     QSettings set;
     _listView = set.value("listView", false).toBool();
     _showTransparentGrid = set.value("showTransparentGrid", true).toBool();
@@ -47,6 +47,11 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
 
     _currentScrollingMode = false;
     _currentScrollingDirection = -2;
+
+    _paddingLeft = 0;
+    _paddingRight = 0;
+    _paddingTop = 0;
+    _paddingBottom = 0;
 
     _quickSearch = new MasonryLayoutQuickSearch(this);
 }
@@ -96,6 +101,12 @@ int MasonryLayout::indexAt(qreal x, qreal y) const {
 
 QRectF MasonryLayout::indexGeometry(int index) const {
     if (index >= 0 && index < _bricks.size()) {
+        if (_bricks[index].row == _bricks[_bricks.size() - 1].row) {
+            return _bricks[index].geometry().adjusted(0, 0, 0, _paddingBottom);
+        }
+        if (!_bricks[index].row) {
+            return _bricks[index].geometry().adjusted(0, -_paddingTop, 0, 0);
+        }
         return _bricks[index].geometry();
     }
     return QRectF();
@@ -203,6 +214,7 @@ BrickItem *MasonryLayout::createComponent() {
         _viewport = qobject_cast<QQuickItem*>(component.create(QQmlEngine::contextForObject(this)));
         _viewport->setParentItem(this);
         _viewport->setParent(this);
+        _viewport->setX(_paddingLeft);
     }
 
     if (!_delegate) {
@@ -226,7 +238,7 @@ void MasonryLayout::rewrap() {
         currentIndexOffset = _contentY - _bricks[_currentIndex].y;
     }
 
-    calcLayout(_bricks, width(), _targetHeight, _spacing, !_listView);
+    calcLayout(_bricks, width() - _paddingLeft - _paddingRight, _targetHeight, _spacing, !_listView, _paddingTop);
 //    qDebug() << "--------------------";
 //    for (int i = 0; i < _bricks.size(); i++) {
 //        qDebug() << _bricks[i].image->path << _bricks[i].originalSize << _bricks[i].normalizedSize;
@@ -234,7 +246,7 @@ void MasonryLayout::rewrap() {
 
 
     if (_bricks.size()) {
-        setContentHeight(_bricks.last().y + _bricks.last().normalizedSize.height());
+        setContentHeight(_bricks.last().y + _bricks.last().normalizedSize.height() + _paddingBottom);
     }
     else {
         setContentHeight(0);
@@ -289,11 +301,12 @@ qreal MasonryLayout::scaleRow(QList<MasonryBrick> &bricks, int canvasWidth, int 
     return rowHeight;
 }
 
-void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, bool lastRowMatchesPrevious) {
+void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing,
+                               bool lastRowMatchesPrevious, qreal paddingTop) {
     int currentRow = 0;
     int currentColumn = 0;
     qreal lastX = 0;
-    qreal lastY = 0;
+    qreal lastY = paddingTop;
 
     for (int i = 0; i < bricks.size(); i++) {
         bricks[i].normalizedSize = scaleToHeightWithSpacing(bricks[i].originalSize, rowTargetHeight, spacing);
@@ -460,6 +473,10 @@ void MasonryLayout::updateProperties() {
             if (_bricks[i].item->property("isFolder").toBool() != _bricks[i].image->isFolder) {
                 _bricks[i].item->setProperty("isFolder", _bricks[i].image->isFolder);
             }
+
+            if (_bricks[i].item->property("canHaveTransparency").toBool() != _bricks[i].image->canHaveTransparency) {
+                _bricks[i].item->setProperty("canHaveTransparency", _bricks[i].image->canHaveTransparency);
+            }
         }
     }
 
@@ -544,7 +561,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
 //    }
 //    qDebug() << "==";
 
-    calcLayout(_currentLoadingRow, width(), _targetHeight, _spacing, !_listView);
+    calcLayout(_currentLoadingRow, width() - _paddingLeft - _paddingRight, _targetHeight, _spacing, !_listView);
     if (_currentLoadingRow.last().row > 0 || flushMode) {
 //        qDebug() << "//// pushing" << _currentLoadingRow.first().globalIndex << flushMode << _currentLoadingRow.size();
 //        qDebug() << "REWRAP";
@@ -661,7 +678,7 @@ void MasonryLayout::zoom(bool in) {
 
     QList<MasonryBrick> bricks;
     QSize minSize = QSize(_targetHeight * BrickSize.width() / BrickSize.height(), _targetHeight);
-    for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
+    for (int i = 0; i <= ((width() - _paddingLeft - _paddingRight) / minSize.width()) * 2; i++) {
         bricks.append(MasonryBrick(BrickSize.width(), BrickSize.height()));
     }
     int columns = -1;
@@ -671,8 +688,8 @@ void MasonryLayout::zoom(bool in) {
     int targetHeightRangeStart = -1;
     int targetHeightRangeEnd = -1;
 
-    for (int targetHeight = _targetHeight; targetHeight >= smallestHeight && targetHeight <= largestHeight; targetHeight += increment) {
-        calcLayout(bricks, width(), targetHeight, _spacing, !_listView);
+    for (int targetHeight = _targetHeight - _paddingBottom; targetHeight >= smallestHeight && targetHeight <= largestHeight; targetHeight += increment) {
+        calcLayout(bricks, width() - _paddingLeft - _paddingRight, targetHeight, _spacing, !_listView, _paddingTop);
         for (int i = 0; i < bricks.size(); i++) {
             if (bricks[i].row && i) {
                 if (columns == -1) {
@@ -696,7 +713,7 @@ void MasonryLayout::zoom(bool in) {
         }
     }
     if (newTargetHeight != -1 || (_targetHeight != largestHeight && in) || (_targetHeight != smallestHeight && !in)) {
-        setTargetHeight(newTargetHeight != -1 ? newTargetHeight : (in ? largestHeight : smallestHeight));
+        setTargetHeight((newTargetHeight != -1 ? newTargetHeight : (in ? largestHeight : smallestHeight)) + _paddingBottom);
         reReadAndDecodeThumbnails();
     }
 }
@@ -714,9 +731,10 @@ void MasonryLayout::updateNeedScroll() {
     if (newNeedScroll != _needScroll && height() > 0) {
         QList<MasonryBrick> bricks = _bricks;
         // TODO: Scrollbar height is hardcoded here
-        calcLayout(bricks, width() + (newNeedScroll ? 0 : 16), _targetHeight, _spacing, !_listView);
+        calcLayout(bricks, width() - _paddingLeft - _paddingRight + (newNeedScroll ? 0 : 16), _targetHeight, _spacing,
+                   !_listView, _paddingTop);
 
-        int newContentHeight = (bricks.last().y + bricks.last().normalizedSize.height());
+        int newContentHeight = (bricks.last().y + bricks.last().normalizedSize.height() + _paddingBottom);
         newNeedScroll = newContentHeight > height();
         if (newNeedScroll != _needScroll && newContentHeight > 0) {
             _needScroll = newNeedScroll;
@@ -819,10 +837,10 @@ void MasonryLayout::startRender() {
     dynamic_cast<ThumbnailsRequestInterface *>(_model)->renderRequestComplete();
     QList<MasonryBrick> bricks;
     QSize minSize = QSize(_targetHeight * BrickSize.width() / BrickSize.height(), _targetHeight);
-    for (int i = 0; i <= (width() / minSize.width()) * 2; i++) {
+    for (int i = 0; i <= ((width() - _paddingLeft - _paddingRight) / minSize.width()) * 2; i++) {
         bricks.append(MasonryBrick(BrickSize.width(), BrickSize.height()));
     }
-    calcLayout(bricks, width(), _targetHeight, _spacing, !_listView);
+    calcLayout(bricks, width() - _paddingLeft - _paddingRight, _targetHeight, _spacing, !_listView);
     if (bricks.size()) {
         QSizeF projectedSize = bricks.first().normalizedSize;
         dynamic_cast<ThumbnailsRequestInterface *>(_model)->requestThumbnails(dp(projectedSize));
@@ -1065,4 +1083,60 @@ void MasonryLayout::setShowTransparentGrid(bool newShowTransparentGrid) {
     set.setValue("showTransparentGrid", _showTransparentGrid);
 
     emit showTransparentGridChanged();
+}
+
+qreal MasonryLayout::paddingLeft() const {
+    return _paddingLeft;
+}
+
+void MasonryLayout::setPaddingLeft(qreal newPaddingLeft) {
+    if (qFuzzyCompare(_paddingLeft, newPaddingLeft))
+        return;
+    _paddingLeft = newPaddingLeft;
+    if (_viewport) {
+        _viewport->setX(_paddingLeft);
+    }
+    rewrap();
+    updateProperties();
+    emit paddingLeftChanged();
+}
+
+qreal MasonryLayout::paddingRight() const {
+    return _paddingRight;
+}
+
+void MasonryLayout::setPaddingRight(qreal newPaddingRight) {
+    if (qFuzzyCompare(_paddingRight, newPaddingRight))
+        return;
+    _paddingRight = newPaddingRight;
+    rewrap();
+    updateProperties();
+    emit paddingRightChanged();
+}
+
+qreal MasonryLayout::paddingTop() const {
+    return _paddingTop;
+}
+
+void MasonryLayout::setPaddingTop(qreal newPaddingTop) {
+    if (qFuzzyCompare(_paddingTop, newPaddingTop))
+        return;
+
+    _paddingTop = newPaddingTop;
+    rewrap();
+    updateProperties();
+    emit paddingTopChanged();
+}
+
+qreal MasonryLayout::paddingBottom() const {
+    return _paddingBottom;
+}
+
+void MasonryLayout::setPaddingBottom(qreal newPaddingBottom) {
+    if (qFuzzyCompare(_paddingBottom, newPaddingBottom))
+        return;
+    _paddingBottom = newPaddingBottom;
+    rewrap();
+    updateProperties();
+    emit paddingBottomChanged();
 }

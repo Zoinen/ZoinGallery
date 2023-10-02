@@ -448,6 +448,8 @@ ImageFile *FileListModel::createFileItem(const QString &folderPath, const QStrin
 
     if (isImage(item->fileName)) {
         item->isImage = true;
+        QString lowerFileName = item->fileName.toLower();
+        item->canHaveTransparency = lowerFileName.endsWith(".svg") || lowerFileName.endsWith(".png") || lowerFileName.endsWith("webp");
         item->iconPath = "qrc:/resources/ImageIcon.svg";
 //                updateImageId(item);
         QString path = item->fullPath();

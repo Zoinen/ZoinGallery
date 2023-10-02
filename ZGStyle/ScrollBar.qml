@@ -14,13 +14,19 @@ T.ScrollBar {
     rightPadding: 0
     bottomPadding: 0
 
-    contentItem: Rectangle {
+    contentItem: Item {
         id: contentItem
         implicitWidth: 15
-        color: scroll.pressed ? Style.midDarkLighter : Style.midDark
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 4
+            radius: 4
+            color: scroll.pressed ? Style.scrollBarHandlePressed : Style.scrollBarHandle
+        }
     }
 
     background: Rectangle {
-        color: Style.controlBackground
+        color: Style.scrollBarBackground
     }
 }

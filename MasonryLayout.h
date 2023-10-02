@@ -51,6 +51,11 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(bool listView READ listView WRITE setListView NOTIFY listViewChanged)
     Q_PROPERTY(bool showTransparentGrid READ showTransparentGrid WRITE setShowTransparentGrid NOTIFY showTransparentGridChanged)
 
+    Q_PROPERTY(qreal paddingLeft READ paddingLeft WRITE setPaddingLeft NOTIFY paddingLeftChanged)
+    Q_PROPERTY(qreal paddingRight READ paddingRight WRITE setPaddingRight NOTIFY paddingRightChanged)
+    Q_PROPERTY(qreal paddingTop READ paddingTop WRITE setPaddingTop NOTIFY paddingTopChanged)
+    Q_PROPERTY(qreal paddingBottom READ paddingBottom WRITE setPaddingBottom NOTIFY paddingBottomChanged)
+
 public:
     explicit MasonryLayout(QQuickItem *parent = nullptr);
     void componentComplete() override;
@@ -103,6 +108,18 @@ public:
     bool showTransparentGrid() const;
     void setShowTransparentGrid(bool newShowTransparentGrid);
 
+    qreal paddingLeft() const;
+    void setPaddingLeft(qreal newPaddingLeft);
+
+    qreal paddingRight() const;
+    void setPaddingRight(qreal newPaddingRight);
+
+    qreal paddingTop() const;
+    void setPaddingTop(qreal newPaddingTop);
+
+    qreal paddingBottom() const;
+    void setPaddingBottom(qreal newPaddingBottom);
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -128,6 +145,14 @@ signals:
     void currentImageIndexChanged();
 
     void showTransparentGridChanged();
+
+    void paddingLeftChanged();
+
+    void paddingRightChanged();
+
+    void paddingTopChanged();
+
+    void paddingBottomChanged();
 
 private slots:
     void onThumbnailReadFinished(ImageFile *root);
@@ -158,7 +183,7 @@ private:
 
     void rewrap();
     static qreal scaleRow(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, int lastRowIndex, qreal rowHeight = 0);
-    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, bool lastRowMatchesPrevious);
+    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, bool lastRowMatchesPrevious, qreal paddingTop = 0);
     void updateProperties();
     void setContentYInternal(qreal newContentY);
     void startRender();
@@ -214,6 +239,11 @@ private:
     int _imageCount;
     int _currentImageIndex;
     bool _showTransparentGrid;
+
+    qreal _paddingLeft;
+    qreal _paddingRight;
+    qreal _paddingTop;
+    qreal _paddingBottom;
 };
 
 #endif // MASONRYLAYOUT_H

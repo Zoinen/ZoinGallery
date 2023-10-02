@@ -232,7 +232,7 @@ Item {
             right: parent.right
             bottom: parent.bottom
         }
-        width: 20
+        width: 16
 
         opacity: root.state === "viewer"
         Behavior on opacity {
@@ -241,10 +241,10 @@ Item {
 
         Slider {
             id: currentImageSlider
-            x: 20
+            x: 16
             y: 0
             width: parent.height
-            height: 20
+            height: 16
             leftPadding: 0
             rightPadding: 0
             topPadding: 0

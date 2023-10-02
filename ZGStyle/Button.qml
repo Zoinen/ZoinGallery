@@ -8,11 +8,11 @@ T.Button {
     id: control
 
     focusPolicy: Qt.NoFocus
-    property real backgroundWidth: 36
-    property real backgroundHeight: 36
+    property real backgroundWidth: 32
+    property real backgroundHeight: 32
     property real centerOffset: 0
 
-    icon.color: enabled ? Style.hovered : Style.buttonDisabled
+    icon.color: enabled ? (control.down ? Style.textPressed : Style.hovered) : Style.buttonDisabled
     icon.width: 16
     icon.height: 16
 

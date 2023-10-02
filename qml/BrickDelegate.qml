@@ -13,6 +13,7 @@ BrickItem {
     property bool isDecodedImage
     property bool isFolder
     property string iconPath
+    property bool canHaveTransparency
     property bool folderView: false
 
     property real sizeBase: Math.min(width, height - 26) - masonryLayout.spacing
@@ -20,8 +21,10 @@ BrickItem {
     property var imageItem: brickDelegate
 
     component ImageView : Item {
+        id: imageViewRoot
         property alias source: image.source
         property real padding
+        property color background
         property bool needScaling: image.sourceSize.width !== Math.round(image.width * dpr) ||
                                    image.sourceSize.height !== Math.round(image.height * dpr)
         property alias image: image
@@ -32,7 +35,8 @@ BrickItem {
         height: Math.round((parent.height - padding) * dpr) / dpr
 
         Image {
-            visible: masonryLayout.showTransparentGrid
+            id: transparencyGrid
+            visible: masonryLayout.showTransparentGrid && canHaveTransparency
             width: parent.width
             height: parent.height
             source: "image://resources/transparent_grid|" + dpr
@@ -41,6 +45,14 @@ BrickItem {
             fillMode: Image.Tile
             verticalAlignment: Image.AlignTop
             horizontalAlignment: Image.AlignLeft
+        }
+
+        Rectangle {
+            width: parent.width
+            height: parent.height
+            radius: 4
+            color: "#202020"
+            visible: image.status !== Image.Ready && !transparencyGrid.visible
         }
 
         Image {
@@ -55,6 +67,42 @@ BrickItem {
             cache: false
             //                    opacity: 0.1
             //                    asynchronous: true
+        }
+
+        Image {
+            anchors.left: image.left
+            anchors.top: image.top
+            source: "image://resources/top_left_round_corner|" + dpr + "|" + imageViewRoot.background
+            cache: true
+            sourceSize.width: 4 * dpr
+            sourceSize.height: 4 * dpr
+        }
+
+        Image {
+            anchors.right: image.right
+            anchors.top: image.top
+            source: "image://resources/top_right_round_corner|" + dpr + "|" + imageViewRoot.background
+            cache: true
+            sourceSize.width: 4 * dpr
+            sourceSize.height: 4 * dpr
+        }
+
+        Image {
+            anchors.left: image.left
+            anchors.bottom: image.bottom
+            source: "image://resources/bottom_left_round_corner|" + dpr + "|" + imageViewRoot.background
+            cache: true
+            sourceSize.width: 4 * dpr
+            sourceSize.height: 4 * dpr
+        }
+
+        Image {
+            anchors.right: image.right
+            anchors.bottom: image.bottom
+            source: "image://resources/bottom_right_round_corner|" + dpr + "|" + imageViewRoot.background
+            cache: true
+            sourceSize.width: 4 * dpr
+            sourceSize.height: 4 * dpr
         }
     }
 
@@ -73,6 +121,7 @@ BrickItem {
                                                           Math.max(0, fileName.height - fileName.contentHeight + sizeBase / 40 - icon.y))
                 }
                 color: Style.selectedBrick
+                radius: 4
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -85,6 +134,7 @@ BrickItem {
                     bottomMargin: 2 + delegateOutline.anchors.bottomMargin + 2
                 }
                 color: Style.selectedBrick
+                radius: 4
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -152,6 +202,7 @@ BrickItem {
                     bottomMargin: 2
                 }
                 color: Style.selectedBrick
+                radius: 4
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -204,6 +255,7 @@ BrickItem {
                     bottomMargin: -2
                 }
                 color: Style.selectedBrick
+                radius: 4
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -211,6 +263,7 @@ BrickItem {
                 id: image
                 padding: masonryLayout.spacing
                 source: imageId
+                background: "#1b1b1b"
             }
 
             Rectangle {
@@ -271,6 +324,7 @@ BrickItem {
                     bottomMargin: 2
                 }
                 color: Style.selectedBrick
+                radius: 4
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -337,6 +391,7 @@ BrickItem {
                             needScaling: false
                             padding: masonryLayout2.spacing
                             source: imageId
+                            background: "#2d2d2d"
                         }
                     }
                 }
@@ -398,6 +453,7 @@ BrickItem {
                     bottomMargin: 2
                 }
                 color: Style.selectedBrick
+                radius: 4
                 visible: masonryLayout.currentIndex === index
             }
 
@@ -466,6 +522,7 @@ BrickItem {
                             needScaling: false
                             padding: masonryLayout2.spacing
                             source: imageId
+                            background: "#397db1"
                         }
                     }
                 }

@@ -4,10 +4,16 @@ set (CMAKE_OSX_DEPLOYMENT_TARGET, "10.13")
 
 project(ZoinGallery LANGUAGES C CXX)
 
+option(USE_QWK "Use QWindowKit" ON)
+
+if (USE_QWK)
+    add_compile_definitions(__USE_QWK)
+endif()
+
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
 list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Bringing back removed std::auto_ptr for msvc and clang
@@ -48,6 +54,10 @@ conan_basic_setup(NO_OUTPUT_DIRS)
 find_package(QT NAMES Qt6)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Concurrent Svg QuickControls2 REQUIRED)
 
+if (USE_QWK)
+    find_package(QWindowKit REQUIRED)
+endif()
+
 set(PROJECT_SOURCES
     main.cpp
     ThumbnailLoader.h
@@ -55,6 +65,7 @@ set(PROJECT_SOURCES
     FileListModel.h
     FileListModel.cpp
     ImageFile.h
+    ImageFile.cpp
     QmlImageProvider.h
     QmlImageProvider.cpp
     ViewerController.h
@@ -78,6 +89,9 @@ set(PROJECT_SOURCES
     ThumbnailCache.cpp
     MainWindow.h
     MainWindow.cpp
+    ImageModel.h
+    ImageModel.cpp
+    DummyQWK.h
 )
 
 #if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)
@@ -121,6 +135,7 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             qml/PathControl.qml
             qml/BrickDelegate.qml
             qml/ViewerMode.qml
+            qml/RoundCorners.qml
             ZGStyle/Style.qml
             ZGStyle/ScrollBar.qml
             ZGStyle/Slider.qml
@@ -153,7 +168,20 @@ if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
             resources/PathSeparator.svg
             resources/ListView.svg
             resources/GridView.svg
+            resources/WindowClose.svg
+            resources/WindowMaximize.svg
+            resources/WindowMinimize.svg
+            resources/WindowRestore.svg
+            resources/ExifCamera.svg
+            resources/ExifDateTime.svg
+            resources/ExifImage.svg
+            resources/ExifLocation.svg
+            resources/ExifShooting.svg
         )
+endif()
+
+if (USE_QWK)
+    target_link_libraries(ZoinGallery PUBLIC QWindowKit::Quick)
 endif()
 
 target_link_libraries(ZoinGallery PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Quick

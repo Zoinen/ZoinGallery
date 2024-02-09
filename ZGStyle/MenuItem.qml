@@ -15,7 +15,7 @@ T.MenuItem {
         text: menuItem.text
         font: menuItem.font
         opacity: enabled ? 1.0 : 0.3
-        color: menuItem.highlighted ? "#ffffff" : "#ffffff"
+        color: Style.text
         horizontalAlignment: Text.AlignLeft
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
@@ -25,7 +25,7 @@ T.MenuItem {
         implicitWidth: 200
         implicitHeight: 36
         opacity: enabled ? 1 : 0.3
-        color: menuItem.highlighted ? "#383838" : "transparent"
+        color: menuItem.highlighted ? Style.lighter : "transparent"
         radius: 4
     }
 }

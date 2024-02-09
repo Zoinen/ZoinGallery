@@ -69,11 +69,13 @@ FileListModel::FileListModel(QObject *parent)
         }
     });
 
-    connect(_generator, &ThreadedThumbnailGenerator::thumbnailReady, this, [&] (const QString &path, const QImage &thumbnail) {
+    connect(_generator, &ThreadedThumbnailGenerator::thumbnailReady, this, [&] (const QString &path, const QImage &thumbnail,
+                                                                                const QVariantMap &exif) {
         auto it = _fileToItem.find(path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
             item->image = thumbnail;
+            item->exif = exif;
             updateImageId(item);
 
             QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
@@ -377,13 +379,16 @@ void FileListModel::requestThumbnails(QStringList files, QSize preferredSize) {
     emit generationFinishedChanged();
 }
 
-void FileListModel::requestThumbnails(QSize preferredSize, bool reset) {
+void FileListModel::requestThumbnails(QSize preferredSize, bool reset, int imageCount) {
 //    qDebug() << "Request thumbnails" << preferredSize;
 
     QList<ImageReadRequest> requests;
     requests.reserve(_imagePaths.size() + _folderImagePaths.size());
     for (const QString &path : _folderImagePaths) {
-        requests.append(ImageReadRequest(path, preferredSize, false, true));
+        ImageReadRequest request(path, preferredSize);
+        request.folderRequest = true;
+        request.folderRequestImageCount = imageCount;
+        requests.append(request);
     }
     for (const QString &path : _imagePaths) {
         requests.append(ImageReadRequest(path, preferredSize));
@@ -527,7 +532,9 @@ void FileListModel::requestViewer(int index, int width, int height) {
             break;
         }
         if (_items[i]->isImage) {
-            requests.append(ImageReadRequest(_items[i]->fullPath(), viewerSize, true));
+            ImageReadRequest request(_items[i]->fullPath(), viewerSize);
+            request.viewerRequest = true;
+            requests.append(request);
         }
     }
     int backwardInsertIndex = 2;
@@ -539,7 +546,9 @@ void FileListModel::requestViewer(int index, int width, int height) {
             if (backwardInsertIndex >= requests.count()) {
                 backwardInsertIndex = requests.count();
             }
-            requests.insert(backwardInsertIndex, ImageReadRequest(_items[i]->fullPath(), viewerSize, true));
+            ImageReadRequest request(_items[i]->fullPath(), viewerSize);
+            request.viewerRequest = true;
+            requests.insert(backwardInsertIndex, request);
             backwardInsertIndex += 2;
         }
     }
@@ -638,7 +647,7 @@ FileListModel *RootProxyModel::sourceModel() const {
     return static_cast<FileListModel *>(QAbstractProxyModel::sourceModel());
 }
 
-void RootProxyModel::requestThumbnails(QSize preferredSize, bool reset) {
+void RootProxyModel::requestThumbnails(QSize preferredSize, bool reset, int imageCount) {
     if (!sourceModel()) {
         return;
     }

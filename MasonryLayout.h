@@ -50,6 +50,8 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(bool needScroll READ needScroll NOTIFY needScrollChanged)
     Q_PROPERTY(bool listView READ listView WRITE setListView NOTIFY listViewChanged)
     Q_PROPERTY(bool showTransparentGrid READ showTransparentGrid WRITE setShowTransparentGrid NOTIFY showTransparentGridChanged)
+    Q_PROPERTY(int listRowHeight READ listRowHeight NOTIFY listRowHeightChanged)
+    Q_PROPERTY(QVariantList currentImageExif READ currentImageExif NOTIFY currentIndexChanged)
 
     Q_PROPERTY(qreal paddingLeft READ paddingLeft WRITE setPaddingLeft NOTIFY paddingLeftChanged)
     Q_PROPERTY(qreal paddingRight READ paddingRight WRITE setPaddingRight NOTIFY paddingRightChanged)
@@ -120,6 +122,10 @@ public:
     qreal paddingBottom() const;
     void setPaddingBottom(qreal newPaddingBottom);
 
+    qreal width() const;
+    int listRowHeight() const;
+    QVariantList currentImageExif() const;
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -154,6 +160,8 @@ signals:
 
     void paddingBottomChanged();
 
+    void listRowHeightChanged();
+
 private slots:
     void onThumbnailReadFinished(ImageFile *root);
 
@@ -162,6 +170,9 @@ private:
 
     struct MasonryBrick {
         QSizeF originalSize;
+        bool temporaryLineBreak;
+        bool lineBreak;
+
         QSizeF normalizedSize;
         qreal x;
         qreal y;
@@ -171,19 +182,20 @@ private:
         BrickItem *item;
         ImageFile *image;
         int globalIndex;
-        bool forceNewLine;
 
         MasonryBrick(int width, int height);
-        MasonryBrick(ImageFile *image_, QSizeF originalSize_);
+        MasonryBrick(ImageFile *image_, QSizeF originalSize_, bool lineBreak_ = false);
         QRectF geometry() const;
         QSize thumbnailSize(int spacing) const;
     };
 
     BrickItem *createComponent();
 
+    bool isEmbedded() const;
     void rewrap();
     static qreal scaleRow(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, int lastRowIndex, qreal rowHeight = 0);
-    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, bool lastRowMatchesPrevious, qreal paddingTop = 0);
+    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing,
+                           bool lastRowMatchesPrevious, qreal paddingTop = 0, bool growToFillWidth = true);
     void updateProperties();
     void setContentYInternal(qreal newContentY);
     void startRender();
@@ -216,9 +228,7 @@ private:
     int _topItemOffset;
     QQuickItem *_viewport;
 
-    const QSizeF BrickSize = QSize(2, 3);
-    const QSizeF BrickFolderSize = QSize(130, 3);
-    const QSizeF BrickFolderViewSize = QSize(30, 3);
+    const QSizeF GridView_Folder = QSize(2, 3);
 
     int _targetHeight;
     qreal _contentY;
@@ -239,6 +249,7 @@ private:
     int _imageCount;
     int _currentImageIndex;
     bool _showTransparentGrid;
+    int _listRowHeight;
 
     qreal _paddingLeft;
     qreal _paddingRight;

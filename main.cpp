@@ -8,6 +8,12 @@
 #include "ViewerController.h"
 #include "MainWindow.h"
 
+#if defined(__USE_QWK)
+#include <QWKQuick/qwkquickglobal.h>
+#else
+#include "DummyQWK.h"
+#endif
+
 int main(int argc, char *argv[])
 {
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
@@ -15,8 +21,10 @@ int main(int argc, char *argv[])
 #endif
 
 #if defined(Q_OS_WIN)
-    qputenv("QT_QPA_PLATFORM", "windows:darkmode=2");
+    // qputenv("QT_QPA_PLATFORM", "windows:darkmode=2");
 #endif
+    qputenv("QSG_INFO", "1");
+    qputenv("QSG_RHI_BACKEND", "d3d12");
 
     QGuiApplication app(argc, argv);
     app.setOrganizationName("Zoin");
@@ -24,6 +32,9 @@ int main(int argc, char *argv[])
     app.setApplicationName("ZoinGallery");
 
     QQuickStyle::setStyle("ZGStyle");
+#if defined(__USE_QWK)
+    QQuickWindow::setDefaultAlphaBuffer(true);
+#endif
 
     qmlRegisterType<MainWindow>("ZoinGallery.MainWindow", 1, 0, "MainWindow");
     qmlRegisterRevision<QWindow, 1>("ZoinGallery.MainWindow", 1, 0);
@@ -39,6 +50,15 @@ int main(int argc, char *argv[])
     }, Qt::QueuedConnection);
 
     ViewerController *controller = new ViewerController(&engine);
+
+#if defined(__USE_QWK)
+    qDebug() << "Using QWK";
+    QWK::registerTypes(&engine);
+#else
+    qDebug() << "Using dummy QWK";
+    DummyQWK::registerTypes(&engine);
+#endif
+
     engine.load(url);
 
     QSettings set;

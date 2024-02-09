@@ -43,6 +43,7 @@ struct ImageFile {
     bool canHaveTransparency;
     QString iconPath;
     int index;
+    QVariantMap exif;
 
     QList<ImageFile *> subfiles;
     ImageFile *parent;
@@ -57,6 +58,8 @@ struct ImageFile {
     bool folderView() const {
         return subfiles.size() != 0 || isFolderView;
     }
+
+    QVariantList exifList();
 };
 
 struct ImageReadRequest {
@@ -64,14 +67,18 @@ struct ImageReadRequest {
     QSize targetSize;
     bool viewerRequest;
     bool folderRequest;
-    bool inFolderRequest;
+    int folderRequestImageCount;
     bool higherThumbnailRequest;
     int queueId;
 
-    ImageReadRequest(const QString &path = QString(), const QSize &size = QSize(), bool viewerRequest_ = false,
-                     bool folderRequest_ = false, bool inFolderRequest_ = false)
-        : sourcePath(path), targetSize(size), viewerRequest(viewerRequest_), folderRequest(folderRequest_),
-          inFolderRequest(inFolderRequest_), higherThumbnailRequest(false), queueId(-1) {}
+    ImageReadRequest(const QString &path = QString(), const QSize &size = QSize()) :
+        sourcePath(path),
+        targetSize(size),
+        viewerRequest(false),
+        folderRequest(false),
+        folderRequestImageCount(0),
+        higherThumbnailRequest(false),
+        queueId(-1) {}
 
     bool operator==(const ImageReadRequest &other) const {
         return sourcePath == other.sourcePath && viewerRequest == other.viewerRequest && higherThumbnailRequest == other.higherThumbnailRequest;
@@ -90,6 +97,7 @@ struct ImageReadResult {
     QString mimeType;
     QByteArray thumbnailData;
     QByteArray fullImageData;
+    QVariantMap exif;
     bool largerImageAvailable;
     bool success;
 

@@ -6,6 +6,6 @@ T.MenuSeparator {
     contentItem: Rectangle {
         implicitWidth: 200
         implicitHeight: 1
-        color: "#3d3d3d"
+        color: Style.lighter
     }
 }

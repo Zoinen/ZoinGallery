@@ -57,6 +57,16 @@ void MainWindow::toggleFullscreen() {
     if (visibility() == QWindow::FullScreen) {
         setVisibility(nonFSVisibility);
         _ignoreNormalGeometryChange = false;
+
+#if defined(__USE_QWK)
+        // Temporary workaround for transparent window BG bug
+        QRect geom = geometry();
+        setGeometry(QRect(0, 0, 0, 0));
+        QTimer::singleShot(0, this, [=] () {
+            setGeometry(geom.adjusted(1, 0, 0, 0));
+            setGeometry(geom);
+        });
+#endif
     }
     else {
         _ignoreNormalGeometryChange = true;
@@ -69,10 +79,28 @@ bool MainWindow::isResizing() const {
     return _leftButtonPressed;
 }
 
+bool MainWindow::isQWK() const {
+#if defined(__USE_QWK)
+    return true;
+#else
+    return false;
+#endif
+}
+
 void MainWindow::showEvent(QShowEvent *event) {
     QQuickWindow::showEvent(event);
     _lastSize = size();
     qDebug() << "SHOW" << geometry();
+
+#if defined(__USE_QWK)
+    // Temporary workaround for transparent window BG bug
+    QRect geom = geometry();
+    setGeometry(QRect(0, 0, 0, 0));
+    QTimer::singleShot(0, this, [=] () {
+        setGeometry(geom.adjusted(1, 0, 0, 0));
+        setGeometry(geom);
+    });
+#endif
 }
 
 void MainWindow::updateDpr() {

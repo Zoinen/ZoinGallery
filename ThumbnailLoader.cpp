@@ -126,6 +126,12 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         else {
             outResult.fullSize = readResolutionFromExif(image.get());
         }
+        outResult.exif = readExif(image.get());
+        outResult.exif["Width"] = outResult.fullSize.width();
+        outResult.exif["Height"] = outResult.fullSize.height();
+        outResult.exif["Size"] = f.size();
+
+        // qDebug().noquote() << "-------------------\n" << QJsonDocument(QJsonObject::fromVariantMap(outResult.exif)).toJson() << "\n---------------";
 //        qDebug() << "OUT FULL SIZE" << path << outResult.fullSize;
 
 //        qDebug() << outResult.request.sourcePath << outResult.fullSize;
@@ -149,6 +155,7 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         if (previewImg.pData_) {
             outResult.thumbnailData = QByteArray::fromRawData(reinterpret_cast<char *>(previewImg.pData_), previewImg.size_);
             outResult.mimeType = QString::fromStdString(previewProp.mimeType_);
+            fixMimeType(outResult.mimeType, outResult.request.sourcePath);
             outResult.thumbnailSize = QSize(previewProp.width_, previewProp.height_);
             if (!outResult.request.higherThumbnailRequest) {
                 outResult.largerImageAvailable = largerImageAvailable;
@@ -159,6 +166,7 @@ bool ThumbnailLoader::readExifPreview(const QString &path, QSize preferredSize, 
         }
         else {
             outResult.mimeType = QString::fromStdString(image->mimeType());
+            fixMimeType(outResult.mimeType, outResult.request.sourcePath);
         }
     } catch (Exiv2::AnyError& e) {
         std::cout << "Caught Exiv2 exception '" << e << "'" << std::endl;
@@ -183,6 +191,7 @@ bool ThumbnailLoader::readGenericPreview(const QString &path, QSize preferredSiz
     outResult.fullSize = reader.size();
     QMimeDatabase mimeDatabase;
     outResult.mimeType = mimeDatabase.mimeTypeForData(outResult.fullImageData).name();
+    fixMimeType(outResult.mimeType, outResult.request.sourcePath);
     return reader.canRead();
 }
 
@@ -409,6 +418,79 @@ ExifOrientation ThumbnailLoader::readOrientationFromExif(Exiv2::Image *image) {
     return orientation;
 }
 
+QVariantMap ThumbnailLoader::readExif(Exiv2::Image *image) {
+    QVariantMap out;
+    const Exiv2::ExifData &exifData = image->exifData();
+    // for (auto it = exifData.begin(); it != exifData.end(); ++it) {
+    //     out[it->key().c_str()] = it->value().toString().c_str();
+    // }
+
+    if (!exifData.empty()) {
+        auto dateTimeOriginalIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.DateTimeOriginal"));
+        if (dateTimeOriginalIt != exifData.end()) {
+            out["DateTime"] = QDateTime::fromString(QString::fromStdString(dateTimeOriginalIt->value().toString()),
+                                                                                "yyyy:MM:dd hh:mm:ss");
+        }
+
+        QStringList shooting;
+        auto shutterIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.ExposureTime"));
+        if (shutterIt != exifData.end()) {
+            out["ShutterSpeed"] = QString::fromStdString(shutterIt->value().toString());
+        }
+        auto fIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.FNumber"));
+        if (fIt != exifData.end()) {
+            out["FNumber"] = QString::fromStdString(fIt->value().toString());
+        }
+        auto isoIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.ISOSpeedRatings"));
+        if (isoIt != exifData.end()) {
+            out["ISO"] = QString::fromStdString(isoIt->value().toString());
+        }
+
+        auto uniqueCameraModelIt = exifData.findKey(Exiv2::ExifKey("Exif.Image.UniqueCameraModel"));
+        if (uniqueCameraModelIt != exifData.end()) {
+            out["Camera"] = QString::fromStdString(uniqueCameraModelIt->value().toString());
+        }
+        else {
+            QString cameraModel;
+            auto imageMakeIt = exifData.findKey(Exiv2::ExifKey("Exif.Image.Make"));
+            auto imageModelIt = exifData.findKey(Exiv2::ExifKey("Exif.Image.Model"));
+
+            if (imageMakeIt != exifData.end()) {
+                cameraModel.append(QString::fromStdString(imageMakeIt->value().toString()) + " ");
+            }
+            if (imageModelIt != exifData.end()) {
+                cameraModel.append(QString::fromStdString(imageModelIt->value().toString()));
+            }
+            if (!cameraModel.isEmpty()) {
+                out["Camera"] = cameraModel;
+            }
+        }
+        auto focalLengthIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.FocalLengthIn35mmFilm"));
+        if (focalLengthIt != exifData.end()) {
+            out["FocalLength"] = QString::fromStdString(focalLengthIt->value().toString());
+        }
+        auto lensIt = exifData.findKey(Exiv2::ExifKey("Exif.Photo.LensModel"));
+        if (lensIt != exifData.end()) {
+            out["Lens"] = QString::fromStdString(lensIt->value().toString());
+        }
+
+        auto latitudeIt = exifData.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSLatitude"));
+        auto latitudeRefIt = exifData.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSLatitudeRef"));
+        auto longitudeIt = exifData.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSLongitude"));
+        auto longitudeRefIt = exifData.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSLongitudeRef"));
+        if (latitudeIt != exifData.end() && latitudeRefIt != exifData.end() &&
+            longitudeIt != exifData.end() && longitudeRefIt != exifData.end()) {
+            out["Location"] = QString("%1 %2,%3 %4")
+                                  .arg(latitudeIt->value().toString().c_str())
+                                  .arg(latitudeRefIt->value().toString().c_str())
+                                  .arg(longitudeIt->value().toString().c_str())
+                                  .arg(longitudeRefIt->value().toString().c_str());
+        }
+    }
+
+    return out;
+}
+
 QSize ThumbnailLoader::readResolutionFromExif(Exiv2::Image *image) {
     QSize size;
     const Exiv2::ExifData &exifData = image->exifData();
@@ -464,4 +546,10 @@ QSize ThumbnailLoader::readResolutionFromExif(Exiv2::Image *image) {
         size = QSize(image->pixelWidth(), image->pixelHeight());
     }
     return size;
+}
+
+void ThumbnailLoader::fixMimeType(QString &mimeToUpdate, const QString &filePath) {
+    if (isExtensionMatch(filePath, {"psd", "psb"})) {
+        mimeToUpdate = "psd";
+    }
 }

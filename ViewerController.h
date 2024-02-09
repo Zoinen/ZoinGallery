@@ -6,6 +6,7 @@
 
 class QQmlEngine;
 class FileListModel;
+class ImageModel;
 
 class ViewerController : public QObject {
     Q_OBJECT
@@ -59,6 +60,7 @@ private:
     void setCurrentPath(const QString &newPath, const QString &itemToSelect = QString());
 
     FileListModel *_fileListModel;
+    ImageModel *_imageModel;
 
     QString _currentPath;
     struct HistoryEntity {

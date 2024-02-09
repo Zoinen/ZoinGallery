@@ -38,7 +38,9 @@ private:
 
     QImage loadJpegFromData(const uint8_t *data, uint32_t size, QSize targetSize);
     ExifOrientation readOrientationFromExif(Exiv2::Image *image);
+    QVariantMap readExif(Exiv2::Image *image);
     QSize readResolutionFromExif(Exiv2::Image *image);
+    void fixMimeType(QString &mimeToUpdate, const QString &filePath);
 
     static bool isExtensionMatch(const QString &path, const QStringList &pattern);
 

@@ -4,6 +4,7 @@
 #include "FileListModel.h"
 #include "QmlImageProvider.h"
 #include "QmlResourcesProvider.h"
+#include "ImageModel.h"
 
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -28,6 +29,9 @@ ViewerController::ViewerController(QQmlEngine *engine)
 
     _fileListModel = new FileListModel(this);
     engine->rootContext()->setContextProperty("fileListModel", _fileListModel);
+
+    _imageModel = new ImageModel(_fileListModel);
+    engine->rootContext()->setContextProperty("imageModel", _imageModel);
 
     QmlImageProvider *imageProvider = new QmlImageProvider("thumbnails", _fileListModel);
     engine->addImageProvider("thumbnails", imageProvider);
@@ -249,8 +253,8 @@ void ViewerController::loadSavedState() {
 
 void ViewerController::setCurrentPath(const QString &newPath, const QString &itemToSelect) {
     _currentPath = newPath;
-    emit currentPathChanged();
     _fileListModel->cd(_currentPath, itemToSelect);
     QSettings set;
     set.setValue("currentPath", _currentPath);
+    emit currentPathChanged();
 }

@@ -43,7 +43,7 @@ ThreadedThumbnailGenerator::ThreadedThumbnailGenerator(QObject *parent)
 
 void ThreadedThumbnailGenerator::prepareToClose() {
     _readWorker->requestInterruption();
-    _readWorker->readQueue().unlock();
+    // _readWorker->readQueue().unlock();
     for (int i = 0; i < _workers.size(); i++) {
         _workers[i].thread->quit();
     }
@@ -181,9 +181,6 @@ void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
     else if (result.request.viewerRequest) {
         requestViewerDecode(ImageReadRequest(result.request.sourcePath, result.request.targetSize));
     }
-    else if (result.request.inFolderRequest) {
-
-    }
     else {
         emit thumbnailInfoReady(result.request.sourcePath, rotateToOrientation(result.fullSize, result.orientation));
     }
@@ -199,7 +196,7 @@ void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
 void ThreadedThumbnailGenerator::onDecodeFinished(const ImageReadResult &readResult, const QImage &image) {
 //    qDebug() << "-------- on ready" << readResult.request.sourcePath << readResult.request.viewerRequest;
     if (!readResult.request.viewerRequest) {
-        emit thumbnailReady(readResult.request.sourcePath, image);
+        emit thumbnailReady(readResult.request.sourcePath, image, readResult.exif);
     }
     else {
         emit viewerReady(readResult.request.sourcePath, image);
@@ -266,6 +263,7 @@ void DecodeWorker::decode(const ImageReadResult &readResult, int queueId) {
 
 ReadWorker::ReadWorker(QObject *parent)
     : QThread(parent) {
+    // setPriority(QThread::LowPriority);
 }
 
 void ReadWorker::run() {
@@ -281,7 +279,7 @@ void ReadWorker::run() {
         else {
             QDir dir(request.sourcePath);
             auto images = dir.entryInfoList(ThumbnailLoader::supportedFormats(), QDir::Files, QDir::Name);
-            int totalImages = 16;
+            int totalImages = request.folderRequestImageCount;
             QList<QFileInfo> imagesFiltered;
             for (float i = 0; i < images.size(); i += qMax(1.0f, float(images.size()) / totalImages)) {
                 imagesFiltered.append(images.at(i));

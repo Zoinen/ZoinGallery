@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Effects
 
 import ZoinGallery 1.0
 
@@ -17,6 +18,9 @@ BrickItem {
     property bool folderView: false
 
     property real sizeBase: Math.min(width, height - 26) - masonryLayout.spacing
+    property real selectionExtendsFor: 5
+    property real selectionExtendsForImage: 2
+    property bool isSelected: masonryLayout.currentIndex === index
 
     property var imageItem: brickDelegate
 
@@ -51,7 +55,7 @@ BrickItem {
             width: parent.width
             height: parent.height
             radius: 4
-            color: "#202020"
+            color: Style.darker
             visible: image.status !== Image.Ready && !transparencyGrid.visible
         }
 
@@ -66,43 +70,39 @@ BrickItem {
             fillMode: Image.PreserveAspectCrop
             cache: false
             //                    opacity: 0.1
-            //                    asynchronous: true
+
+            // Async adds black blinking for folder views
+            //asynchronous: true
         }
 
-        Image {
-            anchors.left: image.left
-            anchors.top: image.top
-            source: "image://resources/top_left_round_corner|" + dpr + "|" + imageViewRoot.background
-            cache: true
-            sourceSize.width: 4 * dpr
-            sourceSize.height: 4 * dpr
-        }
+        // Rectangle {
+        //     id: imageRect
+        //                 layer.enabled: true
+        //                 width: image.width
+        //                 height: image.height
+        //                 radius: 40
+        //                 visible: false
+        //             }
 
-        Image {
-            anchors.right: image.right
-            anchors.top: image.top
-            source: "image://resources/top_right_round_corner|" + dpr + "|" + imageViewRoot.background
-            cache: true
-            sourceSize.width: 4 * dpr
-            sourceSize.height: 4 * dpr
-        }
+        // MultiEffect {
+        //     anchors.fill: image
+        //     source: image
 
-        Image {
-            anchors.left: image.left
-            anchors.bottom: image.bottom
-            source: "image://resources/bottom_left_round_corner|" + dpr + "|" + imageViewRoot.background
-            cache: true
-            sourceSize.width: 4 * dpr
-            sourceSize.height: 4 * dpr
-        }
+        //     maskEnabled: true
+        //     maskSpreadAtMin:0.2
+        //     maskThresholdMin:0.5
+        //     maskSource: imageRect
+        //     // maskSpreadAtMax: 1
+        //     // brightness: 0.4
+        //     //      saturation: 0.2
+        //     //      blurEnabled: true
+        //     //      blurMax: 64
+        //     //      blur: 1.0
+        // }
 
-        Image {
-            anchors.right: image.right
-            anchors.bottom: image.bottom
-            source: "image://resources/bottom_right_round_corner|" + dpr + "|" + imageViewRoot.background
-            cache: true
-            sourceSize.width: 4 * dpr
-            sourceSize.height: 4 * dpr
+        RoundCorners {
+            anchors.fill: image
+            backgroundColor: imageViewRoot.background
         }
     }
 
@@ -111,77 +111,69 @@ BrickItem {
 
         Item {
             Rectangle {
-                id: delegateOutline
                 anchors {
-                    fill: icon
-                    leftMargin: -2
-                    topMargin: -2
-                    rightMargin: -2
-                    bottomMargin: -2 + (quickSearchMode ? (fileInfoPanel.height - fileName.contentHeight - icon.y) :
-                                                          Math.max(0, fileName.height - fileName.contentHeight + sizeBase / 40 - icon.y))
+                    fill: fileDelegateContent
+                    leftMargin: -selectionExtendsFor
+                    topMargin: -selectionExtendsFor
+                    rightMargin: -selectionExtendsFor
+                    bottomMargin: -selectionExtendsFor + fileInfoPanel.height - fileName.contentHeight - sizeBase / 40
                 }
-                color: Style.selectedBrick
-                radius: 4
-                visible: masonryLayout.currentIndex === index
-            }
 
-            Rectangle {
-                anchors {
-                    fill: parent
-                    leftMargin: 2
-                    topMargin: 2
-                    rightMargin: 2
-                    bottomMargin: 2 + delegateOutline.anchors.bottomMargin + 2
-                }
-                color: Style.selectedBrick
+                color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
                 radius: 4
-                visible: masonryLayout.currentIndex === index
-            }
-
-            Image {
-                id: icon
-                x: parent.width / 2 - width / 2
-                y: sizeBase / 10
-                width: sizeBase - sizeBase / 10
-                height: width
-                sourceSize.height: height
-                fillMode: Image.PreserveAspectFit
-                source: iconPath
+                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
 
             Item {
-                id: fileInfoPanel
+                id: fileDelegateContent
                 anchors {
-                    left: parent.left
-                    leftMargin: masonryLayout.spacing / 2
-                    right: parent.right
-                    rightMargin: masonryLayout.spacing / 2
-                    top: icon.bottom
-                    bottom: parent.bottom
-                    bottomMargin: masonryLayout.spacing / 2
+                    fill: parent
+                    margins: masonryLayout.spacing / 2
                 }
-                z: 1
-                //                color: "#80FA8080"
 
-                Text {
-                    id: fileName
-                    anchors{
-                        fill: parent
-                        margins: sizeBase / 40
+                Image {
+                    id: icon
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: sizeBase - sizeBase / 10
+                    height: width
+                    sourceSize.height: height
+                    fillMode: Image.PreserveAspectFit
+                    source: iconPath
+                }
+
+                Item {
+                    id: fileInfoPanel
+                    anchors {
+                        left: parent.left
+                        leftMargin: masonryLayout.spacing / 2
+                        right: parent.right
+                        rightMargin: masonryLayout.spacing / 2
+                        top: icon.bottom
+                        bottom: parent.bottom
+                        bottomMargin: masonryLayout.spacing / 2
                     }
-                    width: parent.width
+                    z: 1
 
-                    text: brickDelegate.text
-                    textFormat: quickSearchMode ? Text.RichText : Text.PlainText
+                    Text {
+                        id: fileName
+                        anchors{
+                            fill: parent
+                            margins: sizeBase / 40
+                        }
+                        width: parent.width
 
-                    horizontalAlignment: Text.AlignHCenter
-                    elide: Text.ElideRight
-                    color: brickMouseArea.containsMouse || masonryLayout.currentIndex === index ? "#fff" : "#d1d1d1"
-                    maximumLineCount: 4
-                    wrapMode: Text.Wrap
+                        text: brickDelegate.text
+                        textFormat: quickSearchMode ? Text.RichText : Text.PlainText
+
+                        horizontalAlignment: Text.AlignHCenter
+                        elide: Text.ElideRight
+                        color: Style.text
+                        maximumLineCount: 4
+                        wrapMode: Text.Wrap
+                    }
                 }
-            }
 
+            }
             Component.onCompleted: {
                 brickDelegate.imageItem = icon
             }
@@ -195,44 +187,48 @@ BrickItem {
             Rectangle {
                 id: outline
                 anchors {
-                    fill: parent
-                    leftMargin: 2
-                    topMargin: 2
-                    rightMargin: 2
-                    bottomMargin: 2
+                    fill: fileListDelegateContent
+                    margins: -selectionExtendsFor
                 }
-                color: Style.selectedBrick
+                color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
                 radius: 4
-                visible: masonryLayout.currentIndex === index
+                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
 
-            Image {
-                id: icon
+            Item {
+                id: fileListDelegateContent
                 anchors {
-                    verticalCenter: parent.verticalCenter
-                    left: outline.left
-                    leftMargin: 10
+                    fill: parent
+                    margins: masonryLayout.spacing / 2
                 }
-                height: parent.height - 10
-                sourceSize.height: height
-                fillMode: Image.PreserveAspectFit
-                source: iconPath
-            }
 
-            Text {
-                id: fileName
-                anchors {
-                    left: icon.right
-                    leftMargin: 5
-                    right: parent.right
-                    verticalCenter: parent.verticalCenter
+                Image {
+                    id: icon
+                    anchors {
+                        verticalCenter: parent.verticalCenter
+                        left: parent.left
+                    }
+                    height: parent.height
+                    sourceSize.height: height
+                    fillMode: Image.PreserveAspectFit
+                    source: iconPath
                 }
-                text: brickDelegate.text
-                textFormat: quickSearchMode ? Text.RichText : Text.PlainText
 
-                elide: Text.ElideRight
-                color: brickMouseArea.containsMouse || masonryLayout.currentIndex === index ? "#fff" : "#d1d1d1"
-                maximumLineCount: 1
+                Text {
+                    id: fileName
+                    anchors {
+                        left: icon.right
+                        leftMargin: 5
+                        right: parent.right
+                        verticalCenter: parent.verticalCenter
+                    }
+                    text: brickDelegate.text
+                    textFormat: quickSearchMode ? Text.RichText : Text.PlainText
+
+                    elide: Text.ElideRight
+                    color: Style.text
+                    maximumLineCount: 1
+                }
             }
 
             Component.onCompleted: {
@@ -249,26 +245,22 @@ BrickItem {
                 id: delegateOutline
                 anchors {
                     fill: image
-                    leftMargin: -2
-                    topMargin: -2
-                    rightMargin: -2
-                    bottomMargin: -2
+                    margins: -selectionExtendsForImage
                 }
-                color: Style.selectedBrick
+                color: brickMouseArea.pressed ? Style.brickImagePressed : (isSelected ? Style.brickImageSelected : Style.brickImageHovered)
                 radius: 4
-                visible: masonryLayout.currentIndex === index
+                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
 
             ImageView {
                 id: image
                 padding: masonryLayout.spacing
                 source: imageId
-                background: "#1b1b1b"
+                background: delegateOutline.visible ? delegateOutline.color : Style.opaqueMasonryViewBackground
             }
 
-            Rectangle {
+            Item {
                 id: imageInfoPanel
-                color: masonryLayout.currentIndex === index ? "#B31a384e" : Qt.rgba(0, 0, 0, 0.5)
                 anchors {
                     left: parent.left
                     leftMargin: masonryLayout.spacing / 2
@@ -279,10 +271,19 @@ BrickItem {
                 }
                 height: imageText.height + 10
                 visible: brickMouseArea.containsMouse && !hideHovered ||
-                         masonryLayout.currentIndex === index ||
+                         isSelected ||
                          masonryView.alwaysShowFileNames ||
                          masonryView.quickSearchMode
                 z: 1
+                clip: true
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.topMargin: -radius
+                    radius: 4
+                    color: brickMouseArea.pressed ? Style.brickInfoPanelPressed : (isSelected ? Style.brickInfoPanelSelected : Style.brickInfoPanelHovered)
+                }
+
 
                 Text {
                     id: imageText
@@ -298,7 +299,7 @@ BrickItem {
 
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideMiddle
-                    color: brickMouseArea.containsMouse || masonryLayout.currentIndex === index ? "#fff" : "#d1d1d1"
+                    color: Style.text
                     maximumLineCount: 4
                     wrapMode: Text.Wrap
                 }
@@ -314,45 +315,78 @@ BrickItem {
         id: folderViewDelegate
 
         Item {
-            id: folderViewDelegateRoot
             Rectangle {
+                id: folderViewDelegateBackground
                 anchors {
-                    fill: parent
-                    leftMargin: 2
-                    topMargin: 2
-                    rightMargin: 2
-                    bottomMargin: 2
+                    fill: folderViewDelegateContent
+                    margins: -selectionExtendsFor
                 }
-                color: Style.selectedBrick
+                color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
                 radius: 4
-                visible: masonryLayout.currentIndex === index
+                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
 
             Item {
+                id: folderViewDelegateContent
                 anchors {
-                    fill: parent //icon
-                    topMargin: masonryLayout.spacing / 2
-                    bottomMargin: masonryLayout.spacing / 2
+                    fill: parent
+                    margins: masonryLayout.spacing / 2
                 }
 
-                Rectangle {
-                    id: folderBackground
-                    anchors.fill: parent
-                    anchors.topMargin: imageInfoPanel.height
-                    color: "#2d2d2d"
-                    radius: 10
-                }
+                Item {
+                    id: folderViewTitle
+                    anchors {
+                        top: parent.top
+                        left: parent.left
+                    }
+                    width: childrenRect.width + 20
+                    height: masonryLayout.listRowHeight - masonryLayout.spacing
 
-                Rectangle {
-                    width: imageInfoPanel.width
-                    height: imageInfoPanel.height + 20
-                    radius: 10
+                    Image {
+                        id: icon
+                        anchors {
+                            bottom: parent.bottom
+                            left: folderViewTitle.left
+                        }
+                        height: parent.height
+                        sourceSize.height: height
+                        fillMode: Image.PreserveAspectFit
+                        source: iconPath
+                    }
 
-                    color: "#2d2d2d"
+                    Text {
+                        id: fileName
+                        anchors {
+                            left: icon.right
+                            leftMargin: 5
+                            verticalCenter: icon.verticalCenter
+                        }
+                        text: brickDelegate.text
+                        textFormat: quickSearchMode ? Text.RichText : Text.PlainText
+
+                        elide: Text.ElideRight
+                        color: Style.text
+                        maximumLineCount: 1
+                    }
                 }
 
                 MasonryLayout {
                     id: masonryLayout2
+
+                    anchors {
+                        left: parent.left
+                        top: folderViewTitle.bottom
+                        right: parent.right
+                        bottom: parent.bottom
+                        topMargin: -spacing / 2 + masonryLayout.spacing / 2
+                        leftMargin: -spacing / 2
+                        rightMargin: -spacing / 2
+                        bottomMargin: -spacing / 2
+                    }
+                    clip: true
+                    model: fileListModel.folderModel(index)
+
+                    spacing: 2
 
                     onHeightChanged: {
                         if (height > 0) {
@@ -365,15 +399,6 @@ BrickItem {
                             masonryLayout2.reReadAndDecodeThumbnails()
                         }
                     }
-
-                    anchors {
-                        fill: folderBackground
-                        margins: sizeBase / 20
-                    }
-                    clip: true
-                    model: fileListModel.folderModel(index)
-
-                    spacing: 2
 
                     delegate: BrickItem {
                         id: brck
@@ -391,48 +416,11 @@ BrickItem {
                             needScaling: false
                             padding: masonryLayout2.spacing
                             source: imageId
-                            background: "#2d2d2d"
+                            background: folderViewDelegateBackground.visible ? folderViewDelegateBackground.color : Style.opaqueMasonryViewBackground
                         }
                     }
                 }
             }
-
-            Item {
-                id: imageInfoPanel
-                anchors.top: parent.top
-                anchors.left: parent.left
-                width: childrenRect.width + 20
-                height: 52
-
-                Image {
-                    id: icon
-                    anchors {
-                        verticalCenter: parent.verticalCenter
-                        left: imageInfoPanel.left
-                        leftMargin: 10
-                    }
-                    height: parent.height - 10
-                    sourceSize.height: height
-                    fillMode: Image.PreserveAspectFit
-                    source: iconPath
-                }
-
-                Text {
-                    id: fileName
-                    anchors {
-                        left: icon.right
-                        leftMargin: 5
-                        verticalCenter: parent.verticalCenter
-                    }
-                    text: brickDelegate.text
-                    textFormat: quickSearchMode ? Text.RichText : Text.PlainText
-
-                    elide: Text.ElideRight
-                    color: brickMouseArea.containsMouse || masonryLayout.currentIndex === index ? "#fff" : "#d1d1d1"
-                    maximumLineCount: 1
-                }
-            }
-
             Component.onCompleted: {
                 brickDelegate.imageItem = masonryLayout2
             }
@@ -443,128 +431,127 @@ BrickItem {
         id: folderViewDelegateGrid
 
         Item {
-            id: folderViewDelegateRoot
             Rectangle {
+                id: folderViewDelegateGridBackground
                 anchors {
-                    fill: parent
-                    leftMargin: 2
-                    topMargin: 2
-                    rightMargin: 2
-                    bottomMargin: 2
+                    fill: folderViewDelegateGridContent
+                    margins: -selectionExtendsFor
                 }
-                color: Style.selectedBrick
+                color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
                 radius: 4
-                visible: masonryLayout.currentIndex === index
+                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
 
             Item {
+                id: folderViewDelegateGridContent
                 anchors {
-                    fill: parent //icon
-                    leftMargin: masonryLayout.spacing / 2
-                    rightMargin: masonryLayout.spacing / 2
-                    topMargin: masonryLayout.spacing / 2
-                    bottomMargin: masonryLayout.spacing / 2 + imageInfoPanel.height
-                }
-
-                Rectangle {
-                    id: folderBackground
-                    anchors.fill: parent
-                    anchors.topMargin: sizeBase / 27
-                    color: "#397db1"
-                    radius: 10
+                    fill: parent
+                    margins: masonryLayout.spacing / 2
                 }
 
                 Rectangle {
                     width: Math.min(110, parent.width * 0.44)
                     height: sizeBase / 27 + 10*2
-                    radius: 10
+                    radius: 4
 
                     color: folderBackground.color
                 }
 
-                MasonryLayout {
-                    id: masonryLayout2
-
-                    onHeightChanged: {
-                        if (height > 0) {
-                            targetHeight = height
-                        }
-                    }
-                    Connections {
-                        target: masonryLayout
-                        function onLayoutReset() {
-                            masonryLayout2.reReadAndDecodeThumbnails()
-                        }
-                    }
+                Rectangle {
+                    id: folderBackground
 
                     anchors {
-                        fill: folderBackground
-                        margins: sizeBase / 20
+                        fill: parent
+                        topMargin: sizeBase / 27
+                        bottomMargin: imageInfoPanel.height + masonryLayout.spacing
                     }
-                    clip: true
-                    model: fileListModel.folderModel(index)
+                    color: Style.folderIcon
+                    radius: 4
 
-                    spacing: 2
+                    MasonryLayout {
+                        id: masonryLayout2
 
-                    delegate: BrickItem {
-                        id: brck
-                        property string text
-                        property string imageId
-                        property int index
-                        property bool isImage
-                        property bool isFolder
-                        property string iconPath
-                        property bool folderView: false
+                        anchors {
+                            fill: parent
+                            leftMargin: spacing / 2
+                            rightMargin: spacing / 2
+                            topMargin: spacing / 2
+                            bottomMargin: spacing
+                        }
+                        clip: true
+                        model: fileListModel.folderModel(index)
 
-                        ImageView {
-                            id: image2
+                        spacing: 2
 
-                            needScaling: false
-                            padding: masonryLayout2.spacing
-                            source: imageId
-                            background: "#397db1"
+                        onHeightChanged: {
+                            if (height > 0) {
+                                targetHeight = height
+                            }
+                        }
+                        Connections {
+                            target: masonryLayout
+                            function onLayoutReset() {
+                                masonryLayout2.reReadAndDecodeThumbnails()
+                            }
+                        }
+
+                        delegate: BrickItem {
+                            id: brck
+                            property string text
+                            property string imageId
+                            property int index
+                            property bool isImage
+                            property bool isFolder
+                            property string iconPath
+                            property bool folderView: false
+
+                            ImageView {
+                                id: image2
+
+                                needScaling: false
+                                padding: masonryLayout2.spacing
+                                source: imageId
+                                background: Style.folderIcon
+                            }
+                        }
+
+                        Component.onCompleted: {
+                            brickDelegate.imageItem = masonryLayout2
                         }
                     }
                 }
-            }
 
-            Item {
-                id: imageInfoPanel
-                anchors {
-                    left: parent.left
-                    leftMargin: masonryLayout.spacing / 2
-                    right: parent.right
-                    rightMargin: masonryLayout.spacing / 2
-                    bottom: parent.bottom
-                    bottomMargin: masonryLayout.spacing / 2
-                }
-                height: imageText.height + 10
-                z: 1
-
-                Text {
-                    id: imageText
-                    anchors{
+                Item {
+                    id: imageInfoPanel
+                    anchors {
                         left: parent.left
-                        leftMargin: /*masonryLayout.listView ? 45 :*/ 5
+                        leftMargin: masonryLayout.spacing / 2
                         right: parent.right
-                        rightMargin: 5
+                        rightMargin: masonryLayout.spacing / 2
                         bottom: parent.bottom
-                        bottomMargin: 5
+                        bottomMargin: masonryLayout.spacing / 2
                     }
+                    height: imageText.height
+                    z: 1
 
-                    text: brickDelegate.text
-                    textFormat: quickSearchMode ? Text.RichText : Text.PlainText
+                    Text {
+                        id: imageText
+                        anchors {
+                            left: parent.left
+                            right: parent.right
+                            bottom: parent.bottom
+                        }
 
-                    horizontalAlignment: masonryLayout.listView ? Text.AlignLeft : Text.AlignHCenter
-                    elide: Text.ElideMiddle
-                    color: brickMouseArea.containsMouse ? "#fff" : "#d1d1d1"
-                    maximumLineCount: 4
-                    wrapMode: Text.Wrap
+                        text: brickDelegate.text
+                        textFormat: quickSearchMode ? Text.RichText : Text.PlainText
+
+                        horizontalAlignment: masonryLayout.listView ? Text.AlignLeft : Text.AlignHCenter
+                        elide: Text.ElideRight
+                        color: Style.text
+                        maximumLineCount: 2
+                        wrapMode: Text.Wrap
+                    }
                 }
-            }
-
-            Component.onCompleted: {
-                brickDelegate.imageItem = masonryLayout2
             }
         }
     }

@@ -10,6 +10,9 @@ Item {
     property int animationDuration: 150
     property int easingType: Easing.OutSine
 
+    property bool panelsVisible: true
+
+    property bool canHaveTransparency
     property alias animation: viewerAnimation
     property alias image: viewerImage
     property alias imageContainer: imageContainerItem
@@ -74,33 +77,29 @@ Item {
         }
     }
 
-    Rectangle {
-        anchors.fill: parent
-        color: "black"
-        opacity: root.state === "viewer"
-        Behavior on opacity {
-            NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
-        }
-    }
+    // Rectangle {
+    //     anchors.fill: parent
+    //     color: Style.viewerBackground
+    //     opacity: root.state === "viewer"
+    //     Behavior on opacity {
+    //         NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
+    //     }
+    // }
 
     Item {
         id: imageContainerItem
 
-        anchors {
-            left: parent.left
-            top: parent.top
-            bottom: parent.bottom
-            right: sliderContainer.left
-        }
+        anchors.fill: parent
 
         Item {
+            id: viewerBoundaries
             clip: true
             x: Math.floor(viewerImage.x + viewerImage.width / 2 - width / 2) + (viewerAnimation.running ? 0.5 : 0)
             y: Math.floor(viewerImage.y + viewerImage.height / 2 - height / 2) + (viewerAnimation.running ? 0.5 : 0)
 
             width: Math.floor(viewerImage.useHeight ? viewerImage.width : (viewerImage.height * viewerImage.aspect)) - (viewerAnimation.running ? 2.5 : 0)
             height: Math.floor(viewerImage.useHeight ? (viewerImage.width / viewerImage.aspect) : viewerImage.height) - (viewerAnimation.running ? 2.5 : 0)
-            visible: masonryLayout.view.showTransparentGrid
+            visible: masonryLayout.view.showTransparentGrid && canHaveTransparency
 
             Image {
                 x: viewerAnimation.running ? -0.5 : 0
@@ -136,7 +135,9 @@ Item {
     }
 
     MouseArea {
+        id: viewerMouse
         anchors.fill: parent
+        anchors.topMargin: isQWK ? titleBar.height : 0
         enabled: root.state === "viewer"
 
         onDoubleClicked:
@@ -152,6 +153,9 @@ Item {
                 }
                 else if (mouse.button === Qt.MiddleButton) {
                     topLevelWindow.toggleFullscreen()
+                }
+                else if (mouse.button === Qt.LeftButton) {
+                    panelsVisible = !panelsVisible
                 }
             }
 
@@ -225,32 +229,118 @@ Item {
         }
     }
 
-    Item {
-        id: sliderContainer
+    MouseArea {
+        id: rightPanel
         anchors {
             top: parent.top
+            topMargin: isQWK ? titleBar.height : 0
             right: parent.right
             bottom: parent.bottom
         }
-        width: 16
+        width: 120
 
-        opacity: root.state === "viewer"
+        property bool viewerOverlapsFilmstrip: x < viewerBoundaries.x + viewerBoundaries.width
+        onViewerOverlapsFilmstripChanged: {
+            titleBar.backgroundVisible = viewerOverlapsFilmstrip
+        }
+
+        opacity: root.state === "viewer" && (panelsVisible || rightPanel.containsMouse)
         Behavior on opacity {
             NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
         }
 
+        hoverEnabled: true
+
+        Rectangle {
+            anchors.fill: parent
+            color: rightPanel.viewerOverlapsFilmstrip ? Style.opaqueMasonryViewBackgroundWithOpacity : Style.viewerPanel
+        }
+
+        ListView {
+            id: filmstrip
+
+            anchors {
+                top: parent.top
+                right: parent.right
+                rightMargin: 25
+                bottom: parent.bottom
+            }
+            width: 86
+            spacing: 13
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+
+            interactive: false
+
+            model: imageModel
+
+            Connections {
+                target: masonryLayout.view
+
+                function onCurrentIndexChanged() {
+                    filmstrip.positionViewAtIndex(imageModel.mapFromSourceRow(masonryLayout.view.currentIndex), ListView.Center)
+                }
+            }
+
+
+            delegate: Item {
+                width: 86
+                height: 57
+
+                property bool isCurrent: imageModel.mapFromSourceRow(masonryLayout.view.currentIndex) === index
+
+                Image {
+                    id: thumbnailImage
+                    source: "image://thumbnails/" + imageIdRole
+                    sourceSize.width: parent.width
+                    sourceSize.height: parent.height
+                    fillMode: Image.PreserveAspectFit
+                    width: parent.width
+                    height: parent.height
+                }
+
+                RoundCorners {
+                    anchors.fill: parent
+                    backgroundColor: Style.opaqueMasonryViewBackground
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    visible: isCurrent || thumbnailMouse.containsMouse
+
+                    color: "transparent"
+                    border.width: 2
+                    border.color: thumbnailMouse.pressed ? Style.brickImagePressed : (isCurrent ? Style.brickImageSelected : Style.brickImageHovered)
+                    radius: 4
+                }
+
+                MouseArea {
+                    id: thumbnailMouse
+                    anchors.fill: parent
+
+                    hoverEnabled: true
+
+                    onClicked: {
+                        masonryLayout.view.currentIndex = index
+                        masonryLayout.setCurrentIndex(imageModel.mapToSourceRow(masonryLayout.view.currentIndex))
+                        onCurrentIndexChanged()
+                    }
+                }
+            }
+        }
+
         Slider {
             id: currentImageSlider
-            x: 16
+            x: parent.width - 6
             y: 0
             width: parent.height
-            height: 16
+            height: 10
             leftPadding: 0
             rightPadding: 0
             topPadding: 0
             bottomPadding: 0
 
-            rectangular: true
+            handleVisible: false
 
             from: 0
             to: masonryLayout.view.imageCount - 1
@@ -266,7 +356,6 @@ Item {
                     masonryLayout.view.currentImageIndex = Math.round(value)
                     masonryLayout.setCurrentIndex(masonryLayout.view.currentIndex)
                     onCurrentIndexChanged()
-
                 }
             }
 
@@ -274,6 +363,97 @@ Item {
                 target: masonryLayout.view
                 function onCurrentImageIndexChanged() {
                     currentImageSlider.value = masonryLayout.view.currentImageIndex
+                }
+            }
+        }
+    }
+
+    MouseArea {
+        id: leftPanel
+        anchors {
+            top: parent.top
+            left: parent.left
+        }
+        width: 180
+        height: exifLayout.height + 10
+
+        opacity: root.state === "viewer" && (panelsVisible || leftPanel.containsMouse)
+        Behavior on opacity {
+            NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
+        }
+
+        hoverEnabled: true
+
+        Rectangle {
+            anchors {
+                fill: parent
+                leftMargin: -radius
+                topMargin: -radius
+            }
+            color: width < viewerBoundaries.x || height < viewerBoundaries.y ? Style.viewerPanel : Style.opaqueMasonryViewBackgroundWithOpacity
+            radius: 4
+        }
+
+        ColumnLayout {
+            id: exifLayout
+            anchors {
+                top: parent.top
+                left: parent.left
+                right: parent.right
+                leftMargin: 12
+                rightMargin: 6
+            }
+            spacing: 0
+
+            Repeater {
+                model: masonryLayout.view.currentImageExif
+                delegate: RowLayout {
+                    property bool isTitle: modelData.title !== undefined
+
+                    Layout.topMargin: !index ? 10 : isTitle ? 15 : 0
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: exifText.height + 2
+
+                    spacing: 7
+
+                    IconLabel {
+                        visible: modelData.icon !== undefined
+                        icon.source: modelData.icon !== undefined ? modelData.icon : ""
+                        icon.width: 15
+                        icon.height: 15
+                        icon.color: Style.text
+                    }
+
+                    Text {
+                        id: exifText
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                        text: modelData.url !== undefined ? modelData.text.replace(" ", "\n") : modelData.text
+                        color: isTitle || !index ? Style.text : Style.textGray
+                        font.pixelSize: !index ? 12 : 16
+                        font.underline: modelData.url !== undefined
+
+                        MouseArea {
+                            id: exifMouse
+                            anchors.fill: parent
+
+                            hoverEnabled: true
+                            cursorShape: modelData.url !== undefined ? Qt.PointingHandCursor : Qt.ArrowCursor
+
+                            onClicked: {
+                                if (modelData.url !== undefined) {
+                                    Qt.openUrlExternally(modelData.url)
+                                }
+                            }
+                        }
+
+                        ToolTip {
+                            id: tooltip
+
+                            visible: exifMouse.containsMouse && exifText.implicitWidth > exifText.width
+                            text: modelData.text
+                        }
+                    }
                 }
             }
         }

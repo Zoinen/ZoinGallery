@@ -6,6 +6,8 @@ T.ToolTip {
     id: control
     text: qsTr("A descriptive tool tip of what the button does")
 
+    y: parent ? parent.height : 0
+
     contentItem: RowLayout {
         spacing: 13
         Text {
@@ -20,7 +22,7 @@ T.ToolTip {
                 return control.text
             }
             font: control.font
-            color: "#fff"
+            color: Style.text
         }
         Text {
             id: hotkeyText
@@ -38,13 +40,14 @@ T.ToolTip {
             }
             font.family: control.font.family
             font.pixelSize: 10
-            color: "#fff"
+            color: Style.text
             opacity: 0.5
         }
     }
 
     background: Rectangle {
-        color: "#505050"
-        border.color: "#8a8a8a"
+        color: Style.tooltipBackground
+        border.color: Style.tooltipBorder
+        radius: 5
     }
 }

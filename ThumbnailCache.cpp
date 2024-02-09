@@ -30,7 +30,7 @@ void ThumbnailCache::add(const QString &path, const QDateTime &lastModified, con
     QByteArray *bytes = new QByteArray();
     QBuffer buffer(bytes);
     buffer.open(QIODevice::WriteOnly);
-    img.save(&buffer, "JPG", 10);
+    img.save(&buffer, "webp", 10);
 
     if (_cache.insert(path, bytes)) {
         _totalSize += bytes->size();
@@ -40,7 +40,7 @@ void ThumbnailCache::add(const QString &path, const QDateTime &lastModified, con
 void ThumbnailCache::requestThumbnail(const QString &path, const QDateTime &lastModified) {
     QByteArray *bytes = _cache.object(path);
     if (bytes) {
-        QImage img = QImage::fromData(*bytes, "JPG");
+        QImage img = QImage::fromData(*bytes, "webp");
         emit cachedThumbnailAvailable(path, img);
     }
 }

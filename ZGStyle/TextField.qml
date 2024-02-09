@@ -8,22 +8,22 @@ T.TextField {
 
     property bool hasBackground: true
 
-    color: acceptableInput ? (hovered ? Style.hovered : Style.text) : Style.textError
+    color: acceptableInput ? Style.text : Style.textError
 
     background: Rectangle {
         id: bg
         visible: hasBackground
         anchors.fill: parent
 
-        color: Style.controlBackground
-        border.color: parent.activeFocus ? Style.focus : bg.color
+        color: Style.darker
+        border.color: parent.activeFocus ? Style.textSelected : bg.color
         border.width: 1
     }
 
     hoverEnabled: true
     selectByMouse: true
-    palette.highlight: Style.focus
-    palette.highlightedText: Style.hovered
+    palette.highlight: Style.textSelected
+    palette.highlightedText: Style.text
     palette.brightText: "green"
 
     leftPadding: 10

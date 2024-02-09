@@ -26,7 +26,7 @@ Item {
             verticalCenter: parent.verticalCenter
         }
         height: 32
-        color: pathMouse.containsMouse ? "#3e3e3e" : "#373737"
+        color: pathMouse.containsMouse ? Style.lighter2 : Style.lighter
         radius: 4
     }
 
@@ -64,8 +64,8 @@ Item {
         Rectangle {
             anchors.centerIn: parent
             width: parent.width
-            height: 32
-            color: folderMouse.containsMouse ? (folderMouse.pressed ? Style.controlBackgroundPressed : Style.controlBackground) : "transparent"
+            height: 22
+            color: folderMouse.containsMouse ? (folderMouse.pressed ? Style.darker : Style.lighter) : "transparent"
             radius: 4
         }
 
@@ -76,7 +76,7 @@ Item {
 
             Text {
                 id: folderText
-                color: folderMouse.containsMouse ? (folderMouse.pressed ? Style.textPressed : Style.hovered) : Style.text
+                color: Style.text
             }
 
             Image {
@@ -121,7 +121,7 @@ Item {
                     rightMargin: 7
                 }
 
-                source: "qrc:/resources/FolderIcon.svg"
+                source: "qrc:/resources/DriveIcon.svg"
                 sourceSize.width: 18
                 sourceSize.height: 18
             }
@@ -179,7 +179,7 @@ Item {
         leftPadding: 4
         rightPadding: 10
         hasBackground: false
-        color: hovered ? Style.hovered : "#f0f0f0"
+        color: Style.text
 
         text: pathRoot.text
 
@@ -212,7 +212,7 @@ Item {
         width: 20
         gradient: Gradient {
             orientation: Gradient.Horizontal
-            GradientStop { position: 0.0; color: "#333" }
+            GradientStop { position: 0.0; color: Style.pathFadeGradient }
             GradientStop { position: 1.0; color: "transparent" }
         }
     }

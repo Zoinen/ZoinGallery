@@ -64,7 +64,7 @@ public:
     QAtomicInt _queueId;
 
 signals:
-    void thumbnailReady(QString path, QImage thumbnail);
+    void thumbnailReady(QString path, QImage thumbnail, const QVariantMap &exif);
     void viewerReady(QString path, QImage thumbnail);
     void folderListReady(const QString &path, const QList<QFileInfo> &images);
     void thumbnailInfoReady(QString path, QSize fullSize);

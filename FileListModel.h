@@ -15,7 +15,7 @@ class ThumbnailsRequestInterface {
 public:
     ThumbnailsRequestInterface();
     virtual void requestThumbnails(QStringList files, QSize preferredSize) = 0;
-    virtual void requestThumbnails(QSize preferredSize, bool reset = false) = 0;
+    virtual void requestThumbnails(QSize preferredSize, bool reset = false, int imageCount = 0) = 0;
     virtual void addRequestThumbnails(QList<ImageReadRequest> requests) = 0;
     virtual ImageFile *rootItem() const { return nullptr; }
 
@@ -48,7 +48,7 @@ public:
 
     // ThumbnailsRequestInterface interface
     void requestThumbnails(QStringList files, QSize preferredSize) override {}
-    void requestThumbnails(QSize preferredSize, bool reset = false) override;
+    void requestThumbnails(QSize preferredSize, bool reset = false, int imageCount = 0) override;
     void addRequestThumbnails(QList<ImageReadRequest> requests) override;
     ImageFile *rootItem() const override;
 
@@ -60,6 +60,7 @@ signals:
 private:
     ImageFile *_sourceRoot;
 };
+
 
 class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterface {
     Q_OBJECT
@@ -95,7 +96,7 @@ public:
 
     // ThumbnailsRequestInterface
     void requestThumbnails(QStringList files, QSize preferredSize) override;
-    void requestThumbnails(QSize preferredSize, bool reset = false) override;
+    void requestThumbnails(QSize preferredSize, bool reset = false, int imageCount = 0) override;
     void addRequestThumbnails(QList<ImageReadRequest> requests) override;
 
     Q_INVOKABLE void requestRender() override;

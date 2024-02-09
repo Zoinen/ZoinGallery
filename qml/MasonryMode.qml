@@ -10,13 +10,6 @@ MouseArea {
     property alias view: masonryLayout
     property alias focusProxy: quickSearchField
 
-    Rectangle {
-        anchors {
-            fill: parent
-        }
-        color: Style.background
-    }
-
     signal toggleViewer()
 
     // <Scrolling>
@@ -48,6 +41,12 @@ MouseArea {
         masonryLayout.setScrollingMode(false)
 
         hideHovered = false
+    }
+
+    function resetCurrentItemCenter() {
+        let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
+        currentItemCenterX = currentItemGeometry.x + currentItemGeometry.width / 2
+        currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
     }
 
     onPressed: (mouse) => {
@@ -123,14 +122,17 @@ MouseArea {
     Connections {
         target: masonryLayout
         function onLayoutReset() {
-            let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
-            currentItemCenterX = currentItemGeometry.x + currentItemGeometry.width / 2
-            currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
+            resetCurrentItemCenter()
         }
     }
 
     Connections {
         target: viewerController
+
+        function onCurrentPathChanged() {
+            resetCurrentItemCenter()
+        }
+
         function onSetCurrentIndex(index) {
             masonryLayout.currentIndex = index
             let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
@@ -157,7 +159,7 @@ MouseArea {
                                           masonryLayout.currentItem.width,
                                           masonryLayout.currentItem.height)
         let spacing = masonryLayout.spacing
-        let imageGeometry = Qt.rect(currentItemGeometry.x + spacing / 2,
+        let imageGeometry = Qt.rect(currentItemGeometry.x + spacing / 2 + masonryLayout.paddingLeft,
                                     currentItemGeometry.y + spacing / 2 - masonryLayout.contentY,
                                     currentItemGeometry.width - spacing,
                                     currentItemGeometry.height - spacing)
@@ -312,12 +314,13 @@ MouseArea {
                 let futureContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
                 let nextPageY = Math.min(masonryLayout.contentHeight - masonryLayout.height, futureContentY + deltaY) + currentItemCenterY
                 let newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, nextPageY)
+                console.log(deltaY, futureContentY, nextPageY, newCurrentIndex2)
 
                 if (newCurrentIndex2 === -1) {
                     newCurrentIndex2 = masonryLayout.count - 1
                 }
                 let hitEnd = newCurrentIndex2 >= masonryLayout.count - 1
-                if (newCurrentIndex2 === masonryLayout.currentIndex) {
+                if (newCurrentIndex2 === masonryLayout.currentIndex && nextPageY >= masonryLayout.contentHeight - masonryLayout.height * 1.5) {
                     newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, masonryLayout.contentHeight - 1)
                     hitEnd = true
 
@@ -406,10 +409,10 @@ MouseArea {
         clip: true
         model: fileListModel
 
-        paddingLeft: 9
-        paddingRight: 9
-        paddingTop: 11
-        paddingBottom: 11
+        paddingLeft: 6
+        paddingRight: 6
+        paddingTop: 5
+        paddingBottom: 12
 
         Behavior on contentY {
             enabled: scrollingMode
@@ -549,9 +552,9 @@ MouseArea {
         }
         width: 330
         height: 49
-        color: "#303030"
+        color: Style.popupBackground
         border.width: 1
-        border.color: "#404040"
+        border.color: Style.popupBorder
         radius: 4
         visible: quickSearchMode
 
@@ -572,7 +575,7 @@ MouseArea {
                 rightPadding: 17
                 focus: true
                 hasBackground: false
-                color: masonryLayout.quickSearch.matches ? (hovered ? Style.hovered : "#f0f0f0") : Style.textError
+                color: masonryLayout.quickSearch.matches ? Style.text : Style.textError
 
                 validator: masonryLayout.quickSearch.validator
 
@@ -604,12 +607,13 @@ MouseArea {
 
                 horizontalAlignment: Text.AlignRight
                 verticalAlignment: Text.AlignVCenter
-                color: "#969696"
+                color: Style.text
+                opacity: 0.4
                 text: masonryLayout.quickSearch.matchesInfo
             }
 
             Rectangle {
-                color: "#505050"
+                color: Style.lighter2
                 Layout.preferredWidth: 1
                 Layout.preferredHeight: 32
                 Layout.leftMargin: 16

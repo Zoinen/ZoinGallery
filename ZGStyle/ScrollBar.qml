@@ -14,19 +14,22 @@ T.ScrollBar {
     rightPadding: 0
     bottomPadding: 0
 
-    contentItem: Item {
+    contentItem: MouseArea {
         id: contentItem
         implicitWidth: 15
+        hoverEnabled: true
+        acceptedButtons: Qt.NoButton
 
         Rectangle {
             anchors.fill: parent
             anchors.margins: 4
             radius: 4
-            color: scroll.pressed ? Style.scrollBarHandlePressed : Style.scrollBarHandle
+            color: scroll.hovered ? (scroll.pressed ? Style.handlePressed : (contentItem.containsMouse ? Style.handleHovered : Style.handleBackgroundHovered)) : Style.handle
         }
     }
 
     background: Rectangle {
-        color: Style.scrollBarBackground
+        color: (scroll.hovered || scroll.pressed) ? Style.lighter : "transparent"
+        radius: 15
     }
 }

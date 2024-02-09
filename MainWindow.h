@@ -7,6 +7,7 @@ class MainWindow : public QQuickWindow {
     Q_OBJECT
     Q_PROPERTY(bool isResizing READ isResizing NOTIFY isResizingChanged)
     Q_PROPERTY(qreal dpr MEMBER _dpr NOTIFY dprChanged)
+    Q_PROPERTY(bool isQWK READ isQWK CONSTANT)
 
 public:
     MainWindow(QWindow *parent = nullptr);
@@ -17,6 +18,8 @@ public:
     Q_INVOKABLE void toggleFullscreen();
 
     bool isResizing() const;
+
+    bool isQWK() const;
 
 signals:
     void mainWindowResized();

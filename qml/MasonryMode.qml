@@ -184,11 +184,12 @@ MouseArea {
         }
     }
 
-    function scrollBy(deltaY) {
+    function scrollBy(deltaY, quickScroll) {
         let newContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY) + deltaY
         newContentY = Math.max(0, Math.min(masonryLayout.contentHeight - masonryLayout.height, newContentY))
         scrollAnimation2.from = masonryLayout.contentY
         scrollAnimation2.to = newContentY
+        scrollAnimation2.duration = quickScroll ? 15 : 150
         scrollAnimation2.restart()
     }
 
@@ -207,6 +208,7 @@ MouseArea {
             if (!masonryView.disableAnimation) {
                 scrollAnimation2.from = masonryLayout.contentY
                 scrollAnimation2.to = newContentY
+                scrollAnimation2.duration = 150
                 scrollAnimation2.restart()
             }
             else {
@@ -464,7 +466,7 @@ MouseArea {
                         }
                     }
                     else {
-                        scrollBy(-delta)
+                        scrollBy(-delta, Qt.platform.os === "osx" ? true : false)
                     }
                 }
         }
@@ -493,7 +495,7 @@ MouseArea {
 
             target: masonryLayout
             property: "contentY"
-            duration: Qt.platform.os === "osx" ? 15 : 150
+            duration: 150
             easing.type: Easing.OutSine
         }
     }

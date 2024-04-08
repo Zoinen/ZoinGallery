@@ -33,6 +33,9 @@ ImageReadRequest ThreadSafeQueue::dequeue() {
     std::unique_lock<std::mutex> lock(_mutex);
     while (_queue.isEmpty()) {
         _condVar.wait(lock);
+        if (_terminateRequested) {
+            return ImageReadRequest();
+        }
     }
     ImageReadRequest var = _queue.takeFirst();
     _processedQueue.insert(var);
@@ -45,6 +48,9 @@ int ThreadSafeQueue::size() {
 }
 
 void ThreadSafeQueue::unlock() {
-    _mutex.unlock();
     _condVar.notify_one();
+}
+
+void ThreadSafeQueue::prepareToClose() {
+    _terminateRequested = true;
 }

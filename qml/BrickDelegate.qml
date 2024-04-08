@@ -14,7 +14,6 @@ BrickItem {
     property bool isDecodedImage
     property bool isFolder
     property string iconPath
-    property bool canHaveTransparency
     property bool folderView: false
 
     property real sizeBase: Math.min(width, height - 26) - masonryLayout.spacing
@@ -28,7 +27,6 @@ BrickItem {
         id: imageViewRoot
         property alias source: image.source
         property real padding
-        property color background
         property bool needScaling: image.sourceSize.width !== Math.round(image.width * dpr) ||
                                    image.sourceSize.height !== Math.round(image.height * dpr)
         property alias image: image
@@ -38,71 +36,40 @@ BrickItem {
         width: Math.round((parent.width - padding) * dpr) / dpr
         height: Math.round((parent.height - padding) * dpr) / dpr
 
-        Image {
-            id: transparencyGrid
-            visible: masonryLayout.showTransparentGrid && canHaveTransparency
-            width: parent.width
-            height: parent.height
-            source: "image://resources/transparent_grid|" + dpr
-            sourceSize.width: 16 * dpr
-            sourceSize.height: 16 * dpr
-            fillMode: Image.Tile
-            verticalAlignment: Image.AlignTop
-            horizontalAlignment: Image.AlignLeft
-        }
-
         Rectangle {
             width: parent.width
             height: parent.height
             radius: 4
             color: Style.darker
-            visible: image.status !== Image.Ready && !transparencyGrid.visible
+            visible: image.status !== Image.Ready
         }
 
         Image {
             id: image
 
-            // Dirty hack to workaround blurry output. Remove someday
-            smooth: needScaling
             width: parent.width
             height: parent.height
 
             fillMode: Image.PreserveAspectCrop
             cache: false
-            //                    opacity: 0.1
-
             // Async adds black blinking for folder views
             //asynchronous: true
+            visible: false
         }
 
-        // Rectangle {
-        //     id: imageRect
-        //                 layer.enabled: true
-        //                 width: image.width
-        //                 height: image.height
-        //                 radius: 40
-        //                 visible: false
-        //             }
-
-        // MultiEffect {
-        //     anchors.fill: image
-        //     source: image
-
-        //     maskEnabled: true
-        //     maskSpreadAtMin:0.2
-        //     maskThresholdMin:0.5
-        //     maskSource: imageRect
-        //     // maskSpreadAtMax: 1
-        //     // brightness: 0.4
-        //     //      saturation: 0.2
-        //     //      blurEnabled: true
-        //     //      blurMax: 64
-        //     //      blur: 1.0
-        // }
-
-        RoundCorners {
+        ShaderEffect {
+            id: imageShader
             anchors.fill: image
-            backgroundColor: imageViewRoot.background
+
+            property var source: image
+            property var viewportSize: Qt.size(width * dpr, height * dpr)
+            property real sharpenAmount: 1
+            property bool showCheckerboard: masonryLayout.showTransparentGrid
+            property int checkerboardSize: 4 * dpr
+            property real borderRadius: 4.1 * dpr
+
+            fragmentShader: "qrc:/resources/shader.frag.qsb"
+            visible: image.source != ""
         }
     }
 
@@ -120,6 +87,8 @@ BrickItem {
                 }
 
                 color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
+                border.width: 1
+                border.color: isSelected ? Style.brickSelectedBorder : color
                 radius: 4
                 visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
@@ -191,6 +160,8 @@ BrickItem {
                     margins: -selectionExtendsFor
                 }
                 color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
+                border.width: 1
+                border.color: isSelected ? Style.brickSelectedBorder : color
                 radius: 4
                 visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
@@ -241,6 +212,7 @@ BrickItem {
         id: imageDelegate
 
         Item {
+            visible: !(isSelected && root.viewerShowAnimationRunning)
             Rectangle {
                 id: delegateOutline
                 anchors {
@@ -256,7 +228,6 @@ BrickItem {
                 id: image
                 padding: masonryLayout.spacing
                 source: imageId
-                background: delegateOutline.visible ? delegateOutline.color : Style.opaqueMasonryViewBackground
             }
 
             Item {
@@ -322,6 +293,8 @@ BrickItem {
                     margins: -selectionExtendsFor
                 }
                 color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
+                border.width: 1
+                border.color: isSelected ? Style.brickSelectedBorder : color
                 radius: 4
                 visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
@@ -331,6 +304,32 @@ BrickItem {
                 anchors {
                     fill: parent
                     margins: masonryLayout.spacing / 2
+                }
+
+                Rectangle {
+                    id: branchDown
+                    x: icon.x + icon.width / 2 - 1
+                    anchors {
+                        top: folderViewTitle.bottom
+                        topMargin: 2
+                        bottom: masonryLayout2.verticalCenter
+                        bottomMargin: -1
+                    }
+                    width: 2
+
+                    color: Style.lighter2
+                }
+
+                Rectangle {
+                    anchors {
+                        left: branchDown.right
+                        right: masonryLayout2.left
+                        rightMargin: 2
+                        verticalCenter: masonryLayout2.verticalCenter
+                    }
+                    height: 2
+
+                    color: Style.lighter2
                 }
 
                 Item {
@@ -379,7 +378,7 @@ BrickItem {
                         right: parent.right
                         bottom: parent.bottom
                         topMargin: -spacing / 2 + masonryLayout.spacing / 2
-                        leftMargin: -spacing / 2
+                        leftMargin: fileName.x
                         rightMargin: -spacing / 2
                         bottomMargin: -spacing / 2
                     }
@@ -416,7 +415,6 @@ BrickItem {
                             needScaling: false
                             padding: masonryLayout2.spacing
                             source: imageId
-                            background: folderViewDelegateBackground.visible ? folderViewDelegateBackground.color : Style.opaqueMasonryViewBackground
                         }
                     }
                 }
@@ -438,6 +436,8 @@ BrickItem {
                     margins: -selectionExtendsFor
                 }
                 color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
+                border.width: 1
+                border.color: isSelected ? Style.brickSelectedBorder : color
                 radius: 4
                 visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
@@ -511,7 +511,6 @@ BrickItem {
                                 needScaling: false
                                 padding: masonryLayout2.spacing
                                 source: imageId
-                                background: Style.folderIcon
                             }
                         }
 

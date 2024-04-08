@@ -1,4 +1,5 @@
 ﻿import QtQuick
+
 import QtQuick.Layouts
 import QtQuick.Controls
 
@@ -10,26 +11,91 @@ Item {
     property int animationDuration: 150
     property int easingType: Easing.OutSine
 
-    property bool panelsVisible: true
+    property bool panelsVisible: false
+    property alias zoomFitView: flickableArea.zoomFitView
 
-    property bool canHaveTransparency
     property alias animation: viewerAnimation
-    property alias image: viewerImage
-    property alias imageContainer: imageContainerItem
+    property alias image: flickableArea.image
+    property alias imageContainer: flickableArea
+
+    // ZZZ: Viewer size request takes current image's full size for all future images!!!
+
+    function setImage(imageId, originalSize) {
+        image.source = imageId
+        imageContainer.originalSize = Qt.size(originalSize.width / dpr, originalSize.height / dpr)
+    }
+
+    function show() {
+        onCurrentIndexChanged()
+        visible = true
+        flickableArea.zoomToFit(true)
+    }
 
     function onCurrentIndexChanged() {
-        fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.imageContainer.width * dpr, viewerMode.imageContainer.height * dpr)
+        if (zoomFitView) {
+            console.log("onCIC FIT", viewerMode.width * dpr, viewerMode.height * dpr)
+            fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+        }
+        else {
+            console.log("onCIC ORIG", viewerMode.imageContainer.originalSize.width * dpr, viewerMode.imageContainer.originalSize.height * dpr)
+            fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.imageContainer.originalSize.width * dpr, viewerMode.imageContainer.originalSize.height * dpr)
+            flickableArea.forceShowScrollBars = true
+            flickableArea.forceShowScrollBars = false
+        }
+
         if (masonryLayout.view.currentItem) {
             topLevelWindow.title = masonryLayout.view.currentItem.text + " [" +
                     (masonryLayout.view.currentImageIndex + 1) + "/" + masonryLayout.view.imageCount + "] - ZoinGallery"
         }
     }
 
+    property bool leftPressed: false
+    property bool rightPressed: false
+    property bool upPressed: false
+    property bool downPressed: false
+    property bool zoomInPressed: false
+    property bool zoomOutPressed: false
+    property bool controlPressed: false
+
     Keys.onPressed:
         (event) => {
             let nextIndex = -1
             let currentIndex = masonryLayout.view.currentIndex
-            if ((event.key === Qt.Key_Left || event.key === Qt.Key_PageUp || event.key === Qt.Key_Backspace ||
+            if (!zoomFitView && (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Up ||
+                                 event.key === Qt.Key_Down) ||
+                                 event.key === Qt.Key_Plus || event.key === Qt.Key_Minus || event.key === Qt.Key_Equal ||
+                                 event.key === Qt.Key_Control) {
+                if (event.isAutoRepeat) {
+                    return
+                }
+                if (event.key === Qt.Key_Left) {
+                    leftPressed = true
+                }
+                else if (event.key === Qt.Key_Right) {
+                    rightPressed = true
+                }
+                else if (event.key === Qt.Key_Up) {
+                    upPressed = true
+                }
+                else if (event.key === Qt.Key_Down) {
+                    downPressed = true
+                }
+                else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
+                    zoomInPressed = true
+                }
+                else if (event.key === Qt.Key_Minus) {
+                    zoomOutPressed = true
+                }
+                else if (event.key === Qt.Key_Control) {
+                    controlPressed = true
+                }
+
+                let speed = controlPressed ? 0.06 : 1
+                flickableArea.startZoomScrollingAnimation(leftPressed ? speed : rightPressed ? -speed : 0,
+                                                          upPressed ? speed : downPressed ? -speed : 0,
+                                                          zoomInPressed ? speed : zoomOutPressed ? -speed : 0)
+            }
+            else if ((event.key === Qt.Key_Left || event.key === Qt.Key_PageUp || event.key === Qt.Key_Backspace ||
                  event.key === Qt.Key_Up) && !(event.modifiers & Qt.AltModifier)) {
                 nextIndex = masonryLayout.moveInImageList(false, false)
             }
@@ -52,19 +118,85 @@ Item {
                      event.key === Qt.Key_PageUp && (event.modifiers & Qt.ControlModifier)) {
                 root.toggleViewer()
             }
+            else if (event.key === Qt.Key_Asterisk || event.key === Qt.Key_9) {
+                flickableArea.zoomTo100()
+            }
+            else if (event.key === Qt.Key_0 && (event.modifiers & Qt.ControlModifier)) {
+                flickableArea.zoomToFit()
+            }
+            else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Slash || event.key === Qt.Key_0) {
+                flickableArea.toggleZoomToFit()
+            }
 
             if (nextIndex !== -1 && nextIndex !== currentIndex) {
                 onCurrentIndexChanged()
             }
     }
 
+    Keys.onReleased:
+        (event) => {
+
+            if (!event.isAutoRepeat) {
+                if (event.key === Qt.Key_Left) {
+                    leftPressed = false
+                }
+                else if (event.key === Qt.Key_Right) {
+                    rightPressed = false
+                }
+                else if (event.key === Qt.Key_Up) {
+                    upPressed = false
+                }
+                else if (event.key === Qt.Key_Down) {
+                    downPressed = false
+                }
+                else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
+                    zoomInPressed = false
+                }
+                else if (event.key === Qt.Key_Minus) {
+                    zoomOutPressed = false
+                }
+                else if (event.key === Qt.Key_Control) {
+                    controlPressed = false
+                }
+            }
+
+            if (!zoomFitView && (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Up ||
+                                 event.key === Qt.Key_Down ||
+                                 event.key === Qt.Key_Plus || event.key === Qt.Key_Minus || event.key === Qt.Key_Equal ||
+                                 event.key === Qt.Key_Control)) {
+                if (event.isAutoRepeat) {
+                    return
+                }
+
+                let speed = controlPressed ? 0.06 : 1
+                flickableArea.startZoomScrollingAnimation(leftPressed ? speed : rightPressed ? -speed : 0,
+                                                      upPressed ? speed : downPressed ? -speed : 0,
+                                                      zoomInPressed ? speed : zoomOutPressed ? -speed : 0)
+                if (event.key === Qt.Key_Control) {
+                    if (!leftPressed && !rightPressed && !upPressed && !downPressed && !zoomInPressed && !zoomOutPressed) {
+                        flickableArea.onControlReleased()
+                    }
+                }
+            }
+        }
+
     Connections {
         target: masonryLayout.view
         function onCurrentIndexChanged() {
             if (root.state === "viewer") {
                 let imageId = masonryLayout.view.indexImage(masonryLayout.view.currentIndex)
+                console.log("ZZ INDEX CHANGE 2", masonryLayout.view.currentIndex, imageId)
                 if (imageId) {
-                    viewerImage.source = imageId
+                    setImage(imageId,
+                             masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
+                    if (zoomFitView) {
+                        flickableArea.zoomToFit(true)
+                        console.log("ZZ FIT ON CHANGE")
+                    }
+                    else {
+                        flickableArea.fitViewerImageInViewportBounds()
+                        console.log("ZZ ELSE")
+                    }
                 }
             }
         }
@@ -73,110 +205,128 @@ Item {
     Connections {
         target: fileListModel
         function onViewerImageIdChanged(newImageId) {
-            viewerImage.source = newImageId
+            viewerMode.setImage(newImageId,
+                                masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
         }
     }
 
-    // Rectangle {
-    //     anchors.fill: parent
-    //     color: Style.viewerBackground
-    //     opacity: root.state === "viewer"
-    //     Behavior on opacity {
-    //         NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
-    //     }
-    // }
+    FlickableZoomable {
+        id: flickableArea
 
-    Item {
-        id: imageContainerItem
+        width: parent.width
+        height: parent.height
+        infoVisible: !viewerAnimation.running
+        animationDuration: viewerMode.animationDuration
 
-        anchors.fill: parent
+        onClicked: panelsVisible = !panelsVisible
 
-        Item {
-            id: viewerBoundaries
-            clip: true
-            x: Math.floor(viewerImage.x + viewerImage.width / 2 - width / 2) + (viewerAnimation.running ? 0.5 : 0)
-            y: Math.floor(viewerImage.y + viewerImage.height / 2 - height / 2) + (viewerAnimation.running ? 0.5 : 0)
-
-            width: Math.floor(viewerImage.useHeight ? viewerImage.width : (viewerImage.height * viewerImage.aspect)) - (viewerAnimation.running ? 2.5 : 0)
-            height: Math.floor(viewerImage.useHeight ? (viewerImage.width / viewerImage.aspect) : viewerImage.height) - (viewerAnimation.running ? 2.5 : 0)
-            visible: masonryLayout.view.showTransparentGrid && canHaveTransparency
-
-            Image {
-                x: viewerAnimation.running ? -0.5 : 0
-                y: viewerAnimation.running ? -0.5 : 0
-                width: parent.width + (viewerAnimation.running ? 0.5 : 0)
-                height: parent.height + (viewerAnimation.running ? 0.5 : 0)
-                source: "image://resources/transparent_grid|" + dpr
-                sourceSize.width: 16 * dpr
-                sourceSize.height: 16 * dpr
-                fillMode: Image.Tile
-                verticalAlignment: Image.AlignTop
-                horizontalAlignment: Image.AlignLeft
+        Rectangle {
+            id: delegateOutline
+            anchors {
+                fill: image
+                margins: -2 //selectionExtendsForImage
             }
+            color: Style.brickImageSelected
+            radius: 4
+            z: -1
         }
 
-        Image {
-            id: viewerImage
-            fillMode: Image.PreserveAspectFit
-            cache: false
-
-            property int actualWidth: Math.round(viewerImage.width * dpr)
-            property int actualHeight: Math.round(viewerImage.height * dpr)
-            property real aspect: viewerImage.sourceSize.width / viewerImage.sourceSize.height
-            property bool useHeight: (viewerImage.sourceSize.height * actualWidth / actualHeight) <= viewerImage.sourceSize.width
-
-            // Dirty hack to workaround blurry output. Remove someday
-            property bool needScaling: {
-                return useHeight ? (Math.abs(viewerImage.sourceSize.width - actualWidth) > 1) :
-                                   (Math.abs(viewerImage.sourceSize.height - actualHeight) > 1)
+        Item {
+            id: imageInfoPanel
+            anchors {
+                left: image.left
+                right: image.right
+                bottom: image.bottom
             }
-            smooth: needScaling
+            height: imageText.height + 10
+            z: 1
+            clip: true
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.topMargin: -radius
+                radius: 4
+                color: Style.brickInfoPanelSelected
+            }
+
+
+            Text {
+                id: imageText
+                anchors{
+                    left: parent.left
+                    right: parent.right
+                    bottom: parent.bottom
+                    margins: 5
+                }
+
+                text: masonryLayout.view.indexText(masonryLayout.view.currentIndex)
+                textFormat: masonryLayout.quickSearchMode ? Text.RichText : Text.PlainText
+
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideMiddle
+                color: Style.text
+                maximumLineCount: 4
+                wrapMode: Text.Wrap
+            }
         }
     }
 
     MouseArea {
         id: viewerMouse
         anchors.fill: parent
-        anchors.topMargin: isQWK ? titleBar.height : 0
-        enabled: root.state === "viewer"
+        enabled: root.state === "viewer" // && zoomFitView
 
-        onDoubleClicked:
-            (mouse) => {
-                if (mouse.button === Qt.LeftButton) {
-                    root.toggleViewer()
-                }
-            }
+        acceptedButtons: Qt.LeftButtons | Qt.MiddleButton
+
         onPressed:
             (mouse) => {
-                if (mouse.button === Qt.RightButton) {
-                    root.toggleViewer()
-                }
-                else if (mouse.button === Qt.MiddleButton) {
+                if (mouse.button === Qt.MiddleButton) {
                     topLevelWindow.toggleFullscreen()
                 }
                 else if (mouse.button === Qt.LeftButton) {
-                    panelsVisible = !panelsVisible
+                    mouse.accepted = false
                 }
             }
 
         onWheel:
             (wheel) => {
-                let nextIndex = -1
-                let currentIndex = masonryLayout.view.currentIndex
-                if (wheel.angleDelta.y < 0) {
-                    nextIndex = masonryLayout.moveInImageList(true, false)
+                if (!(wheel.modifiers === Qt.ControlModifier || (wheel.buttons & Qt.LeftButton))) {
+                    let nextIndex = -1
+                    let currentIndex = masonryLayout.view.currentIndex
+                    if (wheel.angleDelta.y < 0) {
+                        nextIndex = masonryLayout.moveInImageList(true, false)
+                    }
+                    else {
+                        nextIndex = masonryLayout.moveInImageList(false, false)
+                    }
+
+                    if (nextIndex !== currentIndex) {
+                        onCurrentIndexChanged()
+                    }
                 }
                 else {
-                    nextIndex = masonryLayout.moveInImageList(false, false)
-                }
-
-                if (nextIndex !== currentIndex) {
-                    onCurrentIndexChanged()
+                    wheel.accepted = false
                 }
             }
-
-        acceptedButtons: Qt.AllButtons
     }
+
+    /*NumberAnimation {
+        id: viewerAnimation
+
+        property real x
+        property real y
+        property real width
+        property real height
+
+        duration: 0
+
+        onFinished: {
+            if (root.state === "thumbnails") {
+                viewerMode.visible = false
+            }
+        }
+
+    }*/
 
     ParallelAnimation {
         id: viewerAnimation
@@ -188,7 +338,7 @@ Item {
 
         NumberAnimation {
             id: viewerMaximizeAnimationX
-            target: viewerImage
+            target: imageContainer
             property: "x"
             duration: viewerMode.animationDuration
             easing.type: viewerMode.easingType
@@ -196,7 +346,7 @@ Item {
 
         NumberAnimation {
             id: viewerMaximizeAnimationY
-            target: viewerImage
+            target: imageContainer
             property: "y"
             duration: viewerMode.animationDuration
             easing.type: viewerMode.easingType
@@ -204,7 +354,7 @@ Item {
 
         NumberAnimation {
             id: viewerMaximizeAnimationWidth
-            target: viewerImage
+            target: imageContainer
             property: "width"
             duration: viewerMode.animationDuration
             easing.type: viewerMode.easingType
@@ -212,10 +362,26 @@ Item {
 
         NumberAnimation {
             id: viewerMaximizeAnimationHeight
-            target: viewerImage
+            target: imageContainer
             property: "height"
             duration: viewerMode.animationDuration
             easing.type: viewerMode.easingType
+        }
+
+        NumberAnimation {
+            target: delegateOutline
+            property: "opacity"
+            duration: viewerMode.animationDuration
+            easing.type: viewerMode.easingType
+            to: root.state === "viewer" ? 0 : 1
+        }
+
+        NumberAnimation {
+            target: imageInfoPanel
+            property: "opacity"
+            duration: viewerMode.animationDuration
+            easing.type: viewerMode.easingType
+            to: root.state === "viewer" ? 0 : 1
         }
 
         onFinished: {
@@ -223,11 +389,28 @@ Item {
                 viewerMode.visible = false
             }
             else {
-                viewerImage.width = Qt.binding(function() {return imageContainer.width})
-                viewerImage.height = Qt.binding(function() {return imageContainer.height})
+                // image.x = Qt.binding(function() {return zoomFitView ? 0 : zoomCenterOffsetX})
+                // image.y = Qt.binding(function() {return zoomFitView ? 0 : zoomCenterOffsetY})
+                imageContainer.width = Qt.binding(() => {return viewerMode.width})
+                imageContainer.height = Qt.binding(() => {return viewerMode.height})
             }
         }
     }
+
+    // Flickable {
+    //     anchors.fill: parent
+    //     contentWidth: image.width
+    //     contentHeight: image.height
+
+    //     ScrollBar.horizontal: ScrollBar {}
+    //     ScrollBar.vertical: ScrollBar {}
+
+    //     Image {
+    //         source: image.source
+    //         width: image.width
+    //         height: image.height
+    //     }
+    // }
 
     MouseArea {
         id: rightPanel
@@ -239,12 +422,13 @@ Item {
         }
         width: 120
 
-        property bool viewerOverlapsFilmstrip: x < viewerBoundaries.x + viewerBoundaries.width
+        property bool viewerOverlapsFilmstrip: x < flickableArea.image.x + flickableArea.image.width
         onViewerOverlapsFilmstripChanged: {
             titleBar.backgroundVisible = viewerOverlapsFilmstrip
         }
 
         opacity: root.state === "viewer" && (panelsVisible || rightPanel.containsMouse)
+        visible: opacity !== 0
         Behavior on opacity {
             NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
         }
@@ -290,6 +474,41 @@ Item {
                 property bool isCurrent: imageModel.mapFromSourceRow(masonryLayout.view.currentIndex) === index
 
                 Image {
+                    id: image
+
+                    width: parent.width
+                    height: parent.height
+                    source: "image://thumbnails/" + imageIdRole
+
+                    fillMode: Image.PreserveAspectFit
+                    cache: false
+                    // Async adds black blinking for folder views
+                    //asynchronous: true
+                    mipmap: true
+                    visible: false
+                }
+
+                ShaderEffect {
+                    id: imageShader
+                    property real aspect: image.sourceSize.width / image.sourceSize.height
+                    property bool useHeight: (image.sourceSize.height * image.width / image.height) <= image.sourceSize.width
+
+                    anchors.centerIn: parent
+                    width: useHeight ? image.width : (image.height * aspect)
+                    height: useHeight ? (image.width / aspect) : image.height
+
+                    property var source: image
+                    property var viewportSize: Qt.size(width * dpr, height * dpr)
+                    property real sharpenAmount: 2
+                    property bool showCheckerboard: masonryLayout.view.showTransparentGrid
+                    property int checkerboardSize: 4 * dpr
+                    property real borderRadius: 4.1 * dpr
+
+                    fragmentShader: "qrc:/resources/shader.frag.qsb"
+                    visible: image.source != ""
+                }
+
+                /*Image {
                     id: thumbnailImage
                     source: "image://thumbnails/" + imageIdRole
                     sourceSize.width: parent.width
@@ -302,7 +521,7 @@ Item {
                 RoundCorners {
                     anchors.fill: parent
                     backgroundColor: Style.opaqueMasonryViewBackground
-                }
+                }*/
 
                 Rectangle {
                     anchors.fill: parent
@@ -378,6 +597,7 @@ Item {
         height: exifLayout.height + 10
 
         opacity: root.state === "viewer" && (panelsVisible || leftPanel.containsMouse)
+        visible: opacity !== 0
         Behavior on opacity {
             NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
         }
@@ -390,7 +610,7 @@ Item {
                 leftMargin: -radius
                 topMargin: -radius
             }
-            color: width < viewerBoundaries.x || height < viewerBoundaries.y ? Style.viewerPanel : Style.opaqueMasonryViewBackgroundWithOpacity
+            color: width < flickableArea.image.x || height < flickableArea.image.y ? Style.viewerPanel : Style.opaqueMasonryViewBackgroundWithOpacity
             radius: 4
         }
 

@@ -31,12 +31,14 @@ public:
     ImageReadRequest dequeue();
     int size();
     void unlock();
+    void prepareToClose();
 
 private:
     QList<ImageReadRequest> _queue;
     QSet<ImageReadRequest> _processedQueue;
     mutable std::mutex _mutex;
     std::condition_variable _condVar;
+    bool _terminateRequested = false;
 };
 
 #endif // THREADSAFEQUEUE_H

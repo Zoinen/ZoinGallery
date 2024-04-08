@@ -66,6 +66,8 @@ public:
     Q_INVOKABLE int indexAt(qreal x, qreal y) const;
     Q_INVOKABLE QRectF indexGeometry(int index) const;
     Q_INVOKABLE QString indexImage(int index) const;
+    Q_INVOKABLE QString indexText(int index) const;
+    Q_INVOKABLE QSize indexOriginalSize(int index) const;
     Q_INVOKABLE int nextImageIndex(bool forward, bool moveToEnd);
 
     Q_INVOKABLE void reReadAndDecodeThumbnails();

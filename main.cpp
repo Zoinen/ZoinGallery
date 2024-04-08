@@ -23,8 +23,9 @@ int main(int argc, char *argv[])
 #if defined(Q_OS_WIN)
     // qputenv("QT_QPA_PLATFORM", "windows:darkmode=2");
 #endif
-    qputenv("QSG_INFO", "1");
+    //qputenv("QSG_INFO", "1");
     qputenv("QSG_RHI_BACKEND", "d3d12");
+    // qputenv("QSG_NO_VSYNC", "1");
 
     QGuiApplication app(argc, argv);
     app.setOrganizationName("Zoin");

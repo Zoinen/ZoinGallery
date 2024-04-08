@@ -57,7 +57,7 @@ signals:
 private:
     void updateHistory(bool changeHistory);
     void loadSavedState();
-    void setCurrentPath(const QString &newPath, const QString &itemToSelect = QString());
+    int setCurrentPath(const QString &newPath, const QString &itemToSelect = QString());
 
     FileListModel *_fileListModel;
     ImageModel *_imageModel;

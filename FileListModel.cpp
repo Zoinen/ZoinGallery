@@ -54,6 +54,10 @@ FileListModel::FileListModel(QObject *parent)
             item->fullSize = fullSize;
 
             QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
+            if (!modelIndex.isValid()) {
+                qDebug() << "Invalid model index" << item->index << item->parent << item->fullPath();
+                return;
+            }
             emit dataChanged(modelIndex, modelIndex, {ImageFullSizeRole});
 
             if (sizeChanged) {
@@ -85,9 +89,9 @@ FileListModel::FileListModel(QObject *parent)
         }
     });
 
-    connect(_generator, &ThreadedThumbnailGenerator::viewerReady, this, [&] (const QString &path, const QImage &image) {
+    connect(_generator, &ThreadedThumbnailGenerator::viewerReady, this, [&] (const QString &path, const QImage &image, const QSize &requestedSize) {
         QString imageId = generateNewId();
-        _viewerImages[path] = {image, imageId, (int)_viewerImages.size()};
+        _viewerImages[path] = {image, imageId, (int)_viewerImages.size(), requestedSize};
         _imageIdToViewer[imageId] = path;
         auto it = _fileToItem.find(path);
         if (it != _fileToItem.end()) {
@@ -257,9 +261,9 @@ int FileListModel::columnCount(const QModelIndex &parent) const {
 }
 
 void FileListModel::prepareToClose() {
-    _thumbnailCache->thread()->quit();
     _generator->prepareToClose();
 
+    _thumbnailCache->thread()->quit();
     _thumbnailCache->thread()->wait(QDeadlineTimer(2000ms));
     qApp->exit(0);
 }
@@ -454,7 +458,6 @@ ImageFile *FileListModel::createFileItem(const QString &folderPath, const QStrin
     if (isImage(item->fileName)) {
         item->isImage = true;
         QString lowerFileName = item->fileName.toLower();
-        item->canHaveTransparency = lowerFileName.endsWith(".svg") || lowerFileName.endsWith(".png") || lowerFileName.endsWith("webp");
         item->iconPath = "qrc:/resources/ImageIcon.svg";
 //                updateImageId(item);
         QString path = item->fullPath();
@@ -518,6 +521,10 @@ void FileListModel::requestViewer(int index, int width, int height) {
     auto it = _viewerImages.find(requestedPath);
     if (it != _viewerImages.end()) {
         emit viewerImageIdChanged(QString("image://thumbnails/") + it.value().imageId);
+
+        if (it.value().requestedSize == QSize(width, height)) {
+            return;
+        }
     }
 
     QSize viewerSize(width, height);

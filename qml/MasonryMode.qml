@@ -19,8 +19,10 @@ MouseArea {
     property bool quickSearchMode: false
 
     property bool disableAnimation: false
+    property bool scrolled: masonryLayout.needScroll && masonryScroll.position > 0
 
     acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
+    clip: true
 
     function startScrolling() {
         scrollingStarted = false
@@ -384,6 +386,9 @@ MouseArea {
             else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_D) {
                 viewerController.clipboardCopyIndexFullPath(masonryLayout.currentIndex)
             }
+            else if (event.key === Qt.Key_F5 || (event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) {
+                viewerController.cd(viewerController.currentPath)
+            }
             else {
                 event.accepted = false
             }
@@ -408,7 +413,6 @@ MouseArea {
             right: masonryScroll.left
             rightMargin: masonryLayout.spacing / 2
         }
-        clip: true
         model: fileListModel
 
         paddingLeft: 6

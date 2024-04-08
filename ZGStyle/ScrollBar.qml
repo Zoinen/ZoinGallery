@@ -4,9 +4,10 @@ import QtQuick.Controls.Basic as T
 T.ScrollBar {
     id: scroll
     policy: T.ScrollBar.AlwaysOn
-    visible: parent.contentHeight > parent.height
+    visible: horizontal ? parent.contentWidth > parent.width : parent.contentHeight > parent.height
 
     implicitWidth: 15
+    implicitHeight: 15
     hoverEnabled: true
 
     leftPadding: 0
@@ -17,6 +18,7 @@ T.ScrollBar {
     contentItem: MouseArea {
         id: contentItem
         implicitWidth: 15
+        implicitHeight: 15
         hoverEnabled: true
         acceptedButtons: Qt.NoButton
 

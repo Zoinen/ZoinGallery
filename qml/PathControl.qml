@@ -87,7 +87,7 @@ Item {
                 visible: needArrow
 
                 source: "qrc:/resources/PathSeparator.svg"
-                sourceSize.height: 6
+                sourceSize.height: 8
             }
         }
 
@@ -137,7 +137,7 @@ Item {
 
     Item {
         anchors.left: fixedPart.right
-        width: Math.min(pathRoot.width - fixedPart.width, collapsiblePart.width)
+        width: overflowIndicator.visible ? pathRoot.width - fixedPart.width - 10 : collapsiblePart.width
         height: parent.height
         clip: true
         visible: !editMode
@@ -176,7 +176,7 @@ Item {
         }
         visible: editMode
 
-        leftPadding: 4
+        leftPadding: 7
         rightPadding: 10
         hasBackground: false
         color: Style.text
@@ -203,7 +203,8 @@ Item {
     }
 
     Rectangle {
-        visible: !editMode && (pathRoot.width - fixedPart.width < collapsiblePart.width)
+        id: overflowIndicator
+        visible: !editMode && (pathRoot.width - fixedPart.width - 10 < collapsiblePart.width)
         anchors {
             left: fixedPart.right
             top: parent.top

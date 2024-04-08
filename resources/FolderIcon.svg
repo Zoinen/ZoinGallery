@@ -1,28 +1,32 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Generator: Adobe Illustrator 23.0.2, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
-<svg version="1.1"
-	 id="Layer_1" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-	 xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px" viewBox="0 0 24 24"
-	 style="enable-background:new 0 0 24 24;" xml:space="preserve">
-<style type="text/css">
-	.st0{fill:url(#SVGID_1_);}
-	.st1{fill:url(#SVGID_2_);}
-</style>
-<g transform="translate(0 -1028.4)">
-	<linearGradient id="SVGID_1_" gradientUnits="userSpaceOnUse" x1="12" y1="1037.0211" x2="12" y2="1031.8317">
-		<stop  offset="0" style="stop-color:#33709E"/>
-		<stop  offset="6.133717e-02" style="stop-color:#3471A0"/>
-		<stop  offset="0.5644" style="stop-color:#387BAE"/>
-		<stop  offset="1" style="stop-color:#397EB3"/>
-	</linearGradient>
-	<path class="st0" d="M2,1030.4c-1.1,0-2,0.9-2,2v5h10v1h14v-5c0-1.1-0.9-2-2-2H11.7c-0.3-0.6-1-1-1.7-1H2z"/>
-	<linearGradient id="SVGID_2_" gradientUnits="userSpaceOnUse" x1="12" y1="1050.9948" x2="12" y2="1043.4503">
-		<stop  offset="0" style="stop-color:#5BA6DE"/>
-		<stop  offset="2.681667e-02" style="stop-color:#5BA7DF"/>
-		<stop  offset="0.4313" style="stop-color:#5FAEE8"/>
-		<stop  offset="1" style="stop-color:#60B0EB"/>
-	</linearGradient>
-	<path class="st1" d="M12,1033.4c0,1.1-0.9,2-2,2H5H2c-1.1,0-2,0.9-2,2v8v4c0,1.1,0.9,2,2,2h20c1.1,0,2-0.9,2-2v-4v-10
-		c0-1.1-0.9-2-2-2H12z"/>
-</g>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 24 24">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: url(#linear-gradient);
+      }
+
+      .cls-1, .cls-2 {
+        stroke-width: 0px;
+      }
+
+      .cls-2 {
+        fill: url(#linear-gradient-2);
+      }
+    </style>
+    <linearGradient id="linear-gradient" x1="12" y1="-1011.021" x2="12" y2="-1005.832" gradientTransform="translate(0 -1002.4) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#33709e"/>
+      <stop offset=".061" stop-color="#3471a0"/>
+      <stop offset=".564" stop-color="#387bae"/>
+      <stop offset="1" stop-color="#397eb3"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="12" y1="-1024.995" x2="12" y2="-1017.45" gradientTransform="translate(0 -1002.4) scale(1 -1)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ba6de"/>
+      <stop offset=".027" stop-color="#5ba7df"/>
+      <stop offset=".431" stop-color="#5faee8"/>
+      <stop offset="1" stop-color="#60b0eb"/>
+    </linearGradient>
+  </defs>
+  <path class="cls-1" d="M2,2c-1.1,0-2,.9-2,2v5h10v1h14v-5c0-1.1-.9-2-2-2h-9.342c-.474,0-.959-.135-1.303-.461-.354-.335-.854-.539-1.354-.539H2Z"/>
+  <path class="cls-2" d="M13.457,5c-.691,0-1.367.336-1.695.944-.339.627-1.002,1.056-1.762,1.056H2c-1.1,0-2,.9-2,2v12c0,1.1.9,2,2,2h20c1.1,0,2-.9,2-2V7c0-1.1-.9-2-2-2h-8.543Z"/>
 </svg>

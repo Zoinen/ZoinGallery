@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Effects
 
 import ZoinGallery.MainWindow 1.0
 
@@ -36,16 +37,36 @@ MainWindow {
         target: topLevelWindow
 
         function onMainWindowResized() {
-            console.log("ZZ MAIN RESIZED")
             if (root.state === "thumbnails") {
                 masonryLayout.view.reReadAndDecodeThumbnails()
                 viewerDirty = true
             }
             else {
-                console.log("onMainWindowResized", viewerMode.width * dpr, viewerMode.height * dpr)
+                if (viewerMode.zoomFitView) {
+                    console.log("onMainWindowResized")
+                    fileListModel.invalidateViewerImages()
+                    fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+                    viewerDirty = false
+                }
+                else {
+                    viewerDirty = true
+                }
+                thumbnailsDirty = true
+            }
+        }
+    }
+
+    Connections {
+        target: viewerMode
+        function onZoomFitViewChanged() {
+            if (viewerMode.zoomFitView && viewerDirty) {
                 fileListModel.invalidateViewerImages()
                 fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
-                thumbnailsDirty = true
+                viewerDirty = false
+            }
+            else {
+                fileListModel.invalidateViewerImages()
+                fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.imageContainer.originalSize.width * dpr, viewerMode.imageContainer.originalSize.height * dpr)
             }
         }
     }
@@ -54,6 +75,8 @@ MainWindow {
         id: root
         anchors.fill: parent
         color: Style.windowColor
+
+        property bool viewerShowAnimationRunning: viewerMode.animation.running
 
         function toggleViewer() {
             if (root.state === "thumbnails") {
@@ -80,22 +103,20 @@ MainWindow {
             if (!viewerMode.animation.running) {
                 let mappedGeometry = root.mapFromItem(masonryLayout.view, masonryLayout.currentItemImageGeometry())
 
-                viewerMode.image.x = mappedGeometry.x
-                viewerMode.image.y = mappedGeometry.y
-                viewerMode.image.width = mappedGeometry.width
-                viewerMode.image.height = mappedGeometry.height
+                viewerMode.imageContainer.x = mappedGeometry.x
+                viewerMode.imageContainer.y = mappedGeometry.y
+                viewerMode.imageContainer.width = mappedGeometry.width
+                viewerMode.imageContainer.height = mappedGeometry.height
             }
 
-            viewerMode.image.source = masonryLayout.view.currentItem.imageId
-            viewerMode.canHaveTransparency = masonryLayout.view.currentItem.canHaveTransparency
-            viewerMode.onCurrentIndexChanged()
-
-            viewerMode.visible = true
+            viewerMode.setImage(masonryLayout.view.currentItem.imageId,
+                                masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
+            viewerMode.show()
 
             viewerMode.animation.x = 0
             viewerMode.animation.y = 0
-            viewerMode.animation.width = viewerMode.imageContainer.width
-            viewerMode.animation.height = viewerMode.imageContainer.height
+            viewerMode.animation.width = viewerMode.width
+            viewerMode.animation.height = viewerMode.height
             viewerMode.animation.restart()
         }
 
@@ -105,6 +126,10 @@ MainWindow {
 
             if (masonryLayout.view.currentItem) {
                 let mappedGeometry = root.mapFromItem(masonryLayout.view, masonryLayout.currentItemImageGeometry())
+
+                if (!viewerMode.zoomFitView) {
+                    viewerMode.imageContainer.zoomToFit(true) // TODO: Smooth animation
+                }
 
                 viewerMode.animation.x = mappedGeometry.x
                 viewerMode.animation.y = mappedGeometry.y
@@ -171,15 +196,15 @@ MainWindow {
                     icon.color: Style.text
 
                     // property alias source: image.source
-                    /*contentItem: Item {
-                    Image {
-                        id: image
-                        anchors.centerIn: parent
-                        mipmap: true
-                        width: 10
-                        height: 10
-                    }
-                }*/
+                //     contentItem: Item {
+                //     Image {
+                //         id: image
+                //         anchors.centerIn: parent
+                //         mipmap: true
+                //         width: 10
+                //         height: 10
+                //     }
+                // }
                     background: Rectangle {
                         color: {
                             if (!titleButton.enabled) {
@@ -276,6 +301,36 @@ MainWindow {
             Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: titleBar.height
+                z: 1
+
+                MultiEffect {
+                    id: titleBarBlurBehind
+                    source: ShaderEffectSource {
+                        sourceItem: masonryLayout
+                        width: titleBarBlurBehind.width
+                        height: titleBarBlurBehind.height
+                        sourceRect: Qt.rect(0, -height, width, height)
+                    }
+
+                    anchors.fill: parent
+                    opacity: 0.3
+                    contrast: Style.isDarkTheme ? -0.5 : 0
+                    brightness: Style.isDarkTheme ? 0 : 0.3
+                    saturation: topLevelWindow.active ? 0 : -1
+                    Behavior on saturation {
+                        NumberAnimation {
+                            duration: 300
+                            easing.type: Easing.InOutQuad
+                        }
+                    }
+
+                    colorization: Style.isDarkTheme ? 0.4 : 0
+                    colorizationColor: Style.windowBackgroundNoQWK
+                    autoPaddingEnabled: false
+                    blurEnabled: true
+                    blurMax: 64
+                    blur: 1.0
+                }
 
                 RowLayout {
                     id: toolbarLayout
@@ -470,10 +525,10 @@ MainWindow {
                         text: viewerController.currentPath
                     }
 
-
                     Slider {
                         id: masonryZoomSlider
                         Layout.preferredWidth: 100
+                        implicitHeight: 30 // To work around a warning
                         Layout.preferredHeight: 30
                         Layout.alignment: Qt.AlignVCenter
                         from: 40
@@ -543,6 +598,30 @@ MainWindow {
                                     masonryLayout.view.layoutReset()
                                 }
                             }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        bottom: parent.bottom
+                        bottomMargin: -4
+                    }
+                    height: 4
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: "#000" }
+                        GradientStop { position: 0.5; color: Qt.rgba(0, 0, 0, 0.2) }
+                        GradientStop { position: 1.0; color: "transparent" }
+                    }
+
+                    color: "#000"
+                    opacity: masonryLayout.scrolled ? (Style.isDarkTheme ? 0.17 : 0.10) : 0
+                    Behavior on opacity {
+                        NumberAnimation {
+                            duration: 300
+                            easing.type: Easing.InOutQuad
                         }
                     }
                 }

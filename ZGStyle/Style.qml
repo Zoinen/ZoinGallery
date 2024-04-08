@@ -34,17 +34,18 @@ QtObject {
     property color menuBackground: isDarkTheme ? "#2c2c2c" : "#d5d5d5"
     property color menuBorder: isDarkTheme ? "#33000000" : "#bcbcbc"
 
-    property color brickSelected: isDarkTheme ? "#385671" : "#b4cedb"
-    property color brickHovered: isDarkTheme ? "#353535" : "#b4b4b4" // TODO: LIGHT THEME
-    property color brickPressed: isDarkTheme ? "#2e465c" : "#8699a3" // TODO: LIGHT THEME
+    property color brickSelected: isDarkTheme ? "#385671" : Qt.rgba(0, 0.55, 1, 0.2)
+    property color brickSelectedBorder: isDarkTheme ? "#456b8c" : Qt.rgba(0, 0.55, 1, 0.4)
+    property color brickHovered: isDarkTheme ? Qt.rgba(0.7, 0.7, 0.7, 0.1) : Qt.rgba(0, 0.55, 1, 0.1)
+    property color brickPressed: isDarkTheme ? "#2e465c" : Qt.darker(Qt.rgba(0, 0.55, 1, 0.2), 1.2)
 
-    property color brickImageSelected: isDarkTheme ? "#7cbdf9" : "#b4cedb"
-    property color brickImageHovered: isDarkTheme ? "#545454" : "#b4b4b4" // TODO: LIGHT THEME
-    property color brickImagePressed: isDarkTheme ? "#4d769b" : "#8699a3" // TODO: LIGHT THEME
+    property color brickImageSelected: isDarkTheme ? "#7cbdf9" : Qt.rgba(0, 0.55, 1, 0.4)
+    property color brickImageHovered: isDarkTheme ? "#545454" : Qt.lighter(Qt.rgba(0, 0.55, 1, 0.2), 1.5)
+    property color brickImagePressed: isDarkTheme ? "#4d769b" : Qt.darker(Qt.rgba(0, 0.55, 1, 0.4), 1.2)
 
-    property color brickInfoPanelSelected: isDarkTheme ? "#B33d5d7b" : "#99bce9ff" // TODO: LIGHT THEME
-    property color brickInfoPanelHovered: isDarkTheme ? Qt.rgba(40/255, 40/255, 40/255, 0.7) : Qt.rgba(1, 1, 1, 0.6)
-    property color brickInfoPanelPressed: isDarkTheme ? "#B31a384e" : "#99bce9ff"
+    property color brickInfoPanelSelected: isDarkTheme ? "#B33d5d7b" : Qt.lighter(Qt.rgba(0, 0.55, 1, 0.7), 1.7)
+    property color brickInfoPanelHovered: isDarkTheme ? Qt.rgba(0.15, 0.15, 0.15, 0.7) : Qt.lighter(Qt.rgba(0, 0.55, 1, 0.7), 1.9)
+    property color brickInfoPanelPressed: isDarkTheme ? "#B31a384e" : Qt.lighter(Qt.rgba(0, 0.55, 1, 0.7), 1.6)
 
     property color folderIcon: isDarkTheme ? "#397db1" : "#70a5cf"
     property color closeButtonPressed: "#b3271c"

@@ -80,7 +80,7 @@ public:
 
     QHash<int, QByteArray> roleNames() const override;
 
-    int rowCount(const QModelIndex &parent) const override;
+    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role) const override;
 
     QModelIndex index(int row, int column = 0, const QModelIndex &parent = QModelIndex()) const override;
@@ -144,6 +144,7 @@ private:
         QImage image;
         QString imageId;
         int requestIndex;
+        QSize requestedSize;
     };
     QHash<QString, ViewerImage> _viewerImages;
     QHash<QString, QString> _imageIdToViewer;

@@ -43,7 +43,7 @@ ThreadedThumbnailGenerator::ThreadedThumbnailGenerator(QObject *parent)
 
 void ThreadedThumbnailGenerator::prepareToClose() {
     _readWorker->requestInterruption();
-    // _readWorker->readQueue().unlock();
+    _readWorker->prepareToClose();
     for (int i = 0; i < _workers.size(); i++) {
         _workers[i].thread->quit();
     }
@@ -52,7 +52,6 @@ void ThreadedThumbnailGenerator::prepareToClose() {
         _workers[i].thread->wait(QDeadlineTimer(2000ms));
     }
     _readWorker->wait(QDeadlineTimer(2000ms));
-    qDebug() << "Prepare to close";
 }
 
 void ThreadedThumbnailGenerator::clearRequests() {
@@ -187,7 +186,7 @@ void ThreadedThumbnailGenerator::onReadFinished(const ImageReadResult &result) {
 
     if (!_readWorker->readQueue().size()) {
         _readFinished = true;
-        qDebug() << "Generator: read finished";
+        // qDebug() << "Generator: read finished";
         emit readFinished();
         checkIfFinished();
     }
@@ -199,7 +198,7 @@ void ThreadedThumbnailGenerator::onDecodeFinished(const ImageReadResult &readRes
         emit thumbnailReady(readResult.request.sourcePath, image, readResult.exif);
     }
     else {
-        emit viewerReady(readResult.request.sourcePath, image);
+        emit viewerReady(readResult.request.sourcePath, image, readResult.request.targetSize);
     }
     DecodeWorker *worker = static_cast<DecodeWorker*>(sender());
     for (int i = 0; i < _workers.size(); i++) {
@@ -246,9 +245,10 @@ void DecodeWorker::decode(const ImageReadResult &readResult, int queueId) {
         thumbnail = loader.createThumbnail(thumbnail, readResult.request.targetSize, readResult.request.viewerRequest);
 
         // TODO: Remove this hack and fix alpha channel handling for pngs
-        if (!readResult.request.sourcePath.endsWith(".png", Qt::CaseInsensitive)) {
-            thumbnail = loader.unsharpMask(thumbnail);
-        }
+
+        // if (!readResult.request.sourcePath.endsWith(".png", Qt::CaseInsensitive)) {
+        //     thumbnail = loader.unsharpMask(thumbnail);
+        // }
     }
 //    thumbnail.save(QString("c:\\temp\\%1+.png").arg(QFileInfo(readResult.request.sourcePath).baseName()));
 
@@ -268,10 +268,11 @@ ReadWorker::ReadWorker(QObject *parent)
 
 void ReadWorker::run() {
     forever {
+        ImageReadRequest request = _readQueue.dequeue();
+
         if (isInterruptionRequested()) {
             return;
         }
-        ImageReadRequest request = _readQueue.dequeue();
 
         if (!request.folderRequest) {
             readImage(request);
@@ -324,4 +325,9 @@ void ReadWorker::readImage(ImageReadRequest &request) {
 
 ThreadSafeQueue &ReadWorker::readQueue() {
     return _readQueue;
+}
+
+void ReadWorker::prepareToClose() {
+    _readQueue.prepareToClose();
+    _readQueue.unlock();
 }

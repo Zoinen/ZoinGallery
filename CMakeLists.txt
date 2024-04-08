@@ -52,7 +52,8 @@ include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
 conan_basic_setup(NO_OUTPUT_DIRS)
 
 find_package(QT NAMES Qt6)
-find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Concurrent Svg QuickControls2 REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2 REQUIRED)
+find_package(Qt6 COMPONENTS ShaderTools)
 
 if (USE_QWK)
     find_package(QWindowKit REQUIRED)
@@ -120,65 +121,73 @@ set_target_properties(${PROJECT_NAME}
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-if(${QT_VERSION} VERSION_GREATER_EQUAL 6.2)
-    set_source_files_properties(qml/Style.qml PROPERTIES
-        QT_QML_SINGLETON_TYPE TRUE
-    )
+set_source_files_properties(qml/Style.qml PROPERTIES
+    QT_QML_SINGLETON_TYPE TRUE
+)
 
-    qt6_add_qml_module(ZoinGallery
-        URI /
-        VERSION 1.0
-        RESOURCE_PREFIX /
-        QML_FILES
-            qml/main.qml
-            qml/MasonryMode.qml
-            qml/PathControl.qml
-            qml/BrickDelegate.qml
-            qml/ViewerMode.qml
-            qml/RoundCorners.qml
-            ZGStyle/Style.qml
-            ZGStyle/ScrollBar.qml
-            ZGStyle/Slider.qml
-            ZGStyle/Button.qml
-            ZGStyle/TextField.qml
-            ZGStyle/ToolTip.qml
-            ZGStyle/Menu.qml
-            ZGStyle/MenuItem.qml
-            ZGStyle/MenuSeparator.qml
-            ZGStyle/TabBar.qml
-            ZGStyle/TabButton.qml
-        RESOURCES
-            ZGStyle/qmldir
-            resources/ThumbnailsShadow.png
-            resources/ThumbnailsShadow@2x.png
-            resources/FileIcon.svg
-            resources/FolderIcon.svg
-            resources/ImageIcon.svg
-            resources/ScrollMode.svg
-            resources/ScrollModeDown.svg
-            resources/ScrollModeUp.svg
-            resources/Logo.svg
-            resources/DriveIcon.svg
-            resources/Up.svg
-            resources/Back.svg
-            resources/Forward.svg
-            resources/SearchBack.svg
-            resources/SearchClose.svg
-            resources/SearchNext.svg
-            resources/PathSeparator.svg
-            resources/ListView.svg
-            resources/GridView.svg
-            resources/WindowClose.svg
-            resources/WindowMaximize.svg
-            resources/WindowMinimize.svg
-            resources/WindowRestore.svg
-            resources/ExifCamera.svg
-            resources/ExifDateTime.svg
-            resources/ExifImage.svg
-            resources/ExifLocation.svg
-            resources/ExifShooting.svg
-        )
-endif()
+qt_add_shaders(ZoinGallery
+    BATCHABLE
+    NOGLSL
+    PREFIX
+        "/"
+    FILES
+        "resources/shader.frag"
+)
+
+qt6_add_qml_module(ZoinGallery
+    URI /
+    VERSION 1.0
+    RESOURCE_PREFIX /
+    QML_FILES
+        qml/main.qml
+        qml/MasonryMode.qml
+        qml/PathControl.qml
+        qml/BrickDelegate.qml
+        qml/ViewerMode.qml
+        qml/RoundCorners.qml
+        qml/FlickableZoomable.qml
+        ZGStyle/Style.qml
+        ZGStyle/ScrollBar.qml
+        ZGStyle/Slider.qml
+        ZGStyle/Button.qml
+        ZGStyle/TextField.qml
+        ZGStyle/ToolTip.qml
+        ZGStyle/Menu.qml
+        ZGStyle/MenuItem.qml
+        ZGStyle/MenuSeparator.qml
+        ZGStyle/TabBar.qml
+        ZGStyle/TabButton.qml
+    RESOURCES
+        ZGStyle/qmldir
+        resources/ThumbnailsShadow.png
+        resources/ThumbnailsShadow@2x.png
+        resources/FileIcon.svg
+        resources/FolderIcon.svg
+        resources/ImageIcon.svg
+        resources/ScrollMode.svg
+        resources/ScrollModeDown.svg
+        resources/ScrollModeUp.svg
+        resources/Logo.svg
+        resources/DriveIcon.svg
+        resources/Up.svg
+        resources/Back.svg
+        resources/Forward.svg
+        resources/SearchBack.svg
+        resources/SearchClose.svg
+        resources/SearchNext.svg
+        resources/PathSeparator.svg
+        resources/ListView.svg
+        resources/GridView.svg
+        resources/WindowClose.svg
+        resources/WindowMaximize.svg
+        resources/WindowMinimize.svg
+        resources/WindowRestore.svg
+        resources/ExifCamera.svg
+        resources/ExifDateTime.svg
+        resources/ExifImage.svg
+        resources/ExifLocation.svg
+        resources/ExifShooting.svg
+    )
 
 if (USE_QWK)
     target_link_libraries(ZoinGallery PUBLIC QWindowKit::Quick)

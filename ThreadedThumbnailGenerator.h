@@ -22,6 +22,7 @@ class ReadWorker : public QThread {
 public:
     ReadWorker(QObject *parent);
     ThreadSafeQueue &readQueue();
+    void prepareToClose();
 
 signals:
    void readResultReady(const ImageReadResult &result);
@@ -65,7 +66,7 @@ public:
 
 signals:
     void thumbnailReady(QString path, QImage thumbnail, const QVariantMap &exif);
-    void viewerReady(QString path, QImage thumbnail);
+    void viewerReady(QString path, QImage thumbnail, const QSize &requestedSize);
     void folderListReady(const QString &path, const QList<QFileInfo> &images);
     void thumbnailInfoReady(QString path, QSize fullSize);
     void requestDecodeThumbnail(ImageReadResult request, int queueId);

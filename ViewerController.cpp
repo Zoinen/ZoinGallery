@@ -84,10 +84,10 @@ int ViewerController::up() {
         QString previousFolder = QFileInfo(_currentPath).fileName();
         QDir dir(_currentPath);
         if (dir.cdUp()) {
-            setCurrentPath(QDir::toNativeSeparators(dir.absolutePath()), previousFolder);
+            indexToSelect = setCurrentPath(QDir::toNativeSeparators(dir.absolutePath()), previousFolder);
         }
         else {
-            setCurrentPath("Computer", _currentPath);
+            indexToSelect = setCurrentPath("Computer", _currentPath);
         }
     }
     loadSavedState();
@@ -206,7 +206,7 @@ void ViewerController::clipboardCopyIndexFullPath(int index) {
 }
 
 QUrl ViewerController::indexUrl(int index) {
-    if (index < 0) {
+    if (index < 0 || index > _fileListModel->rowCount() - 1) {
         return QUrl();
     }
     return QUrl::fromLocalFile(_fileListModel->itemFromIndex(_fileListModel->index(index))->fullPath());
@@ -251,10 +251,11 @@ void ViewerController::loadSavedState() {
     }
 }
 
-void ViewerController::setCurrentPath(const QString &newPath, const QString &itemToSelect) {
+int ViewerController::setCurrentPath(const QString &newPath, const QString &itemToSelect) {
     _currentPath = newPath;
-    _fileListModel->cd(_currentPath, itemToSelect);
+    int indexToSelect = _fileListModel->cd(_currentPath, itemToSelect);
     QSettings set;
     set.setValue("currentPath", _currentPath);
     emit currentPathChanged();
+    return indexToSelect;
 }

@@ -64,7 +64,7 @@ void MasonryLayout::componentComplete() {
             this, &MasonryLayout::rewrap);
 
     connect(this, &MasonryLayout::widthChanged, this, [&] () {
-        if (width() && dynamic_cast<ThumbnailsRequestInterface *>(_model)->isRenderRequested()) {
+        if (width() > 0 && dynamic_cast<ThumbnailsRequestInterface *>(_model)->isRenderRequested()) {
             startRender();
         }
     });
@@ -121,6 +121,20 @@ QString MasonryLayout::indexImage(int index) const {
         return imageId;
     }
     return QString();
+}
+
+QString MasonryLayout::indexText(int index) const {
+    if (index >= 0 && index < _bricks.size() && _bricks[index].item) {
+        return _bricks[index].item->property("text").toString();
+    }
+    return QString();
+}
+
+QSize MasonryLayout::indexOriginalSize(int index) const {
+    if (index >= 0 && index < _bricks.size()) {
+        return _bricks[index].originalSize.toSize();
+    }
+    return QSize();
 }
 
 int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
@@ -400,7 +414,7 @@ void MasonryLayout::updateProperties() {
 
     int newVisibleStart = -1;
     int newVisibleEnd = -1;
-    QRectF boundingRect_ = boundingRect().adjusted(0, _contentY, 0, _contentY);
+    QRectF boundingRect_ = boundingRect().adjusted(0, _contentY - 46, 0, _contentY);
 
     int currentRow = -1;
     for (int i = 0; i < _bricks.size(); i++) {
@@ -492,10 +506,6 @@ void MasonryLayout::updateProperties() {
 
             if (_bricks[i].item->property("isFolder").toBool() != _bricks[i].image->isFolder) {
                 _bricks[i].item->setProperty("isFolder", _bricks[i].image->isFolder);
-            }
-
-            if (_bricks[i].item->property("canHaveTransparency").toBool() != _bricks[i].image->canHaveTransparency) {
-                _bricks[i].item->setProperty("canHaveTransparency", _bricks[i].image->canHaveTransparency);
             }
         }
     }
@@ -672,7 +682,7 @@ void MasonryLayout::onModelReset() {
         _viewport->setY(-_contentY);
     }
 
-    if (width() && (needToRender || dynamic_cast<ThumbnailsRequestInterface *>(_model)->isRenderRequested())) {
+    if (width() > 0 && (needToRender || dynamic_cast<ThumbnailsRequestInterface *>(_model)->isRenderRequested())) {
         startRender();
     }
     else if (needToRender) {
@@ -688,6 +698,8 @@ void MasonryLayout::onModelReset() {
     emit imageCountChanged();
 
     emit countChanged();
+
+    emit currentIndexChanged();
 }
 
 void MasonryLayout::zoom(bool in) {

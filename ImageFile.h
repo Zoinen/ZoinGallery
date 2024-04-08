@@ -40,7 +40,6 @@ struct ImageFile {
     bool isImage;
     bool isFolderView;
     bool isCachedThumbnail;
-    bool canHaveTransparency;
     QString iconPath;
     int index;
     QVariantMap exif;
@@ -48,8 +47,7 @@ struct ImageFile {
     QList<ImageFile *> subfiles;
     ImageFile *parent;
 
-    ImageFile() : isFolder(false), isFolderView(false), isCachedThumbnail(false), index(-1), parent(nullptr),
-        canHaveTransparency(false) {}
+    ImageFile() : isFolder(false), isFolderView(false), isCachedThumbnail(false), index(-1), parent(nullptr) {}
 
     QString fullPath() const {
         return folderPath + QDir::separator() + fileName;

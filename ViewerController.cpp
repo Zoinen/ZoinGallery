@@ -212,6 +212,10 @@ QUrl ViewerController::indexUrl(int index) {
     return QUrl::fromLocalFile(_fileListModel->itemFromIndex(_fileListModel->index(index))->fullPath());
 }
 
+void ViewerController::enterRecursiveView() {
+    _fileListModel->enterRecursiveView();
+}
+
 void ViewerController::updateHistory(bool changeHistory) {
     if (changeHistory) {
         if (_history.size() - 1 != _indexInHistory) {

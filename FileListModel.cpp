@@ -10,6 +10,7 @@
 #include <QSettings>
 #include <QDeadlineTimer>
 #include <QGuiApplication>
+#include <QStack>
 
 #include <chrono>
 using namespace std::chrono_literals;
@@ -273,29 +274,7 @@ int FileListModel::cd(QString path, QString itemToSelect) {
     int indexToSelect = 0;
 
     beginResetModel();
-    _generator->clearRequests();
-
-    //Viewer
-    _viewerImages.clear();
-    _imageIdToViewer.clear();
-    _currentViewIndex = -1;
-
-    for (auto it = _folderModels.begin(); it != _folderModels.end(); ++it) {
-        it.value()->deleteLater();
-    }
-    _folderModels.clear();
-
-    _fileToItem.clear();
-    _imageIdToItem.clear();
-    _imagePaths.clear();
-    _folderImagePaths.clear();
-    for (int i = 0; i < _items.size(); i++) {
-        for (int j = 0; j < _items[i]->subfiles.size(); j++) {
-            delete _items[i]->subfiles[j];
-        }
-        delete _items[i];
-    }
-    _items.clear();
+    cleanupModelBeforeCd();
 
     if (path == "Computer") {
         for (const auto &drive : QDir::drives()) {
@@ -489,6 +468,32 @@ ImageFile *FileListModel::createFileItem(const QString &folderPath, const QStrin
     return item;
 }
 
+void FileListModel::cleanupModelBeforeCd() {
+    _generator->clearRequests();
+
+    //Viewer
+    _viewerImages.clear();
+    _imageIdToViewer.clear();
+    _currentViewIndex = -1;
+
+    for (auto it = _folderModels.begin(); it != _folderModels.end(); ++it) {
+        it.value()->deleteLater();
+    }
+    _folderModels.clear();
+
+    _fileToItem.clear();
+    _imageIdToItem.clear();
+    _imagePaths.clear();
+    _folderImagePaths.clear();
+    for (int i = 0; i < _items.size(); i++) {
+        for (int j = 0; j < _items[i]->subfiles.size(); j++) {
+            delete _items[i]->subfiles[j];
+        }
+        delete _items[i];
+    }
+    _items.clear();
+}
+
 ImageFile *FileListModel::itemFromIndex(const QModelIndex &index) {
     return static_cast<ImageFile*>(index.internalPointer());
 }
@@ -510,6 +515,122 @@ QAbstractItemModel *FileListModel::folderModel(int index_) {
         return proxy;
     }
     return *it;
+}
+
+struct FolderInfo {
+    int level;                     // Nesting level of the folder
+    QString path;                  // Absolute path of the folder
+    QString lastInGroup;           // String where each character represents a level: '1' for last, '0' for not last
+
+    FolderInfo(int lvl, QString pth, QString lastGroup)
+        : level(lvl), path(pth), lastInGroup(lastGroup) {}
+};
+
+QList<FolderInfo> getAllSubfoldersWithNestingLevel(const QString &startDir) {
+    QList<FolderInfo> allFoldersWithLevels;         // List to store folders with their nesting levels and boolean string
+    QStack<FolderInfo> dirs;                        // Stack to manage directories
+    dirs.push(FolderInfo(0, startDir, ""));        // Start with the initial directory, marked as last in its (non-existent) group
+
+    while (!dirs.isEmpty()) {
+        FolderInfo dirInfo = dirs.pop();
+
+        // Add the current directory to the list
+        allFoldersWithLevels.append(dirInfo);
+
+        // Get a list of all subdirectories in the current directory
+        QStringList subDirs = QDir(dirInfo.path).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (int i = subDirs.count() - 1; i >= 0; --i) {
+            QString subDir = subDirs.at(i);
+            QString newPath = dirInfo.path + '/' + subDir;
+
+            // Determine if this is the last subdirectory in the list
+            QString isLast = (i == subDirs.count() - 1) ? "0" : "1";
+
+            // Create a new boolean string for the next level based on the current dir's string
+            QString newLastInGroup = dirInfo.lastInGroup + isLast;
+
+            dirs.push(FolderInfo(dirInfo.level + 1, newPath, newLastInGroup));
+        }
+    }
+
+    return allFoldersWithLevels;
+}
+
+
+void FileListModel::enterRecursiveView() {
+    beginResetModel();
+    cleanupModelBeforeCd();
+
+    // if (_root == "Computer") {
+    //     for (const auto &drive : QDir::drives()) {
+    //         ImageFile *item = new ImageFile();
+    //         item->fileName = QDir::toNativeSeparators(drive.path());
+    //         item->isFolder = true;
+    //         item->isImage = false;
+    //         item->index = _items.size();
+    //         item->iconPath = "qrc:/resources/DriveIcon.svg";
+    //         _items.append(item);
+
+    //         if (item->fileName == itemToSelect) {
+    //             indexToSelect = _items.size() - 1;
+    //         }
+    //     }
+    // }
+    // else
+    {
+        QList<FolderInfo> folders = getAllSubfoldersWithNestingLevel(_root);
+        for (const auto &folder : folders) {
+            ImageFile *item = new ImageFile();
+            QFileInfo info(folder.path);
+            qDebug() << folder.level << info.filePath() << info.fileName();
+            item->folderPath = info.dir().absolutePath();
+            item->nestingInfo = folder.lastInGroup;
+            item->fileName = info.fileName(); // QString("%1: %2").arg(folder.first).arg(folder.second);
+            item->isFolder = true;
+            item->isImage = false;
+            item->index = _items.size();
+            item->iconPath = "qrc:/resources/FolderIcon.svg";
+            _items.append(item);
+
+            QString path = item->fullPath();
+
+            QSettings set;
+            set.beginGroup("imageCache");
+            QVariant folderView = set.value(path + "/FolderView");
+            if (folderView.isValid()) {
+                item->isFolderView = folderView.toBool();
+                QVariant subItems = set.value(path + "/SubImages");
+                if (subItems.isValid()) {
+                    QStringList images = subItems.toStringList();
+
+                    QList<ImageFile *> subImages;
+                    subImages.reserve(images.size());
+                    for (int i = 0; i < images.size(); i++) {
+                        ImageFile *subItem = createFileItem(path, images.at(i));
+                        subItem->parent = item;
+                        subItem->index = subImages.size();
+                        subImages.append(subItem);
+                    }
+                    item->subfiles = subImages;
+                }
+            }
+            set.endGroup();
+
+            _fileToItem.insert(path, item);
+            _folderImagePaths.append(path);
+        }
+
+        auto files = QDir(_root).entryInfoList(QDir::NoDotAndDotDot | QDir::Files | QDir::Hidden | QDir::System);
+        for (const auto &file : files) {
+            ImageFile *item = createFileItem(_root, file.fileName(), file.lastModified());
+            if (item->isImage) {
+                _imagePaths.append(item->fullPath());
+            }
+            item->index = _items.size();
+            _items.append(item);
+        }
+    }
+    endResetModel();
 }
 
 bool FileListModel::isImage(QString fileName) {

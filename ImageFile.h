@@ -42,6 +42,7 @@ struct ImageFile {
     bool isCachedThumbnail;
     QString iconPath;
     int index;
+    QString nestingInfo;
     QVariantMap exif;
 
     QList<ImageFile *> subfiles;
@@ -50,7 +51,7 @@ struct ImageFile {
     ImageFile() : isFolder(false), isFolderView(false), isCachedThumbnail(false), index(-1), parent(nullptr) {}
 
     QString fullPath() const {
-        return folderPath + QDir::separator() + fileName;
+        return folderPath.isEmpty() ? fileName : (folderPath + QDir::separator() + fileName);
     }
 
     bool folderView() const {

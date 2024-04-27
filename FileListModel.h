@@ -114,6 +114,8 @@ public:
 
     Q_INVOKABLE QAbstractItemModel *folderModel(int index);
 
+    void enterRecursiveView();
+
 signals:
     void generationFinishedChanged();
     void thumbnailReadFinished(ImageFile *root);
@@ -125,6 +127,7 @@ private:
     QString generateNewId();
     void updateImageId(ImageFile *item);
     ImageFile *createFileItem(const QString &folderPath, const QString &fileName, const QDateTime &lastModified = QDateTime());
+    void cleanupModelBeforeCd();
 
     QString _root;
     QHash<QString, ImageFile *> _fileToItem;

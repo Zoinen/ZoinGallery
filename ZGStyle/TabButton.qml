@@ -11,6 +11,15 @@ T.TabButton {
 
     icon.color: checked ? Style.buttonIconSelected : Style.text
 
+    property bool tooltipReady: false
+
+    onHoveredChanged: tooltipReady = hovered
+    onPressed: tooltipReady = false
+
+    ToolTip.visible: tooltipReady && ToolTip.text != ""
+    ToolTip.delay: 1000
+    ToolTip.timeout: 5000
+
     background: Item{
         Rectangle {
             anchors.centerIn: parent

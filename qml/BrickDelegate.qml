@@ -8,6 +8,7 @@ import ZoinGallery 1.0
 BrickItem {
     id: brickDelegate
     property string text
+    property string fullPath
     property string imageId
     property int index
     property bool isImage
@@ -15,11 +16,14 @@ BrickItem {
     property bool isFolder
     property string iconPath
     property bool folderView: false
+    property string nestingInfo: ""
+    property int nestingLevel: nestingInfo.length
 
     property real sizeBase: Math.min(width, height - 26) - masonryLayout.spacing
-    property real selectionExtendsFor: 5
-    property real selectionExtendsForImage: 2
+    readonly property real selectionExtendsFor: 5
+    readonly property real selectionExtendsForImage: 2
     property bool isSelected: masonryLayout.currentIndex === index
+    readonly property real nestingShift: 29
 
     property var imageItem: brickDelegate
 
@@ -70,6 +74,44 @@ BrickItem {
 
             fragmentShader: "qrc:/resources/shader.frag.qsb"
             visible: image.source != ""
+        }
+    }
+
+    component TreeBranch : Row {
+        spacing: 0
+
+        Repeater {
+            model: nestingLevel
+
+            Item {
+                id: treeBranch
+                width: nestingShift
+                height: parent.height
+
+                property bool lastElement: index === nestingLevel - 1
+                property bool hasNextElement: nestingInfo[index] === "1"
+
+                Rectangle {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 2
+                    height: treeBranch.hasNextElement ? parent.height : masonryLayout.listRowHeight / 2 + 2
+
+                    color: Style.lighter2
+                    visible: treeBranch.hasNextElement || treeBranch.lastElement
+                }
+
+                Rectangle {
+                    anchors {
+                        left: parent.horizontalCenter
+                        leftMargin: 1
+                        right: parent.right
+                    }
+                    y: masonryLayout.listRowHeight / 2
+                    height: 2
+                    color: Style.lighter2
+                    visible: treeBranch.lastElement
+                }
+            }
         }
     }
 
@@ -166,11 +208,16 @@ BrickItem {
                 visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
 
+            TreeBranch {
+                height: parent.height
+            }
+
             Item {
                 id: fileListDelegateContent
                 anchors {
                     fill: parent
                     margins: masonryLayout.spacing / 2
+                    leftMargin: masonryLayout.spacing / 2 + nestingShift * nestingLevel
                 }
 
                 Image {
@@ -299,11 +346,16 @@ BrickItem {
                 visible: isSelected || brickMouseArea.containsMouse && !hideHovered
             }
 
+            TreeBranch {
+                height: parent.height
+            }
+
             Item {
                 id: folderViewDelegateContent
                 anchors {
                     fill: parent
                     margins: masonryLayout.spacing / 2
+                    leftMargin: masonryLayout.spacing / 2 + nestingShift * nestingLevel
                 }
 
                 Rectangle {
@@ -592,7 +644,7 @@ BrickItem {
         onDoubleClicked: {
             if (isFolder) {
                 viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
-                viewerController.cd(text)
+                viewerController.cd(fullPath)
             }
             else {
                 if (masonryLayout.currentItem.isImage) {

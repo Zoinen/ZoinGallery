@@ -572,6 +572,7 @@ MainWindow {
                             icon.source: "qrc:/resources/ListView.svg"
                             icon.width: 16
                             icon.height: 16
+                            ToolTip.text: "List View\tF8"
 
                             checked: masonryLayout.view.listView
 
@@ -589,6 +590,7 @@ MainWindow {
                             icon.source: "qrc:/resources/GridView.svg"
                             icon.width: 16
                             icon.height: 16
+                            ToolTip.text: "Grid View\tF8"
 
                             checked: !masonryLayout.view.listView
 
@@ -598,6 +600,17 @@ MainWindow {
                                     masonryLayout.view.layoutReset()
                                 }
                             }
+                        }
+                    }
+
+                    ToolbarButton {
+                        icon.source: "qrc:/resources/RecursiveView.svg"
+                        ToolTip.text: "Recursive View\tF10"
+
+                        Layout.rightMargin: 15
+
+                        onReleased: {
+                            viewerController.enterRecursiveView()
                         }
                     }
                 }

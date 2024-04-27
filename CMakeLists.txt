@@ -187,6 +187,7 @@ qt6_add_qml_module(ZoinGallery
         resources/ExifImage.svg
         resources/ExifLocation.svg
         resources/ExifShooting.svg
+        resources/RecursiveView.svg
     )
 
 if (USE_QWK)

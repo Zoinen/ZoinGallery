@@ -45,6 +45,8 @@ public:
     Q_INVOKABLE void clipboardCopyIndexFullPath(int index);
     Q_INVOKABLE QUrl indexUrl(int index);
 
+    Q_INVOKABLE void enterRecursiveView();
+
 signals:
     void currentPathChanged();
     void setCurrentIndex(int index);

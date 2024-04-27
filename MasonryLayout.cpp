@@ -472,8 +472,14 @@ void MasonryLayout::updateProperties() {
             if (_bricks[i].item->property("text").toString() != _bricks[i].image->fileName) {
                 _bricks[i].item->setProperty("text", _quickSearch->indexTextWithQuickSearchApplied(i));
             }
+            if (_bricks[i].item->property("fullPath").toString() != _bricks[i].image->fullPath()) {
+                _bricks[i].item->setProperty("fullPath", _bricks[i].image->fullPath());
+            }
             if (_bricks[i].item->property("index").toInt() != i) {
                 _bricks[i].item->setProperty("index", i);
+            }
+            if (_bricks[i].item->property("nestingInfo").toString() != _bricks[i].image->nestingInfo) {
+                _bricks[i].item->setProperty("nestingInfo", _bricks[i].image->nestingInfo);
             }
 
             if (_bricks[i].item->property("folderView").toBool() != _bricks[i].image->folderView()) {

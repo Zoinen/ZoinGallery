@@ -344,8 +344,6 @@ bool ThumbnailLoader::isExtensionMatch(const QString &path, const QStringList &p
 
 
 QImage ThumbnailLoader::loadJpegFromData(const uint8_t *data, uint32_t size, QSize targetSize) {
-    const int COLOR_COMPONENTS = 3;
-
     long unsigned int _jpegSize = size;
     const unsigned char* _compressedImage = data;
 
@@ -385,7 +383,7 @@ QImage ThumbnailLoader::loadJpegFromData(const uint8_t *data, uint32_t size, QSi
 //    qDebug() << "Chosen" << denomIndex << "of" << num << width << "x" << height << ", req" << targetSize;
 
     int pitch = TJPAD(width * tjPixelSize[TJPF_RGB]);
-    unsigned char *buffer = new unsigned char[pitch * height * COLOR_COMPONENTS];
+    unsigned char *buffer = new unsigned char[pitch * height];
 
     res = tjDecompress2(_jpegDecompressor, _compressedImage, _jpegSize, buffer, width, pitch, height, TJPF_RGB, TJFLAG_FASTDCT);
     if (res == -1) {
@@ -485,6 +483,19 @@ QVariantMap ThumbnailLoader::readExif(Exiv2::Image *image) {
                                   .arg(latitudeRefIt->value().toString().c_str())
                                   .arg(longitudeIt->value().toString().c_str())
                                   .arg(longitudeRefIt->value().toString().c_str());
+        }
+    }
+
+    const Exiv2::XmpData &xmpData = image->xmpData();
+    // for (auto it = xmpData.begin(); it != xmpData.end(); ++it) {
+    //     qDebug() << "ZZ" << it->key().c_str() << ":" << it->value().toString().c_str();
+    //     out[it->key().c_str()] = it->value().toString().c_str();
+    // }
+
+    if (!xmpData.empty()) {
+        auto panoramaIt = xmpData.findKey(Exiv2::XmpKey("Xmp.GPano.UsePanoramaViewer"));
+        if (panoramaIt != xmpData.end()) {
+            out["Panorama"] = QString::fromStdString(panoramaIt->value().toString());
         }
     }
 

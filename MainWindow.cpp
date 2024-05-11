@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "SvgCursor.h"
 
 #include <QSettings>
 #include <QTimer>
@@ -7,6 +8,11 @@
 
 MainWindow::MainWindow(QWindow *parent)
     : QQuickWindow(parent) {
+
+    QSurfaceFormat format;
+    format.setSamples(16);  // Specify the desired number of samples for multisampling
+    setFormat(format);
+
     _leftButtonPressed = false;
     _ignoreNormalGeometryChange = false;
 
@@ -73,6 +79,15 @@ void MainWindow::toggleFullscreen() {
         set.setValue("nonFSVisibility", visibility());
         setVisibility(QWindow::FullScreen);
     }
+}
+
+void MainWindow::setMousePos(QPoint pos) const {
+    QCursor::setPos(pos);
+}
+
+void MainWindow::setSphereScrollingMouseCursor(bool set, bool idle, qreal rotation) {
+    SvgCursor::setOverrideCursor(set ? (idle ? ":/resources/SphereScrollIdle.svg" : ":/resources/SphereScroll.svg") : "",
+                                 devicePixelRatio(), rotation);
 }
 
 bool MainWindow::isResizing() const {

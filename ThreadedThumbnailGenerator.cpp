@@ -315,7 +315,7 @@ void ReadWorker::readImage(ImageReadRequest &request) {
     }
     else if (!fileLoaded) {
         fileLoaded = loader.readGenericPreview(request.sourcePath, request.targetSize, result);
-        qDebug() << "READING FULL" << result.request.sourcePath;
+        // qDebug() << "READING FULL" << result.request.sourcePath;
     }
     if (fileLoaded) {
         result.success = true;

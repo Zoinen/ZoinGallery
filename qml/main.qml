@@ -42,7 +42,7 @@ MainWindow {
                 viewerDirty = true
             }
             else {
-                if (viewerMode.zoomFitView) {
+                if (viewerMode.zoomFitView && !viewerMode.sphericViewerMode) {
                     console.log("onMainWindowResized")
                     fileListModel.invalidateViewerImages()
                     fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
@@ -111,7 +111,8 @@ MainWindow {
 
             viewerMode.setImage(masonryLayout.view.currentItem.imageId,
                                 masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
-            viewerMode.show()
+            let exif = masonryLayout.view.indexExif(masonryLayout.view.currentIndex)
+            viewerMode.show(exif["Panorama"])
 
             viewerMode.animation.x = 0
             viewerMode.animation.y = 0

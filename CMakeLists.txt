@@ -93,6 +93,8 @@ set(PROJECT_SOURCES
     ImageModel.h
     ImageModel.cpp
     DummyQWK.h
+    SvgCursor.h
+    SvgCursor.cpp
 )
 
 #if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)
@@ -132,6 +134,7 @@ qt_add_shaders(ZoinGallery
         "/"
     FILES
         "resources/shader.frag"
+        "resources/sphere.frag"
 )
 
 qt6_add_qml_module(ZoinGallery
@@ -146,6 +149,7 @@ qt6_add_qml_module(ZoinGallery
         qml/ViewerMode.qml
         qml/RoundCorners.qml
         qml/FlickableZoomable.qml
+        qml/SphericViewer.qml
         ZGStyle/Style.qml
         ZGStyle/ScrollBar.qml
         ZGStyle/Slider.qml
@@ -188,6 +192,9 @@ qt6_add_qml_module(ZoinGallery
         resources/ExifLocation.svg
         resources/ExifShooting.svg
         resources/RecursiveView.svg
+        resources/SphereScroll.svg
+        resources/SphereScrollIdle.svg
+        resources/Sphere.svg
     )
 
 if (USE_QWK)

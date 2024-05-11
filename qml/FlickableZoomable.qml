@@ -486,7 +486,7 @@ Item {
 
         onDoubleClicked:
             (mouse) => {
-                console.log("ZZ DBL")
+                // console.log("ZZ DBL")
                 if (mouse.button === Qt.LeftButton) {
                     root.toggleViewer()
                 }

@@ -1,15 +1,13 @@
 #include "MasonryLayout.h"
 #include "FileListModel.h"
 #include "MasonryLayoutQuickSearch.h"
+#include "SvgCursor.h"
 
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQmlProperty>
-#include <QQuickWindow>
-#include <QGuiApplication>
-#include <QtSvg/QSvgRenderer>
-#include <QPainter>
 #include <QSettings>
+#include <QQuickWindow>
 
 static void registerMyQmlTypes() {
     qmlRegisterType<MasonryLayout>("ZoinGallery", 1, 0, "MasonryLayout");
@@ -137,6 +135,13 @@ QSize MasonryLayout::indexOriginalSize(int index) const {
     return QSize();
 }
 
+QVariantMap MasonryLayout::indexExif(int index) const {
+    if (index >= 0 && index < _bricks.size() && _bricks[index].image) {
+        return _bricks[index].image->exif;
+    }
+    return QVariantMap();
+}
+
 int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
     int nextIndex = _currentIndex;
     for (int i = _currentIndex + (forward ? 1 : -1); i >= 0 && i < _bricks.size(); i += (forward ? 1 : -1)) {
@@ -165,8 +170,6 @@ void MasonryLayout::zoomOut() {
 }
 
 void MasonryLayout::setScrollingMode(bool scrollingMode, int direction) {
-    static bool cursorOverridden = false;
-
     if (_currentScrollingMode == scrollingMode && _currentScrollingDirection == direction) {
         return;
     }
@@ -182,29 +185,10 @@ void MasonryLayout::setScrollingMode(bool scrollingMode, int direction) {
         else {
             path = ":/resources/ScrollMode.svg";
         }
-
-        QSvgRenderer renderer(path);
-        QSize destSize(dp(renderer.defaultSize()));
-
-        QPixmap pix(destSize);
-        pix.fill(Qt::transparent);
-
-        QPainter painter(&pix);
-        renderer.render(&painter);
-        pix.setDevicePixelRatio(dpValue());
-
-        QCursor cursor(pix);
-        if (!cursorOverridden) {
-            cursorOverridden = true;
-            qApp->setOverrideCursor(cursor);
-        }
-        else {
-            qApp->changeOverrideCursor(cursor);
-        }
+        SvgCursor::setOverrideCursor(path, dpValue());
     }
     else {
-        cursorOverridden = false;
-        qApp->restoreOverrideCursor();
+        SvgCursor::setOverrideCursor();
     }
     _currentScrollingMode = scrollingMode;
     _currentScrollingDirection = direction;
@@ -513,6 +497,11 @@ void MasonryLayout::updateProperties() {
             if (_bricks[i].item->property("isFolder").toBool() != _bricks[i].image->isFolder) {
                 _bricks[i].item->setProperty("isFolder", _bricks[i].image->isFolder);
             }
+
+            bool isPanorama = _bricks[i].image->exif["Panorama"].toString() == "True";
+            if (_bricks[i].item->property("isPanorama").toBool() != isPanorama) {
+                _bricks[i].item->setProperty("isPanorama", isPanorama);
+            }
         }
     }
 
@@ -561,6 +550,12 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
                 _bricks[index].originalSize = folderViewSize;
                 rewrap();
                 updateProperties();
+            }
+        }
+        if (roles.contains(FileListModel::ExifRole)) {
+            bool isPanorama = _bricks[index].image->exif["Panorama"].toString() == "True";
+            if (_bricks[index].item && _bricks[index].item->property("isPanorama").toBool() != isPanorama) {
+                _bricks[index].item->setProperty("isPanorama", isPanorama);
             }
         }
     }

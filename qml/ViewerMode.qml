@@ -11,6 +11,22 @@ Item {
     property int animationDuration: 150
     property int easingType: Easing.OutSine
 
+    property real sphericViewerOpacity: 1
+    property bool sphericViewerMode: false
+    onSphericViewerModeChanged: {
+        if (sphericViewerMode) {
+            flickableArea.image.mipmap = false
+
+            fileListModel.invalidateViewerImages()
+            fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.imageContainer.originalSize.width * dpr, viewerMode.imageContainer.originalSize.height * dpr)
+            sphericViewerLoader.sourceComponent = sphericViewerComponent
+        }
+        else {
+            flickableArea.image.mipmap = true
+            sphericViewerLoader.sourceComponent = undefined
+        }
+    }
+
     property bool panelsVisible: false
     property alias zoomFitView: flickableArea.zoomFitView
 
@@ -22,23 +38,27 @@ Item {
 
     function setImage(imageId, originalSize) {
         image.source = imageId
-        imageContainer.originalSize = Qt.size(originalSize.width / dpr, originalSize.height / dpr)
+        flickableArea.originalSize = Qt.size(originalSize.width / dpr, originalSize.height / dpr)
     }
 
-    function show() {
+    function show(sphericViewer) {
+        sphericViewerMode = sphericViewer === "True"
         onCurrentIndexChanged()
         visible = true
         flickableArea.zoomToFit(true)
     }
 
     function onCurrentIndexChanged() {
-        if (zoomFitView) {
-            console.log("onCIC FIT", viewerMode.width * dpr, viewerMode.height * dpr)
+        let exif = masonryLayout.view.indexExif(masonryLayout.view.currentIndex)
+        sphericViewerMode = exif["Panorama"] === "True"
+
+        if (zoomFitView && !sphericViewerMode) {
+            // console.log("onCIC FIT", viewerMode.width * dpr, viewerMode.height * dpr)
             fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
         }
         else {
-            console.log("onCIC ORIG", viewerMode.imageContainer.originalSize.width * dpr, viewerMode.imageContainer.originalSize.height * dpr)
-            fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.imageContainer.originalSize.width * dpr, viewerMode.imageContainer.originalSize.height * dpr)
+            // console.log("onCIC ORIG", flickableArea.originalSize.width * dpr, flickableArea.originalSize.height * dpr)
+            fileListModel.requestViewer(masonryLayout.view.currentIndex, flickableArea.originalSize.width * dpr, flickableArea.originalSize.height * dpr)
             flickableArea.forceShowScrollBars = true
             flickableArea.forceShowScrollBars = false
         }
@@ -127,6 +147,9 @@ Item {
             else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Slash || event.key === Qt.Key_0) {
                 flickableArea.toggleZoomToFit()
             }
+            else if (event.key === Qt.Key_S || event.key === Qt.Key_P) {
+                sphericViewerMode = !sphericViewerMode
+            }
 
             if (nextIndex !== -1 && nextIndex !== currentIndex) {
                 onCurrentIndexChanged()
@@ -185,17 +208,16 @@ Item {
         function onCurrentIndexChanged() {
             if (root.state === "viewer") {
                 let imageId = masonryLayout.view.indexImage(masonryLayout.view.currentIndex)
-                console.log("ZZ INDEX CHANGE 2", masonryLayout.view.currentIndex, imageId)
+                // console.log("ZZ INDEX CHANGE 2", masonryLayout.view.currentIndex, imageId)
                 if (imageId) {
-                    setImage(imageId,
-                             masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
+                    setImage(imageId, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
                     if (zoomFitView) {
                         flickableArea.zoomToFit(true)
-                        console.log("ZZ FIT ON CHANGE")
+                        // console.log("ZZ FIT ON CHANGE")
                     }
                     else {
                         flickableArea.fitViewerImageInViewportBounds()
-                        console.log("ZZ ELSE")
+                        // console.log("ZZ ELSE")
                     }
                 }
             }
@@ -205,14 +227,14 @@ Item {
     Connections {
         target: fileListModel
         function onViewerImageIdChanged(newImageId) {
-            viewerMode.setImage(newImageId,
-                                masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
+            viewerMode.setImage(newImageId, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
         }
     }
 
     FlickableZoomable {
         id: flickableArea
 
+        // visible: !sphericViewerMode
         width: parent.width
         height: parent.height
         infoVisible: !viewerAnimation.running
@@ -271,12 +293,28 @@ Item {
         }
     }
 
+    Loader {
+        id: sphericViewerLoader
+        anchors.fill: flickableArea
+    }
+
+    Component {
+        id: sphericViewerComponent
+
+        SphericViewer {
+            originalSize: flickableArea.originalSize
+            source: flickableArea.image
+            opacity: sphericViewerOpacity
+        }
+    }
+
+
     MouseArea {
         id: viewerMouse
         anchors.fill: parent
         enabled: root.state === "viewer" // && zoomFitView
 
-        acceptedButtons: Qt.LeftButtons | Qt.MiddleButton
+        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
 
         onPressed:
             (mouse) => {
@@ -290,7 +328,7 @@ Item {
 
         onWheel:
             (wheel) => {
-                if (!(wheel.modifiers === Qt.ControlModifier || (wheel.buttons & Qt.LeftButton))) {
+                if (!(wheel.modifiers === Qt.ControlModifier || (wheel.buttons & Qt.LeftButton)) && !sphericViewerMode) {
                     let nextIndex = -1
                     let currentIndex = masonryLayout.view.currentIndex
                     if (wheel.angleDelta.y < 0) {
@@ -338,7 +376,7 @@ Item {
 
         NumberAnimation {
             id: viewerMaximizeAnimationX
-            target: imageContainer
+            target: flickableArea
             property: "x"
             duration: viewerMode.animationDuration
             easing.type: viewerMode.easingType
@@ -346,7 +384,7 @@ Item {
 
         NumberAnimation {
             id: viewerMaximizeAnimationY
-            target: imageContainer
+            target: flickableArea
             property: "y"
             duration: viewerMode.animationDuration
             easing.type: viewerMode.easingType
@@ -354,7 +392,7 @@ Item {
 
         NumberAnimation {
             id: viewerMaximizeAnimationWidth
-            target: imageContainer
+            target: flickableArea
             property: "width"
             duration: viewerMode.animationDuration
             easing.type: viewerMode.easingType
@@ -362,7 +400,7 @@ Item {
 
         NumberAnimation {
             id: viewerMaximizeAnimationHeight
-            target: imageContainer
+            target: flickableArea
             property: "height"
             duration: viewerMode.animationDuration
             easing.type: viewerMode.easingType
@@ -384,6 +422,14 @@ Item {
             to: root.state === "viewer" ? 0 : 1
         }
 
+        NumberAnimation {
+            target: viewerMode
+            property: "sphericViewerOpacity"
+            duration: viewerMode.animationDuration
+            easing.type: viewerMode.easingType
+            to: root.state === "viewer" ? 1 : 0
+        }
+
         onFinished: {
             if (root.state === "thumbnails") {
                 viewerMode.visible = false
@@ -391,8 +437,8 @@ Item {
             else {
                 // image.x = Qt.binding(function() {return zoomFitView ? 0 : zoomCenterOffsetX})
                 // image.y = Qt.binding(function() {return zoomFitView ? 0 : zoomCenterOffsetY})
-                imageContainer.width = Qt.binding(() => {return viewerMode.width})
-                imageContainer.height = Qt.binding(() => {return viewerMode.height})
+                flickableArea.width = Qt.binding(() => {return viewerMode.width})
+                flickableArea.height = Qt.binding(() => {return viewerMode.height})
             }
         }
     }

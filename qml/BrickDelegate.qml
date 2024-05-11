@@ -18,6 +18,7 @@ BrickItem {
     property bool folderView: false
     property string nestingInfo: ""
     property int nestingLevel: nestingInfo.length
+    property bool isPanorama: false
 
     property real sizeBase: Math.min(width, height - 26) - masonryLayout.spacing
     readonly property real selectionExtendsFor: 5
@@ -320,6 +321,20 @@ BrickItem {
                     color: Style.text
                     maximumLineCount: 4
                     wrapMode: Text.Wrap
+                }
+
+                IconLabel {
+                    anchors {
+                        verticalCenter: parent.verticalCenter
+                        right: parent.right
+                        rightMargin: 5
+                    }
+
+                    visible: isPanorama
+                    icon.source: "qrc:/resources/Sphere.svg"
+                    icon.width: 16
+                    icon.height: 16
+                    icon.color: Style.text
                 }
             }
 

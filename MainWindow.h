@@ -16,6 +16,8 @@ public:
 
     Q_INVOKABLE int availableScreenHeight() const;
     Q_INVOKABLE void toggleFullscreen();
+    Q_INVOKABLE void setMousePos(QPoint pos) const;
+    Q_INVOKABLE void setSphereScrollingMouseCursor(bool set, bool idle = false, qreal rotation = 0);
 
     bool isResizing() const;
 

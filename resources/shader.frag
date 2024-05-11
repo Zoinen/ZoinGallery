@@ -98,7 +98,7 @@ void main() {
     // Anti-aliasing width, as a function of viewport size for consistency
     float borderWidth = 0.8; // You can adjust this based on desired edge sharpness
     float alpha = 1 - smoothstep(-borderWidth, borderWidth, distance);
-    if ((p.x < 1 || p.y < 1 || p.x > rectSize.x - 1 || p.y > rectSize.y - 1)/* && alpha > 0.8*/) {
+    if ((p.x < 1 || p.y < 1 || p.x > rectSize.x - 1 || p.y > rectSize.y - 1)) {// && alpha > 0.8) {
         alpha = min(1, alpha * 1.1);
     }
 

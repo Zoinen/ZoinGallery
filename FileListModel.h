@@ -73,7 +73,8 @@ public:
         FolderRole,
         ImageFullSizeRole,
         ImageFileRole,
-        FolderViewRole
+        FolderViewRole,
+        ExifRole
     };
 
     FileListModel(QObject *parent = nullptr);

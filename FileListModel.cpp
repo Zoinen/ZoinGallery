@@ -85,6 +85,7 @@ FileListModel::FileListModel(QObject *parent)
 
             QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
             emit dataChanged(modelIndex, modelIndex, {ImageIdRole});
+            emit dataChanged(modelIndex, modelIndex, {ExifRole});
 
             emit addToCache(path, item->lastModified, thumbnail);
         }

@@ -20,8 +20,6 @@ public:
     bool readImage(ImageData &result);
     bool readPreview(ImageData &result);
 
-    bool readExifPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult);
-    bool readGenericPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult);
     QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize);
 
     QImage createThumbnail(const QImage &image, QSize dimensions);
@@ -40,7 +38,7 @@ private:
 
     QImage loadJpegFromData(const uint8_t *data, uint32_t size, QSize targetSize);
     ExifOrientation readOrientationFromExif(Exiv2::Image *image);
-    QVariantMap readExif(Exiv2::Image *image);
+    QVariantMap readExifToMap(Exiv2::Image *image);
     QSize readResolutionFromExif(Exiv2::Image *image);
     void fixMimeType(QString &mimeToUpdate, const QString &filePath);
 

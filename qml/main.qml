@@ -44,7 +44,7 @@ MainWindow {
             else {
                 if (viewerMode.zoomFitView && !viewerMode.sphericViewerMode) {
                     console.log("onMainWindowResized")
-                    fileListModel.invalidateViewerImages()
+                    fileListModel.cancelAllDecodeViewerRunners()
                     fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
                     viewerDirty = false
                 }
@@ -60,13 +60,13 @@ MainWindow {
         target: viewerMode
         function onZoomFitViewChanged() {
             if (viewerMode.zoomFitView && viewerDirty) {
-                fileListModel.invalidateViewerImages()
+                fileListModel.cancelAllDecodeViewerRunners()
                 fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
                 viewerDirty = false
             }
             else {
-                fileListModel.invalidateViewerImages()
-                fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.imageContainer.originalSize.width * dpr, viewerMode.imageContainer.originalSize.height * dpr)
+                fileListModel.cancelAllDecodeViewerRunners()
+                fileListModel.requestViewer(masonryLayout.view.currentIndex)
             }
         }
     }
@@ -83,7 +83,6 @@ MainWindow {
                 if (viewerDirty) {
                     viewerDirty = false
                     console.log("viewer dirty")
-                    fileListModel.invalidateViewerImages()
                 }
                 switchToViewer()
             }
@@ -93,6 +92,7 @@ MainWindow {
                     thumbnailsDirty = false
                     masonryLayout.view.reReadAndDecodeThumbnails()
                 }
+                fileListModel.cancelAllDecodeViewerRunners()
             }
         }
 
@@ -537,7 +537,11 @@ MainWindow {
                         to: 500
                         stepSize: 1
 
-                        onValueChanged: masonryLayout.view.targetHeight = masonryZoomSlider.value
+                        onValueChanged: {
+                            masonryLayout.view.targetHeight = masonryZoomSlider.value
+                            // 36 is hardcoded and comes from BrickDelegate's layout folderViewDelegate
+                            fileListModel.uiTargetHeight = (masonryZoomSlider.value - 36) * dpr
+                        }
                         property int lastValue: value
                         onPressedChanged: {
                             if (pressed) {

@@ -7,24 +7,16 @@
 
 #include "ImageFile.h"
 
-class ThreadedThumbnailGenerator;
+class DecodeManager;
 class FileListModel;
-class ThumbnailCache;
 
 class ThumbnailsRequestInterface {
 public:
-    ThumbnailsRequestInterface();
-    virtual void requestThumbnails(QStringList files, QSize preferredSize) = 0;
-    virtual void requestThumbnails(QSize preferredSize, bool reset = false, int imageCount = 0) = 0;
-    virtual void addRequestThumbnails(QList<ImageReadRequest> requests) = 0;
+    virtual void decodeImages(const QList<ImageDecodeRequest> &requests) = 0;
+    virtual void cancelAllRunners() = 0;
+    virtual void cancelAllDecodeRunners() = 0;
+
     virtual ImageFile *rootItem() const { return nullptr; }
-
-    virtual void requestRender();
-    void renderRequestComplete();
-    bool isRenderRequested() const;
-
-protected:
-    bool _renderQueued;
 };
 
 class RootProxyModel : public QAbstractProxyModel, public ThumbnailsRequestInterface {
@@ -47,15 +39,13 @@ public:
     FileListModel *sourceModel() const;
 
     // ThumbnailsRequestInterface interface
-    void requestThumbnails(QStringList files, QSize preferredSize) override {}
-    void requestThumbnails(QSize preferredSize, bool reset = false, int imageCount = 0) override;
-    void addRequestThumbnails(QList<ImageReadRequest> requests) override;
     ImageFile *rootItem() const override;
+    void decodeImages(const QList<ImageDecodeRequest> &requests) override;
+
+    void cancelAllRunners() override;
+    void cancelAllDecodeRunners() override;
 
     void resetModel();
-
-signals:
-    void thumbnailReadFinished(ImageFile *root);
 
 private:
     ImageFile *_sourceRoot;
@@ -64,7 +54,7 @@ private:
 
 class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterface {
     Q_OBJECT
-    Q_PROPERTY(bool generationFinished MEMBER _generationFinished NOTIFY generationFinishedChanged)
+    Q_PROPERTY(int uiTargetHeight READ uiTargetHeight WRITE setUiTargetHeight NOTIFY uiTargetHeightChanged FINAL)
 
 public:
     enum ItemUserRoles {
@@ -74,7 +64,8 @@ public:
         ImageFullSizeRole,
         ImageFileRole,
         FolderViewRole,
-        ExifRole
+        ExifRole,
+        TimeToFlushRole
     };
 
     FileListModel(QObject *parent = nullptr);
@@ -96,17 +87,16 @@ public:
     const ImageFile *itemForImageId(QString imageId);
 
     // ThumbnailsRequestInterface
-    void requestThumbnails(QStringList files, QSize preferredSize) override;
-    void requestThumbnails(QSize preferredSize, bool reset = false, int imageCount = 0) override;
-    void addRequestThumbnails(QList<ImageReadRequest> requests) override;
+    void decodeImages(const QList<ImageDecodeRequest> &requests) override;
 
-    Q_INVOKABLE void requestRender() override;
+    Q_INVOKABLE void cancelAllRunners() override;
+    void cancelAllDecodeRunners() override;
+    Q_INVOKABLE void cancelAllDecodeViewerRunners();
 
     static bool isImage(QString fileName);
 
-    Q_INVOKABLE void requestViewer(int index, int width, int height);
+    Q_INVOKABLE void requestViewer(int index, int width = -1, int height = -1); // -1 means full size
     QImage viewerForImageId(QString imageId);
-    Q_INVOKABLE void invalidateViewerImages();
 
     int fileIndex(QString fileName) const;
 
@@ -117,12 +107,13 @@ public:
 
     void enterRecursiveView();
 
+    int uiTargetHeight() const;
+    void setUiTargetHeight(int newUiTargetHeight);
+
 signals:
-    void generationFinishedChanged();
-    void thumbnailReadFinished(ImageFile *root);
     void viewerImageIdChanged(QString imageId);
-    void addToCache(const QString &path, const QDateTime &lastModified, const QImage &thumbnail);
-    void requestThumbnailFromCache(const QString &path, const QDateTime &lastModified);
+
+    void uiTargetHeightChanged();
 
 private:
     QString generateNewId();
@@ -139,9 +130,7 @@ private:
     int _lastRequestIndex;
     int _lastId;
 
-    ThumbnailCache *_thumbnailCache;
-    ThreadedThumbnailGenerator *_generator;
-    bool _generationFinished;
+    DecodeManager *_decodeManager;
 
     // Viewer
     struct ViewerImage {
@@ -156,6 +145,7 @@ private:
     int _currentViewIndex;
 
     QHash<int, RootProxyModel *> _folderModels;
+    int _uiTargetHeight;
 };
 
 #endif // FILELISTMODEL_H

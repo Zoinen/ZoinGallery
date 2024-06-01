@@ -71,23 +71,14 @@ set(PROJECT_SOURCES
     QmlImageProvider.cpp
     ViewerController.h
     ViewerController.cpp
-    ThreadedThumbnailGenerator.h
-    ThreadedThumbnailGenerator.cpp
-    Unsharp/Unsharp.h
-    Unsharp/Unsharp.cpp
-    Unsharp/Utilities.h
     QmlResourcesProvider.h
     QmlResourcesProvider.cpp
     MasonryLayout.h
     MasonryLayout.cpp
     exiv2/Preview.h
     exiv2/Preview.cpp
-    ThreadSafeQueue.h
-    ThreadSafeQueue.cpp
     MasonryLayoutQuickSearch.h
     MasonryLayoutQuickSearch.cpp
-    ThumbnailCache.h
-    ThumbnailCache.cpp
     MainWindow.h
     MainWindow.cpp
     ImageModel.h
@@ -95,6 +86,22 @@ set(PROJECT_SOURCES
     DummyQWK.h
     SvgCursor.h
     SvgCursor.cpp
+    PersistentCache.h
+    PersistentCache.cpp
+    DecodeManager.h
+    DecodeManager.cpp
+    Runners/ImageInfoReadRunner.h
+    Runners/ImageInfoReadRunner.cpp
+    Runners/ImageReadRunner.h
+    Runners/ImageReadRunner.cpp
+    Runners/FolderListReadRunner.h
+    Runners/FolderListReadRunner.cpp
+    Runners/ImageDecodeRunner.h
+    Runners/ImageDecodeRunner.cpp
+    Runners/PersistentImageCacheRunners.h
+    Runners/PersistentImageCacheRunners.cpp
+    Runners/PersistentFolderCacheRunners.h
+    Runners/PersistentFolderCacheRunners.cpp
 )
 
 #if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)

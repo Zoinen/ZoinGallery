@@ -15,14 +15,16 @@ class ThumbnailLoader {
 public:
     static void init();
 
-    void setPath(const QString &path);
+    bool readExif(ImageInfo &result);
+    bool readGenericInfo(ImageInfo &result);
+    bool readImage(ImageData &result);
+    bool readPreview(ImageData &result);
 
     bool readExifPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult);
     bool readGenericPreview(const QString &path, QSize preferredSize, ImageReadResult &outResult);
-    QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize, const ImageReadResult &readResult);
+    QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize);
 
-    QImage createThumbnail(const QImage &image, QSize dimensions, bool keepAspect);
-    QImage unsharpMask(QImage &image);
+    QImage createThumbnail(const QImage &image, QSize dimensions);
     QImage rotateAndFlip(const QImage &image, ExifOrientation orientation);
 
     static QStringList supportedFormats();
@@ -43,8 +45,6 @@ private:
     void fixMimeType(QString &mimeToUpdate, const QString &filePath);
 
     static bool isExtensionMatch(const QString &path, const QStringList &pattern);
-
-    QString _path;
 };
 
 #endif // THUMBNAILLOADER_H

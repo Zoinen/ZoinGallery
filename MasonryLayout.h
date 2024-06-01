@@ -166,7 +166,8 @@ signals:
     void listRowHeightChanged();
 
 private slots:
-    void onThumbnailReadFinished(ImageFile *root);
+    // ZZ: This should be done in embedded view every time
+    void onThumbnailReadFinished();
 
 private:
     friend class MasonryLayoutQuickSearch;
@@ -201,7 +202,6 @@ private:
                            bool lastRowMatchesPrevious, qreal paddingTop = 0, bool growToFillWidth = true);
     void updateProperties();
     void setContentYInternal(qreal newContentY);
-    void startRender();
 
     void setContentHeight(int newContentHeight);
 

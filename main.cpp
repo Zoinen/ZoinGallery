@@ -4,6 +4,7 @@
 #include <QStandardPaths>
 #include <QQuickStyle>
 #include <QSettings>
+#include <QImageReader>
 
 #include "ViewerController.h"
 #include "MainWindow.h"
@@ -13,6 +14,7 @@
 #else
 #include "DummyQWK.h"
 #endif
+
 
 int main(int argc, char *argv[])
 {
@@ -40,6 +42,8 @@ int main(int argc, char *argv[])
     qmlRegisterType<MainWindow>("ZoinGallery.MainWindow", 1, 0, "MainWindow");
     qmlRegisterRevision<QWindow, 1>("ZoinGallery.MainWindow", 1, 0);
     qmlRegisterRevision<QQuickWindow, 1>("ZoinGallery.MainWindow", 1, 0);
+
+    QImageReader::setAllocationLimit(0);
 
     QQmlApplicationEngine engine;
     engine.addImportPath(":/");

@@ -5,8 +5,10 @@
 #include <QSize>
 #include <QImage>
 #include <QMetaType>
-#include <QSharedPointer>
 #include <QDir>
+#include <QSharedPointer>
+
+#include <memory>
 
 enum ExifOrientation {
     Horizontal = 1,
@@ -45,13 +47,16 @@ struct ImageFile {
     QString nestingInfo;
     QVariantMap exif;
 
+    ExifOrientation orientation;
+    QString mimeType;
+
     QList<ImageFile *> subfiles;
     ImageFile *parent;
 
-    ImageFile() : isFolder(false), isFolderView(false), isCachedThumbnail(false), index(-1), parent(nullptr) {}
+    ImageFile() : isFolder(false), isFolderView(false), isCachedThumbnail(false), index(-1), orientation(Horizontal), parent(nullptr) {}
 
     QString fullPath() const {
-        return folderPath.isEmpty() ? fileName : (folderPath + QDir::separator() + fileName);
+        return folderPath.isEmpty() ? fileName : QDir::toNativeSeparators(QDir(folderPath).filePath(fileName));
     }
 
     bool folderView() const {
@@ -104,6 +109,45 @@ struct ImageReadResult {
 };
 
 Q_DECLARE_METATYPE(ImageFile *)
+
+
+
+
+
+
+
+struct ImageInfo {
+    QString path;
+    QDateTime lastModified;
+    QSize imageSize;
+    QVariantMap exif;
+
+    ExifOrientation orientation = ExifOrientation::Horizontal;
+    QString mimeType;
+
+    bool isLast = false;
+    bool isFromEmbeddedView = false;
+};
+
+struct ImageDecodeRequest {
+    QString path;
+    QSize targetSize;
+    ExifOrientation orientation = ExifOrientation::Horizontal;
+    bool viewerRequest = false;
+};
+
+struct ImageData {
+    const ImageDecodeRequest request;
+
+    QByteArray data;
+    QString mimeType;
+    std::shared_ptr<char> previewData;
+    int64_t previewDataSize = 0;
+    QString previewMimeType;
+    QSize imageSize;
+
+    ImageData(const ImageDecodeRequest &request_) : request(request_) {}
+};
 
 #endif // IMAGEFILE_H
 

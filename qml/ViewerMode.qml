@@ -17,8 +17,8 @@ Item {
         if (sphericViewerMode) {
             flickableArea.image.mipmap = false
 
-            fileListModel.invalidateViewerImages()
-            fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.imageContainer.originalSize.width * dpr, viewerMode.imageContainer.originalSize.height * dpr)
+            fileListModel.cancelAllDecodeViewerRunners()
+            fileListModel.requestViewer(masonryLayout.view.currentIndex)
             sphericViewerLoader.sourceComponent = sphericViewerComponent
         }
         else {
@@ -58,7 +58,7 @@ Item {
         }
         else {
             // console.log("onCIC ORIG", flickableArea.originalSize.width * dpr, flickableArea.originalSize.height * dpr)
-            fileListModel.requestViewer(masonryLayout.view.currentIndex, flickableArea.originalSize.width * dpr, flickableArea.originalSize.height * dpr)
+            fileListModel.requestViewer(masonryLayout.view.currentIndex)
             flickableArea.forceShowScrollBars = true
             flickableArea.forceShowScrollBars = false
         }

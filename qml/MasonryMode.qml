@@ -436,12 +436,12 @@ MouseArea {
             let savedContentY = viewerController.savedContentY()
             if (savedContentY !== -1) {
                 masonryLayout.contentY = savedContentY
-                console.log("RESTORING SAVED CONTENTY", savedContentY)
+                // console.log("RESTORING SAVED CONTENTY", savedContentY)
             }
             let savedCurrentIndex = viewerController.savedCurrentIndex()
             if (savedCurrentIndex !== -1) {
                 setCurrentIndex(savedCurrentIndex, false, false, true)
-                console.log("RESTORING CURRENT INDEX", savedContentY)
+                // console.log("RESTORING CURRENT INDEX", savedContentY)
             }
             masonryView.disableAnimation = false
         }
@@ -519,8 +519,10 @@ MouseArea {
 
             function onNeedScrollChanged() {
                 if (!topLevelWindow.isResizing) {
-                    console.log("_need scroll changed")
-                    masonryLayout.model.requestRender()
+                    // console.log("_need scroll changed")
+
+                    //TODO: CHECK THIS
+                    //masonryLayout.reReadAndDecodeThumbnails()
                 }
             }
         }

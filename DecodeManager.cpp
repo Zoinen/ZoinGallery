@@ -180,7 +180,7 @@ void DecodeManager::processQueue() {
         qDebug() << "ZZ TIMER START";
     }
     if (_taskQueue.isEmpty()) {
-        qDebug() << "ZZ FINISHED:" << _timer.elapsed() << "ms";
+        // qDebug() << "ZZ FINISHED:" << _timer.elapsed() << "ms";
     }
     for (int workerIndex = 0; workerIndex < _workers.size(); workerIndex++) {
         if (!_workers[workerIndex].runner) {

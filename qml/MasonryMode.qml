@@ -318,7 +318,7 @@ MouseArea {
                 let futureContentY = (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
                 let nextPageY = Math.min(masonryLayout.contentHeight - masonryLayout.height, futureContentY + deltaY) + currentItemCenterY
                 let newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, nextPageY)
-                console.log(deltaY, futureContentY, nextPageY, newCurrentIndex2)
+                console.log("Key_PageDown", masonryLayout.currentIndex, "->", newCurrentIndex2, "of", masonryLayout.count)
 
                 if (newCurrentIndex2 === -1) {
                     newCurrentIndex2 = masonryLayout.count - 1
@@ -329,9 +329,9 @@ MouseArea {
                     hitEnd = true
 
                     if (newCurrentIndex2 === -1) {
-                        newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, masonryLayout.contentHeight - masonryLayout.targetHeight * 1.5)
+                        newCurrentIndex2 = masonryLayout.indexAt(currentItemCenterX, masonryLayout.contentHeight - masonryLayout.targetHeight * 0.5)
                     }
-                    if (newCurrentIndex2 === masonryLayout.currentIndex) {
+                    if (newCurrentIndex2 === masonryLayout.currentIndex || newCurrentIndex2 === -1) {
                         newCurrentIndex2 = masonryLayout.count - 1
                     }
                 }

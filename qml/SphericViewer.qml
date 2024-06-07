@@ -136,12 +136,13 @@ Item {
 
         onWheel:
             (wheel) => {
-                let delta = -wheel.angleDelta.y / 100
+                if (wheel.modifiers === Qt.ControlModifier || (wheel.buttons & Qt.LeftButton)) {
+                    let delta = -wheel.angleDelta.y / 100
 
-                let minFOV = 1
-                let maxFOV = 180
+                    let minFOV = 1
+                    let maxFOV = 180
 
-/*                const fovChange = Math.exp(-delta * 0.1);
+                    /*                const fovChange = Math.exp(-delta * 0.1);
 
                 // Update the current FOV by multiplying with the FOV change
                 fov *= fovChange;
@@ -150,17 +151,17 @@ Item {
                 fov = Math.max(1, Math.min(170, fov));*/
 
 
-                const normalizedFOV = (fov - minFOV) / (maxFOV - minFOV);
+                    const normalizedFOV = (fov - minFOV) / (maxFOV - minFOV);
 
-                // Calculate the FOV change based on the wheel delta and current FOV
-                const fovChange = Math.exp(delta * zoomSensitivity * (1 - normalizedFOV));
+                    // Calculate the FOV change based on the wheel delta and current FOV
+                    const fovChange = Math.exp(delta * zoomSensitivity * (1 - normalizedFOV));
 
-                // Update the current FOV by multiplying with the FOV change
-                fov *= fovChange;
+                    // Update the current FOV by multiplying with the FOV change
+                    fov *= fovChange;
 
-                // Clamp the FOV within the desired range
-                fov = Math.max(minFOV, Math.min(170, fov));
-
+                    // Clamp the FOV within the desired range
+                    fov = Math.max(minFOV, Math.min(170, fov));
+                }
             }
 
         onPressed: {

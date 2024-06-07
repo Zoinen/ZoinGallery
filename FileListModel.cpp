@@ -471,6 +471,8 @@ bool FileListModel::isImage(QString fileName) {
 }
 
 void FileListModel::requestViewer(int index, int width, int height) {
+    _currentViewIndex = index;
+
     QSize viewerSize(width, height);
     QString requestedPath = _items[index]->fullPath();
     auto it = _viewerImages.find(requestedPath);
@@ -494,7 +496,6 @@ void FileListModel::requestViewer(int index, int width, int height) {
     }
 
 //    qDebug() << "Request thumbnails" << index << viewerSize;
-    _currentViewIndex = index;
 
     int queueSize = 16;
 

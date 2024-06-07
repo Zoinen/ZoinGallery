@@ -6,6 +6,7 @@ T.Slider {
 
     focusPolicy: Qt.NoFocus
     property bool handleVisible: true
+    property real visualHeight
 
     background: Item {
         x: control.leftPadding
@@ -13,7 +14,7 @@ T.Slider {
         implicitWidth: control.orientation === Qt.Horizontal ? 200 : control.width
         implicitHeight: control.orientation === Qt.Horizontal ? control.height : 200
         width: control.orientation === Qt.Horizontal ? control.availableWidth : control.width
-        height: control.orientation === Qt.Horizontal ? (!handleVisible ? control.height : 6) : control.availableHeight
+        height: control.orientation === Qt.Horizontal ? (!handleVisible ? (visualHeight ? visualHeight : control.height) : 6) : control.availableHeight
 
         Rectangle {
             anchors {

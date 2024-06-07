@@ -193,6 +193,7 @@ qt6_add_qml_module(ZoinGallery
         resources/WindowMaximize.svg
         resources/WindowMinimize.svg
         resources/WindowRestore.svg
+        resources/WindowFullscreen.svg
         resources/ExifCamera.svg
         resources/ExifDateTime.svg
         resources/ExifImage.svg
@@ -206,6 +207,11 @@ qt6_add_qml_module(ZoinGallery
 
 if (USE_QWK)
     target_link_libraries(ZoinGallery PUBLIC QWindowKit::Quick)
+endif()
+
+# Link Dwmapi.lib on Windows
+if (WIN32)
+    target_link_libraries(ZoinGallery PRIVATE Dwmapi.lib)
 endif()
 
 target_link_libraries(ZoinGallery PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Quick

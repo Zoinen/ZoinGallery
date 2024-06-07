@@ -10,7 +10,7 @@ import QWindowKit 1.0
 
 MainWindow {
     id: topLevelWindow
-    visible: true
+    // visible: true
     color: isQWK ? "transparent" : Style.windowBackgroundNoQWK
     title: "Zoin Gallery"
 
@@ -37,13 +37,16 @@ MainWindow {
         target: topLevelWindow
 
         function onMainWindowResized() {
+            Qt.callLater(() => {
+            console.log("main window resized", topLevelWindow.width, topLevelWindow.height)
             if (root.state === "thumbnails") {
                 masonryLayout.view.reReadAndDecodeThumbnails()
                 viewerDirty = true
             }
             else {
                 if (viewerMode.zoomFitView && !viewerMode.sphericViewerMode) {
-                    console.log("onMainWindowResized")
+                    // console.log("onMainWindowResized")
+                    viewerMode.imageContainer.zoomToFit(true)
                     fileListModel.cancelAllDecodeViewerRunners()
                     fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
                     viewerDirty = false
@@ -53,6 +56,7 @@ MainWindow {
                 }
                 thumbnailsDirty = true
             }
+            })
         }
     }
 
@@ -237,11 +241,16 @@ MainWindow {
 
                     Layout.alignment: Qt.AlignTop
 
-                    source: topLevelWindow.visibility === Window.Maximized ? "qrc:/resources/WindowRestore.svg" : "qrc:/resources/WindowMaximize.svg"
+                    source: topLevelWindow.visibility === Window.Maximized ? "qrc:/resources/WindowRestore.svg" :
+                            topLevelWindow.visibility === Window.FullScreen ? "qrc:/resources/WindowFullscreen.svg" :"qrc:/resources/WindowMaximize.svg"
                     onClicked: {
-                        if (topLevelWindow.visibility === Window.Maximized) {
+                        if (topLevelWindow.visibility === Window.FullScreen) {
+                            topLevelWindow.toggleFullscreen()
+                        }
+                        else if (topLevelWindow.visibility === Window.Maximized) {
                             topLevelWindow.showNormal()
-                        } else {
+                        }
+                        else {
                             topLevelWindow.showMaximized()
                         }
                     }

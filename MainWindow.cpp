@@ -6,15 +6,27 @@
 #include <QDebug>
 #include <QGuiApplication>
 
+#if defined(Q_OS_WIN)
+#include "dwmapi.h"
+#endif
+
 MainWindow::MainWindow(QWindow *parent)
     : QQuickWindow(parent) {
 
     QSurfaceFormat format;
-    format.setSamples(16);  // Specify the desired number of samples for multisampling
+    format.setSamples(8);  // Specify the desired number of samples for multisampling
     setFormat(format);
 
     _leftButtonPressed = false;
-    _ignoreNormalGeometryChange = false;
+    _ignoreNormalGeometryChange = true;
+    _enableNormalGeometryChangeOnNextExpose = true;
+    _delayedNormalGeometryChangeEnabler = new QTimer(this);
+    _delayedNormalGeometryChangeEnabler->setInterval(150);
+    _delayedNormalGeometryChangeEnabler->setSingleShot(true);
+    connect(_delayedNormalGeometryChangeEnabler, &QTimer::timeout, this, [&] () {
+        _ignoreNormalGeometryChange = false;
+        enableWindowAnimations(true);
+    });
 
     _dpr = -1;
     updateDpr();
@@ -49,35 +61,36 @@ MainWindow::MainWindow(QWindow *parent)
     }
     setGeometry(_normalGeometry);
 
-    QWindow::Visibility windowVisibility = set.value("windowVisibility", QWindow::Windowed).value<QWindow::Visibility>();
-    if (windowVisibility == Minimized) {
-        windowVisibility = Windowed;
-    }
-    setVisibility(windowVisibility);
+    enableWindowAnimations(false);
+
+    setVisibility(Windowed);
 }
 
 void MainWindow::toggleFullscreen() {
+    _ignoreNormalGeometryChange = true;
+    _delayedNormalGeometryChangeEnabler->stop();
+    enableWindowAnimations(false);
     QSettings set;
     QWindow::Visibility nonFSVisibility = set.value("nonFSVisibility", QWindow::Windowed).value<QWindow::Visibility>();
 
     if (visibility() == QWindow::FullScreen) {
-        setVisibility(nonFSVisibility);
-        _ignoreNormalGeometryChange = false;
-
 #if defined(__USE_QWK)
         // Temporary workaround for transparent window BG bug
-        QRect geom = geometry();
         setGeometry(QRect(0, 0, 0, 0));
         QTimer::singleShot(0, this, [=] () {
-            setGeometry(geom.adjusted(1, 0, 0, 0));
-            setGeometry(geom);
+            setGeometry(_normalGeometry.adjusted(1, 0, 0, 0));
+            setGeometry(_normalGeometry);
+            setVisibility(nonFSVisibility);
+            _enableNormalGeometryChangeOnNextExpose = true;
         });
+#else
+        setVisibility(nonFSVisibility);
 #endif
     }
     else {
-        _ignoreNormalGeometryChange = true;
         set.setValue("nonFSVisibility", visibility());
         setVisibility(QWindow::FullScreen);
+        emit fullScreenEntered();
     }
 }
 
@@ -109,11 +122,18 @@ void MainWindow::showEvent(QShowEvent *event) {
 
 #if defined(__USE_QWK)
     // Temporary workaround for transparent window BG bug
+
+    QSettings set;
+    QWindow::Visibility windowVisibility = set.value("windowVisibility", QWindow::Windowed).value<QWindow::Visibility>();
+    if (windowVisibility == Minimized) {
+        windowVisibility = Windowed;
+    }
     QRect geom = geometry();
     setGeometry(QRect(0, 0, 0, 0));
     QTimer::singleShot(0, this, [=] () {
         setGeometry(geom.adjusted(1, 0, 0, 0));
         setGeometry(geom);
+        setVisibility(windowVisibility);
     });
 #endif
 }
@@ -124,6 +144,13 @@ void MainWindow::updateDpr() {
         _dpr = devicePixelRatio();
         emit dprChanged();
     }
+}
+
+void MainWindow::enableWindowAnimations(bool enable) {
+#if defined(Q_OS_WIN)
+    BOOL attrib = !enable;
+    DwmSetWindowAttribute((HWND)winId(), DWMWA_TRANSITIONS_FORCEDISABLED, &attrib, sizeof(attrib));
+#endif
 }
 
 bool MainWindow::event(QEvent *event) {
@@ -174,6 +201,12 @@ bool MainWindow::event(QEvent *event) {
         QSettings set;
         set.setValue("normalGeometry", _normalGeometry);
         set.setValue("windowVisibility", visibility());
+    }
+    else if (event->type() == QEvent::Expose && _enableNormalGeometryChangeOnNextExpose) {
+        if (visibility() != QWindow::FullScreen) {
+            _enableNormalGeometryChangeOnNextExpose = false;
+            _delayedNormalGeometryChangeEnabler->start();
+        }
     }
     return QQuickWindow::event(event);
 }

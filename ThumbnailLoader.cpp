@@ -87,6 +87,9 @@ void ThumbnailLoader::init() {
         Exiv2Extensions.append(TiffRawExtensions);
 
     }
+
+    // Just to fully instantiate it here
+    supportedFormats();
 }
 
 struct membuf: std::streambuf {

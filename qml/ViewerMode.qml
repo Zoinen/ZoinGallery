@@ -328,7 +328,7 @@ Item {
 
         onWheel:
             (wheel) => {
-                if (!(wheel.modifiers === Qt.ControlModifier || (wheel.buttons & Qt.LeftButton)) && !sphericViewerMode) {
+                if (!(wheel.modifiers === Qt.ControlModifier || (wheel.buttons & Qt.LeftButton))) {
                     let nextIndex = -1
                     let currentIndex = masonryLayout.view.currentIndex
                     if (wheel.angleDelta.y < 0) {
@@ -596,16 +596,17 @@ Item {
 
         Slider {
             id: currentImageSlider
-            x: parent.width - 6
+            x: parent.width
             y: 0
             width: parent.height
-            height: 10
+            height: 16
             leftPadding: 0
             rightPadding: 0
             topPadding: 0
             bottomPadding: 0
 
             handleVisible: false
+            visualHeight: 10
 
             from: 0
             to: masonryLayout.view.imageCount - 1

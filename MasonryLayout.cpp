@@ -279,7 +279,7 @@ void MasonryLayout::rewrap() {
 
 QSizeF scaleToWidthWithSpacing(const QSizeF &size, qreal toWidth, int spacing) {
     qreal aspect = size.width() / size.height();
-    return QSizeF(toWidth, (toWidth - spacing) / aspect + spacing);
+    return QSizeF(qMax(0.0, toWidth), qMax(0.0, (toWidth - spacing) / aspect + spacing));
 }
 
 QSizeF scaleToHeightWithSpacing(const QSizeF &size, qreal toHeight, int spacing) {
@@ -310,6 +310,7 @@ qreal MasonryLayout::scaleRow(QList<MasonryBrick> &bricks, int canvasWidth, int 
 
 void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing,
                                bool lastRowMatchesPrevious, qreal paddingTop, bool growToFillWidth) {
+    canvasWidth = qMax(0, canvasWidth);
     int currentRow = 0;
     int currentColumn = 0;
     qreal lastX = 0;
@@ -390,6 +391,7 @@ void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int
         }
 
         currentColumn++;
+
     }
 }
 
@@ -1174,7 +1176,7 @@ void MasonryLayout::setPaddingBottom(qreal newPaddingBottom) {
 }
 
 qreal MasonryLayout::width() const {
-    return qIsInf(QQuickItem::width()) ? 0 : QQuickItem::width();
+    return qMax(0.0, qIsInf(QQuickItem::width()) ? 0 : QQuickItem::width());
 }
 
 int MasonryLayout::listRowHeight() const {

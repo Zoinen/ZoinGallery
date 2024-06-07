@@ -25,6 +25,7 @@ public:
 
 signals:
     void mainWindowResized();
+    void fullScreenEntered();
     void isResizingChanged();
     void dprChanged();
 
@@ -33,12 +34,15 @@ protected:
 
 private:
     void updateDpr();
+    void enableWindowAnimations(bool enable);
 
     bool _leftButtonPressed;
     QSize _lastSize;
     QRect _normalGeometry;
-    bool _ignoreNormalGeometryChange;
     qreal _dpr;
+    bool _ignoreNormalGeometryChange;
+    bool _enableNormalGeometryChangeOnNextExpose;
+    QTimer *_delayedNormalGeometryChangeEnabler;
 };
 
 #endif // MAINWINDOW_H

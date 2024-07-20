@@ -68,7 +68,7 @@ BrickItem {
 
             property var source: image
             property var viewportSize: Qt.size(width * dpr, height * dpr)
-            property real sharpenAmount: 1
+            property real sharpenAmount: 1.5
             property bool showCheckerboard: masonryLayout.showTransparentGrid
             property int checkerboardSize: 4 * dpr
             property real borderRadius: 4.1 * dpr
@@ -462,6 +462,7 @@ BrickItem {
                     Connections {
                         target: masonryLayout
                         function onLayoutReset() {
+                            console.log("on layout reset 2 1")
                             masonryLayout2.reReadAndDecodeThumbnails()
                         }
                     }
@@ -558,6 +559,7 @@ BrickItem {
                         Connections {
                             target: masonryLayout
                             function onLayoutReset() {
+                                console.log("on layout reset 2 2")
                                 masonryLayout2.reReadAndDecodeThumbnails()
                             }
                         }

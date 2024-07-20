@@ -586,8 +586,7 @@ Item {
                     hoverEnabled: true
 
                     onClicked: {
-                        masonryLayout.view.currentIndex = index
-                        masonryLayout.setCurrentIndex(imageModel.mapToSourceRow(masonryLayout.view.currentIndex))
+                        masonryLayout.setCurrentIndex(imageModel.mapToSourceRow(index))
                         onCurrentIndexChanged()
                     }
                 }

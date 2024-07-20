@@ -28,6 +28,7 @@ signals:
     void fullScreenEntered();
     void isResizingChanged();
     void dprChanged();
+    void windowIsReady();
 
 protected:
     void showEvent(QShowEvent *event) override;

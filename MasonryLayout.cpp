@@ -151,15 +151,20 @@ int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
 
 void MasonryLayout::reReadAndDecodeThumbnails() {
     _currentLoadingRow.clear();
+    qDebug() << "MasonryLayout::reReadAndDecodeThumbnails";
     dynamic_cast<ThumbnailsRequestInterface *>(_model)->cancelAllDecodeRunners();
 
     QList<ImageDecodeRequest> requests;
     for (const MasonryBrick &brick : _bricks) {
-        if (brick.image) {
+        if (brick.image && brick.image->isImage) {
             QSize thumbnailSize = brick.thumbnailSize(spacing());
             thumbnailSize = dp(thumbnailSize);
-            requests.append(ImageDecodeRequest{brick.image->fullPath(), thumbnailSize,
-                                               brick.image->orientation});
+            requests.append(ImageDecodeRequest{
+                .info = brick.image->toImageInfo(),
+                .targetSize = thumbnailSize,
+                .viewerRequest = false,
+                .checkCache = brick.image->isCacheAvailable
+            });
         }
     }
     dynamic_cast<ThumbnailsRequestInterface *>(_model)->decodeImages(requests);
@@ -239,17 +244,21 @@ bool MasonryLayout::isEmbedded() const {
 }
 
 void MasonryLayout::rewrap() {
-//    qDebug() << "rewrap" << width() << _bricks.size();
+   // qDebug() << "rewrap" << width() << _bricks.size();
+   //  if (width() <= 0) {
+   //     qDebug() << "no rewrap, zero width";
+   //     return;
+   // }
     int currentIndexOffset = -1;
     if (_currentIndex != -1 && _currentIndex >= _visibleStart && _currentIndex <= _visibleEnd) {
         currentIndexOffset = _contentY - _bricks[_currentIndex].y;
     }
 
     calcLayout(_bricks, width() - _paddingLeft - _paddingRight, _targetHeight, _spacing, !_listView, _paddingTop, !isEmbedded());
-//    qDebug() << "--------------------";
-//    for (int i = 0; i < _bricks.size(); i++) {
-//        qDebug() << _bricks[i].image->path << _bricks[i].originalSize << _bricks[i].normalizedSize;
-//    }
+   // qDebug() << "--------------------";
+   // for (int i = 0; i < _bricks.size(); i++) {
+   //     qDebug() << _bricks[i].image->fullPath() << _bricks[i].originalSize << _bricks[i].normalizedSize;
+   // }
 
 
     if (_bricks.size()) {
@@ -537,7 +546,9 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
         return;
     }
     int index = topLeft.row();
-    if (index >= 0 && index < _bricks.size()) {
+    int indexTo = bottomRight.row();
+    int changedIndexes = indexTo - index;
+    if (index >= 0 && index < _bricks.size() && indexTo >= 0 && indexTo <= _bricks.size()) {
         if (roles.contains(FileListModel::ImageIdRole)) {
             if (_bricks[index].item) {
                 // qDebug() << "upd imageid" << _bricks[index].image->fullPath() << _bricks[index].item;
@@ -545,15 +556,35 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             }
         }
         if (roles.contains(FileListModel::ImageFullSizeRole)) {
-            if (isEmbedded()) {
-                if (_bricks[index].image && _bricks[index].image->fullSize.isValid()) {
-                    _bricks[index].originalSize = _bricks[index].image->fullSize;
+            if (isEmbedded() || (changedIndexes > 1 && !_currentLoadingRow.size())) {
+                for (int i = index; i <= indexTo; i++) {
+                    if (_bricks[i].image && _bricks[i].image->fullSize.isValid()) {
+                        _bricks[i].originalSize = _bricks[i].image->fullSize;
+                    }
                 }
                 rewrap();
-                updateProperties();
+
+                if (!isEmbedded()) {
+                    QList<ImageDecodeRequest> requests;
+                    for (int i = index; i <= indexTo; i++) {
+                        if (_bricks[i].image && _bricks[i].image->fullSize.isValid()) {
+                            requests.append(ImageDecodeRequest{
+                                .info = _bricks[i].image->toImageInfo(),
+                                .targetSize = dp(_bricks[i].thumbnailSize(spacing())),
+                                .viewerRequest = false,
+                                .checkCache = _bricks[i].image->isCacheAvailable
+                            });
+                        }
+                    }
+                    dynamic_cast<ThumbnailsRequestInterface *>(_model)->decodeImages(requests);
+                }
             }
             else {
-                pushToCurrentRow(index);
+                qDebug() << "ZZ LOADING ROW" << _currentLoadingRow.size();
+                for (int i = index; i <= indexTo; i++) {
+                    // TODO: this all comes too early when size is 3x2, fix somehow
+                    pushToCurrentRow(i);
+                }
             }
         }
         if (roles.contains(FileListModel::FolderViewRole)) {
@@ -565,13 +596,14 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             if (_bricks[index].originalSize != folderViewSize) {
                 _bricks[index].originalSize = folderViewSize;
                 rewrap();
-                updateProperties();
             }
         }
         if (roles.contains(FileListModel::ExifRole)) {
-            bool isPanorama = _bricks[index].image->exif["Panorama"].toString() == "True";
-            if (_bricks[index].item && _bricks[index].item->property("isPanorama").toBool() != isPanorama) {
-                _bricks[index].item->setProperty("isPanorama", isPanorama);
+            for (int i = index; i <= indexTo; i++) {
+                bool isPanorama = _bricks[i].image->exif["Panorama"].toString() == "True";
+                if (_bricks[i].item && _bricks[i].item->property("isPanorama").toBool() != isPanorama) {
+                    _bricks[i].item->setProperty("isPanorama", isPanorama);
+                }
             }
         }
         if (roles.contains(FileListModel::TimeToFlushRole)) {
@@ -590,7 +622,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
         int indexToInsert = _currentLoadingRow.count();
         for (int i = index - 1; i >= 0; i--) {
             if (i > lastIndex) {
-//                qDebug() << "adding index" << i << "from" << index << i << lastIndex;
+               // qDebug() << "adding index" << i << "from" << index << i << lastIndex;
                 _currentLoadingRow.insert(indexToInsert, _bricks[i]);
                 _currentLoadingRow[indexToInsert].globalIndex = i;
             }
@@ -647,16 +679,16 @@ void MasonryLayout::pushToCurrentRow(int index) {
             _currentLoadingRow.clear();
         }
         rewrap();
-        // TODO: Possible duplicate call, rewrap already updates properties
-        updateProperties();
 
         QList<ImageDecodeRequest> requests;
         for (int i = 0; i < requestsIndexes.size(); i++) {
             int index = requestsIndexes[i];
-            QSize thumbnailSize = _bricks[index].thumbnailSize(spacing());
-            thumbnailSize = dp(thumbnailSize);
-            requests.append(ImageDecodeRequest{_bricks[index].image->fullPath(), thumbnailSize,
-                                               _bricks[index].image->orientation});
+            requests.append(ImageDecodeRequest{
+                .info = _bricks[index].image->toImageInfo(),
+                .targetSize = dp(_bricks[index].thumbnailSize(spacing())),
+                .viewerRequest = false,
+                .checkCache = _bricks[index].image->isCacheAvailable
+            });
         }
         dynamic_cast<ThumbnailsRequestInterface *>(_model)->decodeImages(requests);
     }
@@ -668,7 +700,7 @@ void MasonryLayout::onThumbnailReadFinished() {
     }
 }
 
-void MasonryLayout::onModelReset() {
+void MasonryLayout::onModelAboutToBeReset() {
     _currentLoadingRow.clear();
     _visibleStart = -1;
     _visibleEnd = -1;
@@ -683,7 +715,9 @@ void MasonryLayout::onModelReset() {
     for (auto it = _freeBrickItems.begin(); it != _freeBrickItems.end(); ++it) {
         (*it)->setProperty("folderView", false);
     }
+}
 
+void MasonryLayout::onModelReset() {
     bool needToRender = false;
     for (int i = 0; i < _model->rowCount(); i++) {
         ImageFile *imageFile = FileListModel::itemFromIndex(_model->index(i, 0));
@@ -978,15 +1012,20 @@ void MasonryLayout::setModel(QAbstractItemModel *newModel) {
     if (_model) {
         disconnect(_model, &QAbstractItemModel::dataChanged,
                    this, &MasonryLayout::onDataChanged);
+        disconnect(_model, &QAbstractItemModel::modelAboutToBeReset,
+                   this, &MasonryLayout::onModelAboutToBeReset);
         disconnect(_model, &QAbstractItemModel::modelReset,
                    this, &MasonryLayout::onModelReset);
     }
     _model = newModel;
     connect(_model, &QAbstractItemModel::dataChanged,
             this, &MasonryLayout::onDataChanged);
+    connect(_model, &QAbstractItemModel::modelAboutToBeReset,
+            this, &MasonryLayout::onModelAboutToBeReset);
     connect(_model, &QAbstractItemModel::modelReset,
             this, &MasonryLayout::onModelReset);
 
+    onModelAboutToBeReset();
     onModelReset();
 }
 
@@ -1073,7 +1112,6 @@ void MasonryLayout::setListView(bool isListView) {
         }
     }
     rewrap();
-    updateProperties();
 
     emit listViewChanged();
 }
@@ -1130,7 +1168,6 @@ void MasonryLayout::setPaddingLeft(qreal newPaddingLeft) {
         _viewport->setX(_paddingLeft);
     }
     rewrap();
-    updateProperties();
     emit paddingLeftChanged();
 }
 
@@ -1143,7 +1180,6 @@ void MasonryLayout::setPaddingRight(qreal newPaddingRight) {
         return;
     _paddingRight = newPaddingRight;
     rewrap();
-    updateProperties();
     emit paddingRightChanged();
 }
 
@@ -1158,7 +1194,6 @@ void MasonryLayout::setPaddingTop(qreal newPaddingTop) {
     _paddingTop = newPaddingTop;
     _topItemOffset = _paddingTop;
     rewrap();
-    updateProperties();
     emit paddingTopChanged();
 }
 
@@ -1171,7 +1206,6 @@ void MasonryLayout::setPaddingBottom(qreal newPaddingBottom) {
         return;
     _paddingBottom = newPaddingBottom;
     rewrap();
-    updateProperties();
     emit paddingBottomChanged();
 }
 

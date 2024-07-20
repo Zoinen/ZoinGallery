@@ -4,6 +4,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 #include <QQueue>
+#include <QTimer>
 
 #include "ImageFile.h"
 
@@ -12,10 +13,9 @@ enum class RunnerType {
     ImageRead,
     FolderListRead,
     ImageDecode,
-    PersistentImageCacheAdd,
-    PersistentImageCacheRetrieve,
-    PersistentFolderCacheAdd,
-    PersistentFolderCacheRetrieve
+    CachedImageStore,
+    CachedImageInfo,
+    CachedImageRetrieve
 };
 QDebug operator<<(QDebug dbg, const RunnerType &myEnum);
 
@@ -28,10 +28,16 @@ public:
     virtual RunnerType type() = 0;
     virtual void run() {} // =0
 
+    void cancel();
+    bool isCanceled() const { return _isCanceled; }
+
     QList<QMetaObject::Connection> connections;
 
 signals:
     void finished(Runner *runner);
+
+private:
+    bool _isCanceled = false;
 };
 
 
@@ -51,16 +57,29 @@ public:
 
 signals:
     void imageInfoReady(const ImageInfo &result);
-    void imageReady(const ImageDecodeRequest &request, const QImage &image);
-    void folderListReady(const QString &path, int totalImages, const QList<QFileInfo> &result);
+    void imagesInfoReady(const QList<ImageInfo> &result);
+    void imageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
+    void folderListReady(const QString &path, const QList<FileInfo> &subfiles);
+
+    void runningTasksChanged(QString runningTasks, QStringList tasksInfo);
 
 protected:
     void processQueue();
     void onRunnerFinished(QObject *runner);
 
 private:
+    void onImageInfoReady(const ImageInfo &result);
     void onImageReadReady(const ImageData &result);
+    void onImageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
+    void onFolderListReady(const QString &path, const QList<FileInfo> &subfiles);
+
+    void onStoreInCache(const ImageDecodeRequest &request, const QImage &image);
+    void onCachedImageInfoRetrieved(const QList<ImageInfo> &results, const QStringList &notFound,
+                                    bool isFromEmbeddedView, const QString &lastPath);
+    void onInfoNotFoundInCache(QList<QString> paths, bool isFromEmbeddedView);
     bool isRunnerTypeMatchesThreadType(Runner *runner, int threadType);
+    void updateRunningTasksCount();
+    QString runnerToString(Runner *task);
 
     struct WorkerInfo {
         QThread *thread;
@@ -78,6 +97,9 @@ private:
 
 
     QElapsedTimer _timer;
+    QTimer _runningTasksUpdateTimer;
+
+    int _runningTasks = 0;
 };
 
 #endif // DECODEMANAGER_H

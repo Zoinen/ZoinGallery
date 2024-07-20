@@ -1433,13 +1433,13 @@ Exiv2::DataBuf Exiv2Preview::preview(const Exiv2::Image& image, int targetWidth,
                 continue;
             }
             PreviewProperties props = loader->getProperties();
-            if (props.width_ > maxPreviewWidth && props.height_ > maxPreviewHeight) {
+            if ((int)props.width_ > maxPreviewWidth && (int)props.height_ > maxPreviewHeight) {
                 maxPreviewWidth = props.width_;
                 maxPreviewHeight = props.height_;
                 previewWithMaxResolution = id;
             }
 
-            if (props.width_ > targetWidth && props.height_ > targetHeight) {
+            if ((int)props.width_ > targetWidth && (int)props.height_ > targetHeight) {
                 properties = loader->getProperties();
                 buf = loader->getData(); // #16 getPreviewImage()
                 properties.size_ = buf.size_;         //     update the size

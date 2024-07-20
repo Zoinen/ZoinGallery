@@ -47,6 +47,8 @@ public:
 
     Q_INVOKABLE void enterRecursiveView();
 
+    Q_INVOKABLE void initialCd();
+
 signals:
     void currentPathChanged();
     void setCurrentIndex(int index);

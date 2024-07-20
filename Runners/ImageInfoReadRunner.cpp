@@ -6,15 +6,17 @@ ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool 
 }
 
 void ImageInfoReadRunner::run() {
-    ImageInfo result;
-    result.path = _path;
-    result.isLast = _isLast;
-    result.isFromEmbeddedView = _isFromEmbeddedView;
+    ImageInfo result{
+        .path = _path,
+        .isLast = _isLast,
+        .isFromEmbeddedView = _isFromEmbeddedView,
+    };
 
     ThumbnailLoader loader;
     if (!loader.readExif(result)) {
         loader.readGenericInfo(result);
     }
+
     emit imageInfoReady(result);
     emit finished(this);
 }

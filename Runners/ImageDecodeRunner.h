@@ -15,9 +15,12 @@ public:
     bool isViewerRequest() const;
 
 signals:
-    void imageReady(const ImageDecodeRequest &request, const QImage &image);
+    void imageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
+    void storeInCache(const ImageDecodeRequest &request, const QImage &image);
 
 private:
+    friend class DecodeManager;
+
     ImageData _imageData;
 };
 

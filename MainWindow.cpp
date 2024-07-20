@@ -120,7 +120,7 @@ void MainWindow::showEvent(QShowEvent *event) {
     _lastSize = size();
     qDebug() << "SHOW" << geometry();
 
-#if defined(__USE_QWK)
+// #if defined(__USE_QWK)
     // Temporary workaround for transparent window BG bug
 
     QSettings set;
@@ -134,8 +134,9 @@ void MainWindow::showEvent(QShowEvent *event) {
         setGeometry(geom.adjusted(1, 0, 0, 0));
         setGeometry(geom);
         setVisibility(windowVisibility);
+        emit windowIsReady();
     });
-#endif
+// #endif
 }
 
 void MainWindow::updateDpr() {

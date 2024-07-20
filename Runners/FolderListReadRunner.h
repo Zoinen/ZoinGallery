@@ -13,9 +13,11 @@ public:
     void run() override;
 
 signals:
-    void folderListReady(const QString &path, int totalImages, const QList<QFileInfo> &result);
+    void folderListReady(const QString &path, const QList<FileInfo> &subfiles);
 
 private:
+    friend class DecodeManager;
+
     QString _path;
     int _totalImages;
 };

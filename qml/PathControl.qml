@@ -64,7 +64,7 @@ Item {
         Rectangle {
             anchors.centerIn: parent
             width: parent.width
-            height: 22
+            height: 24
             color: folderMouse.containsMouse ? (folderMouse.pressed ? Style.darker : Style.lighter) : "transparent"
             radius: 4
         }

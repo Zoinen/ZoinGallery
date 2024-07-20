@@ -115,6 +115,8 @@ signals:
 
     void uiTargetHeightChanged();
 
+    void runningTasksChanged(QString tasks, QStringList tasksInfo);
+
 private:
     QString generateNewId();
     void updateImageId(ImageFile *item);
@@ -136,8 +138,8 @@ private:
     struct ViewerImage {
         QImage image;
         QString imageId;
-        int requestIndex;
         QSize requestedSize;
+        bool isFromCache = false;
     };
     QHash<QString, ViewerImage> _viewerImages;
     QHash<QString, QString> _imageIdToViewer;

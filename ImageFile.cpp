@@ -75,7 +75,7 @@ QString convertEXIFToDMS(const QString& exifInput) {
     return dmsString;
 }
 
-QVariantList ImageFile::exifList() {
+QVariantList ImageFile::exifList() const {
     QVariantList out;
 
     QVariantMap name;

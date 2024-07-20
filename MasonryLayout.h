@@ -184,7 +184,7 @@ private:
         int column;
         bool lastInRow;
         BrickItem *item;
-        ImageFile *image;
+        const ImageFile *const image;
         int globalIndex;
 
         MasonryBrick(int width, int height);
@@ -207,6 +207,7 @@ private:
 
     void onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles = QVector<int>());
     void pushToCurrentRow(int index);
+    void onModelAboutToBeReset();
     void onModelReset();
     void zoom(bool in);
     void updateNeedScroll();

@@ -13,7 +13,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR})
 list(APPEND CMAKE_PREFIX_PATH ${CMAKE_BINARY_DIR})
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Bringing back removed std::auto_ptr for msvc and clang
@@ -86,8 +86,10 @@ set(PROJECT_SOURCES
     DummyQWK.h
     SvgCursor.h
     SvgCursor.cpp
-    PersistentCache.h
-    PersistentCache.cpp
+    PersistentImageCache.h
+    PersistentImageCache.cpp
+    PersistentFolderCache.cpp
+    PersistentFolderCache.h
     DecodeManager.h
     DecodeManager.cpp
     Runners/ImageInfoReadRunner.h
@@ -98,10 +100,8 @@ set(PROJECT_SOURCES
     Runners/FolderListReadRunner.cpp
     Runners/ImageDecodeRunner.h
     Runners/ImageDecodeRunner.cpp
-    Runners/PersistentImageCacheRunners.h
-    Runners/PersistentImageCacheRunners.cpp
-    Runners/PersistentFolderCacheRunners.h
-    Runners/PersistentFolderCacheRunners.cpp
+    Runners/CacheImageRunners.h
+    Runners/CacheImageRunners.cpp
 )
 
 #if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)

@@ -58,6 +58,10 @@ MainWindow {
             }
             })
         }
+
+        function onWindowIsReady() {
+            viewerController.initialCd()
+        }
     }
 
     Connections {
@@ -533,6 +537,46 @@ MainWindow {
                         Layout.preferredHeight: 32
 
                         text: viewerController.currentPath
+                    }
+
+                    Text {
+                        id: runningTasks
+
+                        Connections {
+                            target: fileListModel
+                            function onRunningTasksChanged(tasks, tasksInfo) {
+                                runningTasks.text = tasks
+                                infoList.model = tasksInfo
+                            }
+                        }
+                        text: "0/0"
+                        color: Style.text
+                        Layout.preferredWidth: 45
+                        Layout.rightMargin: 5
+                        horizontalAlignment: Text.AlignRight
+
+                        Window {
+                            id: infoWindow
+                            x: topLevelWindow.x + topLevelWindow.width
+                            y: 20
+                            width: 700
+                            height: 1000
+                            visible: true
+                            color: Style.windowBackgroundNoQWK
+
+                            ListView {
+                                id: infoList
+                                anchors {
+                                    fill: parent
+                                    margins: 10
+                                }
+                                delegate: Text {
+                                    height: 12
+                                    color: modelData.endsWith(" E") ? "#80ff80" : Style.text
+                                    text: modelData
+                                }
+                            }
+                        }
                     }
 
                     Slider {

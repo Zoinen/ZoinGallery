@@ -6,13 +6,14 @@
 #include "QmlResourcesProvider.h"
 #include "ImageModel.h"
 
+#include <QClipboard>
+#include <QDir>
+#include <QGuiApplication>
 #include <QQmlContext>
 #include <QQmlEngine>
-#include <QDir>
-#include <QTimer>
-#include <QClipboard>
-#include <QGuiApplication>
 #include <QSettings>
+#include <QStandardPaths>
+#include <QTimer>
 
 ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
@@ -214,6 +215,22 @@ QUrl ViewerController::indexUrl(int index) {
 
 void ViewerController::enterRecursiveView() {
     _fileListModel->enterRecursiveView();
+}
+
+void ViewerController::initialCd() {
+    QSettings set;
+    QString savedPath = set.value("currentPath").toString();
+
+    if (qApp->arguments().size() > 1) {
+        QString path = qApp->arguments()[1].replace("\"", "");
+        cd(path);
+    }
+    else if (!savedPath.isEmpty()) {
+        cd(savedPath);
+    }
+    else {
+        cd(QStandardPaths::standardLocations(QStandardPaths::DocumentsLocation).first());
+    }
 }
 
 void ViewerController::updateHistory(bool changeHistory) {

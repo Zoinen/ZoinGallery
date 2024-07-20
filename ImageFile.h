@@ -31,6 +31,44 @@ inline QSize rotateToOrientation(QSize size, ExifOrientation orientation) {
     return size;
 }
 
+
+struct ImageInfo {
+    QString path;
+    QDateTime lastModified;
+    QSize imageSize;
+    QVariantMap exif;
+
+    bool isLast = false;
+    bool isFromEmbeddedView = false;
+    bool isCached = false;
+};
+
+struct ImageDecodeRequest {
+    ImageInfo info;
+
+    QSize targetSize;
+    bool viewerRequest = false;
+    bool checkCache = false;
+};
+
+struct ImageData {
+    const ImageDecodeRequest request;
+
+    QByteArray data;
+    QString mimeType;
+    ExifOrientation orientation = ExifOrientation::Horizontal;
+
+    std::shared_ptr<char> previewData;
+    int64_t previewDataSize = 0;
+    QString previewMimeType;
+    ExifOrientation previewOrientation = ExifOrientation::Horizontal;
+
+    QSize imageSize;
+
+    ImageData(const ImageDecodeRequest &request_) : request(request_) {}
+};
+
+
 struct ImageFile {
     QString folderPath;
     QString fileName;
@@ -38,22 +76,18 @@ struct ImageFile {
     QImage image;
     QString imageId;
     QSize fullSize;
-    bool isFolder;
-    bool isImage;
-    bool isFolderView;
-    bool isCachedThumbnail;
+    bool isFolder = false;
+    bool isImage = false;
+    bool isFolderView = false;
+    bool isCacheAvailable = false;
+    bool isCachedThumbnail = false;
     QString iconPath;
-    int index;
+    int index = -1;
     QString nestingInfo;
     QVariantMap exif;
 
-    ExifOrientation orientation;
-    QString mimeType;
-
     QList<ImageFile *> subfiles;
-    ImageFile *parent;
-
-    ImageFile() : isFolder(false), isFolderView(false), isCachedThumbnail(false), index(-1), orientation(Horizontal), parent(nullptr) {}
+    ImageFile *parent = nullptr;
 
     QString fullPath() const {
         return folderPath.isEmpty() ? fileName : QDir::toNativeSeparators(QDir(folderPath).filePath(fileName));
@@ -63,91 +97,33 @@ struct ImageFile {
         return subfiles.size() != 0 || isFolderView;
     }
 
-    QVariantList exifList();
-};
-
-struct ImageReadRequest {
-    QString sourcePath;
-    QSize targetSize;
-    bool viewerRequest;
-    bool folderRequest;
-    int folderRequestImageCount;
-    bool higherThumbnailRequest;
-    int queueId;
-
-    ImageReadRequest(const QString &path = QString(), const QSize &size = QSize()) :
-        sourcePath(path),
-        targetSize(size),
-        viewerRequest(false),
-        folderRequest(false),
-        folderRequestImageCount(0),
-        higherThumbnailRequest(false),
-        queueId(-1) {}
-
-    bool operator==(const ImageReadRequest &other) const {
-        return sourcePath == other.sourcePath && viewerRequest == other.viewerRequest && higherThumbnailRequest == other.higherThumbnailRequest;
+    ImageInfo toImageInfo() const {
+        return {fullPath(), lastModified, fullSize, exif, false, false, isCachedThumbnail};
     }
+
+    QVariantList exifList() const;
 };
-
-inline uint qHash(const ImageReadRequest &key, uint seed = 0) {
-    return qHash(QString("%1|%2").arg(key.viewerRequest).arg(key.sourcePath)), seed;
-}
-
-struct ImageReadResult {
-    ImageReadRequest request;
-    QSize fullSize;
-    QSize thumbnailSize;
-    ExifOrientation orientation;
-    QString mimeType;
-    QByteArray thumbnailData;
-    QByteArray fullImageData;
-    QVariantMap exif;
-    bool largerImageAvailable;
-    bool success;
-
-    ImageReadResult() : orientation(ExifOrientation::Horizontal), largerImageAvailable(false), success(false) {}
-};
-
 Q_DECLARE_METATYPE(ImageFile *)
 
-
-
-
-
-
-
-struct ImageInfo {
-    QString path;
+struct FileInfo {
+    QString name;
     QDateTime lastModified;
-    QSize imageSize;
-    QVariantMap exif;
-
-    ExifOrientation orientation = ExifOrientation::Horizontal;
-    QString mimeType;
-
-    bool isLast = false;
-    bool isFromEmbeddedView = false;
 };
 
-struct ImageDecodeRequest {
+struct FolderInfo {
     QString path;
-    QSize targetSize;
-    ExifOrientation orientation = ExifOrientation::Horizontal;
-    bool viewerRequest = false;
+    QList<FileInfo> subfiles;
 };
 
-struct ImageData {
-    const ImageDecodeRequest request;
+const QSize CACHE_IMAGE_RESOLUTION(1920, 1080);
 
-    QByteArray data;
-    QString mimeType;
-    std::shared_ptr<char> previewData;
-    int64_t previewDataSize = 0;
-    QString previewMimeType;
-    QSize imageSize;
-
-    ImageData(const ImageDecodeRequest &request_) : request(request_) {}
-};
+inline QSize expandToCacheImageResolution(QSize targetSize) {
+    if (targetSize.width() < CACHE_IMAGE_RESOLUTION.width() ||
+        targetSize.height() < CACHE_IMAGE_RESOLUTION.height()) {
+        targetSize = targetSize.scaled(CACHE_IMAGE_RESOLUTION, Qt::KeepAspectRatio);
+    }
+    return targetSize;
+}
 
 #endif // IMAGEFILE_H
 

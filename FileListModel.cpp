@@ -19,17 +19,31 @@ FileListModel::FileListModel(QObject *parent)
     _currentViewIndex = -1;
 
     _decodeManager = new DecodeManager(this);
+    connect(_decodeManager, &DecodeManager::runningTasksChanged, [&] (QString runningTasks, QStringList tasksInfo) {
+        QFile f(QString("C:\\tmp\\log\\%1.txt").arg(QDateTime::currentMSecsSinceEpoch()));
+        f.open(QFile::WriteOnly);
+        f.write(runningTasks.toLatin1() + "\n");
+        QByteArray ba;
+        for (QString task : tasksInfo) {
+            ba.append(task.toUtf8());
+            ba.append("\n");
+        }
+        f.write(ba);
+        emit runningTasksChanged(runningTasks, tasksInfo);
+    });
 
     connect(_decodeManager, &DecodeManager::imageInfoReady, this, [&] (const ImageInfo &result) {
         auto it = _fileToItem.find(result.path);
-        // qDebug() << "INFO RECEIVED" << result.path << result.imageSize << result.orientation;
+        qDebug() << "INFO RECEIVED" << result.path << result.imageSize;
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
             item->fullSize = result.imageSize;
             item->exif = result.exif;
             item->lastModified = result.lastModified;
-            item->orientation = result.orientation;
-            item->mimeType = result.mimeType;
+            item->isCacheAvailable = result.isCached;
+            if (!result.imageSize.isValid()) {
+                return;
+            }
 
             QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
             if (!modelIndex.isValid()) {
@@ -45,7 +59,12 @@ FileListModel::FileListModel(QObject *parent)
             if (result.isFromEmbeddedView) {
                 QList<ImageDecodeRequest> requests;
                 QSize thumbnailSize(result.imageSize.width() * (qreal(_uiTargetHeight) / result.imageSize.height()), _uiTargetHeight);
-                requests.append(ImageDecodeRequest{result.path, thumbnailSize, result.orientation});
+                requests.append(ImageDecodeRequest{
+                    .info = result,
+                    .targetSize = thumbnailSize,
+                    .viewerRequest = false,
+                    .checkCache = result.isCached
+                });
                 decodeImages(requests);
             }
         }
@@ -54,22 +73,100 @@ FileListModel::FileListModel(QObject *parent)
         }
     });
 
-    connect(_decodeManager, &DecodeManager::imageReady, this, [&] (const ImageDecodeRequest &request, const QImage &image) {
-        // qDebug() << "ZZ IMAGE READEY" << request.path << image.size() << request.orientation;
-        auto it = _fileToItem.find(request.path);
+    connect(_decodeManager, &DecodeManager::imagesInfoReady, this, [&] (const QList<ImageInfo> &results) {
+        if (!results.size()) {
+            return;
+        }
+        // qDebug() << "ZZ on DecodeManager::imagesInfoReady" << results.size();
+        QList<ImageDecodeRequest> requests;
+
+        int flushIndex = -1;
+        int minIndex = 1000000;
+        int maxIndex = -1;
+        // TODO: If differents parent come in one signal here it will mess everything up
+        QModelIndex parent;
+
+        for (const ImageInfo &result : results) {
+            auto it = _fileToItem.find(result.path);
+            // qDebug() << "INFO RECEIVED" << result.path << result.imageSize << result.orientation;
+            if (it != _fileToItem.end()) {
+                ImageFile *item = it.value();
+                item->fullSize = result.imageSize;
+                item->exif = result.exif;
+                item->lastModified = result.lastModified;
+                item->isCacheAvailable = result.isCached;
+
+                minIndex = qMin(minIndex, item->index);
+                maxIndex = qMax(maxIndex, item->index);
+                parent = indexFromItem(item->parent);
+
+                if (result.isLast) {
+                    flushIndex = item->index;
+                }
+
+                if (result.isFromEmbeddedView) {
+                    QSize thumbnailSize(result.imageSize.width() * (qreal(_uiTargetHeight) / result.imageSize.height()), _uiTargetHeight);
+                    requests.append(ImageDecodeRequest{
+                        .info = result,
+                        .targetSize = thumbnailSize,
+                        .viewerRequest = false,
+                        .checkCache = result.isCached
+                    });
+                }
+            }
+            else {
+                qDebug() << "ZZ NOT FOUND" << result.path << _fileToItem.keys();
+            }
+        }
+
+        QModelIndex minModelIndex = index(minIndex, 0, parent);
+        QModelIndex maxModelIndex = index(maxIndex, 0, parent);
+        if (!minModelIndex.isValid() || !maxModelIndex.isValid()) {
+            qDebug() << "Invalid model index" << minModelIndex << maxModelIndex << parent;
+            return;
+        }
+        emit dataChanged(minModelIndex, maxModelIndex, {ImageFullSizeRole, ExifRole});
+
+        if (flushIndex != -1) {
+            QModelIndex flushModelIndex = index(flushIndex, 0, parent);
+            emit dataChanged(flushModelIndex, flushModelIndex, {TimeToFlushRole});
+        }
+
+        if (requests.size()) {
+            decodeImages(requests);
+        }
+    });
+
+    connect(_decodeManager, &DecodeManager::imageReady, this, [&] (const ImageDecodeRequest &request,
+                                                                  const QImage &image, bool isFromCache) {
+        // qDebug() << "ZZ IMAGE READEY" << request.info.path << isFromCache << request.targetSize << image.size();
+        auto it = _fileToItem.find(request.info.path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
             if (request.viewerRequest) {
+                qDebug() << "ZZ Viewer image came" << request.info.path << isFromCache << image.size() << item->image.size();
+            }
+            if (isFromCache && (image.width() <= item->image.width() ||
+                                image.height() <= item->image.height())) {
+                return;
+            }
+            if (request.viewerRequest) {
+                qDebug() << "ZZ Viewer image SET";
                 QString imageId = generateNewId();
-                _viewerImages[request.path] = {image, imageId, (int)_viewerImages.size(), image.size()};
-                _imageIdToViewer[imageId] = request.path;
+                _viewerImages[request.info.path] = ViewerImage{
+                    .image = image,
+                    .imageId = imageId,
+                    .requestedSize = image.size(),
+                    .isFromCache = isFromCache
+                };
+                _imageIdToViewer[imageId] = request.info.path;
                 if (item->index == _currentViewIndex) {
                     emit viewerImageIdChanged(QString("image://thumbnails/") + imageId);
                 }
             }
             else {
                 item->image = image;
-                item->isCachedThumbnail = false; // TODO: DO
+                item->isCachedThumbnail = isFromCache;
                 updateImageId(item);
 
                 QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));
@@ -77,15 +174,12 @@ FileListModel::FileListModel(QObject *parent)
             }
         }
         else {
-            qDebug() << "Decoded image is not found in model" << request.path;
+            qDebug() << "Decoded image is not found in model" << request.info.path;
         }
     });
 
-    connect(_decodeManager, &DecodeManager::folderListReady, this, [&] (const QString &path, int totalImages, const QList<QFileInfo> &result) {
-        if (totalImages == -1) {
-            return;
-        }
-        if (!result.size()) {
+    connect(_decodeManager, &DecodeManager::folderListReady, this, [&] (const QString &path, const QList<FileInfo> &subfiles) {
+        if (!subfiles.size()) {
             return;
         }
 
@@ -95,15 +189,15 @@ FileListModel::FileListModel(QObject *parent)
             ImageFile *item = it.value();
 
             QList<ImageFile *> subImages;
-            subImages.reserve(result.size());
+            subImages.reserve(subfiles.size());
             QStringList imagePaths;
-            imagePaths.reserve(result.size());
-            for (int i = 0; i < result.size(); i++) {
-                ImageFile *subItem = createFileItem(path, result.at(i).fileName(), result.at(i).lastModified());
+            imagePaths.reserve(subfiles.size());
+            for (int i = 0; i < subfiles.size(); i++) {
+                ImageFile *subItem = createFileItem(path, subfiles.at(i).name, subfiles.at(i).lastModified);
                 subItem->parent = item;
                 subItem->index = subImages.size();
                 subImages.append(subItem);
-                imagePaths.append(QDir::toNativeSeparators(result.at(i).absoluteFilePath()));
+                imagePaths.append(QDir::toNativeSeparators(QDir(path).absoluteFilePath(subfiles.at(i).name)));
             }
 
             beginInsertRows(indexFromItem(item), 0, subImages.size() - 1);
@@ -216,12 +310,13 @@ int FileListModel::cd(QString path, QString itemToSelect) {
 
     if (path == "Computer") {
         for (const auto &drive : QDir::drives()) {
-            ImageFile *item = new ImageFile();
-            item->fileName = QDir::toNativeSeparators(drive.path());
-            item->isFolder = true;
-            item->isImage = false;
-            item->index = _items.size();
-            item->iconPath = "qrc:/resources/DriveIcon.svg";
+            ImageFile *item = new ImageFile{
+                .fileName = QDir::toNativeSeparators(drive.path()),
+                .isFolder = true,
+                .isImage = false,
+                .iconPath = "qrc:/resources/DriveIcon.svg",
+                .index = static_cast<int>(_items.size()),
+            };
             _items.append(item);
 
             if (item->fileName == itemToSelect) {
@@ -233,13 +328,14 @@ int FileListModel::cd(QString path, QString itemToSelect) {
         QDir dir(_root);
         QStringList folders = dir.entryList(QDir::NoDotAndDotDot | QDir::Dirs | QDir::Hidden | QDir::System);
         for (const auto &folder : folders) {
-            ImageFile *item = new ImageFile();
-            item->folderPath = _root;
-            item->fileName = folder;
-            item->isFolder = true;
-            item->isImage = false;
-            item->index = _items.size();
-            item->iconPath = "qrc:/resources/FolderIcon.svg";
+            ImageFile *item = new ImageFile{
+                .folderPath = _root,
+                .fileName = folder,
+                .isFolder = true,
+                .isImage = false,
+                .iconPath = "qrc:/resources/FolderIcon.svg",
+                .index = static_cast<int>(_items.size()),
+            };
             _items.append(item);
 
             QString path = item->fullPath();
@@ -299,11 +395,12 @@ void FileListModel::updateImageId(ImageFile *item) {
 }
 
 ImageFile *FileListModel::createFileItem(const QString &folderPath, const QString &fileName, const QDateTime &lastModified) {
-    ImageFile *item = new ImageFile();
-    item->folderPath = folderPath;
-    item->fileName = fileName;
-    item->lastModified = lastModified;
-    item->isFolder = false;
+    ImageFile *item = new ImageFile{
+        .folderPath = folderPath,
+        .fileName = fileName,
+        .lastModified = lastModified,
+        .isFolder = false,
+    };
 
     if (isImage(item->fileName)) {
         item->isImage = true;
@@ -369,22 +466,22 @@ QAbstractItemModel *FileListModel::folderModel(int index_) {
     return *it;
 }
 
-struct FolderInfo {
+struct RecursiveFolderInfo {
     int level;                     // Nesting level of the folder
     QString path;                  // Absolute path of the folder
     QString lastInGroup;           // String where each character represents a level: '1' for last, '0' for not last
 
-    FolderInfo(int lvl, QString pth, QString lastGroup)
+    RecursiveFolderInfo(int lvl, QString pth, QString lastGroup)
         : level(lvl), path(pth), lastInGroup(lastGroup) {}
 };
 
-QList<FolderInfo> getAllSubfoldersWithNestingLevel(const QString &startDir) {
-    QList<FolderInfo> allFoldersWithLevels;         // List to store folders with their nesting levels and boolean string
-    QStack<FolderInfo> dirs;                        // Stack to manage directories
-    dirs.push(FolderInfo(0, startDir, ""));        // Start with the initial directory, marked as last in its (non-existent) group
+QList<RecursiveFolderInfo> getAllSubfoldersWithNestingLevel(const QString &startDir) {
+    QList<RecursiveFolderInfo> allFoldersWithLevels;         // List to store folders with their nesting levels and boolean string
+    QStack<RecursiveFolderInfo> dirs;                        // Stack to manage directories
+    dirs.push(RecursiveFolderInfo(0, startDir, ""));        // Start with the initial directory, marked as last in its (non-existent) group
 
     while (!dirs.isEmpty()) {
-        FolderInfo dirInfo = dirs.pop();
+        RecursiveFolderInfo dirInfo = dirs.pop();
 
         // Add the current directory to the list
         allFoldersWithLevels.append(dirInfo);
@@ -401,7 +498,7 @@ QList<FolderInfo> getAllSubfoldersWithNestingLevel(const QString &startDir) {
             // Create a new boolean string for the next level based on the current dir's string
             QString newLastInGroup = dirInfo.lastInGroup + isLast;
 
-            dirs.push(FolderInfo(dirInfo.level + 1, newPath, newLastInGroup));
+            dirs.push(RecursiveFolderInfo(dirInfo.level + 1, newPath, newLastInGroup));
         }
     }
 
@@ -430,18 +527,19 @@ void FileListModel::enterRecursiveView() {
     // }
     // else
     {
-        QList<FolderInfo> folders = getAllSubfoldersWithNestingLevel(_root);
+        QList<RecursiveFolderInfo> folders = getAllSubfoldersWithNestingLevel(_root);
         for (const auto &folder : folders) {
-            ImageFile *item = new ImageFile();
             QFileInfo info(folder.path);
             // qDebug() << folder.level << info.filePath() << info.fileName();
-            item->folderPath = QDir::toNativeSeparators(info.dir().absolutePath());
-            item->nestingInfo = folder.lastInGroup;
-            item->fileName = info.fileName(); // QString("%1: %2").arg(folder.first).arg(folder.second);
-            item->isFolder = true;
-            item->isImage = false;
-            item->index = _items.size();
-            item->iconPath = "qrc:/resources/FolderIcon.svg";
+            ImageFile *item = new ImageFile{
+                .folderPath = QDir::toNativeSeparators(info.dir().absolutePath()),
+                .fileName = info.fileName(), // QString("%1: %2").arg(folder.first).arg(folder.second);
+                .isFolder = true,
+                .isImage = false,
+                .iconPath = "qrc:/resources/FolderIcon.svg",
+                .index = static_cast<int>(_items.size()),
+                .nestingInfo = folder.lastInGroup,
+            };
             _items.append(item);
 
             QString path = item->fullPath();
@@ -472,65 +570,69 @@ bool FileListModel::isImage(QString fileName) {
 
 void FileListModel::requestViewer(int index, int width, int height) {
     _currentViewIndex = index;
-
     QSize viewerSize(width, height);
+
+    // qDebug() << __FUNCTION__ << viewerSize;
     QString requestedPath = _items[index]->fullPath();
     auto it = _viewerImages.find(requestedPath);
     if (it != _viewerImages.end()) {
         emit viewerImageIdChanged(QString("image://thumbnails/") + it.value().imageId);
-
-        auto thumbnailIt = _fileToItem.find(requestedPath);
-        // qDebug() << "INFO RECEIVED" << result.path << result.imageSize << result.orientation;
-        if (thumbnailIt != _fileToItem.end()) {
-            ImageFile *item = thumbnailIt.value();
-
-            QSize targetSize = item->fullSize;
-            if (viewerSize.isValid()) {
-                targetSize = targetSize.scaled(viewerSize, Qt::KeepAspectRatio);
-            }
-
-            if (it.value().requestedSize == targetSize) {
-                return;
-            }
-        }
     }
-
-//    qDebug() << "Request thumbnails" << index << viewerSize;
 
     int queueSize = 16;
-
     QList<ImageDecodeRequest> requests;
-    for (int i = index; i < _items.size(); i++) {
-        if (requests.size() >= queueSize) {
-            break;
+    int imagesChecked = 0;
+    bool hitStart = false;
+    bool hitEnd = false;
+    for (int counter = 0; imagesChecked < queueSize && !(hitStart && hitEnd); counter++) {
+        int i;
+        if (!(counter % 2)) { // n, n+1, n+2, ...
+            i = index + counter / 2;
         }
-        if (_items[i]->isImage) {
+        else { // n-1, n-2, n-3, ...
+            i = index - (counter + 1) / 2;
+        }
+        if (i < 0) {
+            hitStart = true;
+        }
+        if (i >= _items.size()) {
+            hitEnd = true;
+        }
+        if (i >= 0 && i < _items.size() && _items[i]->isImage) {
+            imagesChecked++;
+
+            QString requestedPath = _items[i]->fullPath();
             QSize targetSize = _items[i]->fullSize;
+
             if (viewerSize.isValid()) {
                 targetSize = targetSize.scaled(viewerSize, Qt::KeepAspectRatio);
             }
-            ImageDecodeRequest request{_items[i]->fullPath(), targetSize, _items[i]->orientation, true};
-            requests.append(request);
+
+            auto it = _viewerImages.find(requestedPath);
+            if (it != _viewerImages.end()) {
+                if (it->requestedSize.width() >= targetSize.width() &&
+                    it->requestedSize.height() >= targetSize.height()) {
+                    continue;
+                }
+                else {
+                    it->requestedSize = targetSize;
+                }
+            }
+            else {
+                _viewerImages[requestedPath] = ViewerImage{
+                    .requestedSize = targetSize
+                };
+            }
+
+            requests.append(ImageDecodeRequest{
+                .info = _items[i]->toImageInfo(),
+                .targetSize = targetSize,
+                .viewerRequest = true,
+                .checkCache = _items[i]->isCacheAvailable
+            });
         }
     }
-    int backwardInsertIndex = 2;
-    for (int i = index - 1; i >= 0; i--) {
-        if (requests.size() >= queueSize * 1.5) {
-            break;
-        }
-        if (_items[i]->isImage) {
-            if (backwardInsertIndex >= requests.count()) {
-                backwardInsertIndex = requests.count();
-            }
-            QSize targetSize = _items[i]->fullSize;
-            if (viewerSize.isValid()) {
-                targetSize = targetSize.scaled(viewerSize, Qt::KeepAspectRatio);
-            }
-            ImageDecodeRequest request{_items[i]->fullPath(), targetSize, _items[i]->orientation, true};
-            requests.insert(backwardInsertIndex, request);
-            backwardInsertIndex += 2;
-        }
-    }
+    // qDebug() << __FUNCTION__ << "REQUEST FOR DECODE" << requests.size();
 
     _decodeManager->decodeImages(requests);
 }
@@ -549,6 +651,7 @@ void FileListModel::cancelAllRunners() {
 }
 
 void FileListModel::cancelAllDecodeRunners() {
+    qDebug() << __FUNCTION__;
     _decodeManager->cancelAllDecodeRunners();
 }
 
@@ -650,6 +753,7 @@ void RootProxyModel::cancelAllDecodeRunners() {
     if (!sourceModel()) {
         return;
     }
+    qDebug() << __FUNCTION__;
     dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())->cancelAllDecodeRunners();
 }
 

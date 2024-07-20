@@ -18,6 +18,8 @@ signals:
     void imageInfoReady(const ImageInfo &result);
 
 private:
+    friend class DecodeManager;
+
     QString _path;
     bool _isLast;
     bool _isFromEmbeddedView;

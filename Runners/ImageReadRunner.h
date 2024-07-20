@@ -18,6 +18,8 @@ signals:
     void imageReadReady(const ImageData &result);
 
 private:
+    friend class DecodeManager;
+
     ImageDecodeRequest _request;
 };
 

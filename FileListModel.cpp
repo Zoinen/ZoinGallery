@@ -19,6 +19,18 @@ FileListModel::FileListModel(QObject *parent)
     _currentViewIndex = -1;
 
     _decodeManager = new DecodeManager(this);
+
+    connect(_decodeManager, &DecodeManager::viewerRunnerCanceled, this, [&] (const QString &path) {
+        qDebug() << "REMOVE CANCELLED RUNNER???" << path;
+        auto it = _viewerImages.find(path);
+        if (it != _viewerImages.end()) {
+            if (it.value().image.isNull()) {
+                qDebug() << "REMOVE CANCELLED RUNNER" << path;
+                _viewerImages.remove(path);
+            }
+        }
+    });
+
     connect(_decodeManager, &DecodeManager::runningTasksChanged, [&] (QString runningTasks, QStringList tasksInfo) {
         QFile f(QString("C:\\tmp\\log\\%1.txt").arg(QDateTime::currentMSecsSinceEpoch()));
         f.open(QFile::WriteOnly);
@@ -572,11 +584,19 @@ void FileListModel::requestViewer(int index, int width, int height) {
     _currentViewIndex = index;
     QSize viewerSize(width, height);
 
-    // qDebug() << __FUNCTION__ << viewerSize;
     QString requestedPath = _items[index]->fullPath();
+    qDebug() << __FUNCTION__ << viewerSize << requestedPath;
     auto it = _viewerImages.find(requestedPath);
-    if (it != _viewerImages.end()) {
+    if (it != _viewerImages.end() && !it->image.isNull()) {
+        qDebug() << "Using viewer image" << it->requestedSize << it->image.size();
         emit viewerImageIdChanged(QString("image://thumbnails/") + it.value().imageId);
+    }
+    else {
+        auto itThumbs = _fileToItem.find(requestedPath);
+        if (itThumbs != _fileToItem.end()) {
+            qDebug() << "Using thumbnail image" << itThumbs.value()->image.size();
+            emit viewerImageIdChanged(QString("image://thumbnails/") + itThumbs.value()->imageId);
+        }
     }
 
     int queueSize = 16;

@@ -28,8 +28,12 @@ public:
     virtual RunnerType type() = 0;
     virtual void run() {} // =0
 
+    virtual QString path() const { return QString(); }
+    virtual bool isViewerRequest() const { return false; }
+
     void cancel();
     bool isCanceled() const { return _isCanceled; }
+
 
     QList<QMetaObject::Connection> connections;
 
@@ -62,6 +66,7 @@ signals:
     void folderListReady(const QString &path, const QList<FileInfo> &subfiles);
 
     void runningTasksChanged(QString runningTasks, QStringList tasksInfo);
+    void viewerRunnerCanceled(const QString &path);
 
 protected:
     void processQueue();

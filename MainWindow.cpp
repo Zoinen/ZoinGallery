@@ -73,6 +73,7 @@ void MainWindow::toggleFullscreen() {
     QSettings set;
     QWindow::Visibility nonFSVisibility = set.value("nonFSVisibility", QWindow::Windowed).value<QWindow::Visibility>();
 
+    QRect prevGeometry = geometry();
     if (visibility() == QWindow::FullScreen) {
 #if defined(__USE_QWK)
         // Temporary workaround for transparent window BG bug
@@ -80,8 +81,13 @@ void MainWindow::toggleFullscreen() {
         QTimer::singleShot(0, this, [=] () {
             setGeometry(_normalGeometry.adjusted(1, 0, 0, 0));
             setGeometry(_normalGeometry);
+            qDebug() << "ZZ NORM GEOM" << _normalGeometry;
             setVisibility(nonFSVisibility);
             _enableNormalGeometryChangeOnNextExpose = true;
+
+            if (prevGeometry != geometry()) {
+                emit mainWindowResized(prevGeometry.width() != geometry().width());
+            }
         });
 #else
         setVisibility(nonFSVisibility);
@@ -91,6 +97,10 @@ void MainWindow::toggleFullscreen() {
         set.setValue("nonFSVisibility", visibility());
         setVisibility(QWindow::FullScreen);
         emit fullScreenEntered();
+
+        if (prevGeometry != geometry()) {
+            emit mainWindowResized(prevGeometry.width() != geometry().width());
+        }
     }
 }
 
@@ -134,6 +144,7 @@ void MainWindow::showEvent(QShowEvent *event) {
         setGeometry(geom.adjusted(1, 0, 0, 0));
         setGeometry(geom);
         setVisibility(windowVisibility);
+        qDebug() << "Window is ready";
         emit windowIsReady();
     });
 // #endif
@@ -163,16 +174,20 @@ bool MainWindow::event(QEvent *event) {
     else if (event->type() == QEvent::NonClientAreaMouseButtonRelease && _leftButtonPressed) {
         _leftButtonPressed = false;
         emit isResizingChanged();
-        if (_lastSize != size()) {
-            QTimer::singleShot(0, this, [&] () {
-                emit mainWindowResized();
+        if (_lastSize != size() && _lastSize.height() > 15 * _dpr && size().height() > 15 * _dpr && !_ignoreNormalGeometryChange) {
+            qDebug() << "ZZ CHANGED 1" << _lastSize << "->" << size();
+            bool changedWidth = _lastSize.width() != size().width();
+            QTimer::singleShot(0, this, [=, this] () {
+                emit mainWindowResized(changedWidth);
             });
         }
     }
     else if (event->type() == QEvent::Resize && !_leftButtonPressed) {
-        if (_lastSize != size()) {
-            QTimer::singleShot(0, this, [&] () {
-                emit mainWindowResized();
+        if (_lastSize != size() && _lastSize.height() > 15 * _dpr && size().height() > 15 * _dpr && !_ignoreNormalGeometryChange) {
+            qDebug() << "ZZ CHANGED 2" << _lastSize << "->" << size();
+            bool changedWidth = _lastSize.width() != size().width();
+            QTimer::singleShot(0, this, [=, this] () {
+                emit mainWindowResized(changedWidth);
             });
         }
         _lastSize = size();

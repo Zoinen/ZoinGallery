@@ -176,8 +176,9 @@ bool ThumbnailLoader::readImage(ImageData &result) {
     if (!result.request.checkCache) {
         targetSize = expandToCacheImageResolution(targetSize);
     }
-    if (!previewLoaded || result.imageSize.width() < targetSize.width() ||
-                          result.imageSize.height() < targetSize.height()) {
+    QSize sizeRotated = rotateToOrientation(result.imageSize, result.orientation);
+    if (!previewLoaded || sizeRotated.width() < targetSize.width() ||
+                          sizeRotated.height() < targetSize.height()) {
         QFile f(result.request.info.path);
         if (!f.open(QFile::ReadOnly)) {
             return false;
@@ -317,9 +318,11 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
 }
 
 QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions) {
-    //dimensions = image.size().scaled(dimensions, Qt::KeepAspectRatio);
-
-    return image.scaled(dimensions, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    if (dimensions.width() < image.width() ||
+        dimensions.height() < image.height()) {
+        return image.scaled(dimensions, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
+    return image;
 }
 
 QImage ThumbnailLoader::rotateAndFlip(const QImage &image, ExifOrientation orientation) {

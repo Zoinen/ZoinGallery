@@ -14,6 +14,10 @@ void ImageReadRunner::run() {
     emit finished(this);
 }
 
+QString ImageReadRunner::path() const {
+    return _request.info.path;
+}
+
 bool ImageReadRunner::isViewerRequest() const {
     return _request.viewerRequest;
 }

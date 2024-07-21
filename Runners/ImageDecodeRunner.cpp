@@ -38,6 +38,10 @@ void ImageDecodeRunner::run() {
     emit finished(this);
 }
 
+QString ImageDecodeRunner::path() const {
+    return _imageData.request.info.path;
+}
+
 bool ImageDecodeRunner::isViewerRequest() const {
     return _imageData.request.viewerRequest;
 }

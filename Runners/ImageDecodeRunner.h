@@ -12,7 +12,8 @@ public:
     RunnerType type() override { return RunnerType::ImageDecode; }
     void run() override;
 
-    bool isViewerRequest() const;
+    QString path() const override;
+    bool isViewerRequest() const override;
 
 signals:
     void imageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);

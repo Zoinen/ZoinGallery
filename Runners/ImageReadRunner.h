@@ -12,7 +12,8 @@ public:
     RunnerType type() override { return RunnerType::ImageRead; }
     void run() override;
 
-    bool isViewerRequest() const;
+    QString path() const override;
+    bool isViewerRequest() const override;
 
 signals:
     void imageReadReady(const ImageData &result);

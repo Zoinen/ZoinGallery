@@ -36,11 +36,13 @@ MainWindow {
     Connections {
         target: topLevelWindow
 
-        function onMainWindowResized() {
+        function onMainWindowResized(isWidthChanged) {
             Qt.callLater(() => {
             console.log("main window resized", topLevelWindow.width, topLevelWindow.height)
             if (root.state === "thumbnails") {
-                masonryLayout.view.reReadAndDecodeThumbnails()
+                if (isWidthChanged) {
+                    masonryLayout.view.reReadAndDecodeThumbnails()
+                }
                 viewerDirty = true
             }
             else {

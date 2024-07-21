@@ -19,8 +19,7 @@ bool isRunnerDecode(Runner *runner) {
 }
 
 bool isRunnerDecodeViewer(Runner *runner) {
-    return (runner->type() == RunnerType::ImageRead && static_cast<ImageReadRunner *>(runner)->isViewerRequest()) ||
-           (runner->type() == RunnerType::ImageDecode && static_cast<ImageDecodeRunner *>(runner)->isViewerRequest());
+    return runner->isViewerRequest() && (runner->type() == RunnerType::ImageRead && runner->type() == RunnerType::ImageDecode);
 }
 
 bool isRunnerInReadThread(Runner *runner) {
@@ -176,13 +175,21 @@ void DecodeManager::cancelAllDecodeRunners() {
         if (Runner *runner = _workers[i].runner) {
             if (isRunnerDecode(runner)) {
                 runner->cancel();
+
+                if (runner->isViewerRequest()) {
+                    emit viewerRunnerCanceled(runner->path());
+                }
             }
         }
     }
 
     for (int i = 0; i < _taskQueue.size(); i++) {
         if (isRunnerDecode(_taskQueue.at(i))) {
-            _taskQueue.remove(i);
+            Runner *runner = _taskQueue.takeAt(i);
+            if (runner->isViewerRequest()) {
+                emit viewerRunnerCanceled(runner->path());
+            }
+            runner->deleteLater();
             i--;
         }
     }
@@ -193,6 +200,10 @@ void DecodeManager::cancelAllRunners() {
     for (int i = 0; i < _workers.size(); i++) {
         if (Runner *runner = _workers[i].runner) {
             runner->cancel();
+
+            if (runner->isViewerRequest()) {
+                emit viewerRunnerCanceled(runner->path());
+            }
         }
     }
     _taskQueue.clear();
@@ -204,13 +215,21 @@ void DecodeManager::cancelAllDecodeViewerRunners() {
         if (Runner *runner = _workers[i].runner) {
             if (isRunnerDecodeViewer(runner)) {
                 runner->cancel();
+
+                if (runner->isViewerRequest()) {
+                    emit viewerRunnerCanceled(runner->path());
+                }
             }
         }
     }
 
     for (int i = 0; i < _taskQueue.size(); i++) {
         if (isRunnerDecodeViewer(_taskQueue.at(i))) {
-            _taskQueue.remove(i);
+            Runner *runner = _taskQueue.takeAt(i);
+            if (runner->isViewerRequest()) {
+                emit viewerRunnerCanceled(runner->path());
+            }
+            runner->deleteLater();
             i--;
         }
     }
@@ -259,7 +278,6 @@ QString DecodeManager::runnerToString(Runner *task) {
         break;
     }
 }
-
 
 void DecodeManager::updateRunningTasksCount() {
     int tasks = 0;

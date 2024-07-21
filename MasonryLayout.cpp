@@ -151,8 +151,10 @@ int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
 
 void MasonryLayout::reReadAndDecodeThumbnails() {
     _currentLoadingRow.clear();
-    qDebug() << "MasonryLayout::reReadAndDecodeThumbnails";
-    dynamic_cast<ThumbnailsRequestInterface *>(_model)->cancelAllDecodeRunners();
+    qDebug() << "MasonryLayout::reReadAndDecodeThumbnails" << isEmbedded();
+    if (!isEmbedded()) {
+        dynamic_cast<ThumbnailsRequestInterface *>(_model)->cancelAllDecodeRunners();
+    }
 
     QList<ImageDecodeRequest> requests;
     for (const MasonryBrick &brick : _bricks) {

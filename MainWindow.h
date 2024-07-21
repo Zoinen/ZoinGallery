@@ -24,7 +24,7 @@ public:
     bool isQWK() const;
 
 signals:
-    void mainWindowResized();
+    void mainWindowResized(bool widthChanged);
     void fullScreenEntered();
     void isResizingChanged();
     void dprChanged();

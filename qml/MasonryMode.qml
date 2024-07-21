@@ -28,7 +28,7 @@ MouseArea {
         scrollingStarted = false
         scrollingMode = true
         scrollingStartedAtY = masonryView.mouseY
-        scrollingTimer.start()
+        scrollingAnimation.start()
         masonryLayout.setScrollingMode(true)
     }
 
@@ -39,7 +39,7 @@ MouseArea {
         masonryLayout.contentY += 0.01
         masonryLayout.contentY -= 0.01
 
-        scrollingTimer.stop()
+        scrollingAnimation.stop()
         masonryLayout.setScrollingMode(false)
 
         hideHovered = false
@@ -73,11 +73,8 @@ MouseArea {
         }
     }
 
-    Timer {
-        id: scrollingTimer
-        repeat: true
-        interval: animationInterval / 10
-        property real animationInterval: 250
+    FrameAnimation {
+        id: scrollingAnimation
         onTriggered: {
             let distance = masonryView.mouseY - scrollingStartedAtY
             distance = Math.min(Math.max(0, distance - 25), distance + 25)
@@ -87,7 +84,7 @@ MouseArea {
                 fraction += 0.05
             }
 
-            let speed = scrollingTimer.interval / (1000 / 60) * (animationInterval / scrollingTimer.interval)
+            let speed = frameTime * 30
             let increment = (Math.pow(fraction, 3) * totalHeight) * speed * 2
             masonryLayout.contentY += increment * (distance < 0 ? -1 : 1)
 
@@ -107,6 +104,7 @@ MouseArea {
             }
         }
     }
+
     // </Scrolling>
 
     hoverEnabled: true
@@ -419,15 +417,6 @@ MouseArea {
         paddingRight: 6
         paddingTop: 5
         paddingBottom: 12
-
-        Behavior on contentY {
-            enabled: scrollingMode
-
-            NumberAnimation {
-                id: contentYAnimation
-                duration: scrollingTimer.animationInterval * 2
-            }
-        }
 
         delegate: BrickDelegate {}
 

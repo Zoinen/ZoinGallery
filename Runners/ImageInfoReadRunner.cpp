@@ -1,8 +1,8 @@
 #include "ImageInfoReadRunner.h"
 #include "ThumbnailLoader.h"
 
-ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool isFromEmbeddedView)
-    : _path(path), _isLast(isLast), _isFromEmbeddedView(isFromEmbeddedView) {
+ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool isFromEmbeddedView, bool isFromScanner)
+    : _path(path), _isLast(isLast), _isFromEmbeddedView(isFromEmbeddedView), _isFromScanner(isFromScanner) {
 }
 
 void ImageInfoReadRunner::run() {
@@ -10,6 +10,7 @@ void ImageInfoReadRunner::run() {
         .path = _path,
         .isLast = _isLast,
         .isFromEmbeddedView = _isFromEmbeddedView,
+        .isFromScanner = _isFromScanner
     };
 
     ThumbnailLoader loader;

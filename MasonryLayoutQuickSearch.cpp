@@ -40,7 +40,7 @@ int MasonryLayoutQuickSearch::nextImage(bool forward, bool forceMoveToNext) {
     return nextIndex;
 }
 
-bool MasonryLayoutQuickSearch::hasResults(QString search) {
+bool MasonryLayoutQuickSearch::hasResults(const QString &search) {
     if (search.isEmpty()) {
         return true;
     }
@@ -59,7 +59,7 @@ bool MasonryLayoutQuickSearch::hasResults(QString search) {
     return foundMatches != 0;
 }
 
-bool MasonryLayoutQuickSearch::indexMatches(int index, QString search) {
+bool MasonryLayoutQuickSearch::indexMatches(int index, const QString &search) {
     if (index < 0 || index > masonryLayout()->_bricks.size() - 1) {
         return false;
     }

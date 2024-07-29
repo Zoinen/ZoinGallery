@@ -20,7 +20,7 @@ class ViewerController : public QObject {
 public:
     ViewerController(QQmlEngine *engine);
 
-    Q_INVOKABLE void cd(QString folder, bool changeHistory = true);
+    Q_INVOKABLE void cd(const QString &currentFolder, bool changeHistory = true);
 
     Q_INVOKABLE int up();
     bool canUp() const;

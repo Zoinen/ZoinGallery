@@ -131,7 +131,7 @@ QSize MasonryLayout::indexOriginalSize(int index) const {
 
 QVariantMap MasonryLayout::indexExif(int index) const {
     if (index >= 0 && index < _bricks.size() && _bricks[index].image) {
-        return _bricks[index].image->exif;
+        return _bricks[index].image->info.exif;
     }
     return QVariantMap();
 }
@@ -162,10 +162,10 @@ void MasonryLayout::reReadAndDecodeThumbnails() {
             QSize thumbnailSize = brick.thumbnailSize(spacing());
             thumbnailSize = dp(thumbnailSize);
             requests.append(ImageDecodeRequest{
-                .info = brick.image->toImageInfo(),
+                .info = brick.image->info,
                 .targetSize = thumbnailSize,
                 .viewerRequest = false,
-                .checkCache = brick.image->isCacheAvailable
+                .checkCache = brick.image->info.isCached
             });
         }
     }
@@ -516,7 +516,7 @@ void MasonryLayout::updateProperties() {
                 _bricks[i].item->setProperty("isFolder", _bricks[i].image->isFolder);
             }
 
-            bool isPanorama = _bricks[i].image->exif["Panorama"].toString() == "True";
+            bool isPanorama = _bricks[i].image->info.exif["Panorama"].toString() == "True";
             if (_bricks[i].item->property("isPanorama").toBool() != isPanorama) {
                 _bricks[i].item->setProperty("isPanorama", isPanorama);
             }
@@ -571,10 +571,10 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
                     for (int i = index; i <= indexTo; i++) {
                         if (_bricks[i].image && _bricks[i].image->fullSize.isValid()) {
                             requests.append(ImageDecodeRequest{
-                                .info = _bricks[i].image->toImageInfo(),
+                                .info = _bricks[i].image->info,
                                 .targetSize = dp(_bricks[i].thumbnailSize(spacing())),
                                 .viewerRequest = false,
-                                .checkCache = _bricks[i].image->isCacheAvailable
+                                .checkCache = _bricks[i].image->info.isCached
                             });
                         }
                     }
@@ -582,7 +582,7 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
                 }
             }
             else {
-                qDebug() << "ZZ LOADING ROW" << _currentLoadingRow.size();
+                // qDebug() << "ZZ LOADING ROW" << _currentLoadingRow.size();
                 for (int i = index; i <= indexTo; i++) {
                     // TODO: this all comes too early when size is 3x2, fix somehow
                     pushToCurrentRow(i);
@@ -602,7 +602,7 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
         }
         if (roles.contains(FileListModel::ExifRole)) {
             for (int i = index; i <= indexTo; i++) {
-                bool isPanorama = _bricks[i].image->exif["Panorama"].toString() == "True";
+                bool isPanorama = _bricks[i].image->info.exif["Panorama"].toString() == "True";
                 if (_bricks[i].item && _bricks[i].item->property("isPanorama").toBool() != isPanorama) {
                     _bricks[i].item->setProperty("isPanorama", isPanorama);
                 }
@@ -686,10 +686,10 @@ void MasonryLayout::pushToCurrentRow(int index) {
         for (int i = 0; i < requestsIndexes.size(); i++) {
             int index = requestsIndexes[i];
             requests.append(ImageDecodeRequest{
-                .info = _bricks[index].image->toImageInfo(),
+                .info = _bricks[index].image->info,
                 .targetSize = dp(_bricks[index].thumbnailSize(spacing())),
                 .viewerRequest = false,
-                .checkCache = _bricks[index].image->isCacheAvailable
+                .checkCache = _bricks[index].image->info.isCached
             });
         }
         dynamic_cast<ThumbnailsRequestInterface *>(_model)->decodeImages(requests);

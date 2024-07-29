@@ -17,12 +17,12 @@ void CachedImageRetrieveRunner::run() {
 }
 
 
-CachedImageStoreRunner::CachedImageStoreRunner(const ImageInfo &imageInfo, const QImage &image)
-    : _imageInfo(imageInfo), _image(image) {
+CachedImageStoreRunner::CachedImageStoreRunner(const ImageInfo &imageInfo, const QByteArray &imageData)
+    : _imageInfo(imageInfo), _imageData(imageData) {
 }
 
 void CachedImageStoreRunner::run() {
-    PersistentImageCache::storeImage(_imageInfo, _image);
+    PersistentImageCache::storeImage(_imageInfo, _imageData);
     emit finished(this);
 }
 
@@ -35,6 +35,7 @@ CachedImageInfoRunner::CachedImageInfoRunner(const QStringList &imagePaths, bool
 
 void CachedImageInfoRunner::run() {
     if (!_imagePaths.size()) {
+        emit finished(this);
         return;
     }
     QElapsedTimer t;

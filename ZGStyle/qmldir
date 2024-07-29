@@ -11,3 +11,4 @@ MenuItem 1.0 MenuItem.qml
 MenuSeparator 1.0 MenuSeparator.qml
 TabBar 1.0 TabBar.qml
 TabButton 1.0 TabButton.qml
+Label 1.0 Label.qml

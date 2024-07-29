@@ -17,7 +17,7 @@ public:
 
 signals:
     void imageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
-    void storeInCache(const ImageDecodeRequest &request, const QImage &image);
+    void storeInCache(const ImageDecodeRequest &request, const QByteArray &imageData);
 
 private:
     friend class DecodeManager;

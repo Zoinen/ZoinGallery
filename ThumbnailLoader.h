@@ -18,7 +18,7 @@ public:
     bool readExif(ImageInfo &result);
     bool readGenericInfo(ImageInfo &result);
     bool readImage(ImageData &result);
-    bool readPreview(ImageData &result);
+    bool readPreviewAndMime(ImageData &result);
 
     QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize);
 

@@ -47,7 +47,7 @@ class CachedImageStoreRunner : public Runner {
     Q_OBJECT
 
 public:
-    CachedImageStoreRunner(const ImageInfo &imageInfo, const QImage &image);
+    CachedImageStoreRunner(const ImageInfo &imageInfo, const QByteArray &imageData);
 
     RunnerType type() override { return RunnerType::CachedImageStore; }
     void run() override;
@@ -56,7 +56,7 @@ private:
     friend class DecodeManager;
 
     ImageInfo _imageInfo;
-    QImage _image;
+    QByteArray _imageData;
 };
 
 #endif // CACHEIMAGERUNNERS_H

@@ -12,15 +12,6 @@
 
 class PersistentImageCache {
 public:
-    static bool hasImage(const QString &path);
-    static void retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList, QStringList &outNotFound);
-    static QImage retrieveImage(ImageDecodeRequest &request);
-    static void storeImage(const ImageInfo &imageInfo, const QImage &image);
-
-    static void loadDb();
-    static void dumpDb();
-
-private:
     struct ThumbnailLocation {
         uint16_t chunkFileIndex;
         uint64_t offsetInChunk;
@@ -32,8 +23,22 @@ private:
         ThumbnailLocation location;
         QVariantMap exif;
         QSize imageSize;
+        ExifOrientation orientation = ExifOrientation::Horizontal;
     };
 
+    static bool hasImage(const QString &path);
+    static void retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList, QStringList &outNotFound);
+    static QImage retrieveImage(ImageDecodeRequest &request);
+    static void storeImage(const ImageInfo &imageInfo, const QByteArray &imageData);
+
+    static void loadDb();
+    static void dumpDb();
+
+    QStringList getAllImagePaths() const;
+
+    ThumbnailInfo getThumbnailInfo(const QString &path) const;
+
+private:
     static uint16_t _currentChunkFileIndex;
     static QHash<QString, ThumbnailInfo> _db;
     static QReadWriteLock _dbAccess;

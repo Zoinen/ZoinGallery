@@ -102,6 +102,10 @@ set(PROJECT_SOURCES
     Runners/ImageDecodeRunner.cpp
     Runners/CacheImageRunners.h
     Runners/CacheImageRunners.cpp
+    Runners/RecursiveFolderScanner.h
+    Runners/RecursiveFolderScanner.cpp
+    CacheViewer.h
+    CacheViewer.cpp
 )
 
 #if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)
@@ -157,6 +161,7 @@ qt6_add_qml_module(ZoinGallery
         qml/RoundCorners.qml
         qml/FlickableZoomable.qml
         qml/SphericViewer.qml
+        qml/CacheViewer.qml
         ZGStyle/Style.qml
         ZGStyle/ScrollBar.qml
         ZGStyle/Slider.qml
@@ -168,6 +173,7 @@ qt6_add_qml_module(ZoinGallery
         ZGStyle/MenuSeparator.qml
         ZGStyle/TabBar.qml
         ZGStyle/TabButton.qml
+        ZGStyle/Label.qml
     RESOURCES
         ZGStyle/qmldir
         resources/ThumbnailsShadow.png

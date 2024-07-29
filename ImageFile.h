@@ -35,12 +35,15 @@ inline QSize rotateToOrientation(QSize size, ExifOrientation orientation) {
 struct ImageInfo {
     QString path;
     QDateTime lastModified;
+
     QSize imageSize;
+    ExifOrientation orientation = ExifOrientation::Horizontal;
     QVariantMap exif;
 
     bool isLast = false;
     bool isFromEmbeddedView = false;
     bool isCached = false;
+    bool isFromScanner = false;
 };
 
 struct ImageDecodeRequest {
@@ -56,14 +59,10 @@ struct ImageData {
 
     QByteArray data;
     QString mimeType;
-    ExifOrientation orientation = ExifOrientation::Horizontal;
 
     std::shared_ptr<char> previewData;
     int64_t previewDataSize = 0;
     QString previewMimeType;
-    ExifOrientation previewOrientation = ExifOrientation::Horizontal;
-
-    QSize imageSize;
 
     ImageData(const ImageDecodeRequest &request_) : request(request_) {}
 };
@@ -72,33 +71,27 @@ struct ImageData {
 struct ImageFile {
     QString folderPath;
     QString fileName;
-    QDateTime lastModified;
     QImage image;
     QString imageId;
     QSize fullSize;
     bool isFolder = false;
     bool isImage = false;
     bool isFolderView = false;
-    bool isCacheAvailable = false;
     bool isCachedThumbnail = false;
     QString iconPath;
     int index = -1;
     QString nestingInfo;
-    QVariantMap exif;
+    ImageInfo info;
 
     QList<ImageFile *> subfiles;
     ImageFile *parent = nullptr;
 
     QString fullPath() const {
-        return folderPath.isEmpty() ? fileName : QDir::toNativeSeparators(QDir(folderPath).filePath(fileName));
+        return folderPath.isEmpty() ? fileName : QDir(folderPath).filePath(fileName);
     }
 
     bool folderView() const {
         return subfiles.size() != 0 || isFolderView;
-    }
-
-    ImageInfo toImageInfo() const {
-        return {fullPath(), lastModified, fullSize, exif, false, false, isCachedThumbnail};
     }
 
     QVariantList exifList() const;
@@ -115,12 +108,14 @@ struct FolderInfo {
     QList<FileInfo> subfiles;
 };
 
-const QSize CACHE_IMAGE_RESOLUTION(1920, 1080);
+const QSize CACHE_IMAGE_RESOLUTION(1024, 767);
 
 inline QSize expandToCacheImageResolution(QSize targetSize) {
     if (targetSize.width() < CACHE_IMAGE_RESOLUTION.width() ||
         targetSize.height() < CACHE_IMAGE_RESOLUTION.height()) {
-        targetSize = targetSize.scaled(CACHE_IMAGE_RESOLUTION, Qt::KeepAspectRatio);
+        QSizeF sizeScaled = QSizeF(targetSize).scaled(CACHE_IMAGE_RESOLUTION, Qt::KeepAspectRatio);
+        targetSize.setWidth(sizeScaled.width());
+        targetSize.setHeight(sizeScaled.height() - 1); // TODO: WHAT
     }
     return targetSize;
 }

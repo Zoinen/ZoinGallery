@@ -5,6 +5,7 @@
 #include "Runners/ImageInfoReadRunner.h"
 #include "Runners/ImageReadRunner.h"
 #include "Runners/CacheImageRunners.h"
+#include "Runners/RecursiveFolderScanner.h"
 
 #include "PersistentFolderCache.h"
 #include "PersistentImageCache.h"
@@ -12,6 +13,9 @@
 #include <QThread>
 
 #include <chrono>
+
+#define RUNNING_TASKS_DEBUG
+
 using namespace std::chrono_literals;
 
 bool isRunnerDecode(Runner *runner) {
@@ -19,7 +23,7 @@ bool isRunnerDecode(Runner *runner) {
 }
 
 bool isRunnerDecodeViewer(Runner *runner) {
-    return runner->isViewerRequest() && (runner->type() == RunnerType::ImageRead && runner->type() == RunnerType::ImageDecode);
+    return runner->isViewerRequest() && (runner->type() == RunnerType::ImageRead || runner->type() == RunnerType::ImageDecode);
 }
 
 bool isRunnerInReadThread(Runner *runner) {
@@ -34,7 +38,7 @@ bool isRunnerImageInfoEmbedded(Runner *runner) {
 DecodeManager::DecodeManager(QObject *parent)
     : QObject(parent) {
 
-    _runningTasksUpdateTimer.start(10);
+    _runningTasksUpdateTimer.start(100);
     connect(&_runningTasksUpdateTimer, &QTimer::timeout,
             this, &DecodeManager::updateRunningTasksCount);
 
@@ -49,11 +53,11 @@ DecodeManager::DecodeManager(QObject *parent)
         _workers.append(info);
 
         info.thread->start();
-        //        info.thread->setPriority(QThread::LowPriority);
+        // info.thread->setPriority(QThread::IdlePriority);
     }
 }
 
-void DecodeManager::readImagesInfo(QList<QString> paths, bool isFromEmbeddedView) {
+void DecodeManager::readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView) {
     CachedImageInfoRunner *runner = new CachedImageInfoRunner(paths, isFromEmbeddedView);
     runner->connections.append(
         connect(runner, &CachedImageInfoRunner::cachedImageInfoRetrieved,
@@ -63,7 +67,7 @@ void DecodeManager::readImagesInfo(QList<QString> paths, bool isFromEmbeddedView
     processQueue();
 }
 
-void DecodeManager::onInfoNotFoundInCache(QList<QString> imagePaths, bool isFromEmbeddedView) {
+void DecodeManager::onInfoNotFoundInCache(const QList<QString> &imagePaths, bool isFromEmbeddedView) {
     int insertIndex = _taskQueue.size();
     // Info requests from visible subviews should be first
     if (isFromEmbeddedView) {
@@ -86,7 +90,7 @@ void DecodeManager::onInfoNotFoundInCache(QList<QString> imagePaths, bool isFrom
     processQueue();
 }
 
-void DecodeManager::decodeImages(QList<ImageDecodeRequest> requests) {
+void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
     // Only iterating images that are known to have cache
     /**/{
         int insertIndex = 0;
@@ -167,6 +171,29 @@ void DecodeManager::readFolderList(const QStringList &paths, int totalImages) {
         _taskQueue.enqueue(runner);
     }
     processQueue();
+}
+
+void DecodeManager::scan(const QString &root) {
+    RecursiveFolderScanner *runner = new RecursiveFolderScanner(root);
+    runner->connections.append(
+        connect(runner, &RecursiveFolderScanner::scanImages,
+                this, &DecodeManager::scanImages)
+        );
+    _taskQueue.enqueue(runner);
+    processQueue();
+}
+
+void DecodeManager::scanImages(const QList<QString> &imagePaths) {
+    for (int i = 0; i < imagePaths.size(); i++) {
+        ImageInfoReadRunner *runner = new ImageInfoReadRunner(imagePaths[i], false, false, true);
+        runner->connections.append(
+            connect(runner, &ImageInfoReadRunner::imageInfoReady,
+                    this, &DecodeManager::onScannerInfoReady)
+            );
+        _taskQueue.append(runner);
+    }
+    processQueue();
+
 }
 
 void DecodeManager::cancelAllDecodeRunners() {
@@ -276,7 +303,11 @@ QString DecodeManager::runnerToString(Runner *task) {
     case RunnerType::CachedImageRetrieve:
         return QString("CachedImageRetrieve %2%3").arg(static_cast<CachedImageRetrieveRunner *>(task)->_request.info.path).arg(static_cast<CachedImageRetrieveRunner *>(task)->_request.viewerRequest ? " V" : "");
         break;
+    case RunnerType::RecursiveFolderScanner:
+        return QString("RecursiveFolderScanner");
+        break;
     }
+    return QString();
 }
 
 void DecodeManager::updateRunningTasksCount() {
@@ -288,13 +319,15 @@ void DecodeManager::updateRunningTasksCount() {
     }
 
     QStringList tasksInfo;
+#if defined(RUNNING_TASKS_DEBUG)
     for (int i = 0; i < _workers.size(); i++) {
         tasksInfo.append(QString("%1 %2").arg(i).arg(runnerToString(_workers[i].runner)));
     }
     tasksInfo.append("-------------------");
-    for (int i = 0; i < _taskQueue.size(); i++) {
+    for (int i = 0; i < qMin(100, _taskQueue.size()); i++) {
         tasksInfo.append(QString("%1 %2").arg(i).arg(runnerToString(_taskQueue[i])));
     }
+#endif
 
     emit runningTasksChanged(QString("%1/%2").arg(tasks).arg(_taskQueue.size()), tasksInfo);
 }
@@ -384,7 +417,9 @@ void DecodeManager::onImageReady(const ImageDecodeRequest &request, const QImage
         return;
     }
 
-    emit imageReady(request, image, isFromCache);
+    if (!request.info.isFromScanner) {
+        emit imageReady(request, image, isFromCache);
+    }
 }
 
 void DecodeManager::onFolderListReady(const QString &path, const QList<FileInfo> &subfiles) {
@@ -395,14 +430,34 @@ void DecodeManager::onFolderListReady(const QString &path, const QList<FileInfo>
     emit folderListReady(path, subfiles);
 }
 
-
-void DecodeManager::onStoreInCache(const ImageDecodeRequest &request, const QImage &image) {
+void DecodeManager::onScannerInfoReady(const ImageInfo &result) {
     if (qobject_cast<Runner *>(sender())->isCanceled()) {
         return;
     }
 
-    qDebug() << "ZZ STORE" << request.info.path;
-    CachedImageStoreRunner *runner = new CachedImageStoreRunner(request.info, image);
+    ImageDecodeRequest request{
+        .info = result,
+        .targetSize = CACHE_IMAGE_RESOLUTION,
+        .viewerRequest = false,
+        .checkCache = false
+    };
+
+    ImageReadRunner *runner = new ImageReadRunner(request);
+    runner->connections.append(
+        connect(runner, &ImageReadRunner::imageReadReady,
+                this, &DecodeManager::onImageReadReady)
+        );
+    _taskQueue.prepend(runner);
+    processQueue();
+}
+
+
+void DecodeManager::onStoreInCache(const ImageDecodeRequest &request, const QByteArray &imageData) {
+    if (qobject_cast<Runner *>(sender())->isCanceled()) {
+        return;
+    }
+
+    CachedImageStoreRunner *runner = new CachedImageStoreRunner(request.info, imageData);
     _taskQueue.enqueue(runner);
     processQueue();
 }
@@ -430,6 +485,7 @@ QDebug operator<<(QDebug dbg, const RunnerType &myEnum) {
     case RunnerType::CachedImageStore: dbg.nospace() << "CachedImageStore"; break;
     case RunnerType::CachedImageInfo: dbg.nospace() << "CachedImageInfo"; break;
     case RunnerType::CachedImageRetrieve: dbg.nospace() << "CachedImageRetrieve"; break;
+    case RunnerType::RecursiveFolderScanner: dbg.nospace() << "RecursiveFolderScanner"; break;
     default: dbg.nospace() << "Unknown"; break;
     }
     return dbg.space();

@@ -5,12 +5,22 @@ import QtQuick.Controls
 Item {
     id: pathRoot
     property string text
-    property string pathSeparator: Qt.platform.os === "windows" ? "\\" : "/"
+
+    function replaceAll(str, find, replace) {
+        return str.replace(new RegExp(find, 'g'), replace);
+    }
+
 
     property bool editMode: false
     onEditModeChanged: {
         if (editMode) {
-            pathField.text = pathRoot.text
+            if (Qt.platform.os === "windows") {
+                pathField.text = replaceAll(pathRoot.text, "/", "\\")
+            }
+            else {
+                pathField.text = pathRoot.text
+            }
+
             pathField.selectAll()
             pathField.forceActiveFocus()
         }
@@ -32,7 +42,7 @@ Item {
 
     function folderClicked(path) {
         viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
-        viewerController.cd(rootFolder.text + pathSeparator + path)
+        viewerController.cd(rootFolder.text + "/" + path)
         masonryLayout.view.loadSavedState()
     }
 
@@ -130,7 +140,7 @@ Item {
         FolderDelegate {
             id: rootFolder
             visible: !editMode
-            text: (pathRoot.text.endsWith(pathSeparator) ? pathRoot.text.slice(0, -1) : pathRoot.text).split(pathSeparator)[0]
+            text: (pathRoot.text.endsWith("/") ? pathRoot.text.slice(0, -1) : pathRoot.text).split("/")[0]
             onClicked: (index) => pathRoot.folderClicked("")
         }
     }
@@ -153,14 +163,14 @@ Item {
 
             Repeater {
                 id: repeater
-                model: (text.endsWith(pathSeparator) ? text.slice(0, -1) : text).split(pathSeparator).slice(1)
+                model: (text.endsWith("/") ? text.slice(0, -1) : text).split("/").slice(1)
 
                 FolderDelegate {
                     text: modelData
                     needArrow: index !== repeater.model.length - 1
                     splitIndex: index
 
-                    onClicked: (index) => pathRoot.folderClicked(repeater.model.slice(0, index + 1).join(pathSeparator))
+                    onClicked: (index) => pathRoot.folderClicked(repeater.model.slice(0, index + 1).join("/"))
                 }
             }
         }
@@ -181,8 +191,6 @@ Item {
         hasBackground: false
         color: Style.text
 
-        text: pathRoot.text
-
         onFocusChanged: {
             if (!focus && pathField.focusReason !== Qt.PopupFocusReason) {
                 editMode = false
@@ -193,7 +201,12 @@ Item {
 
         function accept() {
             viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
-            viewerController.cd(pathField.text)
+            if (Qt.platform.os === "windows") {
+                viewerController.cd(replaceAll(pathField.text, "\\\\", "/"))
+            }
+            else {
+                viewerController.cd(pathField.text)
+            }
             masonryLayout.view.loadSavedState()
             editMode = false
         }

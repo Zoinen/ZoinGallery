@@ -82,7 +82,7 @@ QVariantList ImageFile::exifList() const {
     name["text"] = fileName;
     out.append(name);
 
-    if (exif.contains("DateTime")) {
+    if (info.exif.contains("DateTime")) {
         QVariantMap title;
         title["title"] = true;
         title["text"] = "Date and Time";
@@ -90,15 +90,15 @@ QVariantList ImageFile::exifList() const {
         out.append(title);
 
         QVariantMap date;
-        date["text"] = exif["DateTime"].toDateTime().toString("yyyy, MMMM dd");
+        date["text"] = info.exif["DateTime"].toDateTime().toString("yyyy, MMMM dd");
         out.append(date);
 
         QVariantMap time;
-        time["text"] = exif["DateTime"].toDateTime().toString("hh:mm:ss");
+        time["text"] = info.exif["DateTime"].toDateTime().toString("hh:mm:ss");
         out.append(time);
     }
 
-    if (exif.contains("Width") && exif.contains("Height") && exif.contains("Size")) {
+    if (info.exif.contains("Size")) {
         QVariantMap title;
         title["title"] = true;
         title["text"] = "Image";
@@ -110,23 +110,23 @@ QVariantList ImageFile::exifList() const {
         if (mp > 1) {
             mp = qRound(mp);
         }
-        resolution["text"] = QString("%1x%2 (%3 MP)").arg(exif["Width"].toString()).arg(exif["Height"].toString()).arg(mp);
+        resolution["text"] = QString("%1x%2 (%3 MP) %4").arg(info.imageSize.width()).arg(info.imageSize.height()).arg(mp).arg(info.orientation);
         out.append(resolution);
 
         QVariantMap size;
-        size["text"] = fileSizeToHumanReadable(exif["Size"].toLongLong());
+        size["text"] = fileSizeToHumanReadable(info.exif["Size"].toLongLong());
         out.append(size);
     }
 
-    if (exif.contains("ShutterSpeed") || exif.contains("FNumber") || exif.contains("ISO")) {
+    if (info.exif.contains("ShutterSpeed") || info.exif.contains("FNumber") || info.exif.contains("ISO")) {
         QVariantMap title;
         title["title"] = true;
         title["text"] = "Shooting";
         title["icon"] = "qrc:/resources/ExifShooting.svg";
         out.append(title);
     }
-    if (exif.contains("ShutterSpeed")) {
-        QString shutterString = exif["ShutterSpeed"].toString();
+    if (info.exif.contains("ShutterSpeed")) {
+        QString shutterString = info.exif["ShutterSpeed"].toString();
         QStringList shutterValues = shutterString.split("/");
         if (shutterValues.size() == 2) {
             int dividend = shutterValues[0].toInt();
@@ -145,48 +145,48 @@ QVariantList ImageFile::exifList() const {
         shutterSpeed["text"] = shutterString;
         out.append(shutterSpeed);
     }
-    if (exif.contains("FNumber")) {
+    if (info.exif.contains("FNumber")) {
         QVariantMap fNumber;
-        fNumber["text"] = QString("F") + calculateDivision(exif["FNumber"].toString());
+        fNumber["text"] = QString("F") + calculateDivision(info.exif["FNumber"].toString());
         out.append(fNumber);
     }
-    if (exif.contains("ISO")) {
+    if (info.exif.contains("ISO")) {
         QVariantMap iso;
-        iso["text"] = exif["ISO"].toString() + " ISO";
+        iso["text"] = info.exif["ISO"].toString() + " ISO";
         out.append(iso);
     }
 
-    if (exif.contains("Camera") || exif.contains("FocalLength") || exif.contains("Lens")) {
+    if (info.exif.contains("Camera") || info.exif.contains("FocalLength") || info.exif.contains("Lens")) {
         QVariantMap title;
         title["title"] = true;
         title["text"] = "Camera";
         title["icon"] = "qrc:/resources/ExifCamera.svg";
         out.append(title);
     }
-    if (exif.contains("Camera")) {
+    if (info.exif.contains("Camera")) {
         QVariantMap camera;
-        camera["text"] = exif["Camera"].toString();
+        camera["text"] = info.exif["Camera"].toString();
         out.append(camera);
     }
-    if (exif.contains("FocalLength")) {
+    if (info.exif.contains("FocalLength")) {
         QVariantMap focalLength;
-        focalLength["text"] = exif["FocalLength"].toString() + " mm";
+        focalLength["text"] = info.exif["FocalLength"].toString() + " mm";
         out.append(focalLength);
     }
-    if (exif.contains("Lens")) {
+    if (info.exif.contains("Lens")) {
         QVariantMap lens;
-        lens["text"] = exif["Lens"].toString();
+        lens["text"] = info.exif["Lens"].toString();
         out.append(lens);
     }
 
-    if (exif.contains("Location")) {
+    if (info.exif.contains("Location")) {
         QVariantMap title;
         title["title"] = true;
         title["text"] = "Location";
         title["icon"] = "qrc:/resources/ExifLocation.svg";
         out.append(title);
 
-        QStringList loc = exif["Location"].toString().split(",");
+        QStringList loc = info.exif["Location"].toString().split(",");
         QVariantMap location;
         location["text"] = QString("%1 %2").arg(convertEXIFToDMS(loc[0]), convertEXIFToDMS(loc[1]));
         location["url"] = "https://www.google.com/maps/place/" + location["text"].toString().replace(" ", "+");

@@ -23,6 +23,9 @@ MainWindow {
         viewerController.prepareToClose()
     }
 
+    // CacheViewer {
+    // }
+
     WindowAgent {
         id: windowAgent
     }
@@ -389,8 +392,11 @@ MainWindow {
 
                         colorfulIcon: true
                         icon.source: "qrc:/resources/Logo.svg"
-                        onClicked: windowAgent.showSystemMenu(mapToGlobal(0, height))
-                        Component.onCompleted: windowAgent.setSystemButton(WindowAgent.WindowIcon, appIcon)
+                        onClicked: {
+                            // windowAgent.showSystemMenu(mapToGlobal(0, height))
+                            fileListModel.startScanner()
+                        }
+                        // Component.onCompleted: windowAgent.setSystemButton(WindowAgent.WindowIcon, appIcon)
                     }
 
                     Text {
@@ -548,6 +554,7 @@ MainWindow {
                             target: fileListModel
                             function onRunningTasksChanged(tasks, tasksInfo) {
                                 runningTasks.text = tasks
+                                infoWindow.title = tasks
                                 infoList.model = tasksInfo
                             }
                         }

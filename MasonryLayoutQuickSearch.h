@@ -25,7 +25,7 @@ public:
     explicit MasonryLayoutQuickSearch(MasonryLayout *parent = nullptr);
 
     Q_INVOKABLE int nextImage(bool forward, bool forceMoveToNext);
-    bool hasResults(QString search);
+    bool hasResults(const QString &search);
 
     const QString &mask() const;
     void setMask(const QString &newMask);
@@ -47,7 +47,7 @@ signals:
     void matchesInfoChanged();
 
 private:
-    bool indexMatches(int index, QString search);
+    bool indexMatches(int index, const QString &search);
     MasonryLayout *masonryLayout();
 
     QString _mask;

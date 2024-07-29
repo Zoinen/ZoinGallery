@@ -81,10 +81,10 @@ public:
 
     void prepareToClose();
 
-    int cd(QString path, QString itemToSelect = QString());
+    int cd(const QString &path, const QString &itemToSelect = QString());
     QString rootPath() const;
 
-    const ImageFile *itemForImageId(QString imageId);
+    const ImageFile *itemForImageId(const QString &imageId);
 
     // ThumbnailsRequestInterface
     void decodeImages(const QList<ImageDecodeRequest> &requests) override;
@@ -93,12 +93,12 @@ public:
     void cancelAllDecodeRunners() override;
     Q_INVOKABLE void cancelAllDecodeViewerRunners();
 
-    static bool isImage(QString fileName);
+    static bool isImage(const QString &fileName);
 
     Q_INVOKABLE void requestViewer(int index, int width = -1, int height = -1); // -1 means full size
-    QImage viewerForImageId(QString imageId);
+    QImage viewerForImageId(const QString &imageId);
 
-    int fileIndex(QString fileName) const;
+    int fileIndex(const QString &fileName) const;
 
     static ImageFile *itemFromIndex(const QModelIndex &index);
     QModelIndex indexFromItem(const ImageFile *item) const;
@@ -110,12 +110,14 @@ public:
     int uiTargetHeight() const;
     void setUiTargetHeight(int newUiTargetHeight);
 
+    Q_INVOKABLE void startScanner();
+
 signals:
-    void viewerImageIdChanged(QString imageId);
+    void viewerImageIdChanged(const QString &imageId);
 
     void uiTargetHeightChanged();
 
-    void runningTasksChanged(QString tasks, QStringList tasksInfo);
+    void runningTasksChanged(const QString &tasks, const QStringList &tasksInfo);
 
 private:
     QString generateNewId();

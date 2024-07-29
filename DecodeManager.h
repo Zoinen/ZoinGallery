@@ -15,7 +15,8 @@ enum class RunnerType {
     ImageDecode,
     CachedImageStore,
     CachedImageInfo,
-    CachedImageRetrieve
+    CachedImageRetrieve,
+    RecursiveFolderScanner
 };
 QDebug operator<<(QDebug dbg, const RunnerType &myEnum);
 
@@ -50,9 +51,13 @@ class DecodeManager : public QObject {
 
 public:
     explicit DecodeManager(QObject *parent = nullptr);
-    void readImagesInfo(QList<QString> paths, bool isFromEmbeddedView);
-    void decodeImages(QList<ImageDecodeRequest> requests);
+    void readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView);
+    void decodeImages(const QList<ImageDecodeRequest> &requests);
     void readFolderList(const QStringList &paths, int totalImages = -1);
+
+    void scan(const QString &root);
+    void scanImages(const QList<QString> &imagePaths);
+
     void cancelAllDecodeRunners();
     void cancelAllRunners();
     void cancelAllDecodeViewerRunners();
@@ -65,7 +70,7 @@ signals:
     void imageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
     void folderListReady(const QString &path, const QList<FileInfo> &subfiles);
 
-    void runningTasksChanged(QString runningTasks, QStringList tasksInfo);
+    void runningTasksChanged(const QString &runningTasks, const QStringList &tasksInfo);
     void viewerRunnerCanceled(const QString &path);
 
 protected:
@@ -77,11 +82,12 @@ private:
     void onImageReadReady(const ImageData &result);
     void onImageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
     void onFolderListReady(const QString &path, const QList<FileInfo> &subfiles);
+    void onScannerInfoReady(const ImageInfo &result);
 
-    void onStoreInCache(const ImageDecodeRequest &request, const QImage &image);
+    void onStoreInCache(const ImageDecodeRequest &request, const QByteArray &imageData);
     void onCachedImageInfoRetrieved(const QList<ImageInfo> &results, const QStringList &notFound,
                                     bool isFromEmbeddedView, const QString &lastPath);
-    void onInfoNotFoundInCache(QList<QString> paths, bool isFromEmbeddedView);
+    void onInfoNotFoundInCache(const QList<QString> &paths, bool isFromEmbeddedView);
     bool isRunnerTypeMatchesThreadType(Runner *runner, int threadType);
     void updateRunningTasksCount();
     QString runnerToString(Runner *task);

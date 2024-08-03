@@ -194,3 +194,12 @@ QVariantList ImageFile::exifList() const {
     }
     return out;
 }
+
+bool isExtensionMatch(const QString &path, const QStringList &pattern) {
+    for (const QString &ext : pattern) {
+        if (path.endsWith(QString(".") + ext, Qt::CaseInsensitive)) {
+            return true;
+        }
+    }
+    return false;
+}

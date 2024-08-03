@@ -106,6 +106,18 @@ set(PROJECT_SOURCES
     Runners/RecursiveFolderScanner.cpp
     CacheViewer.h
     CacheViewer.cpp
+    Decoders/MetadataReader.h
+    Decoders/Exiv2MetadataReader.cpp
+    Decoders/Exiv2MetadataReader.h
+    Decoders/QtMetadataReader.cpp
+    Decoders/QtMetadataReader.h
+    Decoders/ImageDecoder.h
+    Decoders/TiffDecoder.cpp
+    Decoders/TiffDecoder.h
+    Decoders/JpegDecoder.cpp
+    Decoders/JpegDecoder.h
+    Decoders/QtDecoder.cpp
+    Decoders/QtDecoder.h
 )
 
 #if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)

@@ -120,5 +120,7 @@ inline QSize expandToCacheImageResolution(QSize targetSize) {
     return targetSize;
 }
 
+bool isExtensionMatch(const QString &path, const QStringList &pattern);
+
 #endif // IMAGEFILE_H
 

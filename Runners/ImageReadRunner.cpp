@@ -6,9 +6,8 @@ ImageReadRunner::ImageReadRunner(const ImageDecodeRequest &request)
 }
 
 void ImageReadRunner::run() {
-    ThumbnailLoader loader;
     ImageData imageData(_request);
-    if (loader.readImage(imageData)) {
+    if (ThumbnailLoader::readImage(imageData)) {
         emit imageReadReady(imageData);
     }
     emit finished(this);

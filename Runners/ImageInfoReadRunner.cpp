@@ -13,10 +13,7 @@ void ImageInfoReadRunner::run() {
         .isFromScanner = _isFromScanner
     };
 
-    ThumbnailLoader loader;
-    if (!loader.readExif(result)) {
-        loader.readGenericInfo(result);
-    }
+    ThumbnailLoader::readMetadata(result);
 
     emit imageInfoReady(result);
     emit finished(this);

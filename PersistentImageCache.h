@@ -30,6 +30,7 @@ public:
     static void retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList, QStringList &outNotFound);
     static QImage retrieveImage(ImageDecodeRequest &request);
     static void storeImage(const ImageInfo &imageInfo, const QByteArray &imageData);
+    static QByteArray createImageForCache(const QImage &image);
 
     static void loadDb();
     static void dumpDb();

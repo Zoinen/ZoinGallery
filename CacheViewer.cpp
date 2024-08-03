@@ -64,7 +64,7 @@ void ImageInfoModel::applyFilter() {
         m_filteredPaths = m_imagePaths;
     } else {
         m_filteredPaths.clear();
-        for (const QString &path : qAsConst(m_imagePaths)) {
+        for (const QString &path : std::as_const(m_imagePaths)) {
             if (path.contains(m_filter, Qt::CaseInsensitive)) {
                 m_filteredPaths.append(path);
             }

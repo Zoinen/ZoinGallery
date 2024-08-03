@@ -591,7 +591,7 @@ void FileListModel::enterRecursiveView() {
 }
 
 bool FileListModel::isImage(const QString &fileName) {
-    return ThumbnailLoader::isJpeg(fileName) || ThumbnailLoader::isRawOrTiff(fileName) || ThumbnailLoader::isImageOther(fileName);
+    return ThumbnailLoader::isFormatSupported(fileName);
 }
 
 void FileListModel::requestViewer(int index, int width, int height) {

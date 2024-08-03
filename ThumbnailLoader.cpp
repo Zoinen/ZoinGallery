@@ -92,6 +92,12 @@ void ThumbnailLoader::init() {
     supportedFormats();
 }
 
+void ThumbnailLoader::readMetadata(ImageInfo &result) {
+    if (!readExif(result)) {
+        readGenericInfo(result);
+    }
+}
+
 struct membuf: std::streambuf {
     membuf(uint8_t const* base, size_t size) {
         char* p((char *)base);
@@ -184,6 +190,33 @@ bool ThumbnailLoader::readImage(ImageData &result) {
         f.close();
     }
     return true;
+}
+
+QImage ThumbnailLoader::decode(const ImageData &imageData) {
+    QImage image;
+    if (!imageData.data.isNull()) {
+        QSize targetSize = imageData.request.targetSize;
+        if (!imageData.request.checkCache) {
+            targetSize = expandToCacheImageResolution(targetSize);
+        }
+        image = decodeImage(imageData.data, imageData.mimeType, rotateToOrientation(targetSize, imageData.request.info.orientation));
+
+        // if (imageData.request.viewerRequest) {
+        //     emit finished(this);
+        //     return;
+        // }
+
+
+        if (image.isNull() && imageData.previewData) {
+            QByteArray previewData = QByteArray::fromRawData(imageData.previewData.get(), imageData.previewDataSize);
+            image = decodeImage(previewData, imageData.previewMimeType, rotateToOrientation(targetSize, imageData.request.info.orientation));
+            image = rotateAndFlip(image, imageData.request.info.orientation);
+        }
+        else {
+            image = rotateAndFlip(image, imageData.request.info.orientation);
+        }
+    }
+    return image;
 }
 
 bool ThumbnailLoader::readPreviewAndMime(ImageData &result) {
@@ -349,6 +382,10 @@ QStringList ThumbnailLoader::supportedFormats() {
         }
     }
     return formats;
+}
+
+bool ThumbnailLoader::isFormatSupported(const QString &fileName) {
+    return isJpeg(fileName) || isRawOrTiff(fileName) || isImageOther(fileName);
 }
 
 bool ThumbnailLoader::isJpeg(const QString &path) {

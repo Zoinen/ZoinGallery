@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QBuffer>
 
 QHash<QString, PersistentImageCache::ThumbnailInfo> PersistentImageCache::_db;
 QReadWriteLock PersistentImageCache::_dbAccess;
@@ -109,6 +110,21 @@ void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArr
         _db.insert(imageInfo.path, info);
         _dbAccess.unlock();
     }
+}
+
+QByteArray PersistentImageCache::createImageForCache(const QImage &image) {
+    QByteArray imageData;
+    QBuffer buffer(&imageData);
+    buffer.open(QIODevice::WriteOnly);
+
+    QImage scaled = image;
+    if (CACHE_IMAGE_RESOLUTION.width() < image.width() ||
+        CACHE_IMAGE_RESOLUTION.height() < image.height()) { // Never upscale
+        scaled = image.scaled(CACHE_IMAGE_RESOLUTION, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    // scaled.invertPixels();
+    scaled.save(&buffer, "webp", 50);
+    return imageData;
 }
 
 QDataStream& operator<<(QDataStream& out, const PersistentImageCache::ThumbnailLocation& obj) {

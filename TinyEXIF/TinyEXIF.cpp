@@ -1035,6 +1035,26 @@ int EXIFInfo::parseFromXMPSegment(const uint8_t* buf, unsigned len) {
 		return PARSE_CORRUPT_DATA;
 	return parseFromXMPSegmentXML((const char*)(buf + offs), len - offs);
 }
+
+bool parse_bool(const char *str) {
+    // Convert input string to lowercase for case-insensitive comparison
+    char lower_str[6]; // max length for "false" + null terminator
+    for (int i = 0; i < 5 && str[i]; i++) {
+        lower_str[i] = tolower((unsigned char)str[i]);
+    }
+    lower_str[5] = '\0'; // ensure null-termination
+
+    // Check for "true", "false", "1", and "0"
+    if (strcmp(lower_str, "true") == 0 || strcmp(lower_str, "1") == 0) {
+        return true;
+    } else if (strcmp(lower_str, "false") == 0 || strcmp(lower_str, "0") == 0) {
+        return false;
+    } else {
+        // Handle unexpected input (could also set an error flag or print a message)
+        return false; // Default behavior for unrecognized input
+    }
+}
+
 int EXIFInfo::parseFromXMPSegmentXML(const char* szXML, unsigned len) {
 	// Skip xpacket end section so that tinyxml2 lib parses the section correctly.
 	const char* szEnd(Tools::strrnstr(szXML, "<?xpacket end=", len));
@@ -1072,18 +1092,24 @@ int EXIFInfo::parseFromXMPSegmentXML(const char* szXML, unsigned len) {
 	// Try parsing the XMP content for projection type.
 	{
 	const tinyxml2::XMLElement* const element(document->FirstChildElement("GPano:ProjectionType"));
-	if (element != NULL) {
-		const char* const szProjectionType(element->GetText());
-		if (szProjectionType != NULL) {
-			if (0 == strcasecmp(szProjectionType, "perspective"))
-				ProjectionType = 1;
-			else
-			if (0 == strcasecmp(szProjectionType, "equirectangular") ||
-				0 == strcasecmp(szProjectionType, "spherical"))
-				ProjectionType = 2;
-		}
-	}
-	}
+    const char* szProjectionType = nullptr;
+    if (!element) {
+        szProjectionType = document->Attribute("GPano:ProjectionType");
+    }
+    else {
+        szProjectionType = element->GetText();
+    }
+    if (szProjectionType != NULL) {
+        if (0 == strcasecmp(szProjectionType, "perspective")) {
+            ProjectionType = 1;
+        }
+        else
+            if (0 == strcasecmp(szProjectionType, "equirectangular") ||
+                   0 == strcasecmp(szProjectionType, "spherical")) {
+                ProjectionType = 2;
+        }
+    }
+    }
 
 	// Try parsing the XMP content for supported maker's info.
 	struct ParseXMP	{
@@ -1115,7 +1141,18 @@ int EXIFInfo::parseFromXMPSegmentXML(const char* szXML, unsigned len) {
 			value = strtoul(szAttribute, NULL, 0); return true;
 			return false;
 		}
-	};
+        // same as previous function but with unsigned int results
+        static bool Value(const tinyxml2::XMLElement* document, const char* name, bool& value) {
+            const char* szAttribute = document->Attribute(name);
+            if (szAttribute == NULL) {
+                const tinyxml2::XMLElement* const element(document->FirstChildElement(name));
+                if (element == NULL || (szAttribute = element->GetText()) == NULL)
+                    return false;
+            }
+            value = parse_bool(szAttribute); return true;
+            return false;
+        }
+    };
 	const char* szAbout(document->Attribute("rdf:about"));
 	if (0 == strcasecmp(Make.c_str(), "DJI") || (szAbout != NULL && 0 == strcasecmp(szAbout, "DJI Meta Data"))) {
 		ParseXMP::Value(document, "drone-dji:AbsoluteAltitude", GeoLocation.Altitude);
@@ -1151,6 +1188,16 @@ int EXIFInfo::parseFromXMPSegmentXML(const char* szXML, unsigned len) {
 	}
 	ParseXMP::Value(document, "GPano:PosePitchDegrees", GPano.PosePitchDegrees);
 	ParseXMP::Value(document, "GPano:PoseRollDegrees", GPano.PoseRollDegrees);
+    {
+        const char* usePanoramaViewer = document->Attribute("GPano:UsePanoramaViewer");
+        if (usePanoramaViewer) {
+            // Convert the string to a boolean value
+            GPano.UsePanoramaViewer = (strcmp(usePanoramaViewer, "True") == 0);
+        }
+        else {
+            ParseXMP::Value(document, "GPano:UsePanoramaViewer", GPano.UsePanoramaViewer);
+        }
+    }
 
 	// parse GCamera:MicroVideo
 	if (document->Attribute("GCamera:MicroVideo")) {
@@ -1307,6 +1354,7 @@ void EXIFInfo::clear() {
 	// GPano
 	GPano.PosePitchDegrees = DBL_MAX;
 	GPano.PoseRollDegrees = DBL_MAX;
+    GPano.UsePanoramaViewer = false;
 
 	// Video metadata
 	MicroVideo.HasMicroVideo = 0;

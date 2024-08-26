@@ -166,19 +166,6 @@ MainWindow {
             z: 1
             visible: isQWK
 
-            property bool backgroundVisible: false
-
-            Rectangle {
-                anchors {
-                    fill: titleBarButtonsLayout
-                    topMargin: -radius
-                    rightMargin: -radius
-                }
-                color: Style.opaqueMasonryViewBackgroundWithOpacity
-                visible: titleBar.backgroundVisible && viewerMode.panelsVisible
-                radius: 4
-            }
-
             RowLayout {
                 id: titleBarButtonsLayout
                 anchors {
@@ -295,6 +282,25 @@ MainWindow {
 
         }
 
+        Rectangle {
+            id: thumbnailsViewBackground
+            anchors {
+                fill: thumbnailsView
+                // margins: 5
+                topMargin: titleBar.height
+            }
+            radius: 7
+            color: Qt.rgba(0, 0, 0, 0.35)
+        }
+
+        Rectangle {
+            id: viewerBackground
+            anchors.fill: thumbnailsView
+            color: thumbnailsViewBackground.color
+            opacity: 0
+        }
+
+
         ColumnLayout {
             id: thumbnailsView
             anchors.fill: parent
@@ -318,6 +324,7 @@ MainWindow {
             }
 
             Item {
+                id: toolbar
                 Layout.fillWidth: true
                 Layout.preferredHeight: titleBar.height
                 z: 1
@@ -356,6 +363,7 @@ MainWindow {
                     anchors.fill: parent
                     anchors.rightMargin: isQWK ? titleBarButtonsLayout.width : 0
                     spacing: 0
+                    clip: true
 
                     component Separator : Rectangle {
                         Layout.leftMargin: 5
@@ -535,6 +543,7 @@ MainWindow {
                     PathControl {
                         Layout.leftMargin: 15
                         Layout.rightMargin: 15
+                        clip: true
 
                         onEditModeChanged: {
                             if (!editMode) {
@@ -547,46 +556,46 @@ MainWindow {
                         text: viewerController.currentPath
                     }
 
-                    Text {
-                        id: runningTasks
+                    // Text {
+                    //     id: runningTasks
 
-                        Connections {
-                            target: fileListModel
-                            function onRunningTasksChanged(tasks, tasksInfo) {
-                                runningTasks.text = tasks
-                                infoWindow.title = tasks
-                                infoList.model = tasksInfo
-                            }
-                        }
-                        text: "0/0"
-                        color: Style.text
-                        Layout.preferredWidth: 45
-                        Layout.rightMargin: 5
-                        horizontalAlignment: Text.AlignRight
+                    //     Connections {
+                    //         target: fileListModel
+                    //         function onRunningTasksChanged(tasks, tasksInfo) {
+                    //             runningTasks.text = tasks
+                    //             infoWindow.title = tasks
+                    //             infoList.model = tasksInfo
+                    //         }
+                    //     }
+                    //     text: "0/0"
+                    //     color: Style.text
+                    //     Layout.preferredWidth: 45
+                    //     Layout.rightMargin: 5
+                    //     horizontalAlignment: Text.AlignRight
 
-                        Window {
-                            id: infoWindow
-                            x: topLevelWindow.x + topLevelWindow.width
-                            y: 20
-                            width: 700
-                            height: 1000
-                            visible: true
-                            color: Style.windowBackgroundNoQWK
+                    //     Window {
+                    //         id: infoWindow
+                    //         x: topLevelWindow.x + topLevelWindow.width
+                    //         y: 20
+                    //         width: 700
+                    //         height: 1000
+                    //         visible: true
+                    //         color: Style.windowBackgroundNoQWK
 
-                            ListView {
-                                id: infoList
-                                anchors {
-                                    fill: parent
-                                    margins: 10
-                                }
-                                delegate: Text {
-                                    height: 12
-                                    color: modelData.endsWith(" E") ? "#80ff80" : Style.text
-                                    text: modelData
-                                }
-                            }
-                        }
-                    }
+                    //         ListView {
+                    //             id: infoList
+                    //             anchors {
+                    //                 fill: parent
+                    //                 margins: 10
+                    //             }
+                    //             delegate: Text {
+                    //                 height: 12
+                    //                 color: modelData.endsWith(" E") ? "#80ff80" : Style.text
+                    //                 text: modelData
+                    //             }
+                    //         }
+                    //     }
+                    // }
 
                     Slider {
                         id: masonryZoomSlider
@@ -682,29 +691,28 @@ MainWindow {
                     }
                 }
 
-                Rectangle {
-                    anchors {
-                        left: parent.left
-                        right: parent.right
-                        bottom: parent.bottom
-                        bottomMargin: -4
-                    }
-                    height: 4
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: "#000" }
-                        GradientStop { position: 0.5; color: Qt.rgba(0, 0, 0, 0.2) }
-                        GradientStop { position: 1.0; color: "transparent" }
-                    }
+                // Rectangle {
+                //     anchors {
+                //         left: parent.left
+                //         right: parent.right
+                //         bottom: parent.bottom
+                //         bottomMargin: -4
+                //     }
+                //     height: 4
+                //     gradient: Gradient {
+                //         GradientStop { position: 0.0; color: Style.isDarkTheme ? "#fff" : "#000" }
+                //         GradientStop { position: 0.5; color: Style.isDarkTheme ? Qt.rgba(1, 1, 1, 0.2) : Qt.rgba(0, 0, 0, 0.2) }
+                //         GradientStop { position: 1.0; color: "transparent" }
+                //     }
 
-                    color: "#000"
-                    opacity: masonryLayout.scrolled ? (Style.isDarkTheme ? 0.17 : 0.10) : 0
-                    Behavior on opacity {
-                        NumberAnimation {
-                            duration: 300
-                            easing.type: Easing.InOutQuad
-                        }
-                    }
-                }
+                //     opacity: masonryLayout.scrolled ? (Style.isDarkTheme ? 0.08 : 0.10) : 0
+                //     Behavior on opacity {
+                //         NumberAnimation {
+                //             duration: 300
+                //             easing.type: Easing.InOutQuad
+                //         }
+                //     }
+                // }
             }
             MasonryMode {
                 id: masonryLayout
@@ -759,6 +767,14 @@ MainWindow {
                 PropertyChanges {
                     target: thumbnailsView
                     opacity: 0
+                }
+                PropertyChanges {
+                    target: thumbnailsViewBackground
+                    opacity: 0
+                }
+                PropertyChanges {
+                    target: viewerBackground
+                    opacity: 1
                 }
             }
         ]

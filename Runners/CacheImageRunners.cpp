@@ -11,7 +11,7 @@ void CachedImageRetrieveRunner::run() {
     QImage img = PersistentImageCache::retrieveImage(_request);
     // qDebug() << "XX REQ" << _request.info.path << img << _request.targetSize;
     if (!img.isNull()) {
-        emit cachedThumbnailRetrieved(_request, img, true);
+        emit cachedThumbnailRetrieved(_request, img, DecodedImageInfo {.isFromCache = true});
     }
     emit finished(this);
 }

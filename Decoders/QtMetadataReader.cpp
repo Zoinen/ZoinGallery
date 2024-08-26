@@ -33,6 +33,10 @@ bool QtMetadataReader::readMetadata(ImageInfo& result) {
     return reader.canRead();
 }
 
+bool QtMetadataReader::readPreviewAndMime(ImageData &result) {
+    return false;
+}
+
 bool QtMetadataReader::isFormatSupported(const QString &path) {
     return true;
 }

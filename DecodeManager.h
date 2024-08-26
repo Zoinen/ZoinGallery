@@ -67,7 +67,7 @@ public:
 signals:
     void imageInfoReady(const ImageInfo &result);
     void imagesInfoReady(const QList<ImageInfo> &result);
-    void imageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
+    void imageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
     void folderListReady(const QString &path, const QList<FileInfo> &subfiles);
 
     void runningTasksChanged(const QString &runningTasks, const QStringList &tasksInfo);
@@ -80,7 +80,7 @@ protected:
 private:
     void onImageInfoReady(const ImageInfo &result);
     void onImageReadReady(const ImageData &result);
-    void onImageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
+    void onImageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
     void onFolderListReady(const QString &path, const QList<FileInfo> &subfiles);
     void onScannerInfoReady(const ImageInfo &result);
 
@@ -111,6 +111,8 @@ private:
     QTimer _runningTasksUpdateTimer;
 
     int _runningTasks = 0;
+
+    bool _disableCache = true;
 };
 
 #endif // DECODEMANAGER_H

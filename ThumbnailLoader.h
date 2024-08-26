@@ -17,7 +17,7 @@ public:
 
     static void readMetadata(ImageInfo &result);
     static bool readImage(ImageData &result);
-    static QImage decode(const ImageData &imageData);
+    static QImage decode(const ImageData &imageData, DecodedImageInfo &decodedInfo);
     static QImage createThumbnail(const QImage &image, QSize dimensions);
 
     static QStringList supportedFormats();
@@ -26,7 +26,7 @@ public:
 private:
     static QStringList ImageQtExtensions;
 
-    static QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize);
+    static QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize, DecodedImageInfo &decodedInfo);
     static QImage rotateAndFlip(const QImage &image, ExifOrientation orientation);
 };
 

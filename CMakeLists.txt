@@ -32,12 +32,17 @@ endif()
 
 include(${CMAKE_BINARY_DIR}/conan.cmake)
 
-conan_cmake_configure(REQUIRES exiv2/0.27.4 libtiff/4.3.0
+conan_cmake_configure(REQUIRES exiv2/0.27.4 libtiff/4.6.0 libjpeg-turbo/3.0.3 libraw/0.21.2
                       GENERATORS cmake
                       IMPORTS "bin, *.dll -> ./bin"
                       IMPORTS "bin, *.pdb -> ./bin"
                       OPTIONS
-                      libtiff:jpeg=libjpeg-turbo
+                          libtiff:jpeg=libjpeg-turbo
+
+                          libraw:shared=True
+                          libraw:with_jpeg=libjpeg-turbo
+
+                          jasper:with_libjpeg=libjpeg-turbo
                       )
 
 
@@ -107,6 +112,7 @@ set(PROJECT_SOURCES
     CacheViewer.h
     CacheViewer.cpp
     Decoders/MetadataReader.h
+    Decoders/MetadataReader.cpp
     Decoders/Exiv2MetadataReader.cpp
     Decoders/Exiv2MetadataReader.h
     Decoders/QtMetadataReader.cpp
@@ -118,7 +124,19 @@ set(PROJECT_SOURCES
     Decoders/JpegDecoder.h
     Decoders/QtDecoder.cpp
     Decoders/QtDecoder.h
+    Decoders/LibRawMetadataReader.cpp
+    Decoders/LibRawMetadataReader.h
+    Decoders/TinyEXIFMetadataReader.cpp
+    Decoders/TinyEXIFMetadataReader.h
+    TinyEXIF/TinyEXIF.h
+    TinyEXIF/TinyEXIF.cpp
+    TinyEXIF/tinyxml2.cpp
+    TinyEXIF/tinyxml2.h
+    Exiftool/LensDatabase.cpp
+    Exiftool/LensDatabase.h
 )
+
+include_directories(${CMAKE_SOURCE_DIR}/TinyEXIF)
 
 #if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)
 #    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DQT_QML_DEBUG ")

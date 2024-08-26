@@ -4,6 +4,8 @@
 #include "Decoders/TiffDecoder.h"
 #include "Decoders/JpegDecoder.h"
 #include "Decoders/QtDecoder.h"
+#include "Decoders/LibRawMetadataReader.h"
+#include "Decoders/TinyEXIFMetadataReader.h"
 
 #include <QDebug>
 #include <QImage>
@@ -33,13 +35,23 @@ void ThumbnailLoader::init() {
 }
 
 void ThumbnailLoader::readMetadata(ImageInfo &result) {
-    if (!Exiv2MetadataReader().readMetadata(result)) {
-        QtMetadataReader().readMetadata(result);
+    // if (!Exiv2MetadataReader().readMetadata(result)) {
+    if (!TinyEXIFMetadataReader().readMetadata(result)) {
+        if (!LibRawMetadataReader().readMetadata((result))) {
+            QtMetadataReader().readMetadata(result);
+        }
     }
 }
 
 bool ThumbnailLoader::readImage(ImageData &result) {
-    bool previewLoaded = Exiv2MetadataReader().readPreviewAndMime(result);
+    // TODO: make mime detection better, and probably libraw doing nothing
+    bool previewLoaded = false; //Exiv2MetadataReader().readPreviewAndMime(result);
+    if (!previewLoaded) {
+        previewLoaded = LibRawMetadataReader().readPreviewAndMime(result);
+    }
+    if (!previewLoaded) {
+        previewLoaded = TinyEXIFMetadataReader().readPreviewAndMime(result);
+    }
     QSize targetSize = result.request.targetSize;
     if (!result.request.checkCache) {
         targetSize = expandToCacheImageResolution(targetSize);
@@ -57,38 +69,49 @@ bool ThumbnailLoader::readImage(ImageData &result) {
     return true;
 }
 
-QImage ThumbnailLoader::decode(const ImageData &imageData) {
+QImage ThumbnailLoader::decode(const ImageData &imageData, DecodedImageInfo &decodedInfo) {
+    QSize targetSize = imageData.request.targetSize;
+    if (!imageData.request.checkCache) {
+        targetSize = expandToCacheImageResolution(targetSize);
+    }
+
     QImage image;
     if (!imageData.data.isNull()) {
-        QSize targetSize = imageData.request.targetSize;
-        if (!imageData.request.checkCache) {
-            targetSize = expandToCacheImageResolution(targetSize);
-        }
-        image = decodeImage(imageData.data, imageData.mimeType, rotateToOrientation(targetSize, imageData.request.info.orientation));
-
-        if (image.isNull() && imageData.previewData) {
-            QByteArray previewData = QByteArray::fromRawData(imageData.previewData.get(), imageData.previewDataSize);
-            image = decodeImage(previewData, imageData.previewMimeType, rotateToOrientation(targetSize, imageData.request.info.orientation));
-            image = rotateAndFlip(image, imageData.request.info.orientation);
-        }
-        else {
-            image = rotateAndFlip(image, imageData.request.info.orientation);
-        }
+        image = decodeImage(imageData.data, imageData.mimeType,
+                            rotateToOrientation(targetSize, imageData.request.info.orientation), decodedInfo);
+    }
+    if (image.isNull() && imageData.previewData) {
+        QByteArray previewData = QByteArray::fromRawData(imageData.previewData.get(), imageData.previewDataSize);
+        image = decodeImage(previewData, imageData.previewMimeType,
+                            rotateToOrientation(targetSize, imageData.request.info.orientation), decodedInfo);
+        decodedInfo.previewUsed = "Used preview " + imageData.previewUsed;
+    }
+    if (!image.isNull()) {
+        image = rotateAndFlip(image, imageData.request.info.orientation);
     }
     return image;
 }
 
-QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize) {
+QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize, DecodedImageInfo &decodedInfo) {
+    QImage result;
+    QElapsedTimer t;
+    t.start();
+    qDebug() << "ZZ MIME??" << mimeType;
     if (TiffDecoder().canDecode(mimeType)) {
-        return TiffDecoder().decode(data, targetSize);
+        result = TiffDecoder().decode(data, targetSize);
+        decodedInfo.decoderUsed = "libtiff";
     }
     else if (JpegDecoder().canDecode(mimeType)) {
-        return JpegDecoder().decode(data, targetSize);
+        result = JpegDecoder().decode(data, targetSize);
+        decodedInfo.decoderUsed = "libjpeg-turbo";
+        qDebug() << "ZZ DECODED" << result.size() << targetSize;
     }
     else {
-        return QtDecoder().decode(data, targetSize);
+        result = QtDecoder().decode(data, targetSize);
+        decodedInfo.decoderUsed = "Qt";
     }
-    return QImage();
+    decodedInfo.decodingTookTime = t.restart();
+    return result;
 }
 
 QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions) {
@@ -115,12 +138,12 @@ QImage ThumbnailLoader::rotateAndFlip(const QImage &image, ExifOrientation orien
             transform.scale(-1, 1);
         }
         else if (orientation == ExifOrientation::MirrorHorizontalAndRotate270CW) {
-            transform.scale(-1, 1);
             transform.rotate(270);
+            transform.scale(-1, 1);
         }
         else if (orientation == ExifOrientation::MirrorHorizontalAndRotate90CW) {
-            transform.scale(-1, 1);
             transform.rotate(90);
+            transform.scale(-1, 1);
         }
         else if (orientation == ExifOrientation::MirrorVertical) {
             transform.scale(1, -1);
@@ -140,6 +163,7 @@ QStringList ThumbnailLoader::supportedFormats() {
             }
         }
         formats = QList(formatsSet.begin(), formatsSet.end());
+        qDebug() << "All supported formats:" << formats;
     }
     return formats;
 }

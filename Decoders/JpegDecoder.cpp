@@ -46,8 +46,8 @@ QImage JpegDecoder::decode(const QByteArray &data, QSize targetSize) {
     denomIndex = qBound(0, denomIndex, num - 1);
 
     // Higher quality due to increased base resolution
-    denomIndex--;
-    denomIndex = qBound(0, denomIndex, num - 1);
+    // denomIndex--;
+    // denomIndex = qBound(0, denomIndex, num - 1);
 
     width = TJSCALED(width, factors[denomIndex]);
     height = TJSCALED(height, factors[denomIndex]);
@@ -70,6 +70,7 @@ QImage JpegDecoder::decode(const QByteArray &data, QSize targetSize) {
     QImage img(buffer, width, height, QImage::Format_RGB888, [] (void *ptr) {delete[] (uint8_t *)ptr;}, buffer);
     /*int taken3 = t.restart();
     qDebug() << "time:" << path << taken << taken2 << taken3;*/
-    //    img.save(QString("c:\\temp\\%1").arg(QFileInfo(path).fileName()));
+    // static int index = 0;
+    // img.save(QString("c:\\tmp\\%1.png").arg(index++));
     return img;
 }

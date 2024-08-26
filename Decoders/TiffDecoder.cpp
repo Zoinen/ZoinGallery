@@ -6,7 +6,7 @@
 
 #include "tiffio.hxx"
 
-static const QStringList TiffRawExtensions = {"tiff", "tif", "cr2", "dng", "crw", "nef", "arw", "arq"};
+static const QStringList TiffRawExtensions = {"tiff", "tif", "cr2", "dng", "crw", "nef", "arw", "arq", "cr3"};
 
 struct membuf: std::streambuf {
     membuf(uint8_t const* base, size_t size) {

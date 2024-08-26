@@ -8,6 +8,7 @@ Item {
 
     property alias source: viewerImageShader.source
     property size originalSize
+    property alias fovVisual: viewerImageShader.fov
 
     property real fov: 90
     property alias tilt: viewerImageShader.tilt
@@ -258,37 +259,6 @@ Item {
                         stop()
                     }
                 }
-            }
-        }
-    }
-
-    Item {
-        anchors {
-            right: parent.right
-            top: parent.top
-            rightMargin: 46 * 3 + 5
-        }
-        width: sphereInfoRow.width
-        height: 32
-
-        Row {
-            id: sphereInfoRow
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 5
-
-            IconLabel {
-                anchors.verticalCenter: parent.verticalCenter
-
-                icon.source: "qrc:/resources/Sphere.svg"
-                icon.width: 16
-                icon.height: 16
-                icon.color: Style.text
-            }
-
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                color: Style.text
-                text: Math.round(viewerImageShader.fov) + "°"
             }
         }
     }

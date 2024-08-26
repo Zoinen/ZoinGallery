@@ -146,7 +146,7 @@ FileListModel::FileListModel(QObject *parent)
     });
 
     connect(_decodeManager, &DecodeManager::imageReady, this, [&] (const ImageDecodeRequest &request,
-                                                                  const QImage &image, bool isFromCache) {
+                                                                   const QImage &image, const DecodedImageInfo &decodedInfo) {
         // qDebug() << "ZZ IMAGE READEY" << request.info.path << isFromCache << request.targetSize << image.size();
         auto it = _fileToItem.find(request.info.path);
         if (it != _fileToItem.end()) {
@@ -154,7 +154,7 @@ FileListModel::FileListModel(QObject *parent)
             if (request.viewerRequest) {
                 // qDebug() << "ZZ Viewer image came" << request.info.path << isFromCache << image.size() << item->image.size();
             }
-            if (isFromCache && (image.width() <= item->image.width() ||
+            if (decodedInfo.isFromCache && (image.width() <= item->image.width() ||
                                 image.height() <= item->image.height())) {
                 return;
             }
@@ -168,12 +168,12 @@ FileListModel::FileListModel(QObject *parent)
                     }
                 }
 
-                if (it != _viewerImages.end() && isFromCache) {
+                if (it != _viewerImages.end() && decodedInfo.isFromCache) {
                     _viewerImages[request.info.path] = ViewerImage{
                         .image = image,
                         .imageId = imageId,
                         .requestedSize = it->requestedSize, // not updating this
-                        .isFromCache = isFromCache
+                        .decodedInfo = decodedInfo
                     };
                 }
                 else {
@@ -181,7 +181,7 @@ FileListModel::FileListModel(QObject *parent)
                         .image = image,
                         .imageId = imageId,
                         .requestedSize = image.size(),
-                        .isFromCache = isFromCache
+                        .decodedInfo = decodedInfo
                     };
                 }
                 _imageIdToViewer[imageId] = request.info.path;
@@ -191,7 +191,7 @@ FileListModel::FileListModel(QObject *parent)
             }
             else {
                 item->image = image;
-                item->isCachedThumbnail = isFromCache;
+                item->isCachedThumbnail = decodedInfo.isFromCache;
                 updateImageId(item);
 
                 QModelIndex modelIndex = index(item->index, 0, indexFromItem(item->parent));

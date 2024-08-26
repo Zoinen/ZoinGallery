@@ -2,6 +2,7 @@
 
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Effects
 
 Item {
     id: viewerMode
@@ -33,6 +34,29 @@ Item {
     property alias animation: viewerAnimation
     property alias image: flickableArea.image
     property alias imageContainer: flickableArea
+
+    component BlurBackground : MultiEffect {
+        id: blurItem
+        source: ShaderEffectSource {
+            sourceItem: sphericViewerMode ? sphericViewerLoader.item : flickableArea
+            width: blurItem.width
+            height: blurItem.height
+            sourceRect: Qt.rect(blurItem.parent.x, blurItem.parent.y, blurItem.parent.width, blurItem.parent.height)
+        }
+
+        anchors.fill: parent
+        // opacity: 0.5
+        contrast: -0.5
+        // brightness: -0.3
+        // saturation: -0.5
+
+        colorization: 0.6
+        colorizationColor: Style.windowBackgroundNoQWK
+        autoPaddingEnabled: false
+        blurEnabled: true
+        blurMax: 64
+        blur: 0.3
+    }
 
     // ZZZ: Viewer size request takes current image's full size for all future images!!!
 
@@ -308,7 +332,6 @@ Item {
         }
     }
 
-
     MouseArea {
         id: viewerMouse
         anchors.fill: parent
@@ -458,19 +481,80 @@ Item {
     //     }
     // }
 
+    Item {
+        id: topRightPanel
+        anchors {
+            top: parent.top
+            right: parent.right
+        }
+        width: topRightPanelRow.width
+        height: topRightPanelRow.height
+
+        Rectangle {
+            id: topRightPanelBg
+            width: parent.width
+            height: parent.height
+
+            color: "black"
+            // visible: flickableArea.panelBackgroundVisible && viewerMode.panelsVisible
+
+            layer.enabled: true
+            visible: false
+
+            bottomLeftRadius: 9
+        }
+
+        BlurBackground {
+            maskSource: topRightPanelBg
+            maskEnabled: true
+        }
+
+        RowLayout {
+            id: topRightPanelRow
+            height: 32
+            spacing: 0
+
+            IconLabel {
+                Layout.leftMargin: 13
+                icon.source: "qrc:/resources/Sphere.svg"
+                icon.width: 16
+                icon.height: 16
+                icon.color: Style.text
+
+                visible: sphericViewerMode
+            }
+
+            Text {
+                Layout.leftMargin: sphericViewerMode ? 5 : 13
+                visible: flickableArea.infoVisible
+                verticalAlignment: Text.AlignVCenter
+                Layout.bottomMargin: 1
+
+                text: sphericViewerMode ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))
+                color: Style.text
+            }
+
+            Item {
+                id: titleBarButtonsPlaceholder
+                Layout.preferredWidth: 46 * 3 + 5
+            }
+        }
+    }
+
     MouseArea {
         id: rightPanel
         anchors {
             top: parent.top
             topMargin: isQWK ? titleBar.height : 0
             right: parent.right
-            bottom: parent.bottom
         }
         width: 120
+        property int fullContentHeight: filmstrip.count * (57 + filmstrip.spacing) + filmstrip.spacing
+        height: Math.min(fullContentHeight, parent.height - y)
 
         property bool viewerOverlapsFilmstrip: x < flickableArea.image.x + flickableArea.image.width
         onViewerOverlapsFilmstripChanged: {
-            titleBar.backgroundVisible = viewerOverlapsFilmstrip
+            flickableArea.panelBackgroundVisible = viewerOverlapsFilmstrip
         }
 
         opacity: root.state === "viewer" && (panelsVisible || rightPanel.containsMouse)
@@ -482,9 +566,41 @@ Item {
         hoverEnabled: true
 
         Rectangle {
-            anchors.fill: parent
-            color: rightPanel.viewerOverlapsFilmstrip ? Style.opaqueMasonryViewBackgroundWithOpacity : Style.viewerPanel
+            id: bgRect
+            width: rightPanel.width
+            height: rightPanel.height
+            visible: false
+            topLeftRadius: 9
+            bottomLeftRadius: (rightPanel.fullContentHeight >= rightPanel.parent.height - rightPanel.y) ? 0 : 9
+            color: "black"
         }
+        ShaderEffectSource {
+            id: bgRectSource
+            sourceItem: bgRect
+            width: bgRect
+            height: bgRect
+            smooth: true
+            mipmap: true
+        }
+
+        BlurBackground {
+            maskSource: bgRectSource
+            maskEnabled: true
+
+            // maskThresholdMin: 0.1
+            // maskThresholdMax: 0.9
+
+            // maskSpreadAtMax: 0.5
+            // maskThresholdMax: 0.8
+        }
+        /*Rectangle {
+            anchors {
+                fill: parent
+                topMargin: -9
+            }
+            color: rightPanel.viewerOverlapsFilmstrip ? Style.opaqueMasonryViewBackgroundWithOpacity : Style.viewerPanel
+            topLeftRadius: 7
+        }*/
 
         ListView {
             id: filmstrip
@@ -497,6 +613,8 @@ Item {
             }
             width: 86
             spacing: 13
+            topMargin: spacing
+            bottomMargin: spacing
             clip: true
             boundsBehavior: Flickable.StopAtBounds
 
@@ -570,7 +688,9 @@ Item {
                 }*/
 
                 Rectangle {
-                    anchors.fill: parent
+                    anchors.centerIn: parent
+                    width: image.paintedWidth
+                    height: image.paintedHeight
                     visible: isCurrent || thumbnailMouse.containsMouse
 
                     color: "transparent"
@@ -651,14 +771,29 @@ Item {
         hoverEnabled: true
 
         Rectangle {
+            id: leftPanelBg
+
+            width: leftPanel.width
+            height: leftPanel.height
+
+            layer.enabled: true
+            visible: false
+
+            bottomRightRadius: 9
+            color: "black"
+        }
+
+        BlurBackground {
+            maskSource: leftPanelBg
+            maskEnabled: true
+        }
+        /*Rectangle {
             anchors {
                 fill: parent
-                leftMargin: -radius
-                topMargin: -radius
             }
-            color: width < flickableArea.image.x || height < flickableArea.image.y ? Style.viewerPanel : Style.opaqueMasonryViewBackgroundWithOpacity
-            radius: 4
-        }
+            color: "transparent" // width < flickableArea.image.x || height < flickableArea.image.y ? Style.viewerPanel : Style.opaqueMasonryViewBackgroundWithOpacity
+            bottomRightRadius: 7
+        }*/
 
         ColumnLayout {
             id: exifLayout
@@ -687,7 +822,7 @@ Item {
                         icon.source: modelData.icon !== undefined ? modelData.icon : ""
                         icon.width: 15
                         icon.height: 15
-                        icon.color: Style.text
+                        icon.color: Style.textGray
                     }
 
                     Text {
@@ -695,7 +830,7 @@ Item {
                         Layout.fillWidth: true
                         elide: Text.ElideRight
                         text: modelData.url !== undefined ? modelData.text.replace(" ", "\n") : modelData.text
-                        color: isTitle || !index ? Style.text : Style.textGray
+                        color: !isTitle || !index ? Style.text : Style.textGray
                         font.pixelSize: !index ? 12 : 16
                         font.underline: modelData.url !== undefined
 

@@ -58,13 +58,18 @@ DecodeManager::DecodeManager(QObject *parent)
 }
 
 void DecodeManager::readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView) {
-    CachedImageInfoRunner *runner = new CachedImageInfoRunner(paths, isFromEmbeddedView);
-    runner->connections.append(
-        connect(runner, &CachedImageInfoRunner::cachedImageInfoRetrieved,
-                this, &DecodeManager::onCachedImageInfoRetrieved)
-        );
-    _taskQueue.prepend(runner);
-    processQueue();
+    if (!_disableCache) {
+        CachedImageInfoRunner *runner = new CachedImageInfoRunner(paths, isFromEmbeddedView);
+        runner->connections.append(
+            connect(runner, &CachedImageInfoRunner::cachedImageInfoRetrieved,
+                    this, &DecodeManager::onCachedImageInfoRetrieved)
+            );
+        _taskQueue.prepend(runner);
+        processQueue();
+    }
+    else {
+        onInfoNotFoundInCache(paths, isFromEmbeddedView);
+    }
 }
 
 void DecodeManager::onInfoNotFoundInCache(const QList<QString> &imagePaths, bool isFromEmbeddedView) {
@@ -110,16 +115,18 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
         }
 
         // qDebug() << "ZZ DECODE" << requests.size() << (requests.size() ? requests.first().info.path : "");
-        for (const auto &request : requests) {
-            if (request.checkCache) {
-                // qDebug() << "ZZ TO RUN CACHE LOOKUP";
-                CachedImageRetrieveRunner *runner = new CachedImageRetrieveRunner(request);
-                runner->connections.append(
-                    connect(runner, &CachedImageRetrieveRunner::cachedThumbnailRetrieved,
-                            this, &DecodeManager::onImageReady)
-                    );
-                _taskQueue.insert(insertIndex, runner);
-                insertIndex++;
+        if (!_disableCache) {
+            for (const auto &request : requests) {
+                if (request.checkCache) {
+                    // qDebug() << "ZZ TO RUN CACHE LOOKUP";
+                    CachedImageRetrieveRunner *runner = new CachedImageRetrieveRunner(request);
+                    runner->connections.append(
+                        connect(runner, &CachedImageRetrieveRunner::cachedThumbnailRetrieved,
+                                this, &DecodeManager::onImageReady)
+                        );
+                    _taskQueue.insert(insertIndex, runner);
+                    insertIndex++;
+                }
             }
         }
     }/**/
@@ -157,7 +164,12 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
 void DecodeManager::readFolderList(const QStringList &paths, int totalImages) {
     QList<FolderInfo> results;
     QStringList notFound;
-    PersistentFolderCache::retrieveFolders(paths, results, notFound);
+    if (!_disableCache) {
+        PersistentFolderCache::retrieveFolders(paths, results, notFound);
+    }
+    else {
+        notFound = paths;
+    }
     for (FolderInfo &result : results) {
         emit folderListReady(result.path, result.subfiles);
     }
@@ -273,8 +285,10 @@ void DecodeManager::prepareToClose() {
         _workers[i].thread->wait(QDeadlineTimer(2000ms));
     }
 
-    PersistentFolderCache::dumpDb();
-    PersistentImageCache::dumpDb();
+    if (!_disableCache) {
+        PersistentFolderCache::dumpDb();
+        PersistentImageCache::dumpDb();
+    }
 }
 
 QString DecodeManager::runnerToString(Runner *task) {
@@ -393,12 +407,20 @@ void DecodeManager::onImageReadReady(const ImageData &result) {
     }
 
     ImageDecodeRunner *runner = new ImageDecodeRunner(result);
-    runner->connections.append({
-        connect(runner, &ImageDecodeRunner::imageReady,
-                this, &DecodeManager::onImageReady),
-        connect(runner, &ImageDecodeRunner::storeInCache,
-                this, &DecodeManager::onStoreInCache)
-    });
+    if (!_disableCache) {
+        runner->connections.append({
+            connect(runner, &ImageDecodeRunner::imageReady,
+                    this, &DecodeManager::onImageReady),
+            connect(runner, &ImageDecodeRunner::storeInCache,
+                    this, &DecodeManager::onStoreInCache)
+        });
+    }
+    else {
+        runner->connections.append({
+            connect(runner, &ImageDecodeRunner::imageReady,
+                    this, &DecodeManager::onImageReady)
+        });
+    }
     _taskQueue.enqueue(runner);
 
     processQueue();
@@ -412,13 +434,13 @@ void DecodeManager::onImageInfoReady(const ImageInfo &result) {
     emit imageInfoReady(result);
 }
 
-void DecodeManager::onImageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache) {
+void DecodeManager::onImageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo) {
     if (qobject_cast<Runner *>(sender())->isCanceled()) {
         return;
     }
 
     if (!request.info.isFromScanner) {
-        emit imageReady(request, image, isFromCache);
+        emit imageReady(request, image, decodedInfo);
     }
 }
 

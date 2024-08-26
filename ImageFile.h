@@ -54,6 +54,13 @@ struct ImageDecodeRequest {
     bool checkCache = false;
 };
 
+struct DecodedImageInfo {
+    QString decoderUsed;
+    int decodingTookTime = -1;
+    QString previewUsed;
+    bool isFromCache = false;
+};
+
 struct ImageData {
     const ImageDecodeRequest request;
 
@@ -63,6 +70,7 @@ struct ImageData {
     std::shared_ptr<char> previewData;
     int64_t previewDataSize = 0;
     QString previewMimeType;
+    QString previewUsed;
 
     ImageData(const ImageDecodeRequest &request_) : request(request_) {}
 };
@@ -111,7 +119,7 @@ struct FolderInfo {
 const QSize CACHE_IMAGE_RESOLUTION(1024, 767);
 
 inline QSize expandToCacheImageResolution(QSize targetSize) {
-    if (targetSize.width() < CACHE_IMAGE_RESOLUTION.width() ||
+    if (targetSize.width() < CACHE_IMAGE_RESOLUTION.width() &&
         targetSize.height() < CACHE_IMAGE_RESOLUTION.height()) {
         QSizeF sizeScaled = QSizeF(targetSize).scaled(CACHE_IMAGE_RESOLUTION, Qt::KeepAspectRatio);
         targetSize.setWidth(sizeScaled.width());

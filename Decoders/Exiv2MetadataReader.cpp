@@ -115,7 +115,6 @@ bool Exiv2MetadataReader::readPreviewAndMime(ImageData &result) {
                                                           preferredSizeRotated.height(), &previewProp, ignoreThumbnailAt,
                                                           &largerImageAvailable);
         if (previewImg.pData_) {
-            result.data = QByteArray::fromRawData(reinterpret_cast<char *>(previewImg.pData_), previewImg.size_);
             result.previewData.reset(reinterpret_cast<char *>(previewImg.pData_));
             result.previewDataSize = previewImg.size_;
             result.previewMimeType = QString::fromStdString(previewProp.mimeType_);
@@ -202,6 +201,52 @@ QSize Exiv2MetadataReader::readResolutionFromExif(Exiv2::Image *image) {
     return size;
 }
 
+double fractionToDouble(const QString& fraction) {
+    QStringList parts = fraction.split('/');
+    if (parts.size() != 2) return fraction.toDouble();
+
+    bool okNumerator, okDenominator;
+    double numerator = parts.at(0).toDouble(&okNumerator);
+    double denominator = parts.at(1).toDouble(&okDenominator);
+
+    if (!okNumerator || !okDenominator || denominator == 0) return 0.0;
+
+    return numerator / denominator;
+}
+
+QString Exiv2MetadataReader::convertEXIFToDD(const QString& exifLat, const QString &exifLon) {
+    QStringList latParts = exifLat.split(' ');
+    if (latParts.size() < 4) {
+        return QString();
+    }
+
+    double latDegrees = fractionToDouble(latParts.at(0));
+    double latMinutes = fractionToDouble(latParts.at(1));
+    double latSeconds = fractionToDouble(latParts.at(2));
+
+    char latDirection = latParts.last().toLatin1()[0];
+    if (latDirection != 'N' && latDirection != 'S') {
+        return "Invalid Direction";
+    }
+
+
+    QStringList lonParts = exifLon.split(' ');
+    if (lonParts.size() < 4) {
+        return QString();
+    }
+
+    double lonDegrees = fractionToDouble(lonParts.at(0));
+    double lonMinutes = fractionToDouble(lonParts.at(1));
+    double lonSeconds = fractionToDouble(lonParts.at(2));
+
+    char lonDirection = lonParts.last().toLatin1()[0];
+    if (lonDirection != 'E' && lonDirection != 'W') {
+        return "Invalid Direction";
+    }
+
+    return convertDMSToDD(latDegrees, latMinutes, latSeconds, latDirection, lonDegrees, lonMinutes, lonSeconds, lonDirection);
+}
+
 QVariantMap Exiv2MetadataReader::readExifToMap(Exiv2::Image *image) {
     QVariantMap out;
     const Exiv2::ExifData &exifData = image->exifData();
@@ -264,11 +309,11 @@ QVariantMap Exiv2MetadataReader::readExifToMap(Exiv2::Image *image) {
         auto longitudeRefIt = exifData.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSLongitudeRef"));
         if (latitudeIt != exifData.end() && latitudeRefIt != exifData.end() &&
             longitudeIt != exifData.end() && longitudeRefIt != exifData.end()) {
-            out["Location"] = QString("%1 %2,%3 %4")
-                                  .arg(latitudeIt->value().toString().c_str())
-                                  .arg(latitudeRefIt->value().toString().c_str())
-                                  .arg(longitudeIt->value().toString().c_str())
-                                  .arg(longitudeRefIt->value().toString().c_str());
+            out["Location"] = convertEXIFToDD(
+                QString("%1 %2").arg(latitudeIt->value().toString().c_str())
+                    .arg(latitudeRefIt->value().toString().c_str()),
+                QString("%1 %2").arg(longitudeIt->value().toString().c_str())
+                    .arg(longitudeRefIt->value().toString().c_str()));
         }
     }
 

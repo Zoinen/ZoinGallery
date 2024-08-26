@@ -34,7 +34,7 @@ public:
     void run() override;
 
 signals:
-    void cachedThumbnailRetrieved(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
+    void cachedThumbnailRetrieved(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
 
 private:
     friend class DecodeManager;

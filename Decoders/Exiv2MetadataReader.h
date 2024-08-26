@@ -14,7 +14,7 @@ public:
     bool readMetadata(ImageInfo& result) override;
     bool isFormatSupported(const QString &path) override;
 
-    bool readPreviewAndMime(ImageData &result);
+    bool readPreviewAndMime(ImageData &result) override;
 
 private:
     static ExifOrientation readOrientationFromExif(Exiv2::Image *image);
@@ -22,6 +22,7 @@ private:
     static QVariantMap readExifToMap(Exiv2::Image *image);
 
     static void fixMimeType(QString &mimeToUpdate, const QString &filePath);
+    static QString convertEXIFToDD(const QString& exifLat, const QString &exifLon);
 };
 
 #endif // EXIV2METADATAREADER_H

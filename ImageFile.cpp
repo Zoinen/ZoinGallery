@@ -33,48 +33,6 @@ QString calculateDivision(const QString expression) {
     return expression;
 }
 
-
-double fractionToDouble(const QString& fraction) {
-    QStringList parts = fraction.split('/');
-    if (parts.size() != 2) return 0.0;
-
-    bool okNumerator, okDenominator;
-    double numerator = parts.at(0).toDouble(&okNumerator);
-    double denominator = parts.at(1).toDouble(&okDenominator);
-
-    if (!okNumerator || !okDenominator || denominator == 0) return 0.0;
-
-    return numerator / denominator;
-}
-
-QString convertEXIFToDMS(const QString& exifInput) {
-    QStringList parts = exifInput.split(' ');
-    if (parts.size() < 4) return "Invalid Input";
-
-    double degrees = fractionToDouble(parts.at(0));
-    double minutes = fractionToDouble(parts.at(1));
-    double seconds = fractionToDouble(parts.at(2));
-
-    double dd = degrees + minutes / 60 + seconds / 3600;
-    int deg = dd;
-    int min = 60 * (dd - deg);
-    double sec = 3600 * (dd - deg) - 60 * min;
-
-    // Extract and validate the direction
-    QString direction = parts.last();
-    if (direction != "N" && direction != "S" && direction != "E" && direction != "W") {
-        return "Invalid Direction";
-    }
-
-    // Format the output correctly
-    QString dmsString = QString("%1°%2'%3\"%4").arg(deg)
-                            .arg(min, 2, 10, QChar('0'))
-                            .arg(sec, 2, 'f', 2, QChar('0'))
-                            .arg(direction);
-
-    return dmsString;
-}
-
 QVariantList ImageFile::exifList() const {
     QVariantList out;
 
@@ -188,8 +146,11 @@ QVariantList ImageFile::exifList() const {
 
         QStringList loc = info.exif["Location"].toString().split(",");
         QVariantMap location;
-        location["text"] = QString("%1 %2").arg(convertEXIFToDMS(loc[0]), convertEXIFToDMS(loc[1]));
-        location["url"] = "https://www.google.com/maps/place/" + location["text"].toString().replace(" ", "+");
+        location["text"] = info.exif["Location"].toString();
+        // location["text"] = QString("%1 %2").arg(convertEXIFToDMS(loc[0]), convertEXIFToDMS(loc[1]));
+        // location["url"] = "https://www.google.com/maps/place/" + location["text"].toString().replace(" ", "+");
+        QStringList latLon = location["text"].toString().split(", ");
+        location["url"] = QString("https://www.openstreetmap.org/?mlat=%1&mlon=%2").arg(latLon[0], latLon[1]);
         out.append(location);
     }
     return out;

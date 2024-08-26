@@ -141,7 +141,7 @@ private:
         QImage image;
         QString imageId;
         QSize requestedSize;
-        bool isFromCache = false;
+        DecodedImageInfo decodedInfo;
     };
     QHash<QString, ViewerImage> _viewerImages;
     QHash<QString, QString> _imageIdToViewer;

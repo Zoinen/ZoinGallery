@@ -16,7 +16,7 @@ public:
     bool isViewerRequest() const override;
 
 signals:
-    void imageReady(const ImageDecodeRequest &request, const QImage &image, bool isFromCache);
+    void imageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
     void storeInCache(const ImageDecodeRequest &request, const QByteArray &imageData);
 
 private:

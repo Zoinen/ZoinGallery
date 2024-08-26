@@ -25,6 +25,7 @@ Item {
     property bool scrollBarsVisible: (hbar.hovered || hbar.pressed || vbar.hovered || vbar.pressed || dragZoomActive || frameAnimation.running || forceShowScrollBars) && !zoomFitView
 
     property bool fitToHeight: originalSize.width / originalSize.height <= flickableArea.width / flickableArea.height
+    property bool panelBackgroundVisible: false
 
     signal clicked
 
@@ -501,20 +502,6 @@ Item {
                     flickableArea.clicked()
                 }
             }
-    }
-
-    Text {
-        anchors {
-            right: parent.right
-            top: parent.top
-            rightMargin: 46 * 3 + 5
-        }
-        height: 32
-        verticalAlignment: Qt.AlignVCenter
-        visible: flickableArea.infoVisible
-
-        text: (zoomFitView ? "* " : "") + (Math.round(zoomScale * 100) + "%")
-        color: Style.text
     }
 
     // Rectangle {

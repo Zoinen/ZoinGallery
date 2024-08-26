@@ -413,10 +413,10 @@ MouseArea {
         }
         model: fileListModel
 
-        paddingLeft: 6
-        paddingRight: 6
-        paddingTop: 5
-        paddingBottom: 12
+        paddingLeft: 1+5
+        paddingRight: 1+5
+        paddingTop: 7+5
+        paddingBottom: 7+5
 
         delegate: BrickDelegate {}
 

@@ -32,7 +32,7 @@ endif()
 
 include(${CMAKE_BINARY_DIR}/conan.cmake)
 
-conan_cmake_configure(REQUIRES exiv2/0.27.4 libtiff/4.6.0 libjpeg-turbo/3.0.3 libraw/0.21.2
+conan_cmake_configure(REQUIRES exiv2/0.27.4 libtiff/4.6.0 libjpeg-turbo/3.0.3 libraw/0.21.2 libpng/1.6.43
                       GENERATORS cmake
                       IMPORTS "bin, *.dll -> ./bin"
                       IMPORTS "bin, *.pdb -> ./bin"
@@ -56,6 +56,8 @@ conan_cmake_install(PATH_OR_REFERENCE .
 include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
 conan_basic_setup(NO_OUTPUT_DIRS)
 
+add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+
 find_package(QT NAMES Qt6)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2 REQUIRED)
 find_package(Qt6 COMPONENTS ShaderTools)
@@ -74,6 +76,8 @@ set(PROJECT_SOURCES
     ImageFile.cpp
     QmlImageProvider.h
     QmlImageProvider.cpp
+    QmlAsyncImageProvider.h
+    QmlAsyncImageProvider.cpp
     ViewerController.h
     ViewerController.cpp
     QmlResourcesProvider.h
@@ -128,6 +132,8 @@ set(PROJECT_SOURCES
     Decoders/LibRawMetadataReader.h
     Decoders/TinyEXIFMetadataReader.cpp
     Decoders/TinyEXIFMetadataReader.h
+    Decoders/LibpngMetadataReader.cpp
+    Decoders/LibpngMetadataReader.h
     TinyEXIF/TinyEXIF.h
     TinyEXIF/TinyEXIF.cpp
     TinyEXIF/tinyxml2.cpp
@@ -176,6 +182,7 @@ qt_add_shaders(ZoinGallery
     FILES
         "resources/shader.frag"
         "resources/sphere.frag"
+        "resources/outline.frag"
 )
 
 qt6_add_qml_module(ZoinGallery
@@ -192,6 +199,7 @@ qt6_add_qml_module(ZoinGallery
         qml/FlickableZoomable.qml
         qml/SphericViewer.qml
         qml/CacheViewer.qml
+        qml/TitleButton.qml
         ZGStyle/Style.qml
         ZGStyle/ScrollBar.qml
         ZGStyle/Slider.qml

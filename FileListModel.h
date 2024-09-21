@@ -97,6 +97,7 @@ public:
 
     Q_INVOKABLE void requestViewer(int index, int width = -1, int height = -1); // -1 means full size
     QImage viewerForImageId(const QString &imageId);
+    QImage fullSizeViewerForImageId(const QString &imageId);
 
     int fileIndex(const QString &fileName) const;
 
@@ -113,7 +114,7 @@ public:
     Q_INVOKABLE void startScanner();
 
 signals:
-    void viewerImageIdChanged(const QString &imageId);
+    void viewerImageIdChanged(const QString &imageId, int level); // 0 is thumbnail, 1 is viewer, 2 is full resolution
 
     void uiTargetHeightChanged();
 
@@ -144,7 +145,9 @@ private:
         DecodedImageInfo decodedInfo;
     };
     QHash<QString, ViewerImage> _viewerImages;
+    QHash<QString, ViewerImage> _fullSizeViewerImages;
     QHash<QString, QString> _imageIdToViewer;
+    QHash<QString, QString> _imageIdToFullSizeViewer;
     QSet<QString> _requestedViewerImages;
     int _currentViewIndex;
 

@@ -3,6 +3,7 @@
 #include "ThumbnailLoader.h"
 #include "FileListModel.h"
 #include "QmlImageProvider.h"
+#include "QmlAsyncImageProvider.h"
 #include "QmlResourcesProvider.h"
 #include "ImageModel.h"
 #include "CacheViewer.h"
@@ -38,6 +39,9 @@ ViewerController::ViewerController(QQmlEngine *engine)
     QmlImageProvider *imageProvider = new QmlImageProvider("thumbnails", _fileListModel);
     engine->addImageProvider("thumbnails", imageProvider);
 
+    QmlAsyncImageProvider *asyncImageProvider = new QmlAsyncImageProvider("async", _fileListModel);
+    engine->addImageProvider("async", asyncImageProvider);
+
     QmlResourcesProvider *resourcesProvider = new QmlResourcesProvider("resources");
     engine->addImageProvider("resources", resourcesProvider);
 
@@ -53,6 +57,9 @@ void ViewerController::cd(const QString &folder, bool changeHistory) {
         currentFolder = currentFolder.left(currentFolder.size() - 1);
     }
     currentFolder = currentFolder.trimmed();
+    if (currentFolder.endsWith(":") && !currentFolder.contains("/") && !currentFolder.contains("\\")) {
+        currentFolder.append("/");
+    }
 
     if (currentFolder == "Computer\\" || currentFolder == "Computer/" || currentFolder == "Computer") {
         setCurrentPath("Computer");

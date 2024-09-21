@@ -10,7 +10,6 @@ Item {
     property size originalSize
 
     property bool zoomFitView: true
-    property bool infoVisible: true
 
     property real zoomScale: 1.5
     readonly property real minZoomScale: 0.005
@@ -25,7 +24,7 @@ Item {
     property bool scrollBarsVisible: (hbar.hovered || hbar.pressed || vbar.hovered || vbar.pressed || dragZoomActive || frameAnimation.running || forceShowScrollBars) && !zoomFitView
 
     property bool fitToHeight: originalSize.width / originalSize.height <= flickableArea.width / flickableArea.height
-    property bool panelBackgroundVisible: false
+    property real scrollBarsRightMargin: 0
 
     signal clicked
 
@@ -113,8 +112,6 @@ Item {
     }
 
     function zoomTo100(keepMousePosition) {
-        zoomFitView = false
-
         zoomAnimation.to = 1
         let targetX
         let targetY
@@ -140,6 +137,8 @@ Item {
 
         viewportAnimation.easing = Easing.InOutQuad
         viewportAnimation.restart()
+
+        zoomFitView = false
     }
 
     function zoomToFit(skipAnimation) {
@@ -224,10 +223,81 @@ Item {
         viewportAnimation.restart();
     }
 
+    function setImage(imageId, originalSize, fromIndex, level) {
+        delayedIdSetter.stop()
+        if (level === 0 && fromIndex !== image.fromIndex) {
+            image.source = imageId
+            image.fromIndex = fromIndex
+            image.fromLevel = level
+            if (viewerImage2.fromIndex !== fromIndex) {
+                viewerImage2.source = ""
+                viewerImageCrop.source = ""
+                viewerImage2.fromIndex = -1
+            }
+        }
+        else if (level === 1 && (fromIndex !== image.fromIndex || image.fromLevel === 0)) {
+            image.source = imageId
+            image.fromIndex = fromIndex
+            image.fromLevel = level
+            if (viewerImage2.fromIndex !== fromIndex) {
+                viewerImage2.source = ""
+                viewerImageCrop.source = ""
+                viewerImage2.fromIndex = -1
+            }
+        }
+        else if (level === 2 && fromIndex !== viewerImage2.fromIndex) {
+            let targetX
+            let targetY
+            if (viewportAnimation.running) {
+                targetX = xAnimation.to
+            }
+            else {
+                targetX = viewerImage.x
+            }
+
+            if (viewportAnimation.running) {
+                targetY = yAnimation.to
+            }
+            else {
+                targetY = viewerImage.y
+            }
+
+            if (flickableArea.width * dpr > originalSize.width || flickableArea.height * dpr > originalSize.height) {
+                viewerImage2.source = ""
+                viewerImageCrop.source = ""
+                viewerImage2.fromIndex = -1
+            }
+            else {
+                viewerImageCrop.targetX = -Math.floor(targetX)
+                viewerImageCrop.targetY = -Math.floor(targetY)
+                viewerImageCrop.targetWidth = flickableArea.width
+                viewerImageCrop.targetHeight = flickableArea.height
+                viewerImageCrop.source = imageId + "/" +
+                        viewerImageCrop.targetX * dpr + "," +
+                        viewerImageCrop.targetY * dpr + "," +
+                        flickableArea.width * dpr + "," +
+                        flickableArea.height * dpr
+                viewerImage2.fromIndex = fromIndex
+            }
+
+            delayedIdSetter.idToSet = imageId
+            delayedIdSetter.restart()
+        }
+        flickableArea.originalSize = Qt.size(originalSize.width / dpr, originalSize.height / dpr)
+    }
+
+    Timer {
+        id: delayedIdSetter
+        property string idToSet
+        interval: animationDuration
+        onTriggered: viewerImage2.source = idToSet
+    }
+
     ScrollBar {
         id: vbar
         anchors {
             right: parent.right
+            rightMargin: scrollBarsRightMargin
             top: parent.top
             topMargin: titleBar.height
             bottom: parent.bottom
@@ -254,6 +324,7 @@ Item {
         anchors {
             left: parent.left
             right: parent.right
+            rightMargin: scrollBarsRightMargin
             bottom: parent.bottom
         }
         z: 1
@@ -306,8 +377,28 @@ Item {
 
         width: originalSize.width * zoomScale
         height: originalSize.height * zoomScale
-        mipmap: true
+        mipmap: false
+        asynchronous: false
+
+        property int fromIndex: -1
+        property int fromLevel: -1
+
         visible: false
+
+
+        Image {
+            id: viewerImage2
+            cache: false
+
+            width: parent.width
+            height: parent.height
+            mipmap: true
+            asynchronous: true
+
+            property int fromIndex: -1
+
+            // visible: false
+        }
     }
 
     ShaderEffect {
@@ -315,7 +406,7 @@ Item {
         anchors.fill: viewerImage
         // visible: !viewerMouse.pressed
 
-        property var source: viewerImage
+        property var source: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImage
         property var viewportSize: Qt.size(viewerImageShader.width * dpr, viewerImageShader.height * dpr)
         property real sharpenAmount: zoomScale < 1 ? 1.5 : 0
         property bool showCheckerboard: masonryLayout.view.showTransparentGrid
@@ -323,6 +414,28 @@ Item {
         property int borderRadius: 0
 
         fragmentShader: "qrc:/resources/shader.frag.qsb"
+
+        Image {
+            id: viewerImageCrop
+            cache: false
+
+            property real targetX
+            property real targetY
+            property real targetWidth
+            property real targetHeight
+
+            x: targetX * zoomScale
+            y: targetY * zoomScale
+            width: targetWidth * zoomScale
+            height: targetHeight * zoomScale
+
+            // mipmap: false
+            // asynchronous: false
+
+            property int fromIndex: -1
+
+            visible: viewerImage2.status !== Image.Ready
+        }
     }
 
     MouseArea {
@@ -458,7 +571,7 @@ Item {
 
                     zoomAnimation.to *= delta
                     if (wheel.modifiers === Qt.ControlModifier && !(wheel.buttons & Qt.LeftButton)) {
-                        console.log("ZZ CENTER") //(mouse.x - viewerImage.x) / zoomScale
+                        // console.log("ZZ CENTER") //(mouse.x - viewerImage.x) / zoomScale
                         xAnimation.to = flickableArea.width / 2 - ((flickableArea.width / 2 - viewerImage.x) / zoomScale) * zoomAnimation.to
                         yAnimation.to = flickableArea.height / 2 - ((flickableArea.height / 2 - viewerImage.y) / zoomScale) * zoomAnimation.to
 

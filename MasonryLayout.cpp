@@ -116,8 +116,8 @@ QString MasonryLayout::indexImage(int index) const {
 }
 
 QString MasonryLayout::indexText(int index) const {
-    if (index >= 0 && index < _bricks.size() && _bricks[index].item) {
-        return _bricks[index].item->property("text").toString();
+    if (index >= 0 && index < _bricks.size()) {
+        return _bricks[index].image->fileName;
     }
     return QString();
 }

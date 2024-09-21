@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Effects
 
 Item {
     id: pathRoot
@@ -146,11 +147,11 @@ Item {
     }
 
     Item {
+        id: dynamicPart
         anchors.left: fixedPart.right
-        width: overflowIndicator.visible ? pathRoot.width - fixedPart.width - 10 : collapsiblePart.width
+        width: rectMaskSource.overflowIndicatorVisible ? pathRoot.width - fixedPart.width - 10 : collapsiblePart.width
         height: parent.height
         clip: true
-        visible: !editMode
 
         RowLayout {
             id: collapsiblePart
@@ -174,6 +175,54 @@ Item {
                 }
             }
         }
+    }
+
+    Item {
+        id: rectMaskSource
+        anchors.fill: dynamicPart
+
+        layer.enabled: true
+        visible: false
+        property bool overflowIndicatorVisible: !editMode && (pathRoot.width - fixedPart.width - 10 < collapsiblePart.width)
+
+        Rectangle {
+            id: overflowIndicator
+            anchors {
+                top: parent.top
+                bottom: parent.bottom
+            }
+            width: 20
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.0; color: rectMaskSource.overflowIndicatorVisible ? "transparent" : Qt.white }
+                GradientStop { position: 1.0; color: Qt.white }
+            }
+        }
+
+        Rectangle {
+            anchors {
+                left: overflowIndicator.right
+                right: parent.right
+                top: parent.top
+                bottom: parent.bottom
+            }
+        }
+    }
+
+    MultiEffect {
+        anchors.fill: dynamicPart
+        source: ShaderEffectSource {
+            sourceItem: dynamicPart
+            hideSource: true
+        }
+
+        maskEnabled: true
+        maskSource: rectMaskSource
+
+        maskThresholdMin: 0.5
+        maskSpreadAtMin: 1.0
+
+        visible: !editMode
     }
 
     TextField {
@@ -213,21 +262,5 @@ Item {
 
         Keys.onEnterPressed: accept()
         Keys.onReturnPressed: accept()
-    }
-
-    Rectangle {
-        id: overflowIndicator
-        visible: !editMode && (pathRoot.width - fixedPart.width - 10 < collapsiblePart.width)
-        anchors {
-            left: fixedPart.right
-            top: parent.top
-            bottom: parent.bottom
-        }
-        width: 20
-        gradient: Gradient {
-            orientation: Gradient.Horizontal
-            GradientStop { position: 0.0; color: Style.pathFadeGradient }
-            GradientStop { position: 1.0; color: "transparent" }
-        }
     }
 }

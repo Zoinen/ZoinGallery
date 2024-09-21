@@ -33,7 +33,7 @@ MainWindow {
     Component.onCompleted: {
         windowAgent.setup(topLevelWindow)
 
-        windowAgent.setWindowAttribute("mica", true)
+        windowAgent.setWindowAttribute("mica", true) // "mica-alt"
     }
 
     Connections {
@@ -123,7 +123,7 @@ MainWindow {
             }
 
             viewerMode.setImage(masonryLayout.view.currentItem.imageId,
-                                masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
+                                masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, 0)
             let exif = masonryLayout.view.indexExif(masonryLayout.view.currentIndex)
             viewerMode.show(exif["Panorama"])
 
@@ -175,53 +175,6 @@ MainWindow {
                 }
                 spacing: 0
 
-                component TitleButton : Button {
-                    id: titleButton
-
-                    implicitHeight: 32
-                    implicitWidth: 46
-
-                    leftPadding: 0
-                    topPadding: 0
-                    rightPadding: 0
-                    bottomPadding: 0
-                    leftInset: 0
-                    topInset: 0
-                    rightInset: 0
-                    bottomInset: 0
-
-                    property alias source: titleButton.icon.source
-
-                    icon.width: 10
-                    icon.height: 10
-                    icon.color: Style.text
-
-                    // property alias source: image.source
-                //     contentItem: Item {
-                //     Image {
-                //         id: image
-                //         anchors.centerIn: parent
-                //         mipmap: true
-                //         width: 10
-                //         height: 10
-                //     }
-                // }
-                    background: Rectangle {
-                        color: {
-                            if (!titleButton.enabled) {
-                                return "gray";
-                            }
-                            if (titleButton.pressed) {
-                                return Style.darker;
-                            }
-                            if (titleButton.hovered) {
-                                return Style.lighter;
-                            }
-                            return "transparent";
-                        }
-                    }
-                }
-
                 TitleButton {
                     id: minButton
 
@@ -260,19 +213,17 @@ MainWindow {
 
                     source: "qrc:/resources/WindowClose.svg"
                     icon.color: closeButton.hovered ? Style.closeButtonHoveredIcon : Style.text
-                    background: Rectangle {
-                        color: {
-                            if (!closeButton.enabled) {
-                                return "gray";
-                            }
-                            if (closeButton.pressed) {
-                                return Style.closeButtonPressed;
-                            }
-                            if (closeButton.hovered) {
-                                return Style.closeButtonHovered;
-                            }
-                            return "transparent";
+                    backgroundColor: {
+                        if (!closeButton.enabled) {
+                            return "gray";
                         }
+                        if (closeButton.pressed) {
+                            return Style.closeButtonPressed;
+                        }
+                        if (closeButton.hovered) {
+                            return Style.closeButtonHovered;
+                        }
+                        return "transparent";
                     }
                     onClicked: topLevelWindow.close()
 
@@ -369,7 +320,7 @@ MainWindow {
                         Layout.leftMargin: 5
                         Layout.rightMargin: 5
                         implicitWidth: 1
-                        implicitHeight: 46 - 15
+                        implicitHeight: titleBar.height - 15
                         color: Style.lighter2
                     }
 
@@ -378,7 +329,7 @@ MainWindow {
                         Layout.alignment: Qt.AlignVCenter
 
                         implicitWidth: 36
-                        implicitHeight: 46
+                        implicitHeight: titleBar.height
 
                         signal rightReleased
 
@@ -643,7 +594,7 @@ MainWindow {
 
                         TabButton {
                             implicitWidth: 36
-                            implicitHeight: 46
+                            implicitHeight: titleBar.height
 
                             icon.source: "qrc:/resources/ListView.svg"
                             icon.width: 16
@@ -661,7 +612,7 @@ MainWindow {
                         }
                         TabButton {
                             implicitWidth: 36
-                            implicitHeight: 46
+                            implicitHeight: titleBar.height
 
                             icon.source: "qrc:/resources/GridView.svg"
                             icon.width: 16
@@ -775,6 +726,10 @@ MainWindow {
                 PropertyChanges {
                     target: viewerBackground
                     opacity: 1
+                }
+                PropertyChanges {
+                    target: titleBar
+                    opacity: 0
                 }
             }
         ]

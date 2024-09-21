@@ -25,7 +25,7 @@ QtObject {
     property color buttonIconSelected: isDarkTheme ? "#43b5ff" : "#43b5ff"
     property color buttonIconDisabled: "#707070"
 
-    property color tooltipBackground: isDarkTheme ? "#404040" : "#d5d5d5"
+    property color tooltipBackground: isDarkTheme ? "#363636" : "#d5d5d5"
     property color tooltipBorder: isDarkTheme ? "#505050" : "#bcbcbc"
 
     property color popupBackground: isDarkTheme ? "#303030" : "#d5d5d5"
@@ -54,5 +54,4 @@ QtObject {
 
     property color viewerBackground: isDarkTheme ? "#000" : "#fff"
     property color viewerPanel: "transparent" // Qt.rgba(0, 0, 0, 0.1) //isDarkTheme ? "#000" : "#fff"
-    property color pathFadeGradient: isDarkTheme ? "#333436" : "#e2e5e8"
 }

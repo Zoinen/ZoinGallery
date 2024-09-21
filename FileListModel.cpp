@@ -29,6 +29,13 @@ FileListModel::FileListModel(QObject *parent)
                 _viewerImages.remove(path);
             }
         }
+        auto fullSizeIt = _fullSizeViewerImages.find(path);
+        if (fullSizeIt != _fullSizeViewerImages.end()) {
+            if (fullSizeIt.value().image.isNull()) {
+                qDebug() << "REMOVE CANCELLED FULL SIZE RUNNER" << path;
+                _fullSizeViewerImages.remove(path);
+            }
+        }
     });
 
     connect(_decodeManager, &DecodeManager::runningTasksChanged, [&] (const QString &runningTasks, const QStringList &tasksInfo) {
@@ -147,7 +154,7 @@ FileListModel::FileListModel(QObject *parent)
 
     connect(_decodeManager, &DecodeManager::imageReady, this, [&] (const ImageDecodeRequest &request,
                                                                    const QImage &image, const DecodedImageInfo &decodedInfo) {
-        // qDebug() << "ZZ IMAGE READEY" << request.info.path << isFromCache << request.targetSize << image.size();
+        // qDebug() << "ZZ IMAGE READEY" << request.info.path << request.info.imageSize << request.targetSize << image.size();
         auto it = _fileToItem.find(request.info.path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
@@ -161,32 +168,63 @@ FileListModel::FileListModel(QObject *parent)
             if (request.viewerRequest) {
                 // qDebug() << "ZZ Viewer image SET";
                 QString imageId = generateNewId();
-                auto it = _viewerImages.find(request.info.path);
-                if (it != _viewerImages.end()) {
-                    if (it->image.width() > image.width() && it->image.height() > image.height()) {
-                        return;
+                if (request.targetSize == request.info.imageSize) {
+                    auto it = _fullSizeViewerImages.find(request.info.path);
+                    if (it != _fullSizeViewerImages.end()) {
+                        if (it->image.width() > image.width() && it->image.height() > image.height()) {
+                            return;
+                        }
+                    }
+
+                    if (it != _fullSizeViewerImages.end() && decodedInfo.isFromCache) {
+                        _fullSizeViewerImages[request.info.path] = ViewerImage{
+                            .image = image,
+                            .imageId = imageId,
+                            .requestedSize = it->requestedSize, // not updating this
+                            .decodedInfo = decodedInfo
+                        };
+                    }
+                    else {
+                        _fullSizeViewerImages[request.info.path] = ViewerImage{
+                            .image = image,
+                            .imageId = imageId,
+                            .requestedSize = image.size(),
+                            .decodedInfo = decodedInfo
+                        };
+                    }
+                    _imageIdToFullSizeViewer[imageId] = request.info.path;
+                    if (item->index == _currentViewIndex) {
+                        emit viewerImageIdChanged(QString("image://async/") + imageId, 2);
                     }
                 }
-
-                if (it != _viewerImages.end() && decodedInfo.isFromCache) {
-                    _viewerImages[request.info.path] = ViewerImage{
-                        .image = image,
-                        .imageId = imageId,
-                        .requestedSize = it->requestedSize, // not updating this
-                        .decodedInfo = decodedInfo
-                    };
-                }
                 else {
-                    _viewerImages[request.info.path] = ViewerImage{
-                        .image = image,
-                        .imageId = imageId,
-                        .requestedSize = image.size(),
-                        .decodedInfo = decodedInfo
-                    };
-                }
-                _imageIdToViewer[imageId] = request.info.path;
-                if (item->index == _currentViewIndex) {
-                    emit viewerImageIdChanged(QString("image://thumbnails/") + imageId);
+                    auto it = _viewerImages.find(request.info.path);
+                    if (it != _viewerImages.end()) {
+                        if (it->image.width() > image.width() && it->image.height() > image.height()) {
+                            return;
+                        }
+                    }
+
+                    if (it != _viewerImages.end() && decodedInfo.isFromCache) {
+                        _viewerImages[request.info.path] = ViewerImage{
+                            .image = image,
+                            .imageId = imageId,
+                            .requestedSize = it->requestedSize, // not updating this
+                            .decodedInfo = decodedInfo
+                        };
+                    }
+                    else {
+                        _viewerImages[request.info.path] = ViewerImage{
+                            .image = image,
+                            .imageId = imageId,
+                            .requestedSize = image.size(),
+                            .decodedInfo = decodedInfo
+                        };
+                    }
+                    _imageIdToViewer[imageId] = request.info.path;
+                    if (item->index == _currentViewIndex) {
+                        emit viewerImageIdChanged(QString("image://thumbnails/") + imageId, 1);
+                    }
                 }
             }
             else {
@@ -335,8 +373,12 @@ int FileListModel::cd(const QString &path, const QString &itemToSelect) {
 
     if (path == "Computer") {
         for (const auto &drive : QDir::drives()) {
+            QString drivePath = drive.path();
+            if (drivePath.endsWith("/") && !drivePath.startsWith("/")) {
+                drivePath = drivePath.left(drivePath.size() - 1);
+            }
             ImageFile *item = new ImageFile{
-                .fileName = drive.path(),
+                .fileName = drivePath,
                 .isFolder = true,
                 .isImage = false,
                 .iconPath = "qrc:/resources/DriveIcon.svg",
@@ -448,7 +490,9 @@ void FileListModel::cleanupModelBeforeCd() {
 
     //Viewer
     _viewerImages.clear();
+    _fullSizeViewerImages.clear();
     _imageIdToViewer.clear();
+    _imageIdToFullSizeViewer.clear();
     _currentViewIndex = -1;
 
     for (auto it = _folderModels.begin(); it != _folderModels.end(); ++it) {
@@ -600,17 +644,20 @@ void FileListModel::requestViewer(int index, int width, int height) {
 
     QString requestedPath = _items[index]->fullPath();
     // qDebug() << __FUNCTION__ << viewerSize << requestedPath;
+    auto fullSizeIt = _fullSizeViewerImages.find(requestedPath);
     auto it = _viewerImages.find(requestedPath);
+    auto itThumbs = _fileToItem.find(requestedPath);
+    if (itThumbs != _fileToItem.end()) {
+        // qDebug() << "Using thumbnail image" << itThumbs.value()->image.size();
+        emit viewerImageIdChanged(QString("image://thumbnails/") + itThumbs.value()->imageId, 0);
+    }
     if (it != _viewerImages.end() && !it->image.isNull()) {
         // qDebug() << "Using viewer image" << it->requestedSize << it->image.size();
-        emit viewerImageIdChanged(QString("image://thumbnails/") + it.value().imageId);
+        emit viewerImageIdChanged(QString("image://thumbnails/") + it.value().imageId, 1);
     }
-    else {
-        auto itThumbs = _fileToItem.find(requestedPath);
-        if (itThumbs != _fileToItem.end()) {
-            // qDebug() << "Using thumbnail image" << itThumbs.value()->image.size();
-            emit viewerImageIdChanged(QString("image://thumbnails/") + itThumbs.value()->imageId);
-        }
+    if (!viewerSize.isValid() && fullSizeIt != _fullSizeViewerImages.end() && !fullSizeIt->image.isNull()) {
+        // qDebug() << "Using full size viewer image" << fullSizeIt->requestedSize << fullSizeIt->image.size();
+        emit viewerImageIdChanged(QString("image://async/") + fullSizeIt.value().imageId, 2);
     }
 
     int queueSize = 16;
@@ -640,23 +687,43 @@ void FileListModel::requestViewer(int index, int width, int height) {
 
             if (viewerSize.isValid()) {
                 targetSize = targetSize.scaled(viewerSize, Qt::KeepAspectRatio);
-            }
 
-            auto it = _viewerImages.find(requestedPath);
-            if (it != _viewerImages.end()) {
-                if (it->requestedSize.width() >= targetSize.width() &&
-                    it->requestedSize.height() >= targetSize.height()) {
-                    continue;
+                auto it = _viewerImages.find(requestedPath);
+                if (it != _viewerImages.end()) {
+                    if (it->requestedSize.width() >= targetSize.width() &&
+                        it->requestedSize.height() >= targetSize.height()) {
+                        continue;
+                    }
+                    else {
+                        // qDebug() << "ZZ DEC DUE TO SIZE" << targetSize << "from" << it->requestedSize << requestedPath;
+                        it->requestedSize = targetSize;
+                    }
                 }
                 else {
-                    qDebug() << "ZZ DEC DUE TO SIZE" << targetSize << "from" << it->requestedSize << requestedPath;
-                    it->requestedSize = targetSize;
+                    _viewerImages[requestedPath] = ViewerImage{
+                        .requestedSize = targetSize
+                    };
                 }
             }
             else {
-                _viewerImages[requestedPath] = ViewerImage{
-                    .requestedSize = targetSize
-                };
+                // qDebug() << "ZZ REQ FULL SIZE" << requestedPath;
+                auto it = _fullSizeViewerImages.find(requestedPath);
+                if (it != _fullSizeViewerImages.end()) {
+                    if (it->requestedSize.width() >= targetSize.width() &&
+                        it->requestedSize.height() >= targetSize.height()) {
+                        continue;
+                    }
+                    else {
+                        // qDebug() << "ZZ DEC DUE TO FULL SIZE" << targetSize << "from" << it->requestedSize << requestedPath;
+                        it->requestedSize = targetSize;
+                    }
+                }
+                else {
+                    _fullSizeViewerImages[requestedPath] = ViewerImage{
+                        .requestedSize = targetSize
+                    };
+                }
+
             }
 
             requests.append(ImageDecodeRequest{
@@ -678,6 +745,17 @@ QImage FileListModel::viewerForImageId(const QString &imageId) {
         QString path = *it;
         return _viewerImages[path].image;
     }
+
+    return QImage();
+}
+
+QImage FileListModel::fullSizeViewerForImageId(const QString &imageId) {
+    auto it = _imageIdToFullSizeViewer.find(imageId);
+    if (it != _imageIdToFullSizeViewer.end()) {
+        QString path = *it;
+        return _fullSizeViewerImages[path].image;
+    }
+
     return QImage();
 }
 

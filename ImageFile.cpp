@@ -36,10 +36,6 @@ QString calculateDivision(const QString expression) {
 QVariantList ImageFile::exifList() const {
     QVariantList out;
 
-    QVariantMap name;
-    name["text"] = fileName;
-    out.append(name);
-
     if (info.exif.contains("DateTime")) {
         QVariantMap title;
         title["title"] = true;
@@ -152,6 +148,27 @@ QVariantList ImageFile::exifList() const {
         QStringList latLon = location["text"].toString().split(", ");
         location["url"] = QString("https://www.openstreetmap.org/?mlat=%1&mlon=%2").arg(latLon[0], latLon[1]);
         out.append(location);
+    }
+
+    if (info.exif.contains("png_data")) {
+        QVariantList pngData = info.exif["png_data"].toList();
+        for (auto data : pngData) {
+            QVariantMap map = data.toMap();
+            QString key = map.keys().first();
+            if (key.startsWith("XML:")) {
+                continue;
+            }
+
+            QVariantMap title;
+            title["title"] = true;
+            title["text"] = key;
+            out.append(title);
+
+            QVariantMap value;
+            value["text"] = map[key];
+            value["multiline"] = true;
+            out.append(value);
+        }
     }
     return out;
 }

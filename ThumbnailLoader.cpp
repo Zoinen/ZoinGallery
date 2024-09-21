@@ -6,6 +6,7 @@
 #include "Decoders/QtDecoder.h"
 #include "Decoders/LibRawMetadataReader.h"
 #include "Decoders/TinyEXIFMetadataReader.h"
+#include "Decoders/LibpngMetadataReader.h"
 
 #include <QDebug>
 #include <QImage>
@@ -37,8 +38,10 @@ void ThumbnailLoader::init() {
 void ThumbnailLoader::readMetadata(ImageInfo &result) {
     // if (!Exiv2MetadataReader().readMetadata(result)) {
     if (!TinyEXIFMetadataReader().readMetadata(result)) {
-        if (!LibRawMetadataReader().readMetadata((result))) {
-            QtMetadataReader().readMetadata(result);
+        if (!LibRawMetadataReader().readMetadata(result)) {
+            if (!LibpngMetadataReader().readMetadata(result)) {
+                QtMetadataReader().readMetadata(result);
+            }
         }
     }
 }
@@ -96,7 +99,7 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
     QImage result;
     QElapsedTimer t;
     t.start();
-    qDebug() << "ZZ MIME??" << mimeType;
+    // qDebug() << "ZZ MIME??" << mimeType;
     if (TiffDecoder().canDecode(mimeType)) {
         result = TiffDecoder().decode(data, targetSize);
         decodedInfo.decoderUsed = "libtiff";
@@ -104,7 +107,7 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
     else if (JpegDecoder().canDecode(mimeType)) {
         result = JpegDecoder().decode(data, targetSize);
         decodedInfo.decoderUsed = "libjpeg-turbo";
-        qDebug() << "ZZ DECODED" << result.size() << targetSize;
+        // qDebug() << "ZZ DECODED" << result.size() << targetSize;
     }
     else {
         result = QtDecoder().decode(data, targetSize);

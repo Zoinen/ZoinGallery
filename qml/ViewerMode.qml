@@ -32,13 +32,12 @@ Item {
     property alias zoomFitView: flickableArea.zoomFitView
 
     property alias animation: viewerAnimation
-    property alias image: flickableArea.image
     property alias imageContainer: flickableArea
 
     component BlurBackground : MultiEffect {
         id: blurItem
         source: ShaderEffectSource {
-            sourceItem: sphericViewerMode ? sphericViewerLoader.item : flickableArea
+            sourceItem: sphericViewerMode ? sphericViewerLoader.item : flickableAreaContainer
             width: blurItem.width
             height: blurItem.height
             sourceRect: Qt.rect(blurItem.parent.x, blurItem.parent.y, blurItem.parent.width, blurItem.parent.height)
@@ -56,13 +55,97 @@ Item {
         blurEnabled: true
         blurMax: 64
         blur: 0.3
+
+        maskThresholdMin: 0.5
+        maskSpreadAtMin: 1.0
+    }
+
+    component CanvasText : Item {
+        id: canvasTextControl
+        implicitWidth: canvasText.width
+        implicitHeight: canvasText.height
+
+        property string text
+        property alias font: canvasDummyText.font
+        property alias texture: canvasText
+        property bool elide: false
+
+        Text {
+            id: canvasDummyText
+            text: canvasTextControl.text
+            font.pixelSize: 14
+            visible: false
+            width: canvasTextControl.elide ? parent.width : implicitWidth
+
+            onTextChanged: canvasText.requestPaint()
+        }
+
+        Canvas {
+            id: canvasText
+            width: canvasDummyText.width
+            height: canvasDummyText.height
+            onWidthChanged: requestPaint()
+
+            onPaint: {
+                var ctx = getContext("2d");
+                ctx.reset();
+
+                var text = canvasDummyText.text;
+                var fontSize = canvasDummyText.font.pixelSize;
+                var fontFamily = canvasDummyText.font.family;
+                var fillColor = "white";
+
+                ctx.font = fontSize + "px \"" + fontFamily + "\"";
+                ctx.textBaseline = "top";
+                ctx.lineJoin = 'miter';
+                ctx.miterLimit = 2;
+
+                ctx.fillStyle = fillColor;
+
+                if (canvasTextControl.elide) {
+                    var ellipsis = "...";
+                    var ellipsisWidth = ctx.measureText(ellipsis).width;
+                    var textWidth = ctx.measureText(text).width;
+
+                    // Check if text fits
+                    if (textWidth > width) {
+                        // Split text into start and end parts
+                        var startText = text;
+                        var endText = text;
+
+                        // Remove characters from the middle until text fits with ellipsis
+                        while (ctx.measureText(startText + ellipsis + endText).width > width && startText.length > 0 && endText.length > 0) {
+                            startText = startText.slice(0, -1);  // Shorten the start
+                            endText = endText.slice(1);          // Shorten the end
+                        }
+
+                        // Combine start, ellipsis, and end parts
+                        text = startText + ellipsis + endText;
+                    }
+                }
+                ctx.fillText(text, 0, 0);
+            }
+        }
+    }
+
+    component OutlineAndShadowEffect : ShaderEffect {
+        property var source
+        property color outlineColor: "black"
+        property real outlineWidth: 0.5
+        property real outlineOpacity: 0.6
+        property size textureSize: Qt.size(width, height)
+
+        property real blurRadius: 2.0
+        property color blurColor: "black"
+        property real blurOpacity: 0.7
+
+        fragmentShader: "qrc:/resources/outline.frag.qsb"
     }
 
     // ZZZ: Viewer size request takes current image's full size for all future images!!!
 
-    function setImage(imageId, originalSize) {
-        image.source = imageId
-        flickableArea.originalSize = Qt.size(originalSize.width / dpr, originalSize.height / dpr)
+    function setImage(imageId, originalSize, fromIndex, level) {
+        flickableArea.setImage(imageId, originalSize, fromIndex, level)
     }
 
     function show(sphericViewer) {
@@ -87,10 +170,8 @@ Item {
             flickableArea.forceShowScrollBars = false
         }
 
-        if (masonryLayout.view.currentItem) {
-            topLevelWindow.title = masonryLayout.view.currentItem.text + " [" +
-                    (masonryLayout.view.currentImageIndex + 1) + "/" + masonryLayout.view.imageCount + "] - ZoinGallery"
-        }
+        topLevelWindow.title = masonryLayout.view.indexText(masonryLayout.view.currentIndex) + " [" +
+                (masonryLayout.view.currentImageIndex + 1) + "/" + masonryLayout.view.imageCount + "] - ZoinGallery"
     }
 
     property bool leftPressed: false
@@ -182,7 +263,6 @@ Item {
 
     Keys.onReleased:
         (event) => {
-
             if (!event.isAutoRepeat) {
                 if (event.key === Qt.Key_Left) {
                     leftPressed = false
@@ -234,7 +314,7 @@ Item {
                 let imageId = masonryLayout.view.indexImage(masonryLayout.view.currentIndex)
                 // console.log("ZZ INDEX CHANGE 2", masonryLayout.view.currentIndex, imageId)
                 if (imageId) {
-                    setImage(imageId, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
+                    setImage(imageId, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, 0)
                     if (zoomFitView) {
                         flickableArea.zoomToFit(true)
                         // console.log("ZZ FIT ON CHANGE")
@@ -250,76 +330,114 @@ Item {
 
     Connections {
         target: fileListModel
-        function onViewerImageIdChanged(newImageId) {
-            viewerMode.setImage(newImageId, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex))
+        function onViewerImageIdChanged(newImageId, level) {
+            viewerMode.setImage(newImageId, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, level)
         }
     }
 
-    FlickableZoomable {
-        id: flickableArea
+    Item {
+        id: flickableAreaContainer
+        anchors.fill: parent
 
-        // visible: !sphericViewerMode
-        width: parent.width
-        height: parent.height
-        infoVisible: !viewerAnimation.running
-        animationDuration: viewerMode.animationDuration
+        FlickableZoomable {
+            id: flickableArea
 
-        onClicked: panelsVisible = !panelsVisible
+            // visible: !sphericViewerMode
+            width: parent.width
+            height: parent.height
+            animationDuration: viewerMode.animationDuration
+            scrollBarsRightMargin: panelsVisible ? rightPanel.width : 0
 
-        Rectangle {
-            id: delegateOutline
-            anchors {
-                fill: image
-                margins: -2 //selectionExtendsForImage
-            }
-            color: Style.brickImageSelected
-            radius: 4
-            z: -1
-        }
-
-        Item {
-            id: imageInfoPanel
-            anchors {
-                left: image.left
-                right: image.right
-                bottom: image.bottom
-            }
-            height: imageText.height + 10
-            z: 1
-            clip: true
+            onClicked: panelsVisible = !panelsVisible
 
             Rectangle {
-                anchors.fill: parent
-                anchors.topMargin: -radius
+                id: delegateOutline
+                anchors {
+                    fill: flickableArea.image
+                    margins: -2 //selectionExtendsForImage
+                }
+                color: Style.brickImageSelected
                 radius: 4
-                color: Style.brickInfoPanelSelected
+                z: -1
             }
 
+            Item {
+                id: imageInfoPanel
+                anchors {
+                    left: flickableArea.image.left
+                    right: flickableArea.image.right
+                    bottom: flickableArea.image.bottom
+                }
+                height: imageText.height + 10
+                z: 1
+                clip: true
 
-            Text {
-                id: imageText
-                anchors{
-                    left: parent.left
-                    right: parent.right
-                    bottom: parent.bottom
-                    margins: 5
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.topMargin: -radius
+                    radius: 4
+                    color: Style.brickInfoPanelSelected
                 }
 
-                text: masonryLayout.view.indexText(masonryLayout.view.currentIndex)
-                textFormat: masonryLayout.quickSearchMode ? Text.RichText : Text.PlainText
 
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideMiddle
-                color: Style.text
-                maximumLineCount: 4
-                wrapMode: Text.Wrap
+                Text {
+                    id: imageText
+                    anchors{
+                        left: parent.left
+                        right: parent.right
+                        bottom: parent.bottom
+                        margins: 5
+                    }
+
+                    text: masonryLayout.view.indexText(masonryLayout.view.currentIndex)
+                    textFormat: masonryLayout.quickSearchMode ? Text.RichText : Text.PlainText
+
+                    horizontalAlignment: Text.AlignHCenter
+                    elide: Text.ElideMiddle
+                    color: Style.text
+                    maximumLineCount: 4
+                    wrapMode: Text.Wrap
+                }
             }
+
+            component RectangleShadow : Rectangle {
+                property var baseItem
+
+                x: baseItem.x
+                y: baseItem.y
+                width: baseItem.width
+                height: baseItem.height
+                z: -1
+
+                color: Style.windowBackgroundNoQWK
+                opacity: baseItem.opacity
+            }
+        }
+
+        RectangleShadow {
+            baseItem: leftPanel
+            bottomRightRadius: 8
+            topRightRadius: 8
+        }
+
+        RectangleShadow {
+            baseItem: rightPanel
+            topLeftRadius: 8
+            bottomLeftRadius: rightPanel.listContentsFitScreen ? 8 : 0
+        }
+
+        RectangleShadow {
+            baseItem: topPanel
+            opacity: topPanel.backgroundOpacity
         }
     }
 
     Loader {
         id: sphericViewerLoader
-        anchors.fill: flickableArea
+        x: flickableArea.x
+        y: flickableArea.y
+        width: flickableArea.width
+        height: flickableArea.height
     }
 
     Component {
@@ -482,64 +600,180 @@ Item {
     // }
 
     Item {
-        id: topRightPanel
+        id: topPanel
+
         anchors {
-            top: parent.top
+            left: parent.left
             right: parent.right
+            top: parent.top
         }
-        width: topRightPanelRow.width
-        height: topRightPanelRow.height
+        height: 32
+
+        opacity: root.state === "viewer"
+        visible: opacity !== 0
+        Behavior on opacity {
+            NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
+        }
+        property bool hovered: false
+        property alias backgroundOpacity: topBarBackground.opacity
+
+        property string fileName: masonryLayout.view.indexText(masonryLayout.view.currentIndex)
+
+        component TitleProxyButton : TitleButton {
+            property var proxyControl
+            property bool backgroundVisible: true
+            property bool contentVisible: true
+
+            source: contentVisible || proxyControl.hovered ? proxyControl.source : ""
+            icon.color: proxyControl.icon.color
+            backgroundColor: backgroundVisible ? proxyControl.backgroundColor : "transparent"
+            hoveredOverride: proxyControl.hovered
+            pressedOverride: proxyControl.pressed
+        }
+
 
         Rectangle {
-            id: topRightPanelBg
-            width: parent.width
-            height: parent.height
-
-            color: "black"
-            // visible: flickableArea.panelBackgroundVisible && viewerMode.panelsVisible
+            id: topBarRect
+            width: topPanel.width
+            height: topPanel.height
 
             layer.enabled: true
             visible: false
-
-            bottomLeftRadius: 9
         }
 
         BlurBackground {
-            maskSource: topRightPanelBg
-            maskEnabled: true
+            id: topBarBackground
+            opacity: root.state === "viewer" && topPanel.hovered
+            visible: opacity !== 0
+            Behavior on opacity {
+                NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
+            }
+            maskSource: topBarRect
         }
 
-        RowLayout {
-            id: topRightPanelRow
-            height: 32
+        Timer {
+            repeat: true
+            running: root.state === "viewer"
+            interval: 50
+            onTriggered: {
+                let pos = topLevelWindow.mousePos()
+                pos = titleBar.mapFromGlobal(pos.x, pos.y)
+                let containsPos = pos.x >= titleBar.x && pos.y >= titleBar.y && pos.x <= titleBar.x + titleBar.width && pos.y <= titleBar.y + titleBar.height
+                topPanel.hovered = topLevelWindow.isPressedOnTitleBar() && containsPos
+            }
+        }
+
+        Item {
+            id: topPanelRowContainer
+            anchors.fill: parent
+
+            RowLayout {
+                id: topPanelRow
+                anchors {
+                    left: parent.left
+                    top: parent.top
+                    right: titleBarButtonsRow.left
+                    bottom: parent.bottom
+                }
+                spacing: 0
+                clip: true
+
+                CanvasText {
+                    id: canv1
+                    text: topPanel.fileName
+                    elide: true
+                    Layout.leftMargin: 12
+                    Layout.fillWidth: true
+                    Layout.bottomMargin: 1
+                }
+
+                IconLabel {
+                    Layout.leftMargin: 13
+                    icon.source: "qrc:/resources/Sphere.svg"
+                    icon.width: 16
+                    icon.height: 16
+                    icon.color: Style.text
+
+                    visible: sphericViewerMode
+                }
+
+                Text {
+                    id: text2
+                    Layout.leftMargin: sphericViewerMode ? 5 : 13
+                    Layout.rightMargin: 5
+                    verticalAlignment: Text.AlignVCenter
+                    Layout.bottomMargin: 1
+                    Layout.minimumWidth: 0
+                    Layout.preferredWidth: implicitWidth
+                    Layout.maximumWidth: implicitWidth
+
+                    text: sphericViewerMode ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))
+                    font.pixelSize: 14
+                    color: Style.text
+                }
+            }
+
+            Row {
+                id: titleBarButtonsRow
+                anchors {
+                    right: parent.right
+                    top: parent.top
+                }
+
+                TitleProxyButton {
+                    proxyControl: minButton
+                    backgroundVisible: false
+                }
+
+                TitleProxyButton {
+                    proxyControl: maxButton
+                    backgroundVisible: false
+                }
+
+                TitleProxyButton {
+                    proxyControl: closeButton
+                    backgroundVisible: false
+                }
+            }
+        }
+
+        OutlineAndShadowEffect {
+            width: topPanelRowContainer.width
+            height: topPanelRowContainer.height
+            source: ShaderEffectSource {
+                sourceItem: topPanelRowContainer
+                hideSource: true
+            }
+
+            outlineOpacity: 0.6 * (1 - topBarBackground.opacity)
+            blurOpacity: 0.7 * (1 - topBarBackground.opacity)
+        }
+
+        Row {
+            id: titleBarButtonsBackground
+            anchors {
+                top: parent.top
+                right: parent.right
+            }
             spacing: 0
 
-            IconLabel {
-                Layout.leftMargin: 13
-                icon.source: "qrc:/resources/Sphere.svg"
-                icon.width: 16
-                icon.height: 16
-                icon.color: Style.text
-
-                visible: sphericViewerMode
+            TitleProxyButton {
+                proxyControl: minButton
+                contentVisible: false
             }
 
-            Text {
-                Layout.leftMargin: sphericViewerMode ? 5 : 13
-                visible: flickableArea.infoVisible
-                verticalAlignment: Text.AlignVCenter
-                Layout.bottomMargin: 1
-
-                text: sphericViewerMode ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))
-                color: Style.text
+            TitleProxyButton {
+                proxyControl: maxButton
+                contentVisible: false
             }
 
-            Item {
-                id: titleBarButtonsPlaceholder
-                Layout.preferredWidth: 46 * 3 + 5
+            TitleProxyButton {
+                proxyControl: closeButton
+                contentVisible: false
             }
         }
     }
+
 
     MouseArea {
         id: rightPanel
@@ -553,9 +787,8 @@ Item {
         height: Math.min(fullContentHeight, parent.height - y)
 
         property bool viewerOverlapsFilmstrip: x < flickableArea.image.x + flickableArea.image.width
-        onViewerOverlapsFilmstripChanged: {
-            flickableArea.panelBackgroundVisible = viewerOverlapsFilmstrip
-        }
+
+        property bool listContentsFitScreen: rightPanel.fullContentHeight < rightPanel.parent.height - rightPanel.y
 
         opacity: root.state === "viewer" && (panelsVisible || rightPanel.containsMouse)
         visible: opacity !== 0
@@ -569,38 +802,18 @@ Item {
             id: bgRect
             width: rightPanel.width
             height: rightPanel.height
+
+            layer.enabled: true
             visible: false
-            topLeftRadius: 9
-            bottomLeftRadius: (rightPanel.fullContentHeight >= rightPanel.parent.height - rightPanel.y) ? 0 : 9
-            color: "black"
-        }
-        ShaderEffectSource {
-            id: bgRectSource
-            sourceItem: bgRect
-            width: bgRect
-            height: bgRect
-            smooth: true
-            mipmap: true
+
+            topLeftRadius: 8
+            bottomLeftRadius: rightPanel.listContentsFitScreen ? 8 : 0
         }
 
         BlurBackground {
-            maskSource: bgRectSource
+            maskSource: bgRect
             maskEnabled: true
-
-            // maskThresholdMin: 0.1
-            // maskThresholdMax: 0.9
-
-            // maskSpreadAtMax: 0.5
-            // maskThresholdMax: 0.8
         }
-        /*Rectangle {
-            anchors {
-                fill: parent
-                topMargin: -9
-            }
-            color: rightPanel.viewerOverlapsFilmstrip ? Style.opaqueMasonryViewBackgroundWithOpacity : Style.viewerPanel
-            topLeftRadius: 7
-        }*/
 
         ListView {
             id: filmstrip
@@ -638,7 +851,7 @@ Item {
                 property bool isCurrent: imageModel.mapFromSourceRow(masonryLayout.view.currentIndex) === index
 
                 Image {
-                    id: image
+                    id: filmstripImage
 
                     width: parent.width
                     height: parent.height
@@ -647,21 +860,21 @@ Item {
                     fillMode: Image.PreserveAspectFit
                     cache: false
                     // Async adds black blinking for folder views
-                    //asynchronous: true
+                    // asynchronous: true
                     mipmap: true
                     visible: false
                 }
 
                 ShaderEffect {
                     id: imageShader
-                    property real aspect: image.sourceSize.width / image.sourceSize.height
-                    property bool useHeight: (image.sourceSize.height * image.width / image.height) <= image.sourceSize.width
+                    property real aspect: filmstripImage.sourceSize.width / filmstripImage.sourceSize.height
+                    property bool useHeight: (filmstripImage.sourceSize.height * filmstripImage.width / filmstripImage.height) <= filmstripImage.sourceSize.width
 
                     anchors.centerIn: parent
-                    width: useHeight ? image.width : (image.height * aspect)
-                    height: useHeight ? (image.width / aspect) : image.height
+                    width: useHeight ? filmstripImage.width : (filmstripImage.height * aspect)
+                    height: useHeight ? (filmstripImage.width / aspect) : filmstripImage.height
 
-                    property var source: image
+                    property var source: filmstripImage
                     property var viewportSize: Qt.size(width * dpr, height * dpr)
                     property real sharpenAmount: 2
                     property bool showCheckerboard: masonryLayout.view.showTransparentGrid
@@ -669,7 +882,7 @@ Item {
                     property real borderRadius: 4.1 * dpr
 
                     fragmentShader: "qrc:/resources/shader.frag.qsb"
-                    visible: image.source != ""
+                    visible: filmstripImage.source != ""
                 }
 
                 /*Image {
@@ -689,8 +902,8 @@ Item {
 
                 Rectangle {
                     anchors.centerIn: parent
-                    width: image.paintedWidth
-                    height: image.paintedHeight
+                    width: filmstripImage.paintedWidth
+                    height: filmstripImage.paintedHeight
                     visible: isCurrent || thumbnailMouse.containsMouse
 
                     color: "transparent"
@@ -757,10 +970,11 @@ Item {
         id: leftPanel
         anchors {
             top: parent.top
+            topMargin: titleBar.height
             left: parent.left
         }
         width: 180
-        height: exifLayout.height + 10
+        height: exifLayout.height > 0 ? (exifLayout.height + 10) : 0
 
         opacity: root.state === "viewer" && (panelsVisible || leftPanel.containsMouse)
         visible: opacity !== 0
@@ -779,8 +993,8 @@ Item {
             layer.enabled: true
             visible: false
 
-            bottomRightRadius: 9
-            color: "black"
+            bottomRightRadius: 8
+            topRightRadius: 8
         }
 
         BlurBackground {
@@ -830,8 +1044,9 @@ Item {
                         Layout.fillWidth: true
                         elide: Text.ElideRight
                         text: modelData.url !== undefined ? modelData.text.replace(" ", "\n") : modelData.text
+                        wrapMode: modelData.multiline !== undefined ? Text.Wrap : Text.NoWrap
                         color: !isTitle || !index ? Style.text : Style.textGray
-                        font.pixelSize: !index ? 12 : 16
+                        font.pixelSize: 16
                         font.underline: modelData.url !== undefined
 
                         MouseArea {

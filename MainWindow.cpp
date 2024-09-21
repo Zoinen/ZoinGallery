@@ -1,10 +1,11 @@
 #include "MainWindow.h"
 #include "SvgCursor.h"
 
-#include <QSettings>
-#include <QTimer>
 #include <QDebug>
 #include <QGuiApplication>
+#include <QQuickItem>
+#include <QSettings>
+#include <QTimer>
 
 #if defined(Q_OS_WIN)
 #include "dwmapi.h"
@@ -13,9 +14,9 @@
 MainWindow::MainWindow(QWindow *parent)
     : QQuickWindow(parent) {
 
-    QSurfaceFormat format;
-    format.setSamples(8);  // Specify the desired number of samples for multisampling
-    setFormat(format);
+    // QSurfaceFormat format;
+    // format.setSamples(8);  // Specify the desired number of samples for multisampling
+    // setFormat(format);
 
     _leftButtonPressed = false;
     _ignoreNormalGeometryChange = true;
@@ -106,6 +107,14 @@ void MainWindow::toggleFullscreen() {
 
 void MainWindow::setMousePos(QPoint pos) const {
     QCursor::setPos(pos);
+}
+
+QPointF MainWindow::mousePos() const {
+    return QCursor::pos().toPointF();
+}
+
+bool MainWindow::isPressedOnTitleBar() const {
+    return !mouseGrabberItem() || (mouseGrabberItem() && mouseGrabberItem()->objectName().startsWith("titleBar", Qt::CaseInsensitive));
 }
 
 void MainWindow::setSphereScrollingMouseCursor(bool set, bool idle, qreal rotation) {

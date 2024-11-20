@@ -76,35 +76,125 @@ struct ImageData {
 };
 
 
-struct ImageFile {
-    QString folderPath;
-    QString fileName;
-    QImage image;
-    QString imageId;
-    QSize fullSize;
-    bool isFolder = false;
-    bool isImage = false;
-    bool isFolderView = false;
-    bool isCachedThumbnail = false;
-    QString iconPath;
-    int index = -1;
-    QString nestingInfo;
-    ImageInfo info;
+class ImageFile : public QObject {
+    Q_OBJECT
+    Q_PROPERTY(QString text READ text NOTIFY textChanged)
+    Q_PROPERTY(int index READ index NOTIFY indexChanged)
+    Q_PROPERTY(QString fullPath READ fullPath NOTIFY fullPathChanged)
+    Q_PROPERTY(QString nestingInfo READ nestingInfo NOTIFY nestingInfoChanged)
+    Q_PROPERTY(bool folderView READ folderView NOTIFY folderViewChanged)
+    Q_PROPERTY(QString imageIdUrl READ imageIdUrl NOTIFY imageIdUrlChanged)
+    Q_PROPERTY(bool isImage READ isImage NOTIFY isImageChanged)
+    Q_PROPERTY(bool isShowAsImage READ isShowAsImage WRITE setIsShowAsImage NOTIFY isShowAsImageChanged)
+    Q_PROPERTY(QString iconPath READ iconPath NOTIFY iconPathChanged)
+    Q_PROPERTY(bool isFolder READ isFolder NOTIFY isFolderChanged)
+    Q_PROPERTY(bool isPanorama READ isPanorama NOTIFY isPanoramaChanged)
+    Q_PROPERTY(bool isFilteredOut READ isFilteredOut NOTIFY isFilteredOutChanged)
+    Q_PROPERTY(QSize fullSize READ fullSize NOTIFY fullSizeChanged)
 
-    QList<ImageFile *> subfiles;
-    ImageFile *parent = nullptr;
+public:
+    using QObject::QObject;
 
-    QString fullPath() const {
-        return folderPath.isEmpty() ? fileName : QDir(folderPath).filePath(fileName);
-    }
+    QString folderPath() const;
+    void setFolderPath(const QString &folderPath);
 
-    bool folderView() const {
-        return subfiles.size() != 0 || isFolderView;
-    }
+    QString fileName() const;
+    void setFileName(const QString &fileName);
+
+    QImage image() const;
+    void setImage(const QImage &image);
+
+    QString imageIdUrl() const;
+    void setImageId(const QString &imageId);
+
+    QSize fullSize() const;
+    void setFullSize(const QSize &fullSize);
+
+    bool isFolder() const;
+    void setIsFolder(bool isFolder);
+
+    bool isImage() const;
+    void setIsImage(bool isImage);
+
+    bool isFolderView() const;
+    void setIsFolderView(bool isFolderView);
+
+    bool isCachedThumbnail() const;
+    void setIsCachedThumbnail(bool isCachedThumbnail);
+
+    QString iconPath() const;
+    void setIconPath(const QString &iconPath);
+
+    int index() const;
+    void setIndex(int index);
+
+    QString nestingInfo() const;
+    void setNestingInfo(const QString &nestingInfo);
+
+    ImageInfo info() const;
+    void setInfo(const ImageInfo &info);
+
+    QList<ImageFile *> subfiles() const;
+    void setSubfiles(const QList<ImageFile *> &subfiles);
+
+    ImageFile *imageFileParent() const;
+    void setImageFileParent(ImageFile *parent);
+
+    bool isShowAsImage() const;
+    void setIsShowAsImage(bool showAsImage);
+
+    QString fullPath() const;
+    bool folderView() const;
+    bool isPanorama() const;
 
     QVariantList exifList() const;
+
+    QString text() const;
+
+    bool isFilteredOut() const;
+
+    void setSearchText(const QString &searchText);
+
+signals:
+    void fullPathChanged();
+    void nestingInfoChanged();
+    void folderViewChanged();
+    void imageIdUrlChanged();
+    void isImageChanged();
+    void isShowAsImageChanged();
+    void iconPathChanged();
+    void isFolderChanged();
+    void isPanoramaChanged();
+
+    void textChanged();
+    void indexChanged();
+    void fullSizeChanged();
+
+    void isFilteredOutChanged();
+
+private:
+    QString _folderPath;
+    QString _fileName;
+    QImage _image;
+    QString _imageId;
+    QSize _fullSize;
+    bool _isFolder = false;
+    bool _isImage = false;
+    bool _isFolderView = false;
+    bool _isCachedThumbnail = false;
+    bool _isShowAsImage = false;
+    QString _iconPath;
+    int _index = -1;
+    QString _nestingInfo;
+    ImageInfo _info;
+
+    QList<ImageFile *> _subfiles;
+    ImageFile *_imageFileParent = nullptr;
+    QString _searchText;
 };
 Q_DECLARE_METATYPE(ImageFile *)
+
+using ImageFilePtr = std::shared_ptr<ImageFile>;
 
 struct FileInfo {
     QString name;

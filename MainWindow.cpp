@@ -153,8 +153,11 @@ void MainWindow::showEvent(QShowEvent *event) {
         setGeometry(geom.adjusted(1, 0, 0, 0));
         setGeometry(geom);
         setVisibility(windowVisibility);
-        qDebug() << "Window is ready";
-        emit windowIsReady();
+
+        QTimer::singleShot(0, this, [=] () {
+            qDebug() << "Window is ready";
+            emit windowIsReady();
+        });
     });
 // #endif
 }

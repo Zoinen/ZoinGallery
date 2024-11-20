@@ -1,4 +1,4 @@
-#include "LibRawMetadataReader.h"
+#include "RawDecoder.h"
 #include "ImageFile.h"
 #include "Exiftool/LensDatabase.h"
 
@@ -7,7 +7,13 @@
 #include <QDebug>
 #include <QFile>
 
-ExifOrientation LibRawMetadataReader::readOrientationFromExif(LibRaw &rawProcessor) {
+REGISTER_DECODER_DEFINITION(RawDecoder)
+
+static const QStringList RawExtensions = {"dng", "crw", "cr2", "cr3", "nef", "nrw", "arw", "arq", "sr2", "srf", "raf",
+                                          "orf", "rw2", "pef", "rwl", "x3f", "3fr", "fff", "mef", "srw", "dcr", "k25",
+                                          "kdc", "erf", "mos", "iiq", "bay", "cs1"};
+
+ExifOrientation RawDecoder::readOrientationFromExif(LibRaw &rawProcessor) {
     ExifOrientation orientation = Horizontal;
 
     // LibRaw stores orientation in imgdata.sizes.flip
@@ -21,7 +27,7 @@ ExifOrientation LibRawMetadataReader::readOrientationFromExif(LibRaw &rawProcess
     return orientation;
 }
 
-QVariantMap LibRawMetadataReader::readExifToMap(LibRaw &rawProcessor) {
+QVariantMap RawDecoder::readExifToMap(LibRaw &rawProcessor) {
     QVariantMap out;
 
     // Date and Time
@@ -116,16 +122,29 @@ QVariantMap LibRawMetadataReader::readExifToMap(LibRaw &rawProcessor) {
     // Note: LibRaw doesn't provide direct access to XMP data for panorama info
     return out;
 }
+
+QStringList RawDecoder::supportedFormats() {
+    return RawExtensions;
+}
+
 #include <QElapsedTimer>
-bool LibRawMetadataReader::readMetadata(ImageInfo &result) {
+bool RawDecoder::readMetadata(ImageInfo &result) {
+    if (!isFormatSupported(result.path)) {
+        return false;
+    }
+
     LibRaw rawProcessor;
 
+    // ZZZZ: THIS ONE SHOULD BE FAST BUT IT'S NOT SINCE IT DOESN'T CHECK FOR FILE FORMAT
     // Open the CR3 file
 #if defined(Q_OS_WIN)
     if (rawProcessor.open_file(result.path.toStdWString().c_str()) != LIBRAW_SUCCESS) {
 #else
     if (rawProcessor.open_file(result.path.toUtf8().constData()) != LIBRAW_SUCCESS) {
 #endif
+        // ZOIN ZOIN ZOIN
+        // DONT COMMIT THIS
+        // IT SHOULDNT HAPPEN THAT OFTEN
         qDebug() << "Failed to open file: " << result.path;
         return false;
     }
@@ -135,12 +154,15 @@ bool LibRawMetadataReader::readMetadata(ImageInfo &result) {
 
     result.orientation = readOrientationFromExif(rawProcessor);
     result.exif = readExifToMap(rawProcessor);
-    result.exif["Size"] = QFileInfo(result.path).size();
 
     return true;
 }
 
-bool LibRawMetadataReader::readPreviewAndMime(ImageData &result) {
+bool RawDecoder::readPreviewAndMime(ImageData &result) {
+    if (!isFormatSupported(result.request.info.path)) {
+        return false;
+    }
+
     LibRaw rawProcessor;
 
     // Open the CR3 file from memory buffer
@@ -149,7 +171,10 @@ bool LibRawMetadataReader::readPreviewAndMime(ImageData &result) {
 #else
     if (rawProcessor.open_file(result.request.info.path.toUtf8().constData()) != LIBRAW_SUCCESS) {
 #endif
-        qCritical() << "Failed to open buffer";
+        // ZOIN ZOIN ZOIN
+        // DONT COMMIT THIS
+        // IT SHOULDNT HAPPEN THAT OFTEN
+        qCritical() << "Failed to open buffer 2";
         return false;
     }
 
@@ -196,9 +221,5 @@ bool LibRawMetadataReader::readPreviewAndMime(ImageData &result) {
     result.previewUsed = QString("%1 of %2 (%3x%4 %5 %6)").arg(thumbnailIndex).arg(rawProcessor.imgdata.thumbs_list.thumbcount)
                              .arg(thumb->width).arg(thumb->height).arg(thumb->colors).arg(thumb->bits);
 
-    return true;
-}
-
-bool LibRawMetadataReader::isFormatSupported(const QString &path) {
     return true;
 }

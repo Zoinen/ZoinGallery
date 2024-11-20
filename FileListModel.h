@@ -54,12 +54,12 @@ private:
 
 class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterface {
     Q_OBJECT
-    Q_PROPERTY(int uiTargetHeight READ uiTargetHeight WRITE setUiTargetHeight NOTIFY uiTargetHeightChanged FINAL)
+    Q_PROPERTY(bool runningTasksDebug READ runningTasksDebug WRITE setRunningTasksDebug NOTIFY runningTasksDebugChanged)
 
 public:
     enum ItemUserRoles {
-        ImageRole = Qt::UserRole + 100,
-        ImageIdRole,
+        IsImageRole = Qt::UserRole + 100,
+        ImageIdUrlRole,
         FolderRole,
         ImageFullSizeRole,
         ImageFileRole,
@@ -108,23 +108,26 @@ public:
 
     void enterRecursiveView();
 
-    int uiTargetHeight() const;
-    void setUiTargetHeight(int newUiTargetHeight);
+    Q_INVOKABLE void setFolderViewImageSize(int width, int height);
+    Q_INVOKABLE void setFolderViewImageCount(int count);
 
     Q_INVOKABLE void startScanner();
 
-signals:
-    void viewerImageIdChanged(const QString &imageId, int level); // 0 is thumbnail, 1 is viewer, 2 is full resolution
+    bool runningTasksDebug() const;
+    void setRunningTasksDebug(bool isRunningTasksDebug);
 
-    void uiTargetHeightChanged();
+signals:
+    void viewerImageIdUrlChanged(const QString &imageId, int level); // 0 is thumbnail, 1 is viewer, 2 is full resolution
 
     void runningTasksChanged(const QString &tasks, const QStringList &tasksInfo);
+    void runningTasksDebugChanged();
 
 private:
     QString generateNewId();
     void updateImageId(ImageFile *item);
     ImageFile *createFileItem(const QString &folderPath, const QString &fileName, const QDateTime &lastModified = QDateTime());
     void cleanupModelBeforeCd();
+    ImageDecodeRequest imageDecodeRequestFromEmbeddedImageInfo(const ImageInfo &info) const;
 
     QString _root;
     QHash<QString, ImageFile *> _fileToItem;
@@ -152,7 +155,8 @@ private:
     int _currentViewIndex;
 
     QHash<int, RootProxyModel *> _folderModels;
-    int _uiTargetHeight;
+    QSize _folderViewImageSize;
+    int _folderViewImageCount = 16;
 };
 
 #endif // FILELISTMODEL_H

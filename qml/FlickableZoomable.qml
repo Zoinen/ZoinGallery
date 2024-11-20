@@ -223,10 +223,11 @@ Item {
         viewportAnimation.restart();
     }
 
-    function setImage(imageId, originalSize, fromIndex, level) {
+    function setImage(imageIdUrl, originalSize, fromIndex, level) {
+        console.log("SET IMAGE", imageIdUrl, originalSize, fromIndex, level)
         delayedIdSetter.stop()
         if (level === 0 && fromIndex !== image.fromIndex) {
-            image.source = imageId
+            image.source = imageIdUrl
             image.fromIndex = fromIndex
             image.fromLevel = level
             if (viewerImage2.fromIndex !== fromIndex) {
@@ -236,7 +237,7 @@ Item {
             }
         }
         else if (level === 1 && (fromIndex !== image.fromIndex || image.fromLevel === 0)) {
-            image.source = imageId
+            image.source = imageIdUrl
             image.fromIndex = fromIndex
             image.fromLevel = level
             if (viewerImage2.fromIndex !== fromIndex) {
@@ -262,17 +263,19 @@ Item {
                 targetY = viewerImage.y
             }
 
-            if (flickableArea.width * dpr > originalSize.width || flickableArea.height * dpr > originalSize.height) {
+            if (flickableArea.width > originalSize.width / dpr * zoomAnimation.to || flickableArea.height > originalSize.height / dpr * zoomAnimation.to) {
+                console.log("Not using partial decode", zoomScale, zoomAnimation.running, zoomAnimation.to)
                 viewerImage2.source = ""
                 viewerImageCrop.source = ""
                 viewerImage2.fromIndex = -1
             }
             else {
+                console.log("Requesting partial decode")
                 viewerImageCrop.targetX = -Math.floor(targetX)
                 viewerImageCrop.targetY = -Math.floor(targetY)
                 viewerImageCrop.targetWidth = flickableArea.width
                 viewerImageCrop.targetHeight = flickableArea.height
-                viewerImageCrop.source = imageId + "/" +
+                viewerImageCrop.source = imageIdUrl + "/" +
                         viewerImageCrop.targetX * dpr + "," +
                         viewerImageCrop.targetY * dpr + "," +
                         flickableArea.width * dpr + "," +
@@ -280,7 +283,7 @@ Item {
                 viewerImage2.fromIndex = fromIndex
             }
 
-            delayedIdSetter.idToSet = imageId
+            delayedIdSetter.idToSet = imageIdUrl
             delayedIdSetter.restart()
         }
         flickableArea.originalSize = Qt.size(originalSize.width / dpr, originalSize.height / dpr)
@@ -299,7 +302,7 @@ Item {
             right: parent.right
             rightMargin: scrollBarsRightMargin
             top: parent.top
-            topMargin: titleBar.height
+            topMargin: titleBar.viewerHeight
             bottom: parent.bottom
         }
         z: 1

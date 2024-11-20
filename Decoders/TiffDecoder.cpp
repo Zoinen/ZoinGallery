@@ -6,7 +6,9 @@
 
 #include "tiffio.hxx"
 
-static const QStringList TiffRawExtensions = {"tiff", "tif", "cr2", "dng", "crw", "nef", "arw", "arq", "cr3"};
+REGISTER_DECODER_DEFINITION(TiffDecoder)
+
+static const QStringList TiffExtensions = {"tiff", "tif"};
 
 struct membuf: std::streambuf {
     membuf(uint8_t const* base, size_t size) {
@@ -36,14 +38,14 @@ struct imemstream: virtual membuf, std::istream {
 };
 
 QStringList TiffDecoder::supportedFormats() {
-    return TiffRawExtensions;
+    return TiffExtensions;
 }
 
-bool TiffDecoder::canDecode(const QString &mimeType) {
-    return mimeType == "image/tiff";
-}
+QImage TiffDecoder::decode(const QString &mimeType, const QByteArray &data, QSize targetSize) {
+    if (mimeType != "image/tiff") {
+        return QImage();
+    }
 
-QImage TiffDecoder::decode(const QByteArray &data, QSize targetSize) {
     imemstream memStream(reinterpret_cast<const uint8_t *>(data.constData()), data.size());
 
     std::istringstream input_TIFF_stream;

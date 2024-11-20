@@ -1,6 +1,11 @@
-﻿#include "MetadataReader.h"
+﻿#include "ImageDecoderInterface.h"
+#include "ImageFile.h"
 
-QString MetadataReader::formatShutterSpeed(double shutterSpeed) {
+bool ImageDecoderInterface::isFormatSupported(const QString &path) {
+    return isExtensionMatch(path, supportedFormats());
+}
+
+QString ImageDecoderInterface::formatShutterSpeed(double shutterSpeed) {
     if (shutterSpeed <= 0) return "Invalid";
 
     if (shutterSpeed < 0.25) {
@@ -19,7 +24,7 @@ QString MetadataReader::formatShutterSpeed(double shutterSpeed) {
     }
 }
 
-QString MetadataReader::convertDMSToDD(double latitudeDegrees, double latitudeMinutes, double latitudeSeconds, char latitudeDirection,
+QString ImageDecoderInterface::convertDMSToDD(double latitudeDegrees, double latitudeMinutes, double latitudeSeconds, char latitudeDirection,
                        double longitudeDegrees, double longitudeMinutes, double longitudeSeconds, char longitudeDirection)
 {
     // Convert latitude to decimal degrees

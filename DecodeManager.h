@@ -64,6 +64,9 @@ public:
 
     void prepareToClose();
 
+    bool runningTasksDebug() const;
+    void setRunningTasksDebug(bool isRunningTasksDebug);
+
 signals:
     void imageInfoReady(const ImageInfo &result);
     void imagesInfoReady(const QList<ImageInfo> &result);
@@ -113,6 +116,7 @@ private:
     int _runningTasks = 0;
 
     bool _disableCache = true;
+    bool _runningTasksDebug = false;
 };
 
 #endif // DECODEMANAGER_H

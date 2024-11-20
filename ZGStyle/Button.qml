@@ -14,8 +14,9 @@ T.Button {
     property real centerOffset: 0
     property bool colorfulIcon: false
     property bool inactive: false
+    opacity: inactive ? 0.37 : 1
 
-    icon.color: colorfulIcon ? "transparent" : (enabled && !inactive ? Style.text : Style.buttonIconDisabled)
+    icon.color: colorfulIcon ? "transparent" : Style.text
     icon.width: 16
     icon.height: 16
 
@@ -33,7 +34,6 @@ T.Button {
         anchors.horizontalCenterOffset: control.centerOffset
         width: backgroundWidth
         height: backgroundHeight
-        opacity: enabled && !inactive ? 1 : 0.3
         color: control.enabled && !inactive ? (control.down ? Style.darker : (control.hovered ? Style.lighter : "transparent")) : "transparent"
         radius: 4
     }

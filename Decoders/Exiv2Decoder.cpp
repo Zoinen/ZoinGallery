@@ -1,4 +1,4 @@
-﻿#include "Exiv2MetadataReader.h"
+﻿#include "Exiv2Decoder.h"
 
 #include <exiv2/exiv2.hpp>
 #include <exiv2/preview.hpp>
@@ -6,9 +6,13 @@
 
 #include <iostream>
 
-static const QStringList TiffRawExtensions = {"tiff", "tif", "cr2", "dng", "crw", "nef", "arw", "arq"};
+// REGISTER_DECODER_DEFINITION(Exiv2Decoder)
+
+static const QStringList Exiv2Extensions = {"arw", "arq", "avif", "bmp", "cr2", "cr3", "crw", "dcp", "dng", "eps", "exv",
+                                            "gif", "heic", "heif", "jp2", "jpg", "jpe", "jpeg", "jfif", "jxl", "mrw",
+                                            "nef", "orf", "pef", "pgf", "png", "psd", "raf", "rw2", "sr2", "srw", "tga",
+                                            "tif", "tiff", "webp", "xmp"};
 static const QStringList JpegExtensions = {"jpg", "jpeg", "jpe", "jfif"};
-QStringList Exiv2Extensions = {"exv", "mrw", "webp", "pef", "rw2", "sr2", "srw", "orf", "png", "pgf", "raf", "eps", "xmp", "gif", "psd", "tga", "bmp", "jp2"};
 
 #ifdef _WIN32
 #define NULL_DEVICE "NUL:"
@@ -16,7 +20,13 @@ QStringList Exiv2Extensions = {"exv", "mrw", "webp", "pef", "rw2", "sr2", "srw",
 #define NULL_DEVICE "/dev/null"
 #endif
 
-void Exiv2MetadataReader::init() {
+bool Exiv2Decoder::_initCalled = false;
+
+Exiv2Decoder::Exiv2Decoder() {
+    if (_initCalled) {
+        return;
+    }
+    _initCalled = true;
     Exiv2::XmpParser::initialize();
     ::atexit(Exiv2::XmpParser::terminate);
 #ifdef EXV_ENABLE_BMFF
@@ -28,7 +38,11 @@ void Exiv2MetadataReader::init() {
 #endif
 }
 
-bool Exiv2MetadataReader::readMetadata(ImageInfo &result) {
+QStringList Exiv2Decoder::supportedFormats() {
+    return Exiv2Extensions;
+}
+
+bool Exiv2Decoder::readMetadata(ImageInfo &result) {
     if (!isFormatSupported(result.path)) {
         return false;
     }
@@ -66,16 +80,8 @@ bool Exiv2MetadataReader::readMetadata(ImageInfo &result) {
     return true;
 }
 
-bool Exiv2MetadataReader::isFormatSupported(const QString &path) {
-    return isExtensionMatch(path, Exiv2Extensions) || isExtensionMatch(path, JpegExtensions) || isExtensionMatch(path, TiffRawExtensions);
-}
-
-bool Exiv2MetadataReader::readPreviewAndMime(ImageData &result) {
+bool Exiv2Decoder::readPreviewAndMime(ImageData &result) {
     if (!isFormatSupported(result.request.info.path)) {
-        return false;
-    }
-
-    if (isExtensionMatch(result.request.info.path, JpegExtensions)) {
         return false;
     }
 
@@ -95,7 +101,6 @@ bool Exiv2MetadataReader::readPreviewAndMime(ImageData &result) {
         assert(image.get() != 0);
         image->readMetadata();
         result.mimeType = QString::fromStdString(image->mimeType());
-        fixMimeType(result.mimeType, result.request.info.path);
 
         Exiv2::PreviewProperties previewProp;
 
@@ -118,7 +123,6 @@ bool Exiv2MetadataReader::readPreviewAndMime(ImageData &result) {
             result.previewData.reset(reinterpret_cast<char *>(previewImg.pData_));
             result.previewDataSize = previewImg.size_;
             result.previewMimeType = QString::fromStdString(previewProp.mimeType_);
-            fixMimeType(result.mimeType, result.request.info.path);
             previewImg.release();
             f.unmap(mappedFile);
             return true;
@@ -132,7 +136,7 @@ bool Exiv2MetadataReader::readPreviewAndMime(ImageData &result) {
     return false;
 }
 
-ExifOrientation Exiv2MetadataReader::readOrientationFromExif(Exiv2::Image *image) {
+ExifOrientation Exiv2Decoder::readOrientationFromExif(Exiv2::Image *image) {
     ExifOrientation orientation = Horizontal;
     const Exiv2::ExifData &exifData = image->exifData();
     if (!exifData.empty()) {
@@ -144,7 +148,7 @@ ExifOrientation Exiv2MetadataReader::readOrientationFromExif(Exiv2::Image *image
     return orientation;
 }
 
-QSize Exiv2MetadataReader::readResolutionFromExif(Exiv2::Image *image) {
+QSize Exiv2Decoder::readResolutionFromExif(Exiv2::Image *image) {
     QSize size;
     const Exiv2::ExifData &exifData = image->exifData();
     if (!exifData.empty()) {
@@ -214,7 +218,7 @@ double fractionToDouble(const QString& fraction) {
     return numerator / denominator;
 }
 
-QString Exiv2MetadataReader::convertEXIFToDD(const QString& exifLat, const QString &exifLon) {
+QString Exiv2Decoder::convertEXIFToDD(const QString& exifLat, const QString &exifLon) {
     QStringList latParts = exifLat.split(' ');
     if (latParts.size() < 4) {
         return QString();
@@ -247,7 +251,7 @@ QString Exiv2MetadataReader::convertEXIFToDD(const QString& exifLat, const QStri
     return convertDMSToDD(latDegrees, latMinutes, latSeconds, latDirection, lonDegrees, lonMinutes, lonSeconds, lonDirection);
 }
 
-QVariantMap Exiv2MetadataReader::readExifToMap(Exiv2::Image *image) {
+QVariantMap Exiv2Decoder::readExifToMap(Exiv2::Image *image) {
     QVariantMap out;
     const Exiv2::ExifData &exifData = image->exifData();
     // for (auto it = exifData.begin(); it != exifData.end(); ++it) {
@@ -331,10 +335,4 @@ QVariantMap Exiv2MetadataReader::readExifToMap(Exiv2::Image *image) {
     }
 
     return out;
-}
-
-void Exiv2MetadataReader::fixMimeType(QString &mimeToUpdate, const QString &filePath) {
-    if (isExtensionMatch(filePath, {"psd", "psb"})) {
-        mimeToUpdate = "psd";
-    }
 }

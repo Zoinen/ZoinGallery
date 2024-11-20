@@ -52,6 +52,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(bool showTransparentGrid READ showTransparentGrid WRITE setShowTransparentGrid NOTIFY showTransparentGridChanged)
     Q_PROPERTY(int listRowHeight READ listRowHeight NOTIFY listRowHeightChanged)
     Q_PROPERTY(QVariantList currentImageExif READ currentImageExif NOTIFY currentIndexChanged)
+    Q_PROPERTY(QQuickItem *viewport READ viewport NOTIFY viewportChanged)
 
     Q_PROPERTY(qreal paddingLeft READ paddingLeft WRITE setPaddingLeft NOTIFY paddingLeftChanged)
     Q_PROPERTY(qreal paddingRight READ paddingRight WRITE setPaddingRight NOTIFY paddingRightChanged)
@@ -65,7 +66,7 @@ public:
     Q_INVOKABLE QQuickItem *itemAt(qreal x, qreal y) const;
     Q_INVOKABLE int indexAt(qreal x, qreal y) const;
     Q_INVOKABLE QRectF indexGeometry(int index) const;
-    Q_INVOKABLE QString indexImage(int index) const;
+    Q_INVOKABLE QString indexImageIdUrl(int index) const;
     Q_INVOKABLE QString indexText(int index) const;
     Q_INVOKABLE QSize indexOriginalSize(int index) const;
     Q_INVOKABLE QVariantMap indexExif(int index) const;
@@ -129,6 +130,8 @@ public:
     int listRowHeight() const;
     QVariantList currentImageExif() const;
 
+    QQuickItem *viewport() const;
+
 signals:
     void targetHeightChanged();
     void contentYChanged();
@@ -165,6 +168,8 @@ signals:
 
     void listRowHeightChanged();
 
+    void viewportChanged();
+
 private slots:
     // ZZ: This should be done in embedded view every time
     void onThumbnailReadFinished();
@@ -174,21 +179,18 @@ private:
 
     struct MasonryBrick {
         QSizeF originalSize;
-        bool temporaryLineBreak;
-        bool lineBreak;
+        bool temporaryLineBreakAfter = false;
+        bool lineBreakAfter = false;
 
         QSizeF normalizedSize;
-        qreal x;
-        qreal y;
-        int row;
-        int column;
-        bool lastInRow;
-        BrickItem *item;
-        const ImageFile *const image;
-        int globalIndex;
+        qreal x = 0;
+        qreal y = 0;
+        int row = 0;
+        int column = 0;
+        BrickItem *item = nullptr;
+        ImageFile *const image = nullptr;
+        int globalIndex = -1;
 
-        MasonryBrick(int width, int height);
-        MasonryBrick(ImageFile *image_, QSizeF originalSize_, bool lineBreak_ = false);
         QRectF geometry() const;
         QSize thumbnailSize(int spacing) const;
     };
@@ -198,8 +200,16 @@ private:
     bool isEmbedded() const;
     void rewrap();
     static qreal scaleRow(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, int lastRowIndex, qreal rowHeight = 0);
+    enum CalcLayoutMode {
+        CalcLayoutMasonry,
+        CalcLayoutSingleRow,
+        CalcLayoutGrid
+    };
+    CalcLayoutMode layoutMode() const;
+    static void calcGridLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing,
+                           bool lastRowMatchesPrevious, qreal paddingTop);
     static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing,
-                           bool lastRowMatchesPrevious, qreal paddingTop = 0, bool growToFillWidth = true);
+                           bool lastRowMatchesPrevious, qreal paddingTop, CalcLayoutMode layoutMode);
     void updateProperties();
     void setContentYInternal(qreal newContentY);
 
@@ -232,7 +242,7 @@ private:
     int _topItemOffset;
     QQuickItem *_viewport;
 
-    const QSizeF GridView_Folder = QSize(2, 3);
+    const QSizeF GridView_Folder = QSizeF(1, 1);
 
     int _targetHeight;
     qreal _contentY;

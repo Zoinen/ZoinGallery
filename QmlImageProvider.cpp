@@ -15,7 +15,7 @@ QImage QmlImageProvider::requestImage(const QString &id, QSize *size, const QSiz
     if (_model) {
         const ImageFile *item = _model->itemForImageId(id);
         if (item) {
-            QImage img = item->image;
+            QImage img = item->image();
             if (!img.isNull()) {
                 return img;
             }

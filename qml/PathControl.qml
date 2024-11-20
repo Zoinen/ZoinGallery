@@ -6,6 +6,9 @@ import QtQuick.Effects
 Item {
     id: pathRoot
     property string text
+    property bool isNetworkDrive: text.startsWith("//")
+    property string textNetworkFixed: isNetworkDrive ? text.slice(2) : text
+    property var breadcrumbs: (textNetworkFixed.endsWith("/") ? textNetworkFixed.slice(0, -1) : textNetworkFixed).split("/")
 
     function replaceAll(str, find, replace) {
         return str.replace(new RegExp(find, 'g'), replace);
@@ -37,7 +40,7 @@ Item {
             verticalCenter: parent.verticalCenter
         }
         height: 32
-        color: pathMouse.containsMouse ? Style.lighter2 : Style.lighter
+        color: pathMouse.containsMouse ? Style.pathBackgroundHovered : Style.pathBackground
         radius: 4
     }
 
@@ -69,14 +72,14 @@ Item {
 
         signal clicked(index: int)
 
-        implicitWidth: folder.width + 12
+        implicitWidth: folder.width + 11
         implicitHeight: parent.height
 
         Rectangle {
             anchors.centerIn: parent
             width: parent.width
             height: 24
-            color: folderMouse.containsMouse ? (folderMouse.pressed ? Style.darker : Style.lighter) : "transparent"
+            color: folderMouse.containsMouse ? (folderMouse.pressed ? Style.pathItemPressed : Style.pathItemHovered) : "transparent"
             radius: 4
         }
 
@@ -88,17 +91,20 @@ Item {
             Text {
                 id: folderText
                 color: Style.text
+                font.pixelSize: 14
+                renderType: Text.NativeRendering
             }
 
-            Image {
+            IconLabel {
                 anchors {
                     verticalCenter: parent.verticalCenter
                     verticalCenterOffset: 1
                 }
                 visible: needArrow
+                opacity: 0.5
 
-                source: "qrc:/resources/PathSeparator.svg"
-                sourceSize.height: 8
+                icon.source: "qrc:/resources/PathSeparator.svg"
+                icon.color: Style.text
             }
         }
 
@@ -132,7 +138,7 @@ Item {
                     rightMargin: 7
                 }
 
-                source: "qrc:/resources/DriveIcon.svg"
+                source: isNetworkDrive ? "qrc:/resources/NetworkDriveIcon.svg" : "qrc:/resources/DriveIcon.svg"
                 sourceSize.width: 18
                 sourceSize.height: 18
             }
@@ -141,7 +147,7 @@ Item {
         FolderDelegate {
             id: rootFolder
             visible: !editMode
-            text: (pathRoot.text.endsWith("/") ? pathRoot.text.slice(0, -1) : pathRoot.text).split("/")[0]
+            text: breadcrumbs[0]
             onClicked: (index) => pathRoot.folderClicked("")
         }
     }
@@ -164,7 +170,7 @@ Item {
 
             Repeater {
                 id: repeater
-                model: (text.endsWith("/") ? text.slice(0, -1) : text).split("/").slice(1)
+                model: breadcrumbs.slice(1)
 
                 FolderDelegate {
                     text: modelData
@@ -234,6 +240,8 @@ Item {
             right: parent.right
         }
         visible: editMode
+        font.pixelSize: 14
+        renderType: Text.NativeRendering
 
         leftPadding: 7
         rightPadding: 10

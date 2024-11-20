@@ -16,14 +16,14 @@ T.TextField {
         anchors.fill: parent
 
         color: Style.darker
-        border.color: parent.activeFocus ? Style.textSelected : bg.color
+        border.color: parent.activeFocus ? Style.textSelectedBackground : bg.color
         border.width: 1
     }
 
     hoverEnabled: true
     selectByMouse: true
-    palette.highlight: Style.textSelected
-    palette.highlightedText: Style.text
+    palette.highlight: Style.textSelectedBackground
+    palette.highlightedText: Style.textSelected
     palette.brightText: "green"
 
     leftPadding: 10

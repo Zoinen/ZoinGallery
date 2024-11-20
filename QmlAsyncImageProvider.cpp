@@ -39,7 +39,7 @@ void AsyncImageResponseRunnable::run() {
     if (_model) {
         const ImageFile *item = _model->itemForImageId(_id);
         if (item) {
-            QImage img = item->image;
+            QImage img = item->image();
             if (!img.isNull()) {
                 emit done(img);
                 return;

@@ -1,12 +1,5 @@
 #include "ThumbnailLoader.h"
-#include "Decoders/Exiv2MetadataReader.h"
-#include "Decoders/QtMetadataReader.h"
-#include "Decoders/TiffDecoder.h"
-#include "Decoders/JpegDecoder.h"
-#include "Decoders/QtDecoder.h"
-#include "Decoders/LibRawMetadataReader.h"
-#include "Decoders/TinyEXIFMetadataReader.h"
-#include "Decoders/LibpngMetadataReader.h"
+#include "Decoders/ImageDecoderInterface.h"
 
 #include <QDebug>
 #include <QImage>
@@ -27,34 +20,39 @@
 QStringList ThumbnailLoader::ImageQtExtensions;
 
 void ThumbnailLoader::init() {
-    QtDecoder().init();
-    JpegDecoder().init();
-    TiffDecoder().init();
-
     // Just to fully instantiate it here
     supportedFormats();
 }
 
 void ThumbnailLoader::readMetadata(ImageInfo &result) {
-    // if (!Exiv2MetadataReader().readMetadata(result)) {
-    if (!TinyEXIFMetadataReader().readMetadata(result)) {
-        if (!LibRawMetadataReader().readMetadata(result)) {
-            if (!LibpngMetadataReader().readMetadata(result)) {
-                QtMetadataReader().readMetadata(result);
-            }
+    for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
+        if (ImageDecoderFactory::createDecoder(i)->readMetadata(result)) {
+            break;
         }
+    }
+    if (!result.exif.contains("Size")) {
+        result.exif["Size"] = QFileInfo(result.path).size();
+    }
+    if (!result.exif.contains("DateTime")) {
+        result.exif["DateTimeCreated"] = QFileInfo(result.path).birthTime();
     }
 }
 
 bool ThumbnailLoader::readImage(ImageData &result) {
-    // TODO: make mime detection better, and probably libraw doing nothing
-    bool previewLoaded = false; //Exiv2MetadataReader().readPreviewAndMime(result);
-    if (!previewLoaded) {
-        previewLoaded = LibRawMetadataReader().readPreviewAndMime(result);
+    bool previewLoaded = false;
+    for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
+        previewLoaded = ImageDecoderFactory::createDecoder(i)->readPreviewAndMime(result);
+        if (previewLoaded) {
+            break;
+        }
     }
-    if (!previewLoaded) {
-        previewLoaded = TinyEXIFMetadataReader().readPreviewAndMime(result);
+    if (result.mimeType.isEmpty()) {
+        result.mimeType = QMimeDatabase().mimeTypeForFile(result.request.info.path).name();
+        if (isExtensionMatch(result.request.info.path, {"psd", "psb"})) {
+            result.mimeType = "psd";
+        }
     }
+
     QSize targetSize = result.request.targetSize;
     if (!result.request.checkCache) {
         targetSize = expandToCacheImageResolution(targetSize);
@@ -80,10 +78,12 @@ QImage ThumbnailLoader::decode(const ImageData &imageData, DecodedImageInfo &dec
 
     QImage image;
     if (!imageData.data.isNull()) {
+        // qDebug() << "ZZ DECODE" << imageData.request.info.path << imageData.mimeType;
         image = decodeImage(imageData.data, imageData.mimeType,
                             rotateToOrientation(targetSize, imageData.request.info.orientation), decodedInfo);
     }
     if (image.isNull() && imageData.previewData) {
+        // qDebug() << "ZZ DECODE PREVIEW" << imageData.request.info.path << imageData.previewMimeType;
         QByteArray previewData = QByteArray::fromRawData(imageData.previewData.get(), imageData.previewDataSize);
         image = decodeImage(previewData, imageData.previewMimeType,
                             rotateToOrientation(targetSize, imageData.request.info.orientation), decodedInfo);
@@ -100,18 +100,12 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
     QElapsedTimer t;
     t.start();
     // qDebug() << "ZZ MIME??" << mimeType;
-    if (TiffDecoder().canDecode(mimeType)) {
-        result = TiffDecoder().decode(data, targetSize);
-        decodedInfo.decoderUsed = "libtiff";
-    }
-    else if (JpegDecoder().canDecode(mimeType)) {
-        result = JpegDecoder().decode(data, targetSize);
-        decodedInfo.decoderUsed = "libjpeg-turbo";
-        // qDebug() << "ZZ DECODED" << result.size() << targetSize;
-    }
-    else {
-        result = QtDecoder().decode(data, targetSize);
-        decodedInfo.decoderUsed = "Qt";
+    for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
+        result = ImageDecoderFactory::createDecoder(i)->decode(mimeType, data, targetSize);
+        if (!result.isNull()) {
+            decodedInfo.decoderUsed = ImageDecoderFactory::createDecoder(i)->decoderName();
+            break;
+        }
     }
     decodedInfo.decodingTookTime = t.restart();
     return result;
@@ -160,8 +154,9 @@ QStringList ThumbnailLoader::supportedFormats() {
     static QStringList formats;
     if (formats.isEmpty()) {
         QSet<QString> formatsSet;
-        for (const auto &extensions : {QtDecoder().supportedFormats(), JpegDecoder().supportedFormats(), TiffDecoder().supportedFormats()}) {
-            for (const QString &extension : extensions) {
+        for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
+            QStringList supportedFormats = ImageDecoderFactory::createDecoder(i)->supportedFormats();
+            for (const QString &extension : supportedFormats) {
                 formatsSet.insert(QString("*.%1").arg(extension));
             }
         }

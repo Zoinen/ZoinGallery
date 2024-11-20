@@ -37,8 +37,7 @@ public:
 
     const QString &matchesInfo() const;
 
-    void updateVisuals();
-    QString indexTextWithQuickSearchApplied(int index);
+    void updateItemsText();
 
 signals:
     void maskChanged();

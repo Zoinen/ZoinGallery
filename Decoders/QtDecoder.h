@@ -1,15 +1,18 @@
 ﻿#ifndef QTIMAGEDECODER_H
 #define QTIMAGEDECODER_H
 
-#include "ImageDecoder.h"
+#include "ImageDecoderInterface.h"
 
-class QtDecoder : public ImageDecoder {
+class QtDecoder : public ImageDecoderInterface {
+    REGISTER_DECODER_DECLARATION(QtDecoder, -100)
+
 public:
-    void init() override;
+    QtDecoder();
     QStringList supportedFormats() override;
 
-    bool canDecode(const QString& mimeType) override;
-    QImage decode(const QByteArray& data, QSize targetSize) override;
+    bool readMetadata(ImageInfo& result) override;
+    bool readPreviewAndMime(ImageData &result) override { return false; }
+    QImage decode(const QString& mimeType, const QByteArray& data, QSize targetSize) override;
 
 private:
     static QStringList _formats;

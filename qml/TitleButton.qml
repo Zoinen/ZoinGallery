@@ -7,7 +7,7 @@ Button {
 
     objectName: "titleBarButton"
 
-    implicitHeight: 32 //titleBar.height
+    implicitHeight: titleBar.height
     implicitWidth: 46
 
     leftPadding: 0
@@ -18,6 +18,11 @@ Button {
     topInset: 0
     rightInset: 0
     bottomInset: 0
+
+    opacity: topLevelWindow.active || titleButton.hoveredOverride ? 1 : 0.4
+    Behavior on opacity {
+        NumberAnimation { duration: 150; easing.type: Easing.InOutQuad }
+    }
 
     property alias source: titleButton.icon.source
     property bool pressedOverride: pressed

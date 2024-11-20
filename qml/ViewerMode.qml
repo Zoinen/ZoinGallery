@@ -45,12 +45,12 @@ Item {
 
         anchors.fill: parent
         // opacity: 0.5
-        contrast: -0.5
-        // brightness: -0.3
+        contrast: Style.isDarkTheme ? -0.5 : -0.7
+        brightness: Style.isDarkTheme ? 0 : 0.35
         // saturation: -0.5
 
         colorization: 0.6
-        colorizationColor: Style.windowBackgroundNoQWK
+        colorizationColor: Style.viewerPanelBackground
         autoPaddingEnabled: false
         blurEnabled: true
         blurMax: 64
@@ -93,7 +93,7 @@ Item {
                 var text = canvasDummyText.text;
                 var fontSize = canvasDummyText.font.pixelSize;
                 var fontFamily = canvasDummyText.font.family;
-                var fillColor = "white";
+                var fillColor = Style.viewerMainText;
 
                 ctx.font = fontSize + "px \"" + fontFamily + "\"";
                 ctx.textBaseline = "top";
@@ -130,13 +130,13 @@ Item {
 
     component OutlineAndShadowEffect : ShaderEffect {
         property var source
-        property color outlineColor: "black"
+        property color outlineColor: Style.viewerMainTextOutline
         property real outlineWidth: 0.5
         property real outlineOpacity: 0.6
         property size textureSize: Qt.size(width, height)
 
         property real blurRadius: 2.0
-        property color blurColor: "black"
+        property color blurColor: Style.viewerMainTextOutline
         property real blurOpacity: 0.7
 
         fragmentShader: "qrc:/resources/outline.frag.qsb"
@@ -144,8 +144,8 @@ Item {
 
     // ZZZ: Viewer size request takes current image's full size for all future images!!!
 
-    function setImage(imageId, originalSize, fromIndex, level) {
-        flickableArea.setImage(imageId, originalSize, fromIndex, level)
+    function setImage(imageIdUrl, originalSize, fromIndex, level) {
+        flickableArea.setImage(imageIdUrl, originalSize, fromIndex, level)
     }
 
     function show(sphericViewer) {
@@ -311,10 +311,10 @@ Item {
         target: masonryLayout.view
         function onCurrentIndexChanged() {
             if (root.state === "viewer") {
-                let imageId = masonryLayout.view.indexImage(masonryLayout.view.currentIndex)
-                // console.log("ZZ INDEX CHANGE 2", masonryLayout.view.currentIndex, imageId)
-                if (imageId) {
-                    setImage(imageId, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, 0)
+                let imageIdUrl = masonryLayout.view.indexImageIdUrl(masonryLayout.view.currentIndex)
+                // console.log("ZZ INDEX CHANGE 2", masonryLayout.view.currentIndex, imageIdUrl)
+                if (imageIdUrl) {
+                    setImage(imageIdUrl, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, 0)
                     if (zoomFitView) {
                         flickableArea.zoomToFit(true)
                         // console.log("ZZ FIT ON CHANGE")
@@ -330,8 +330,8 @@ Item {
 
     Connections {
         target: fileListModel
-        function onViewerImageIdChanged(newImageId, level) {
-            viewerMode.setImage(newImageId, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, level)
+        function onViewerImageIdUrlChanged(newImageIdUrl, level) {
+            viewerMode.setImage(newImageIdUrl, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, level)
         }
     }
 
@@ -394,7 +394,7 @@ Item {
 
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideMiddle
-                    color: Style.text
+                    color: Style.viewerMainText
                     maximumLineCount: 4
                     wrapMode: Text.Wrap
                 }
@@ -409,7 +409,7 @@ Item {
                 height: baseItem.height
                 z: -1
 
-                color: Style.windowBackgroundNoQWK
+                color: Style.viewerPanelBackground
                 opacity: baseItem.opacity
             }
         }
@@ -417,12 +417,12 @@ Item {
         RectangleShadow {
             baseItem: leftPanel
             bottomRightRadius: 8
-            topRightRadius: 8
+            topRightRadius: 8 * (1 - topPanel.backgroundOpacity)
         }
 
         RectangleShadow {
             baseItem: rightPanel
-            topLeftRadius: 8
+            topLeftRadius: 8 * (1 - topPanel.backgroundOpacity)
             bottomLeftRadius: rightPanel.listContentsFitScreen ? 8 : 0
         }
 
@@ -607,7 +607,7 @@ Item {
             right: parent.right
             top: parent.top
         }
-        height: 32
+        height: titleBar.viewerHeight
 
         opacity: root.state === "viewer"
         visible: opacity !== 0
@@ -625,7 +625,7 @@ Item {
             property bool contentVisible: true
 
             source: contentVisible || proxyControl.hovered ? proxyControl.source : ""
-            icon.color: proxyControl.icon.color
+            icon.color: proxyControl.icon.color === Style.text ? Style.viewerMainText : proxyControl.icon.color
             backgroundColor: backgroundVisible ? proxyControl.backgroundColor : "transparent"
             hoveredOverride: proxyControl.hovered
             pressedOverride: proxyControl.pressed
@@ -692,7 +692,7 @@ Item {
                     icon.source: "qrc:/resources/Sphere.svg"
                     icon.width: 16
                     icon.height: 16
-                    icon.color: Style.text
+                    icon.color: Style.viewerMainText
 
                     visible: sphericViewerMode
                 }
@@ -709,7 +709,7 @@ Item {
 
                     text: sphericViewerMode ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))
                     font.pixelSize: 14
-                    color: Style.text
+                    color: Style.viewerMainText
                 }
             }
 
@@ -779,7 +779,7 @@ Item {
         id: rightPanel
         anchors {
             top: parent.top
-            topMargin: isQWK ? titleBar.height : 0
+            topMargin: isQWK ? titleBar.viewerHeight : 0
             right: parent.right
         }
         width: 120
@@ -806,7 +806,7 @@ Item {
             layer.enabled: true
             visible: false
 
-            topLeftRadius: 8
+            topLeftRadius: 8 * (1 - topPanel.backgroundOpacity)
             bottomLeftRadius: rightPanel.listContentsFitScreen ? 8 : 0
         }
 
@@ -855,7 +855,7 @@ Item {
 
                     width: parent.width
                     height: parent.height
-                    source: "image://thumbnails/" + imageIdRole
+                    source: model.imageIdUrlRole
 
                     fillMode: Image.PreserveAspectFit
                     cache: false
@@ -887,7 +887,7 @@ Item {
 
                 /*Image {
                     id: thumbnailImage
-                    source: "image://thumbnails/" + imageIdRole
+                    source: model.imageIdUrlRole
                     sourceSize.width: parent.width
                     sourceSize.height: parent.height
                     fillMode: Image.PreserveAspectFit
@@ -929,8 +929,8 @@ Item {
         Slider {
             id: currentImageSlider
             x: parent.width
-            y: 0
-            width: parent.height
+            y: 3
+            width: parent.height - 6
             height: 16
             leftPadding: 0
             rightPadding: 0
@@ -970,7 +970,7 @@ Item {
         id: leftPanel
         anchors {
             top: parent.top
-            topMargin: titleBar.height
+            topMargin: titleBar.viewerHeight
             left: parent.left
         }
         width: 180
@@ -994,7 +994,7 @@ Item {
             visible: false
 
             bottomRightRadius: 8
-            topRightRadius: 8
+            topRightRadius: 8 * (1 - topPanel.backgroundOpacity)
         }
 
         BlurBackground {
@@ -1036,7 +1036,7 @@ Item {
                         icon.source: modelData.icon !== undefined ? modelData.icon : ""
                         icon.width: 15
                         icon.height: 15
-                        icon.color: Style.textGray
+                        icon.color: Style.viewerSecondaryText
                     }
 
                     Text {
@@ -1045,7 +1045,7 @@ Item {
                         elide: Text.ElideRight
                         text: modelData.url !== undefined ? modelData.text.replace(" ", "\n") : modelData.text
                         wrapMode: modelData.multiline !== undefined ? Text.Wrap : Text.NoWrap
-                        color: !isTitle || !index ? Style.text : Style.textGray
+                        color: !isTitle ? Style.viewerMainText : Style.viewerSecondaryText
                         font.pixelSize: 16
                         font.underline: modelData.url !== undefined
 

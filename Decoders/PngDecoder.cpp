@@ -1,4 +1,4 @@
-#include "LibpngMetadataReader.h"
+#include "PngDecoder.h"
 #include "ImageFile.h"
 
 #include <png.h>
@@ -10,7 +10,13 @@
 #include <QDateTime>
 #include <QScopedPointer>
 
-bool LibpngMetadataReader::readMetadata(ImageInfo &result) {
+REGISTER_DECODER_DEFINITION(PngDecoder)
+
+QStringList PngDecoder::supportedFormats() {
+    return {"png"};
+}
+
+bool PngDecoder::readMetadata(ImageInfo &result) {
     if (!isFormatSupported(result.path)) {
         return false;
     }
@@ -58,13 +64,16 @@ bool LibpngMetadataReader::readMetadata(ImageInfo &result) {
         }
     }
     result.exif["png_data"] = pngData;
-    result.exif["Size"] = QFileInfo(result.path).size();
 
     png_destroy_read_struct(&png, &info, nullptr);
     return true;
 }
 
-bool LibpngMetadataReader::readPreviewAndMime(ImageData &result) {
+bool PngDecoder::readPreviewAndMime(ImageData &result) {
+    if (!isFormatSupported(result.request.info.path)) {
+        return false;
+    }
+
     // For PNG, we can use the original file as the preview
     QFile file(result.request.info.path);
     if (!file.open(QIODevice::ReadOnly)) {
@@ -80,8 +89,4 @@ bool LibpngMetadataReader::readPreviewAndMime(ImageData &result) {
     result.previewUsed = "Original PNG file";
 
     return true;
-}
-
-bool LibpngMetadataReader::isFormatSupported(const QString &path) {
-    return path.toLower().endsWith(".png");
 }

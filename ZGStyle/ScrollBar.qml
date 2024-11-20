@@ -26,7 +26,7 @@ T.ScrollBar {
             anchors.fill: parent
             anchors.margins: 4
             radius: 4
-            color: scroll.hovered ? (scroll.pressed ? Style.handlePressed : (contentItem.containsMouse ? Style.handleHovered : Style.handleBackgroundHovered)) : Style.handle
+            color: scroll.hovered ? (scroll.pressed ? Style.scrollBarHandlePressed : (contentItem.containsMouse ? Style.scrollBarHandleHovered : Style.scrollBarHandleBackgroundHovered)) : Style.scrollBarHandle
         }
     }
 

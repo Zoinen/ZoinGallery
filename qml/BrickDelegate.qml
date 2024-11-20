@@ -7,34 +7,29 @@ import ZoinGallery 1.0
 
 BrickItem {
     id: brickDelegate
-    property string text
-    property string fullPath
-    property string imageId
-    property int index
-    property bool isImage
-    property bool isDecodedImage
-    property bool isFolder
-    property string iconPath
-    property bool folderView: false
-    property string nestingInfo: ""
-    property int nestingLevel: nestingInfo.length
-    property bool isPanorama: false
 
+    property var model
+
+    property int nestingLevel: model !== undefined ? model.nestingInfo.length : 0
+    /// ZZZZZZZZZ TODO: GET RID OF THIS
     property real sizeBase: Math.min(width, height - 26) - masonryLayout.spacing
+    property real folderGridDelegateTop: Math.round(width / 20)
     readonly property real selectionExtendsFor: 5
     readonly property real selectionExtendsForImage: 2
-    property bool isSelected: masonryLayout.currentIndex === index
+    property bool isSelected: model !== undefined ? (masonryLayout.currentIndex === model.index) : false
     readonly property real nestingShift: 29
 
     property var imageItem: brickDelegate
 
     component ImageView : Item {
         id: imageViewRoot
-        property alias source: image.source
+        property alias source: internalImage.source
         property real padding
-        property bool needScaling: image.sourceSize.width !== Math.round(image.width * dpr) ||
-                                   image.sourceSize.height !== Math.round(image.height * dpr)
-        property alias image: image
+        property bool needScaling: internalImage.sourceSize.width !== Math.round(internalImage.width * dpr) ||
+                                   internalImage.sourceSize.height !== Math.round(internalImage.height * dpr)
+        property alias internalImage: internalImage
+        property alias sharpen: imageShader.sharpenAmount
+        // property real sharpen
 
         x: padding / 2
         y: padding / 2
@@ -46,16 +41,20 @@ BrickItem {
             height: parent.height
             radius: 4
             color: Style.darker
-            visible: image.status !== Image.Ready
+            visible: internalImage.status !== Image.Ready
         }
 
         Image {
-            id: image
+            id: internalImage
 
-            width: parent.width
-            height: parent.height
+            property int xDiff: implicitWidth - imageViewRoot.width * dpr
+            property int yDiff: implicitHeight - imageViewRoot.height * dpr
+            property bool diffIsSmall: Math.abs(xDiff) < 4 && Math.abs(yDiff) < 4
 
-            fillMode: Image.PreserveAspectCrop
+            width: diffIsSmall ? implicitWidth / dpr : imageViewRoot.width
+            height: diffIsSmall ? implicitHeight / dpr : imageViewRoot.height
+            fillMode: diffIsSmall ? Image.Pad : Image.PreserveAspectCrop
+
             cache: false
             // Async adds black blinking for folder views
             //asynchronous: true
@@ -64,9 +63,9 @@ BrickItem {
 
         ShaderEffect {
             id: imageShader
-            anchors.fill: image
+            anchors.fill: internalImage
 
-            property var source: image
+            property var source: internalImage
             property var viewportSize: Qt.size(width * dpr, height * dpr)
             property real sharpenAmount: 1.5
             property bool showCheckerboard: masonryLayout.showTransparentGrid
@@ -74,7 +73,15 @@ BrickItem {
             property real borderRadius: 4.1 * dpr
 
             fragmentShader: "qrc:/resources/shader.frag.qsb"
-            visible: image.source != ""
+            visible: internalImage.source != ""
+        }
+
+        Text {
+            id: imageSizeDiff
+            text: (internalImage.xDiff !== 0 || internalImage.yDiff !== 0) ? internalImage.xDiff + "x" + internalImage.yDiff : "0"
+            visible: !internalImage.diffIsSmall && internalImage.status === Image.Ready
+            color: "orange"
+            style: Text.Outline; styleColor: "black"
         }
     }
 
@@ -89,8 +96,8 @@ BrickItem {
                 width: nestingShift
                 height: parent.height
 
-                property bool lastElement: index === nestingLevel - 1
-                property bool hasNextElement: nestingInfo[index] === "1"
+                property bool lastElement: model.index === nestingLevel - 1
+                property bool hasNextElement: model.nestingInfo[model.index] === "1"
 
                 Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -150,7 +157,7 @@ BrickItem {
                     height: width
                     sourceSize.height: height
                     fillMode: Image.PreserveAspectFit
-                    source: iconPath
+                    source: model.iconPath
                 }
 
                 Item {
@@ -174,7 +181,7 @@ BrickItem {
                         }
                         width: parent.width
 
-                        text: brickDelegate.text
+                        text: model.text
                         textFormat: quickSearchMode ? Text.RichText : Text.PlainText
 
                         horizontalAlignment: Text.AlignHCenter
@@ -230,7 +237,7 @@ BrickItem {
                     height: parent.height
                     sourceSize.height: height
                     fillMode: Image.PreserveAspectFit
-                    source: iconPath
+                    source: model.iconPath
                 }
 
                 Text {
@@ -241,7 +248,7 @@ BrickItem {
                         right: parent.right
                         verticalCenter: parent.verticalCenter
                     }
-                    text: brickDelegate.text
+                    text: model.text
                     textFormat: quickSearchMode ? Text.RichText : Text.PlainText
 
                     elide: Text.ElideRight
@@ -275,7 +282,7 @@ BrickItem {
             ImageView {
                 id: image
                 padding: masonryLayout.spacing
-                source: imageId
+                source: model.imageIdUrl
             }
 
             Item {
@@ -313,7 +320,7 @@ BrickItem {
                         margins: 5
                     }
 
-                    text: brickDelegate.text
+                    text: model.text
                     textFormat: quickSearchMode ? Text.RichText : Text.PlainText
 
                     horizontalAlignment: Text.AlignHCenter
@@ -330,7 +337,7 @@ BrickItem {
                         rightMargin: 5
                     }
 
-                    visible: isPanorama
+                    visible: model.isPanorama
                     icon.source: "qrc:/resources/Sphere.svg"
                     icon.width: 16
                     icon.height: 16
@@ -345,7 +352,7 @@ BrickItem {
     }
 
     Component {
-        id: folderViewDelegate
+        id: folderListViewDelegate
 
         Item {
             Rectangle {
@@ -379,7 +386,7 @@ BrickItem {
                     anchors {
                         top: folderViewTitle.bottom
                         topMargin: 2
-                        bottom: masonryLayout2.verticalCenter
+                        bottom: folderListMasonryLayout.verticalCenter
                         bottomMargin: -1
                     }
                     width: 2
@@ -390,9 +397,9 @@ BrickItem {
                 Rectangle {
                     anchors {
                         left: branchDown.right
-                        right: masonryLayout2.left
+                        right: folderListMasonryLayout.left
                         rightMargin: 2
-                        verticalCenter: masonryLayout2.verticalCenter
+                        verticalCenter: folderListMasonryLayout.verticalCenter
                     }
                     height: 2
 
@@ -417,7 +424,7 @@ BrickItem {
                         height: parent.height
                         sourceSize.height: height
                         fillMode: Image.PreserveAspectFit
-                        source: iconPath
+                        source: model.iconPath
                     }
 
                     Text {
@@ -427,7 +434,7 @@ BrickItem {
                             leftMargin: 5
                             verticalCenter: icon.verticalCenter
                         }
-                        text: brickDelegate.text
+                        text: model.text
                         textFormat: quickSearchMode ? Text.RichText : Text.PlainText
 
                         elide: Text.ElideRight
@@ -437,7 +444,7 @@ BrickItem {
                 }
 
                 MasonryLayout {
-                    id: masonryLayout2
+                    id: folderListMasonryLayout
 
                     anchors {
                         left: parent.left
@@ -450,7 +457,8 @@ BrickItem {
                         bottomMargin: -spacing / 2
                     }
                     clip: true
-                    model: fileListModel.folderModel(index)
+
+                    model: brickDelegate.model ? fileListModel.folderModel(brickDelegate.model.index) : null
 
                     spacing: 2
 
@@ -462,43 +470,55 @@ BrickItem {
                     Connections {
                         target: masonryLayout
                         function onLayoutReset() {
-                            console.log("on layout reset 2 1")
-                            masonryLayout2.reReadAndDecodeThumbnails()
+                            // console.log("on layout reset 2 1")
+                            folderListMasonryLayout.reReadAndDecodeThumbnails()
                         }
                     }
 
                     delegate: BrickItem {
                         id: brck
-                        property string text
-                        property string imageId
-                        property int index
-                        property bool isImage
-                        property bool isFolder
-                        property string iconPath
-                        property bool folderView: false
+
+                        property var model
 
                         ImageView {
                             id: image2
 
                             needScaling: false
-                            padding: masonryLayout2.spacing
-                            source: imageId
+                            padding: folderListMasonryLayout.spacing
+                            source: model !== undefined ? model.imageIdUrl : ""
                         }
                     }
                 }
             }
             Component.onCompleted: {
-                brickDelegate.imageItem = masonryLayout2
+                brickDelegate.imageItem = folderListMasonryLayout
             }
         }
     }
 
     Component {
-        id: folderViewDelegateGrid
+        id: folderGridViewDelegate
 
         Item {
+            id: folderGridViewDelegateItem
+            // Rectangle {
+            //     id: actualGridSize
+
+            //     x: masonryLayout.spacing / 2 + /*folderGridMasonryLayout.spacing*/2
+            //     y: masonryLayout.spacing / 2 + /*folderGridMasonryLayout.spacing*/2 + /*folderGridDelegateTop*/masonryLayout.targetHeight/20
+            //     property real canvasWidth: masonryLayout.width - masonryLayout.paddingLeft - masonryLayout.paddingRight
+            //     property real averageCellWidth: canvasWidth / Math.floor(canvasWidth / masonryLayout.targetHeight)
+            //     width: averageCellWidth - x * 2
+            //     height: averageCellWidth - y - (masonryLayout.spacing / 2 + /*folderGridMasonryLayout.spacing*/2) - (/*imageInfoPanel.height*/17 + masonryLayout.spacing)
+
+            //     z: 100
+            //     color: "orange"
+            //     radius: 10
+            //     opacity: 0.2
+            // }
+
             Rectangle {
-                id: folderViewDelegateGridBackground
+                id: folderViewGridDelegateBackground
                 anchors {
                     fill: folderViewDelegateGridContent
                     margins: -selectionExtendsFor
@@ -518,73 +538,84 @@ BrickItem {
                 }
 
                 Rectangle {
+                    id: folderTop
                     width: Math.min(110, parent.width * 0.44)
-                    height: sizeBase / 27 + 10*2
+                    height: folderGridDelegateTop + 10*2
                     radius: 4
 
                     color: folderBackground.color
                 }
+
+                // Rectangle {
+                //     z: 1
+                //     anchors.fill: folderTop
+                //     anchors.margins: 1
+                //     anchors.bottomMargin: 16
+                //     topLeftRadius: 4
+                //     topRightRadius: 4
+                //     color: "#19191b"
+                // }
 
                 Rectangle {
                     id: folderBackground
 
                     anchors {
                         fill: parent
-                        topMargin: sizeBase / 27
+                        topMargin: folderGridDelegateTop
                         bottomMargin: imageInfoPanel.height + masonryLayout.spacing
                     }
                     color: Style.folderIcon
                     radius: 4
 
+                    Rectangle {
+                        anchors.fill: parent
+                        anchors.margins: 1
+                        radius: 4
+                        color: Style.isDarkTheme ? "#304051" : "#60b0eb"
+                    }
+
                     MasonryLayout {
-                        id: masonryLayout2
+                        id: folderGridMasonryLayout
 
                         anchors {
                             fill: parent
-                            leftMargin: spacing / 2
-                            rightMargin: spacing / 2
-                            topMargin: spacing / 2
-                            bottomMargin: spacing
+                            margins: folderGridMasonryLayout.spacing * 2
                         }
                         clip: true
-                        model: fileListModel.folderModel(index)
+                        model: fileListModel.folderModel(brickDelegate.model.index)
 
-                        spacing: 2
+                        spacing: 1
 
-                        onHeightChanged: {
-                            if (height > 0) {
-                                targetHeight = height
-                            }
-                        }
+                        targetHeight: height
+                        // onHeightChanged: {
+                        //     if (height > 0) {
+                        //         targetHeight = height / 3
+                        //     }
+                        // }
                         Connections {
                             target: masonryLayout
                             function onLayoutReset() {
-                                console.log("on layout reset 2 2")
-                                masonryLayout2.reReadAndDecodeThumbnails()
+                                // console.log("on layout reset 2 2")
+                                folderGridMasonryLayout.reReadAndDecodeThumbnails()
                             }
                         }
 
                         delegate: BrickItem {
                             id: brck
-                            property string text
-                            property string imageId
-                            property int index
-                            property bool isImage
-                            property bool isFolder
-                            property string iconPath
-                            property bool folderView: false
+
+                            property var model
 
                             ImageView {
                                 id: image2
 
                                 needScaling: false
-                                padding: masonryLayout2.spacing
-                                source: imageId
+                                padding: folderGridMasonryLayout.spacing
+                                source: model !== undefined ? model.imageIdUrl : ""
                             }
                         }
 
                         Component.onCompleted: {
-                            brickDelegate.imageItem = masonryLayout2
+                            brickDelegate.imageItem = folderGridMasonryLayout
                         }
                     }
                 }
@@ -610,7 +641,7 @@ BrickItem {
                             bottom: parent.bottom
                         }
 
-                        text: brickDelegate.text
+                        text: model.text
                         textFormat: quickSearchMode ? Text.RichText : Text.PlainText
 
                         horizontalAlignment: masonryLayout.listView ? Text.AlignLeft : Text.AlignHCenter
@@ -618,6 +649,7 @@ BrickItem {
                         color: Style.text
                         maximumLineCount: 2
                         wrapMode: Text.Wrap
+                        // renderType: Text.CurveRendering
                     }
                 }
             }
@@ -642,29 +674,32 @@ BrickItem {
 
         drag.target: draggable
 
-        onPressed: (mouse) => {
-            let mappedPos = imageItem.mapFromItem(brickMouseArea, mouse.x, mouse.y)
-            draggable.Drag.hotSpot.x = mappedPos.x
-            draggable.Drag.hotSpot.y = mappedPos.y
-            imageItem.grabToImage(function(result) {
-                draggable.Drag.imageSource = result.url
-            })
+        onPressed:
+            (mouse) => {
+                if (imageItem !== undefined) {
+                    let mappedPos = imageItem.mapFromItem(brickMouseArea, mouse.x, mouse.y)
+                    draggable.Drag.hotSpot.x = mappedPos.x
+                    draggable.Drag.hotSpot.y = mappedPos.y
+                    imageItem.grabToImage(function(result) {
+                        draggable.Drag.imageSource = result.url
+                    })
+                }
 
-            focusProxy.forceActiveFocus()
+                focusProxy.forceActiveFocus()
 
-            if (scrollingMode) {
-                endScrolling()
-            }
-            setCurrentIndex(index)
+                if (scrollingMode) {
+                    endScrolling()
+                }
+                setCurrentIndex(model.index)
         }
 
         onDoubleClicked: {
-            if (isFolder) {
+            if (model.isFolder) {
                 viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
-                viewerController.cd(fullPath)
+                viewerController.cd(model.fullPath)
             }
             else {
-                if (masonryLayout.currentItem.isImage) {
+                if (masonryLayout.currentItem.model.isImage) {
                     masonryView.toggleViewer()
                 }
             }
@@ -674,25 +709,33 @@ BrickItem {
     Loader {
         id: loader
         anchors.fill: parent
-        sourceComponent: fileDelegate
+        asynchronous: true
     }
 
     states: [
         State {
-            when: masonryLayout.listView && folderView
-            PropertyChanges { loader.sourceComponent: folderViewDelegate }
+            when: model === undefined
+            PropertyChanges { loader.sourceComponent: undefined }
         },
         State {
-            when: folderView
-            PropertyChanges { loader.sourceComponent: folderViewDelegateGrid }
+            when: model !== undefined && masonryLayout.listView && model.folderView
+            PropertyChanges { loader.sourceComponent: folderListViewDelegate }
         },
         State {
-            when: imageId !== "" || isDecodedImage
+            when: model !== undefined && model.folderView
+            PropertyChanges { loader.sourceComponent: folderGridViewDelegate }
+        },
+        State {
+            when: model !== undefined && (model.imageIdUrl !== "" || model.isShowAsImage)
             PropertyChanges { loader.sourceComponent: imageDelegate }
         },
         State {
-            when: masonryLayout.listView && isFolder
+            when: model !== undefined && masonryLayout.listView && model.isFolder
             PropertyChanges { loader.sourceComponent: fileListDelegate }
+        },
+        State {
+            when: model !== undefined
+            PropertyChanges { loader.sourceComponent: fileDelegate }
         }
     ]
 }

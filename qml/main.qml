@@ -33,7 +33,7 @@ MainWindow {
     Component.onCompleted: {
         windowAgent.setup(topLevelWindow)
 
-        windowAgent.setWindowAttribute("mica", true) // "mica-alt"
+        windowAgent.setWindowAttribute("mica-alt", true) // "mica-alt"
     }
 
     Connections {
@@ -65,6 +65,7 @@ MainWindow {
         }
 
         function onWindowIsReady() {
+            masonryZoomSlider.updateTargetSize()
             viewerController.initialCd()
         }
     }
@@ -81,6 +82,13 @@ MainWindow {
                 fileListModel.cancelAllDecodeViewerRunners()
                 fileListModel.requestViewer(masonryLayout.view.currentIndex)
             }
+        }
+    }
+
+    Connections {
+        target: viewerController
+        function onCurrentPathChanged() {
+            masonryZoomSlider.updateTargetSize()
         }
     }
 
@@ -122,7 +130,7 @@ MainWindow {
                 viewerMode.imageContainer.height = mappedGeometry.height
             }
 
-            viewerMode.setImage(masonryLayout.view.currentItem.imageId,
+            viewerMode.setImage(masonryLayout.view.currentItem.model.imageIdUrl,
                                 masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, 0)
             let exif = masonryLayout.view.indexExif(masonryLayout.view.currentIndex)
             viewerMode.show(exif["Panorama"])
@@ -162,7 +170,17 @@ MainWindow {
                 right: parent.right
                 top: parent.top
             }
-            height: 46
+            property int viewerHeight: 32
+            property int thumbnailsHeight: 48
+
+            height: root.state === "thumbnails" ? thumbnailsHeight : viewerHeight
+            Behavior on height {
+                NumberAnimation {
+                    duration: viewerMode.animationDuration
+                    easing.type: viewerMode.easingType
+                }
+            }
+
             z: 1
             visible: isQWK
 
@@ -238,10 +256,15 @@ MainWindow {
             anchors {
                 fill: thumbnailsView
                 // margins: 5
-                topMargin: titleBar.height
+                topMargin: titleBar.thumbnailsHeight
+                leftMargin: Style.isDarkTheme ? 0 : -1
+                rightMargin: Style.isDarkTheme ? 0 : -1
+                bottomMargin: Style.isDarkTheme ? 0 : -1
             }
             radius: 7
-            color: Qt.rgba(0, 0, 0, 0.35)
+            border.width: 1
+            border.color: Style.masonryViewBackgroundBorder
+            color: Style.masonryViewBackground
         }
 
         Rectangle {
@@ -277,7 +300,7 @@ MainWindow {
             Item {
                 id: toolbar
                 Layout.fillWidth: true
-                Layout.preferredHeight: titleBar.height
+                Layout.preferredHeight: titleBar.thumbnailsHeight
                 z: 1
 
                 MultiEffect {
@@ -317,10 +340,10 @@ MainWindow {
                     clip: true
 
                     component Separator : Rectangle {
-                        Layout.leftMargin: 5
-                        Layout.rightMargin: 5
+                        Layout.leftMargin: 14
+                        Layout.rightMargin: 14
                         implicitWidth: 1
-                        implicitHeight: titleBar.height - 15
+                        implicitHeight: 32
                         color: Style.lighter2
                     }
 
@@ -329,7 +352,7 @@ MainWindow {
                         Layout.alignment: Qt.AlignVCenter
 
                         implicitWidth: 36
-                        implicitHeight: titleBar.height
+                        implicitHeight: titleBar.thumbnailsHeight
 
                         signal rightReleased
 
@@ -352,8 +375,8 @@ MainWindow {
                         colorfulIcon: true
                         icon.source: "qrc:/resources/Logo.svg"
                         onClicked: {
-                            // windowAgent.showSystemMenu(mapToGlobal(0, height))
-                            fileListModel.startScanner()
+                            windowAgent.showSystemMenu(mapToGlobal(0, height))
+                            // fileListModel.startScanner()
                         }
                         // Component.onCompleted: windowAgent.setSystemButton(WindowAgent.WindowIcon, appIcon)
                     }
@@ -366,7 +389,12 @@ MainWindow {
 
                         text: "ZoinGallery"
                         color: Style.text
+                        renderType: Text.NativeRendering
+
                         opacity: topLevelWindow.active ? 1 : 0.5
+                        Behavior on opacity {
+                            NumberAnimation { duration: 150; easing.type: Easing.InOutQuad }
+                        }
                     }
 
                     ToolbarButton {
@@ -492,8 +520,8 @@ MainWindow {
                     }
 
                     PathControl {
-                        Layout.leftMargin: 15
-                        Layout.rightMargin: 15
+                        Layout.leftMargin: 14
+                        Layout.rightMargin: 14
                         clip: true
 
                         onEditModeChanged: {
@@ -507,46 +535,60 @@ MainWindow {
                         text: viewerController.currentPath
                     }
 
-                    // Text {
-                    //     id: runningTasks
+                    Shortcut {
+                        sequence: "F12"
+                        onActivated: {
+                            fileListModel.runningTasksDebug = !fileListModel.runningTasksDebug
+                        }
+                    }
 
-                    //     Connections {
-                    //         target: fileListModel
-                    //         function onRunningTasksChanged(tasks, tasksInfo) {
-                    //             runningTasks.text = tasks
-                    //             infoWindow.title = tasks
-                    //             infoList.model = tasksInfo
-                    //         }
-                    //     }
-                    //     text: "0/0"
-                    //     color: Style.text
-                    //     Layout.preferredWidth: 45
-                    //     Layout.rightMargin: 5
-                    //     horizontalAlignment: Text.AlignRight
+                    Component {
+                        id: runningTasksDebugView
+                        Text {
+                            id: runningTasks
 
-                    //     Window {
-                    //         id: infoWindow
-                    //         x: topLevelWindow.x + topLevelWindow.width
-                    //         y: 20
-                    //         width: 700
-                    //         height: 1000
-                    //         visible: true
-                    //         color: Style.windowBackgroundNoQWK
+                            Connections {
+                                target: fileListModel
+                                function onRunningTasksChanged(tasks, tasksInfo) {
+                                    runningTasks.text = tasks
+                                    infoWindow.title = tasks
+                                    infoList.model = tasksInfo
+                                }
+                            }
+                            text: "0/0"
+                            color: Style.text
+                            Layout.preferredWidth: 45
+                            Layout.rightMargin: 5
+                            horizontalAlignment: Text.AlignRight
 
-                    //         ListView {
-                    //             id: infoList
-                    //             anchors {
-                    //                 fill: parent
-                    //                 margins: 10
-                    //             }
-                    //             delegate: Text {
-                    //                 height: 12
-                    //                 color: modelData.endsWith(" E") ? "#80ff80" : Style.text
-                    //                 text: modelData
-                    //             }
-                    //         }
-                    //     }
-                    // }
+                            Window {
+                                id: infoWindow
+                                x: topLevelWindow.x + topLevelWindow.width
+                                y: 20
+                                width: 700
+                                height: 1000
+                                visible: true
+                                color: Style.windowBackgroundNoQWK
+
+                                ListView {
+                                    id: infoList
+                                    anchors {
+                                        fill: parent
+                                        margins: 10
+                                    }
+                                    delegate: Text {
+                                        height: 12
+                                        color: modelData.endsWith(" E") ? "#80ff80" : Style.text
+                                        text: modelData
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Loader {
+                        sourceComponent: fileListModel.runningTasksDebug ? runningTasksDebugView : undefined
+                    }
 
                     Slider {
                         id: masonryZoomSlider
@@ -559,10 +601,45 @@ MainWindow {
                         to: 500
                         stepSize: 1
 
+                        function updateTargetSize() {
+                            if (masonryLayout.view.listView) {
+                                // 36 is hardcoded and comes from BrickDelegate's layout folderViewDelegate
+                                fileListModel.setFolderViewImageSize(0, (masonryZoomSlider.value - 36) * dpr)
+                            }
+                            else {
+                                // this is taken from commented out actualGridSize item in BrickDelegate
+
+                                let spacing = 2
+                                let canvasWidth = (masonryLayout.view.width - 1) - masonryLayout.view.paddingLeft - masonryLayout.view.paddingRight
+                                let columns = Math.floor(canvasWidth / masonryLayout.view.targetHeight)
+                                let averageCellWidth = canvasWidth / columns
+                                // console.log("ZZ COLUMNS", columns, canvasWidth, masonryLayout.view.targetHeight)
+                                if (columns >= masonryLayout.view.count) {
+                                    // console.log("ZZ TOO FEW" , columns, masonryLayout.view.count)
+                                    averageCellWidth = masonryLayout.view.targetHeight
+                                }
+
+                                let targetWidth = averageCellWidth - masonryLayout.view.spacing - spacing
+                                let targetHeight = averageCellWidth - masonryLayout.view.spacing * 2 - spacing - Math.round(targetWidth/20) - 17
+
+                                let dimensions = targetWidth < 80 ? 1 :
+                                                 targetWidth < 150 ? 2 :
+                                                 targetWidth < 300 ? 3 : 4
+
+                                targetWidth = (targetWidth - spacing * (dimensions + 1)) / dimensions
+                                targetHeight = (targetHeight - spacing * (dimensions + 1)) / dimensions
+
+                                if (targetWidth > 0 && targetHeight > 0) {
+                                    // console.log("qml dimens", Math.round(targetWidth * dpr), Math.round(targetHeight * dpr), dimensions)
+
+                                    fileListModel.setFolderViewImageSize(Math.round(targetWidth * dpr), Math.round(targetHeight * dpr))
+                                }
+                            }
+                        }
+
                         onValueChanged: {
                             masonryLayout.view.targetHeight = masonryZoomSlider.value
-                            // 36 is hardcoded and comes from BrickDelegate's layout folderViewDelegate
-                            fileListModel.uiTargetHeight = (masonryZoomSlider.value - 36) * dpr
+                            updateTargetSize()
                         }
                         property int lastValue: value
                         onPressedChanged: {
@@ -576,14 +653,11 @@ MainWindow {
                     }
 
                     Separator {
-                        Layout.leftMargin: 13
-                        Layout.rightMargin: 15
                     }
 
                     TabBar {
                         spacing: 0
                         Layout.alignment: Qt.AlignVCenter
-                        Layout.rightMargin: 15
 
                         Shortcut {
                             sequence: "F8"
@@ -593,8 +667,8 @@ MainWindow {
                         }
 
                         TabButton {
-                            implicitWidth: 36
-                            implicitHeight: titleBar.height
+                            implicitWidth: 32
+                            implicitHeight: titleBar.thumbnailsHeight
 
                             icon.source: "qrc:/resources/ListView.svg"
                             icon.width: 16
@@ -606,13 +680,14 @@ MainWindow {
                             onReleased: {
                                 if (!masonryLayout.view.listView) {
                                     masonryLayout.view.listView = true
+                                    masonryZoomSlider.updateTargetSize()
                                     masonryLayout.view.layoutReset()
                                 }
                             }
                         }
                         TabButton {
-                            implicitWidth: 36
-                            implicitHeight: titleBar.height
+                            implicitWidth: 32
+                            implicitHeight: titleBar.thumbnailsHeight
 
                             icon.source: "qrc:/resources/GridView.svg"
                             icon.width: 16
@@ -624,6 +699,7 @@ MainWindow {
                             onReleased: {
                                 if (masonryLayout.view.listView) {
                                     masonryLayout.view.listView = false
+                                    masonryZoomSlider.updateTargetSize()
                                     masonryLayout.view.layoutReset()
                                 }
                             }
@@ -631,14 +707,17 @@ MainWindow {
                     }
 
                     ToolbarButton {
+                        Layout.leftMargin: 8
                         icon.source: "qrc:/resources/RecursiveView.svg"
                         ToolTip.text: "Recursive View\tF10"
-
-                        Layout.rightMargin: 15
 
                         onReleased: {
                             viewerController.enterRecursiveView()
                         }
+                    }
+
+                    Separator {
+                        Layout.rightMargin: 7
                     }
                 }
 
@@ -665,6 +744,7 @@ MainWindow {
                 //     }
                 // }
             }
+
             MasonryMode {
                 id: masonryLayout
                 Layout.fillWidth: true

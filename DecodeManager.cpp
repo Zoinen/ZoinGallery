@@ -14,8 +14,6 @@
 
 #include <chrono>
 
-#define RUNNING_TASKS_DEBUG
-
 using namespace std::chrono_literals;
 
 bool isRunnerDecode(Runner *runner) {
@@ -209,7 +207,7 @@ void DecodeManager::scanImages(const QList<QString> &imagePaths) {
 }
 
 void DecodeManager::cancelAllDecodeRunners() {
-    qDebug() << "-----------" << __FUNCTION__;
+    // qDebug() << "-----------" << __FUNCTION__;
     for (int i = 0; i < _workers.size(); i++) {
         if (Runner *runner = _workers[i].runner) {
             if (isRunnerDecode(runner)) {
@@ -291,6 +289,14 @@ void DecodeManager::prepareToClose() {
     }
 }
 
+bool DecodeManager::runningTasksDebug() const {
+    return _runningTasksDebug;
+}
+
+void DecodeManager::setRunningTasksDebug(bool isRunningTasksDebug) {
+    _runningTasksDebug = isRunningTasksDebug;
+}
+
 QString DecodeManager::runnerToString(Runner *task) {
     if (!task) {
         return "-";
@@ -333,15 +339,15 @@ void DecodeManager::updateRunningTasksCount() {
     }
 
     QStringList tasksInfo;
-#if defined(RUNNING_TASKS_DEBUG)
-    for (int i = 0; i < _workers.size(); i++) {
-        tasksInfo.append(QString("%1 %2").arg(i).arg(runnerToString(_workers[i].runner)));
+    if (_runningTasksDebug) {
+        for (int i = 0; i < _workers.size(); i++) {
+            tasksInfo.append(QString("%1 %2").arg(i).arg(runnerToString(_workers[i].runner)));
+        }
+        tasksInfo.append("-------------------");
+        for (int i = 0; i < qMin(100000, _taskQueue.size()); i++) {
+            tasksInfo.append(QString("%1 %2").arg(i).arg(runnerToString(_taskQueue[i])));
+        }
     }
-    tasksInfo.append("-------------------");
-    for (int i = 0; i < qMin(100, _taskQueue.size()); i++) {
-        tasksInfo.append(QString("%1 %2").arg(i).arg(runnerToString(_taskQueue[i])));
-    }
-#endif
 
     emit runningTasksChanged(QString("%1/%2").arg(tasks).arg(_taskQueue.size()), tasksInfo);
 }

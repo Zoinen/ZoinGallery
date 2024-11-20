@@ -27,6 +27,6 @@ int ImageModel::mapFromSourceRow(int sourceRow) const {
 bool ImageModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const {
     QModelIndex index = sourceModel()->index(sourceRow, 0, sourceParent);
 
-    return !index.data(FileListModel::ImageRole).value<QImage>().isNull();
+    return index.data(FileListModel::IsImageRole).toBool();
 }
 

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Effects
 
 import ZoinGallery 1.0
 
@@ -272,6 +273,19 @@ MouseArea {
                 let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
                 let yBelow = currentItemGeometry.y + currentItemGeometry.height + 2
                 let indexBelow = masonryLayout.indexAt(currentItemCenterX, yBelow)
+
+                if (indexBelow === -1) {
+                    if (masonryLayout.listView) {
+                        indexBelow = masonryLayout.indexAt(0, yBelow)
+                    }
+                    // else {
+                    //     let newX = currentItemCenterX -
+                    //     while (newX > 0) {
+                    //         indexBelow = masonryLayout.indexAt(0, yBelow)
+                    //     }
+                    // }
+                }
+
                 if (indexBelow !== -1) {
                     if (event.modifiers & Qt.ControlModifier) {
                         ensureVisible(masonryLayout.currentIndex)
@@ -354,11 +368,11 @@ MouseArea {
                      event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier) ||
                      event.key === Qt.Key_PageDown && (event.modifiers & Qt.ControlModifier)) {
                 hideQuickSearch()
-                if (masonryLayout.currentItem.isFolder) {
+                if (masonryLayout.currentItem.model.isFolder) {
                     viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
-                    viewerController.cd(masonryLayout.currentItem.text)
+                    viewerController.cd(masonryLayout.currentItem.model.text)
                 }
-                else if (masonryLayout.currentItem.isImage) {
+                else if (masonryLayout.currentItem.model.isImage) {
                     masonryView.toggleViewer()
                 }
             }

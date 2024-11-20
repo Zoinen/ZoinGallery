@@ -1,14 +1,17 @@
 ﻿#ifndef TIFFDECODER_H
 #define TIFFDECODER_H
 
-#include "ImageDecoder.h"
+#include "ImageDecoderInterface.h"
 
-class TiffDecoder : public ImageDecoder {
+class TiffDecoder : public ImageDecoderInterface {
+    REGISTER_DECODER_DECLARATION(TiffDecoder, 0)
+
 public:
     QStringList supportedFormats() override;
 
-    bool canDecode(const QString& mimeType) override;
-    QImage decode(const QByteArray& data, QSize targetSize) override;
+    bool readMetadata(ImageInfo& result) override { return false; }
+    bool readPreviewAndMime(ImageData &result) override { return false; }
+    QImage decode(const QString& mimeType, const QByteArray& data, QSize targetSize) override;
 };
 
 #endif // TIFFDECODER_H

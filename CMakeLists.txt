@@ -115,25 +115,22 @@ set(PROJECT_SOURCES
     Runners/RecursiveFolderScanner.cpp
     CacheViewer.h
     CacheViewer.cpp
-    Decoders/MetadataReader.h
-    Decoders/MetadataReader.cpp
-    Decoders/Exiv2MetadataReader.cpp
-    Decoders/Exiv2MetadataReader.h
-    Decoders/QtMetadataReader.cpp
-    Decoders/QtMetadataReader.h
-    Decoders/ImageDecoder.h
+    Decoders/ImageDecoderInterface.h
+    Decoders/ImageDecoderInterface.cpp
+    Decoders/ImageDecoderFactory.h
+    Decoders/ImageDecoderFactory.cpp
+    Decoders/Exiv2Decoder.cpp
+    Decoders/Exiv2Decoder.h
     Decoders/TiffDecoder.cpp
     Decoders/TiffDecoder.h
     Decoders/JpegDecoder.cpp
     Decoders/JpegDecoder.h
     Decoders/QtDecoder.cpp
     Decoders/QtDecoder.h
-    Decoders/LibRawMetadataReader.cpp
-    Decoders/LibRawMetadataReader.h
-    Decoders/TinyEXIFMetadataReader.cpp
-    Decoders/TinyEXIFMetadataReader.h
-    Decoders/LibpngMetadataReader.cpp
-    Decoders/LibpngMetadataReader.h
+    Decoders/RawDecoder.cpp
+    Decoders/RawDecoder.h
+    Decoders/PngDecoder.cpp
+    Decoders/PngDecoder.h
     TinyEXIF/TinyEXIF.h
     TinyEXIF/TinyEXIF.cpp
     TinyEXIF/tinyxml2.cpp
@@ -224,6 +221,7 @@ qt6_add_qml_module(ZoinGallery
         resources/ScrollModeUp.svg
         resources/Logo.svg
         resources/DriveIcon.svg
+        resources/NetworkDriveIcon.svg
         resources/Up.svg
         resources/Back.svg
         resources/Forward.svg

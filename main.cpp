@@ -13,7 +13,7 @@
 #else
 #include "DummyQWK.h"
 #endif
-
+#include <QDirIterator>
 
 int main(int argc, char *argv[])
 {
@@ -25,7 +25,9 @@ int main(int argc, char *argv[])
     // qputenv("QT_QPA_PLATFORM", "windows:darkmode=2");
 #endif
     //qputenv("QSG_INFO", "1");
+#if defined(Q_OS_WIN)
     qputenv("QSG_RHI_BACKEND", "d3d12");
+#endif
     // qputenv("QSG_NO_VSYNC", "1");
 
     QGuiApplication app(argc, argv);
@@ -46,7 +48,13 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
     engine.addImportPath(":/");
-    const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
+    engine.addImportPath(":/ZoinGallery");
+    // // Recursively list all resources in :/
+    // QDirIterator it(":/", QDirIterator::Subdirectories);
+    // while (it.hasNext()) {
+    //     qDebug() << "Resource:" << it.next();
+    // }
+    const QUrl url(QStringLiteral("qrc:/ZoinGallery/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated, &app, [url](QObject *obj, const QUrl &objUrl) {
         if (!obj && url == objUrl) {
             QCoreApplication::exit(-1);

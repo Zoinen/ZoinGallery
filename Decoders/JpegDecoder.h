@@ -1,4 +1,4 @@
-﻿#ifndef JPEGDECODER_H
+#ifndef JPEGDECODER_H
 #define JPEGDECODER_H
 
 #include "ImageDecoderInterface.h"

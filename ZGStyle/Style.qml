@@ -10,6 +10,7 @@ QtObject {
     property color lighter2: isDarkTheme ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(0, 0, 0, 0.08)
     property color darker: isDarkTheme ? Qt.rgba(0, 0, 0, 0.3) : Qt.rgba(0, 0, 0, 0.2)
 
+    property color windowBackgroundQWKLegacy: isDarkTheme ? "#00091a" : "#c3ccd9"
     property color windowBackgroundNoQWK: isDarkTheme ? "#282828" : "#f8f8f8"
     property color windowColor: isDarkTheme ? Qt.rgba(0.2, 0.2, 0.2, 0.7) : Qt.rgba(1, 1, 1, 0.5) // for dark, Qt.rgba(0.3, 0.3, 0.3, 0.4) matches "explorer"
     property color masonryViewBackground: isDarkTheme ? Qt.rgba(0, 0, 0, 0.35) : Qt.rgba(1, 1, 1, 0.5)

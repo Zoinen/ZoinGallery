@@ -49,6 +49,8 @@ public:
 
     Q_INVOKABLE void initialCd();
 
+    Q_INVOKABLE QColor adjustHSL(const QColor &color, qreal h, qreal s, qreal l);
+
 signals:
     void currentPathChanged();
     void setCurrentIndex(int index);

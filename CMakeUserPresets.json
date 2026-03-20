@@ -1,0 +1,21 @@
+{
+    "version": 4,
+    "configurePresets": [
+        {
+            "name": "vs2022-zoin",
+            "inherits": "conan-default",
+            "cacheVariables": {
+                "CMAKE_PREFIX_PATH": "C:/Dev/Qt6.8.1/6.8.1/msvc2022_64",
+                "QWindowKit_DIR": "D:/Code/_qwindowkit_2025/qwindowkit_bin/lib/cmake/QWindowKit"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "vs2022-zoin-relwithdebinfo",
+            "configurePreset": "vs2022-zoin",
+            "configuration": "RelWithDebInfo",
+            "jobs": 32
+        }
+    ]
+}

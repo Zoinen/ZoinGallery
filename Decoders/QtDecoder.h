@@ -1,4 +1,4 @@
-﻿#ifndef QTIMAGEDECODER_H
+#ifndef QTIMAGEDECODER_H
 #define QTIMAGEDECODER_H
 
 #include "ImageDecoderInterface.h"

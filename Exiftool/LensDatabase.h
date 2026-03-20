@@ -1,4 +1,4 @@
-﻿#ifndef LENSDATABASE_H
+#ifndef LENSDATABASE_H
 #define LENSDATABASE_H
 
 #include <QString>

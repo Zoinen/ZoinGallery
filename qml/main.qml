@@ -11,7 +11,8 @@ import QWindowKit 1.0
 MainWindow {
     id: topLevelWindow
     // visible: true
-    color: isQWK ? "transparent" : Style.windowBackgroundNoQWK
+    color: isQWK ? (isQWKLegacy ? Style.windowBackgroundQWKLegacy : "transparent") : Style.windowBackgroundNoQWK
+    property bool isQWKLegacy: false
     title: "Zoin Gallery"
 
     property bool viewerDirty: false
@@ -33,7 +34,7 @@ MainWindow {
     Component.onCompleted: {
         windowAgent.setup(topLevelWindow)
 
-        windowAgent.setWindowAttribute("mica-alt", true) // "mica-alt"
+        isQWKLegacy = windowAgent.setWindowAttribute("mica-alt", true) !== true
     }
 
     Connections {
@@ -708,6 +709,7 @@ MainWindow {
 
                     ToolbarButton {
                         Layout.leftMargin: 8
+                        Layout.rightMargin: isQWK ? 0 : 7
                         icon.source: "qrc:/resources/RecursiveView.svg"
                         ToolTip.text: "Recursive View\tF10"
 
@@ -718,6 +720,7 @@ MainWindow {
 
                     Separator {
                         Layout.rightMargin: 7
+                        visible: isQWK
                     }
                 }
 

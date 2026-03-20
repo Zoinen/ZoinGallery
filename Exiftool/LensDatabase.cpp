@@ -1,4 +1,4 @@
-﻿#include "LensDatabase.h"
+#include "LensDatabase.h"
 
 #include <QHash>
 

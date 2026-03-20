@@ -49,6 +49,7 @@ ViewerController::ViewerController(QQmlEngine *engine)
 }
 
 void ViewerController::cd(const QString &folder, bool changeHistory) {
+    qDebug() << "CD" << folder;
     QString currentFolder = folder.trimmed();
     if (currentFolder.startsWith("\"")) {
         currentFolder = currentFolder.right(currentFolder.size() - 1);
@@ -241,6 +242,20 @@ void ViewerController::initialCd() {
     else {
         cd(QStandardPaths::standardLocations(QStandardPaths::DocumentsLocation).first());
     }
+}
+
+/*QColor ViewerController::adjustHSL(const QColor &color, qreal h, qreal s, qreal l) {
+    qreal newHue = color.hsvHueF() + h;
+    return QColor::fromHsvF(newHue - qFloor(newHue),
+                            qBound(0.0, color.hsvSaturationF() + s, 1.0),
+                            qBound(0.0, color.valueF() + l, 1.0));
+}*/
+
+QColor ViewerController::adjustHSL(const QColor &color, qreal h, qreal s, qreal l) {
+    qreal newHue = color.hslHueF() + h;
+    return QColor::fromHslF(newHue - qFloor(newHue),
+                            qBound(0.0, color.hslSaturationF() + s, 1.0),
+                            qBound(0.0, color.lightnessF() + l, 1.0));
 }
 
 void ViewerController::updateHistory(bool changeHistory) {

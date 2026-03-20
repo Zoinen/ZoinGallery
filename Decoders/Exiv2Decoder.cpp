@@ -1,4 +1,4 @@
-﻿#include "Exiv2Decoder.h"
+#include "Exiv2Decoder.h"
 
 #include <exiv2/exiv2.hpp>
 #include <exiv2/preview.hpp>

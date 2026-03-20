@@ -1,7 +1,8 @@
-﻿import QtQuick
+import QtQuick
 
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Effects
 
 Item {
@@ -253,7 +254,12 @@ Item {
                 flickableArea.toggleZoomToFit()
             }
             else if (event.key === Qt.Key_S || event.key === Qt.Key_P) {
+                console.log("ZZ SP")
                 sphericViewerMode = !sphericViewerMode
+            }
+            else if (event.key === Qt.Key_C) {
+                console.log("ZZ F12")
+                fileListModel.dumpCurrentImage()
             }
 
             if (nextIndex !== -1 && nextIndex !== currentIndex) {
@@ -710,6 +716,34 @@ Item {
                     text: sphericViewerMode ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))
                     font.pixelSize: 14
                     color: Style.viewerMainText
+                }
+
+                Button {
+                    id: settingsButton
+
+                    icon.width: 10
+                    icon.height: 10
+
+                    implicitWidth: 36
+                    implicitHeight: titleBar.viewerHeight
+
+                    icon.source: "qrc:/resources/Settings.svg"
+                    // onClicked: topLevelWindow.showMinimized()
+                    Component.onCompleted: {
+                        windowAgent.setHitTestVisible(settingsButton)
+                    }
+                }
+
+                component Separator : Rectangle {
+                    Layout.leftMargin: 14
+                    Layout.rightMargin: 14
+                    implicitWidth: 1
+                    implicitHeight: 20
+                    color: "#505050"
+                }
+
+                Separator {
+
                 }
             }
 

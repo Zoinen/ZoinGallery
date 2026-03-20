@@ -1,4 +1,4 @@
-﻿#ifndef SVGCURSOR_H
+#ifndef SVGCURSOR_H
 #define SVGCURSOR_H
 
 #include <QString>

@@ -2315,7 +2315,7 @@ public:
     	includes the terminating null.)
     */
     int CStrSize() const {
-        return _buffer.Size();
+        return (int)_buffer.Size();
     }
     /**
     	If in print to memory mode, reset the buffer to the

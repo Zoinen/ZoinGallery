@@ -3,3 +3,6 @@ https://www.iconfinder.com/iconsets/arrow-outline-8
 https://www.iconfinder.com/search/icons?family=perfect-free
 
 https://www.iconfinder.com/icons/6703107/3d_shape_3d_sphere_geometric_geometry_round_shape_sphere_icon
+
+#Gear: https://www.iconfinder.com/icons/8155392/settings_gear_options_configuration_cogwheel_cog_preferences_icon
+Settings: https://www.iconfinder.com/icons/5349756/configuration_control_gear_options_preferences_settings_tools_icon

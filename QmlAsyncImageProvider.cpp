@@ -54,6 +54,7 @@ void AsyncImageResponseRunnable::run() {
             else {
                 if (_id.contains("/")) {
                     QStringList idAndSize = _id.split("/");
+                    qDebug() << "idAndSize" << idAndSize;
                     QImage img = _model->fullSizeViewerForImageId(idAndSize[0]);
                     QStringList sizeStrings = idAndSize[1].split(",");
                     if (sizeStrings.size() == 4) {

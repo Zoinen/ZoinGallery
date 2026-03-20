@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Effects
 
 import ZoinGallery 1.0
@@ -76,13 +77,13 @@ BrickItem {
             visible: internalImage.source != ""
         }
 
-        Text {
-            id: imageSizeDiff
-            text: (internalImage.xDiff !== 0 || internalImage.yDiff !== 0) ? internalImage.xDiff + "x" + internalImage.yDiff : "0"
-            visible: !internalImage.diffIsSmall && internalImage.status === Image.Ready
-            color: "orange"
-            style: Text.Outline; styleColor: "black"
-        }
+        // Text {
+        //     id: imageSizeDiff
+        //     text: (internalImage.xDiff !== 0 || internalImage.yDiff !== 0) ? internalImage.xDiff + "x" + internalImage.yDiff : "0"
+        //     visible: !internalImage.diffIsSmall && internalImage.status === Image.Ready
+        //     color: "orange"
+        //     style: Text.Outline; styleColor: "black"
+        // }
     }
 
     component TreeBranch : Row {
@@ -194,7 +195,7 @@ BrickItem {
 
             }
             Component.onCompleted: {
-                brickDelegate.imageItem = icon
+                brickDelegate.imageItem = fileDelegateContent
             }
         }
     }
@@ -258,7 +259,7 @@ BrickItem {
             }
 
             Component.onCompleted: {
-                brickDelegate.imageItem = icon
+                brickDelegate.imageItem = fileListDelegateContent
             }
         }
     }
@@ -346,7 +347,7 @@ BrickItem {
             }
 
             Component.onCompleted: {
-                brickDelegate.imageItem = image.image
+                brickDelegate.imageItem = image
             }
         }
     }
@@ -491,7 +492,7 @@ BrickItem {
                 }
             }
             Component.onCompleted: {
-                brickDelegate.imageItem = folderListMasonryLayout
+                brickDelegate.imageItem = folderViewDelegateContent
             }
         }
     }
@@ -615,7 +616,7 @@ BrickItem {
                         }
 
                         Component.onCompleted: {
-                            brickDelegate.imageItem = folderGridMasonryLayout
+                            brickDelegate.imageItem = folderViewDelegateGridContent
                         }
                     }
                 }

@@ -1,4 +1,4 @@
-﻿#include "QtDecoder.h"
+#include "QtDecoder.h"
 #include "ImageFile.h"
 
 #include <QBuffer>

@@ -50,6 +50,8 @@ bool ThumbnailLoader::readImage(ImageData &result) {
         result.mimeType = QMimeDatabase().mimeTypeForFile(result.request.info.path).name();
         if (isExtensionMatch(result.request.info.path, {"psd", "psb"})) {
             result.mimeType = "psd";
+        } else if (isExtensionMatch(result.request.info.path, {"dds"})) {
+            result.mimeType = "image/vnd.ms-dds";
         }
     }
 

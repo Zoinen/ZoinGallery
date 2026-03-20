@@ -29,7 +29,7 @@ QVariant ImageInfoModel::data(const QModelIndex &index, int role) const {
     case LastModifiedRole:
         return info.lastModified;
     case ThumbnailSizeRole:
-        return info.location.thumbnailSize;
+        return (quint64)info.location.thumbnailSize;
     case ImageSizeRole:
         return info.imageSize;
     default:

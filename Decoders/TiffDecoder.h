@@ -1,4 +1,4 @@
-﻿#ifndef TIFFDECODER_H
+#ifndef TIFFDECODER_H
 #define TIFFDECODER_H
 
 #include "ImageDecoderInterface.h"

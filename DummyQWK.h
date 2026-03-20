@@ -1,4 +1,4 @@
-﻿#ifndef DUMMYQWK_H
+#ifndef DUMMYQWK_H
 #define DUMMYQWK_H
 
 #include <QQmlEngine>

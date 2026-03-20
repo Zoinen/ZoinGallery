@@ -1,7 +1,7 @@
 #ifndef PREVIEW_H
 #define PREVIEW_H
 
-#include <exiv2/image.hpp>
+#include <exiv2/exiv2.hpp>
 #include <exiv2/preview.hpp>
 
 class Exiv2Preview {

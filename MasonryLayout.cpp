@@ -3,11 +3,14 @@
 #include "MasonryLayoutQuickSearch.h"
 #include "SvgCursor.h"
 
+#include <QParallelAnimationGroup>
+#include <QPropertyAnimation>
+#include <QPropertyAnimation>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QQmlProperty>
-#include <QSettings>
 #include <QQuickWindow>
+#include <QSettings>
 
 static void registerMyQmlTypes() {
     qmlRegisterType<MasonryLayout>("ZoinGallery", 1, 0, "MasonryLayout");
@@ -287,7 +290,7 @@ void MasonryLayout::rewrap() {
         setContentYInternal(newContentY);
     }
     else {
-        updateProperties();
+        updateProperties(true);
     }
 }
 
@@ -477,7 +480,7 @@ QString rectToString(QRectF rect) {
     return QString("%1,%2\n%3x%4").arg(rectI.x()).arg(rectI.y()).arg(rectI.width()).arg(rectI.height());
 }
 
-void MasonryLayout::updateProperties() {
+void MasonryLayout::updateProperties(bool animate) {
 //    qDebug() << "update props";
 
     int newVisibleStart = -1;
@@ -527,17 +530,31 @@ void MasonryLayout::updateProperties() {
 
     if (newVisibleStart != -1) {
         for (int i = newVisibleStart; i <= newVisibleEnd; i++) {
+            bool itemPopped = false;
             if (!_bricks[i].item) {
+                itemPopped = true;
+                if (isEmbedded()) {
+                    // qDebug() << "POP ITEM" << i << dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem();
+                }
                 _bricks[i].item = popBrickItem();
                 _bricks[i].item->setProperty("model", QVariant::fromValue(_bricks[i].image));
             }
             _bricks[i].item->setRowColumn(_bricks[i].row, _bricks[i].column);
 
-            if (roundRect(_bricks[i].item->geometry()) != roundRect(_bricks[i].geometry())) {
+            if (itemPopped || roundRect(_bricks[i].item->geometry()) != roundRect(_bricks[i].geometry())) {
                 // if (isEmbedded()) {
                 //     qDebug() << "ZZ UPD GEOM for" << i << _bricks[i].geometry() << newVisibleStart << newVisibleEnd << isEmbedded();
                 // }
-                _bricks[i].item->setGeometry(_bricks[i].geometry(), false);
+                // bool animateGeometry = !itemPopped && _bricks[i].item->isVisible() && !(isEmbedded() && (_bricks[i].item->geometry().x() < 0 || _bricks[i].item->geometry().y() < 0));
+                bool animateGeometry = _bricks[i].item->isVisible() && animate && _bricks[i].item->geometry().isValid();
+                if (animateGeometry) {
+                    if (isEmbedded() && dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()->fileName() == "2015.07.09 Каланча") {
+                        qDebug() << "ANIMATE" << i << dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem() <<
+                            roundRect(_bricks[i].item->geometry()) << roundRect(_bricks[i].geometry()) <<
+                            _bricks[i].image->info().path;
+                    }
+                }
+                _bricks[i].item->setGeometry(_bricks[i].geometry(), animateGeometry);
             }
 
             if (itemsToHide.contains(_bricks[i].item)) {
@@ -867,6 +884,7 @@ void MasonryLayout::updateNeedScroll() {
 }
 
 void MasonryLayout::pushBrickItem(BrickItem *item) {
+    item->stopGeometryAnimation();
     _usedBrickItems.remove(item);
     _freeBrickItems.insert(item);
 }
@@ -876,10 +894,16 @@ BrickItem *MasonryLayout::popBrickItem() {
     if (_freeBrickItems.size() > 0) {
         item = *_freeBrickItems.begin();
         _freeBrickItems.remove(item);
+        item->stopGeometryAnimation();
+        // if (isEmbedded()) {
+            // qDebug() << "take from stash";
+        // }
     }
     else {
         item = createComponent();
-//        qDebug() << "create component";
+        // if (isEmbedded()) {
+            // qDebug() << "create component";
+        // }
     }
     _usedBrickItems.insert(item);
     return item;
@@ -967,6 +991,28 @@ int MasonryLayout::contentHeight() const {
 BrickItem::BrickItem(QQuickItem *parent)
     : QQuickItem(parent) {
     _isChangingGeometry = false;
+
+    int animationDuration = 500;
+    _geometryAnimationGroup = new QParallelAnimationGroup(this);
+    _xAnimation = new QPropertyAnimation(this, "x");
+    _xAnimation->setDuration(animationDuration);
+    _xAnimation->setEasingCurve(QEasingCurve::InOutQuad);
+    _geometryAnimationGroup->addAnimation(_xAnimation);
+
+    _yAnimation = new QPropertyAnimation(this, "y");
+    _yAnimation->setDuration(animationDuration);
+    _yAnimation->setEasingCurve(QEasingCurve::InOutQuad);
+    _geometryAnimationGroup->addAnimation(_yAnimation);
+
+    _widthAnimation = new QPropertyAnimation(this, "width");
+    _widthAnimation->setDuration(animationDuration);
+    _widthAnimation->setEasingCurve(QEasingCurve::InOutQuad);
+    _geometryAnimationGroup->addAnimation(_widthAnimation);
+
+    _heightAnimation = new QPropertyAnimation(this, "height");
+    _heightAnimation->setDuration(animationDuration);
+    _heightAnimation->setEasingCurve(QEasingCurve::InOutQuad);
+    _geometryAnimationGroup->addAnimation(_heightAnimation);
 }
 
 void BrickItem::setRowColumn(int row, int column) {
@@ -974,8 +1020,37 @@ void BrickItem::setRowColumn(int row, int column) {
     _column = column;
 }
 
-void BrickItem::setGeometry(QRectF rect, bool instantMove) {
+void BrickItem::animateToRect(const QRectF &rect) {
+    // Animate the x property if it has changed
+    // if (x() != rect.x()) {
+        _xAnimation->setEndValue(rect.x());
+    // }
+
+    // Animate the y property if it has changed
+    // if (y() != rect.y()) {
+        _yAnimation->setEndValue(rect.y());
+    // }
+
+    // Animate the width property if it has changed
+    // if (width() != rect.width()) {
+        _widthAnimation->setEndValue(rect.width());
+    // }
+
+    // Animate the height property if it has changed
+    // if (height() != rect.height()) {
+        _heightAnimation->setEndValue(rect.height());
+    // }
+
+    // Start the animation group and set it to delete itself when done
+    _geometryAnimationGroup->start();
+}
+
+void BrickItem::setGeometry(QRectF rect, bool animate) {
     rect = roundRect(rect);
+    if (animate) {
+        animateToRect(rect);
+        return;
+    }
 
     QRectF oldGeometry(x(), y(), width(), height());
     _isChangingGeometry = true;
@@ -995,7 +1070,7 @@ void BrickItem::setGeometry(QRectF rect, bool instantMove) {
 
     _isChangingGeometry = false;
 
-    if (oldGeometry != rect && !instantMove) {
+    if (oldGeometry != rect) {
 #if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
         geometryChanged(oldGeometry, rect);
 #else
@@ -1006,6 +1081,17 @@ void BrickItem::setGeometry(QRectF rect, bool instantMove) {
 
 QRectF BrickItem::geometry() const {
     return QRectF(x(), y(), width(), height());
+}
+
+void BrickItem::stopGeometryAnimation() {
+    _geometryAnimationGroup->stop();
+/*    if (_geometryAnimationGroup->state() == QAbstractAnimation::Running) {
+        QRectF rect(_xAnimation->endValue().toReal(),
+                    _yAnimation->endValue().toReal(),
+                    _widthAnimation->endValue().toReal(),
+                    _heightAnimation->endValue().toReal());
+        setGeometry(rect, false);
+    }*/
 }
 
 int BrickItem::row() const {

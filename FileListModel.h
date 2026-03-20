@@ -113,11 +113,14 @@ public:
 
     Q_INVOKABLE void startScanner();
 
+    Q_INVOKABLE void dumpCurrentImage();
+
     bool runningTasksDebug() const;
     void setRunningTasksDebug(bool isRunningTasksDebug);
 
 signals:
     void viewerImageIdUrlChanged(const QString &imageId, int level); // 0 is thumbnail, 1 is viewer, 2 is full resolution
+    void viewerReset();
 
     void runningTasksChanged(const QString &tasks, const QStringList &tasksInfo);
     void runningTasksDebugChanged();

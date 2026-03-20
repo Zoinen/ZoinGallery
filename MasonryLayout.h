@@ -7,14 +7,19 @@
 #include "MasonryLayoutQuickSearch.h"
 #include "ImageFile.h"
 
+class QParallelAnimationGroup;
+class QPropertyAnimation;
+
+
 class BrickItem : public QQuickItem {
     Q_OBJECT
 public:
     BrickItem(QQuickItem *parent = nullptr);
 
     void setRowColumn(int row, int column);
-    void setGeometry(QRectF rect, bool instantMove);
+    void setGeometry(QRectF rect, bool animate);
     QRectF geometry() const;
+    void stopGeometryAnimation();
 
     int row() const;
     int column() const;
@@ -25,11 +30,18 @@ protected:
 #else
     void geometryChange(const QRectF &newGeometry, const QRectF &oldGeometry);
 #endif
+    void animateToRect(const QRectF &rect);
 
 private:
     bool _isChangingGeometry;
     int _row;
     int _column;
+
+    QParallelAnimationGroup *_geometryAnimationGroup;
+    QPropertyAnimation *_xAnimation;
+    QPropertyAnimation *_yAnimation;
+    QPropertyAnimation *_widthAnimation;
+    QPropertyAnimation *_heightAnimation;
 };
 
 
@@ -210,7 +222,7 @@ private:
                            bool lastRowMatchesPrevious, qreal paddingTop);
     static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing,
                            bool lastRowMatchesPrevious, qreal paddingTop, CalcLayoutMode layoutMode);
-    void updateProperties();
+    void updateProperties(bool animate = false);
     void setContentYInternal(qreal newContentY);
 
     void setContentHeight(int newContentHeight);

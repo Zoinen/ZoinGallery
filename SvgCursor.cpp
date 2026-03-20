@@ -1,4 +1,4 @@
-﻿#include "SvgCursor.h"
+#include "SvgCursor.h"
 
 #include <QtSvg/QSvgRenderer>
 #include <QPainter>

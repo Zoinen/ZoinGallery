@@ -1,4 +1,4 @@
-﻿import QtQuick
+import QtQuick
 
 import QtQuick.Layouts
 import QtQuick.Controls
@@ -223,8 +223,18 @@ Item {
         viewportAnimation.restart();
     }
 
+    Connections {
+        target: fileListModel
+        function onViewerReset() {
+            console.log("VIEWER RESET-----------------------")
+            image.fromIndex = -1
+            image.fromLevel = -1
+            viewerImage2.fromIndex = -1
+        }
+    }
+
     function setImage(imageIdUrl, originalSize, fromIndex, level) {
-        console.log("SET IMAGE", imageIdUrl, originalSize, fromIndex, level)
+        console.log("SET IMAGE |", imageIdUrl, "|", originalSize, fromIndex, level)
         delayedIdSetter.stop()
         if (level === 0 && fromIndex !== image.fromIndex) {
             image.source = imageIdUrl
@@ -275,11 +285,12 @@ Item {
                 viewerImageCrop.targetY = -Math.floor(targetY)
                 viewerImageCrop.targetWidth = flickableArea.width
                 viewerImageCrop.targetHeight = flickableArea.height
+                // TODO: Math.round() is not accurate here
                 viewerImageCrop.source = imageIdUrl + "/" +
-                        viewerImageCrop.targetX * dpr + "," +
-                        viewerImageCrop.targetY * dpr + "," +
-                        flickableArea.width * dpr + "," +
-                        flickableArea.height * dpr
+                        Math.round(viewerImageCrop.targetX * dpr) + "," +
+                        Math.round(viewerImageCrop.targetY * dpr) + "," +
+                        Math.round(flickableArea.width * dpr) + "," +
+                        Math.round(flickableArea.height * dpr)
                 viewerImage2.fromIndex = fromIndex
             }
 

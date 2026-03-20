@@ -1,4 +1,4 @@
-﻿#include "TiffDecoder.h"
+#include "TiffDecoder.h"
 
 #include <streambuf>
 #include <istream>

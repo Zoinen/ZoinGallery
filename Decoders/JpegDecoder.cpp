@@ -1,10 +1,10 @@
-﻿#include "JpegDecoder.h"
+#include "JpegDecoder.h"
 
 #include <QFile>
 #include <QDebug>
 
 #include <iostream>
-#include "tinyexif.h"
+#include "TinyEXIF.h"
 #include <turbojpeg.h>
 
 REGISTER_DECODER_DEFINITION(JpegDecoder)

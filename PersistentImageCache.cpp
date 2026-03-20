@@ -128,12 +128,15 @@ QByteArray PersistentImageCache::createImageForCache(const QImage &image) {
 }
 
 QDataStream& operator<<(QDataStream& out, const PersistentImageCache::ThumbnailLocation& obj) {
-    out << obj.chunkFileIndex << obj.offsetInChunk << obj.thumbnailSize;
+    out << obj.chunkFileIndex << (quint64)obj.offsetInChunk << (quint64)obj.thumbnailSize;
     return out;
 }
 
 QDataStream& operator>>(QDataStream& in, PersistentImageCache::ThumbnailLocation& obj) {
-    in >> obj.chunkFileIndex >> obj.offsetInChunk >> obj.thumbnailSize;
+    quint64 offsetInChunk, thumbnailSize;
+    in >> obj.chunkFileIndex >> offsetInChunk >> thumbnailSize;
+    obj.offsetInChunk = offsetInChunk;
+    obj.thumbnailSize = thumbnailSize;
     return in;
 }
 

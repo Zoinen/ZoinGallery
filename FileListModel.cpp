@@ -9,6 +9,8 @@
 #include <QDeadlineTimer>
 #include <QGuiApplication>
 #include <QStack>
+#include <QStandardPaths>
+#include <QDateTime>
 
 #include <chrono>
 using namespace std::chrono_literals;
@@ -489,6 +491,7 @@ void FileListModel::cleanupModelBeforeCd() {
         delete _items[i];
     }
     _items.clear();
+    emit viewerReset();
 }
 
 ImageDecodeRequest FileListModel::imageDecodeRequestFromEmbeddedImageInfo(const ImageInfo &info) const {
@@ -645,7 +648,7 @@ void FileListModel::requestViewer(int index, int width, int height) {
     auto itThumbs = _fileToItem.find(requestedPath);
     if (itThumbs != _fileToItem.end()) {
         qDebug() << "Using thumbnail image" << itThumbs.value()->image().size();
-        emit viewerImageIdUrlChanged(QString("image://thumbnails/") + itThumbs.value()->imageIdUrl(), 0);
+        emit viewerImageIdUrlChanged(itThumbs.value()->imageIdUrl(), 0);
     }
     if (it != _viewerImages.end() && !it->image.isNull()) {
         qDebug() << "Using viewer image" << it->requestedSize << it->image.size();
@@ -903,4 +906,46 @@ void FileListModel::setRunningTasksDebug(bool isRunningTasksDebug) {
     }
     _decodeManager->setRunningTasksDebug(isRunningTasksDebug);
     emit runningTasksDebugChanged();
+}
+
+void FileListModel::dumpCurrentImage() {
+    if (_currentViewIndex < 0 || _currentViewIndex >= _items.size()) {
+        qDebug() << "No valid current image to dump";
+        return;
+    }
+    
+    ImageFile *currentItem = _items.at(_currentViewIndex);
+    QString imagePath = currentItem->fullPath();
+    
+    // Try to get full size viewer image first, fall back to regular viewer image
+    QImage imageToSave;
+    if (_fullSizeViewerImages.contains(imagePath)) {
+        imageToSave = _fullSizeViewerImages[imagePath].image;
+    } else if (_viewerImages.contains(imagePath)) {
+        imageToSave = _viewerImages[imagePath].image;
+    }
+    
+    if (imageToSave.isNull()) {
+        qDebug() << "No viewer image available for current index";
+        return;
+    }
+    
+    // Get Pictures folder path
+    QString picturesPath = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    QDir picturesDir(picturesPath);
+    if (!picturesDir.exists()) {
+        picturesDir.mkpath(".");
+    }
+    
+    // Create filename with timestamp
+    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
+    QString filename = QFileInfo(imagePath).baseName() + "_" + timestamp + ".png";
+    QString savePath = picturesDir.filePath(filename);
+    
+    // Save the image
+    if (imageToSave.save(savePath, "PNG")) {
+        qDebug() << "Image saved to" << savePath;
+    } else {
+        qDebug() << "Failed to save image to" << savePath;
+    }
 }

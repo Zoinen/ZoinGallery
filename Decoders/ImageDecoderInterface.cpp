@@ -1,4 +1,4 @@
-﻿#include "ImageDecoderInterface.h"
+#include "ImageDecoderInterface.h"
 #include "ImageFile.h"
 
 bool ImageDecoderInterface::isFormatSupported(const QString &path) {

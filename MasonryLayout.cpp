@@ -510,7 +510,7 @@ void MasonryLayout::updateProperties(bool animate) {
             }
         }
     }
-    if (newVisibleEnd == -1) {
+    if (newVisibleStart != -1 && newVisibleEnd == -1) {
         // qDebug() << "ZZ WELL USE LAST";
         newVisibleEnd = _bricks.size() - 1;
     }

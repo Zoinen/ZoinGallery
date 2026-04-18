@@ -45,6 +45,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _spacing = 12; // Should be divisible by 4
     _listView = set.value("listView", true).toBool();
     _showTransparentGrid = set.value("showTransparentGrid", true).toBool();
+    _animateResizing = set.value("animateResizing", true).toBool();
     _imageCount = 0;
     _listRowHeight = 30;
 
@@ -541,20 +542,22 @@ void MasonryLayout::updateProperties(bool animate) {
             }
             _bricks[i].item->setRowColumn(_bricks[i].row, _bricks[i].column);
 
-            if (itemPopped || roundRect(_bricks[i].item->geometry()) != roundRect(_bricks[i].geometry())) {
-                // if (isEmbedded()) {
-                //     qDebug() << "ZZ UPD GEOM for" << i << _bricks[i].geometry() << newVisibleStart << newVisibleEnd << isEmbedded();
-                // }
-                // bool animateGeometry = !itemPopped && _bricks[i].item->isVisible() && !(isEmbedded() && (_bricks[i].item->geometry().x() < 0 || _bricks[i].item->geometry().y() < 0));
-                bool animateGeometry = _bricks[i].item->isVisible() && animate && _bricks[i].item->geometry().isValid();
-                if (animateGeometry) {
-                    if (isEmbedded() && dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()->fileName() == "2015.07.09 Каланча") {
-                        qDebug() << "ANIMATE" << i << dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem() <<
-                            roundRect(_bricks[i].item->geometry()) << roundRect(_bricks[i].geometry()) <<
-                            _bricks[i].image->info().path;
-                    }
+            if (!_animateResizing) {
+                if (roundRect(_bricks[i].item->geometry()) != roundRect(_bricks[i].geometry())) {
+                    _bricks[i].item->setGeometry(_bricks[i].geometry(), false);
                 }
-                _bricks[i].item->setGeometry(_bricks[i].geometry(), animateGeometry);
+            } else {
+                if (itemPopped || roundRect(_bricks[i].item->geometry()) != roundRect(_bricks[i].geometry())) {
+                    bool animateGeometry = _bricks[i].item->isVisible() && animate && _bricks[i].item->geometry().isValid();
+                    if (animateGeometry) {
+                        if (isEmbedded() && dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()->fileName() == "2015.07.09 Каланча") {
+                            qDebug() << "ANIMATE" << i << dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem() <<
+                                roundRect(_bricks[i].item->geometry()) << roundRect(_bricks[i].geometry()) <<
+                                _bricks[i].image->info().path;
+                        }
+                    }
+                    _bricks[i].item->setGeometry(_bricks[i].geometry(), animateGeometry);
+                }
             }
 
             if (itemsToHide.contains(_bricks[i].item)) {
@@ -1052,6 +1055,8 @@ void BrickItem::setGeometry(QRectF rect, bool animate) {
         return;
     }
 
+    stopGeometryAnimation();
+
     QRectF oldGeometry(x(), y(), width(), height());
     _isChangingGeometry = true;
 
@@ -1276,6 +1281,23 @@ void MasonryLayout::setShowTransparentGrid(bool newShowTransparentGrid) {
     set.setValue("showTransparentGrid", _showTransparentGrid);
 
     emit showTransparentGridChanged();
+}
+
+bool MasonryLayout::animateResizing() const {
+    return _animateResizing;
+}
+
+void MasonryLayout::setAnimateResizing(bool newAnimateResizing) {
+    if (_animateResizing == newAnimateResizing) {
+        return;
+    }
+
+    _animateResizing = newAnimateResizing;
+    
+    QSettings set;
+    set.setValue("animateResizing", _animateResizing);
+    
+    emit animateResizingChanged();
 }
 
 qreal MasonryLayout::paddingLeft() const {

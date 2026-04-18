@@ -376,8 +376,9 @@ MainWindow {
                         colorfulIcon: true
                         icon.source: "qrc:/resources/Logo.svg"
                         onClicked: {
-                            windowAgent.showSystemMenu(mapToGlobal(0, height))
+                            // windowAgent.showSystemMenu(mapToGlobal(0, height))
                             // fileListModel.startScanner()
+                            settingsDialog.open()
                         }
                         // Component.onCompleted: windowAgent.setSystemButton(WindowAgent.WindowIcon, appIcon)
                     }
@@ -760,6 +761,10 @@ MainWindow {
         ViewerMode {
             id: viewerMode
             anchors.fill: parent
+        }
+
+        SettingsDialog {
+            id: settingsDialog
         }
 
         state: "thumbnails"

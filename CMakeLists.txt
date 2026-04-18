@@ -176,7 +176,7 @@ set_target_properties(${PROJECT_NAME}
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-set_source_files_properties(qml/Style.qml PROPERTIES
+set_source_files_properties(ZGStyle/Style.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE
 )
 
@@ -249,6 +249,7 @@ qt6_add_qml_module(ZoinGallery
     RESOURCE_PREFIX /
     QML_FILES
         qml/main.qml
+        qml/SettingsDialog.qml
         qml/MasonryMode.qml
         qml/PathControl.qml
         qml/BrickDelegate.qml

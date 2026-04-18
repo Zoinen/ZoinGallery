@@ -62,6 +62,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(bool needScroll READ needScroll NOTIFY needScrollChanged)
     Q_PROPERTY(bool listView READ listView WRITE setListView NOTIFY listViewChanged)
     Q_PROPERTY(bool showTransparentGrid READ showTransparentGrid WRITE setShowTransparentGrid NOTIFY showTransparentGridChanged)
+    Q_PROPERTY(bool animateResizing READ animateResizing WRITE setAnimateResizing NOTIFY animateResizingChanged)
     Q_PROPERTY(int listRowHeight READ listRowHeight NOTIFY listRowHeightChanged)
     Q_PROPERTY(QVariantList currentImageExif READ currentImageExif NOTIFY currentIndexChanged)
     Q_PROPERTY(QQuickItem *viewport READ viewport NOTIFY viewportChanged)
@@ -126,6 +127,9 @@ public:
     bool showTransparentGrid() const;
     void setShowTransparentGrid(bool newShowTransparentGrid);
 
+    bool animateResizing() const;
+    void setAnimateResizing(bool newAnimateResizing);
+
     qreal paddingLeft() const;
     void setPaddingLeft(qreal newPaddingLeft);
 
@@ -169,6 +173,8 @@ signals:
     void currentImageIndexChanged();
 
     void showTransparentGridChanged();
+
+    void animateResizingChanged();
 
     void paddingLeftChanged();
 
@@ -275,6 +281,7 @@ private:
     int _imageCount;
     int _currentImageIndex;
     bool _showTransparentGrid;
+    bool _animateResizing;
     int _listRowHeight;
 
     qreal _paddingLeft;

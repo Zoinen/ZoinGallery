@@ -171,6 +171,10 @@ Item {
             flickableArea.forceShowScrollBars = false
         }
 
+        updateTitle()
+    }
+
+    function updateTitle() {
         topLevelWindow.title = masonryLayout.view.indexText(masonryLayout.view.currentIndex) + " [" +
                 (masonryLayout.view.currentImageIndex + 1) + "/" + masonryLayout.view.imageCount + "] - ZoinGallery"
     }
@@ -191,6 +195,7 @@ Item {
         function onStateChanged() {
             if (root.state === "thumbnails") {
                 previousImageIndex = -1
+                flickableArea.rotationMode = 0
             }
         }
     }
@@ -300,6 +305,14 @@ Item {
             else if (event.key === Qt.Key_S || event.key === Qt.Key_P) {
                 console.log("ZZ SP")
                 sphericViewerMode = !sphericViewerMode
+            }
+            else if (event.key === Qt.Key_BracketRight) {
+                flickableArea.rotate(1)
+                updateTitle()
+            }
+            else if (event.key === Qt.Key_BracketLeft) {
+                flickableArea.rotate(3)
+                updateTitle()
             }
             else if (event.key === Qt.Key_C) {
                 console.log("ZZ F12")
@@ -673,7 +686,13 @@ Item {
         property bool hovered: false
         property alias backgroundOpacity: topBarBackground.opacity
 
-        property string fileName: masonryLayout.view.indexText(masonryLayout.view.currentIndex)
+        property string fileName: {
+            let rotationStr = ""
+            if (flickableArea.rotationMode === 1) rotationStr = " [90°]"
+            else if (flickableArea.rotationMode === 2) rotationStr = " [180°]"
+            else if (flickableArea.rotationMode === 3) rotationStr = " [270°]"
+            return masonryLayout.view.indexText(masonryLayout.view.currentIndex) + rotationStr
+        }
 
         component TitleProxyButton : TitleButton {
             property var proxyControl
@@ -964,6 +983,7 @@ Item {
                     property bool showCheckerboard: masonryLayout.view.showTransparentGrid
                     property int checkerboardSize: 4 * dpr
                     property real borderRadius: 4.1 * dpr
+                    property int rotationMode: 0
 
                     fragmentShader: "qrc:/resources/shader.frag.qsb"
                     visible: filmstripImage.source != ""

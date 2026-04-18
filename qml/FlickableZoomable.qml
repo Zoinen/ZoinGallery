@@ -8,6 +8,8 @@ Item {
 
     property alias image: viewerImage
     property size originalSize
+    property int rotationMode: 0
+    property size effectiveOriginalSize: (rotationMode % 2 === 1) ? Qt.size(originalSize.height, originalSize.width) : originalSize
 
     property bool zoomFitView: true
 
@@ -23,7 +25,7 @@ Item {
     property bool dragZoomActive: viewerMouse.pressed || viewportAnimation.running
     property bool scrollBarsVisible: (hbar.hovered || hbar.pressed || vbar.hovered || vbar.pressed || dragZoomActive || frameAnimation.running || forceShowScrollBars) && !zoomFitView
 
-    property bool fitToHeight: originalSize.width / originalSize.height <= flickableArea.width / flickableArea.height
+    property bool fitToHeight: effectiveOriginalSize.width / effectiveOriginalSize.height <= flickableArea.width / flickableArea.height
     property real scrollBarsRightMargin: 0
 
     signal clicked
@@ -154,10 +156,10 @@ Item {
 
         zoomFitView = true
 
-        let targetWidth = fitToHeight ? flickableArea.height * (originalSize.width / originalSize.height) :
+        let targetWidth = fitToHeight ? flickableArea.height * (effectiveOriginalSize.width / effectiveOriginalSize.height) :
                                                     flickableArea.width
         let targetHeight = fitToHeight ? flickableArea.height :
-                                                     flickableArea.width / (originalSize.width / originalSize.height)
+                                                     flickableArea.width / (effectiveOriginalSize.width / effectiveOriginalSize.height)
 
         if (skipAnimation) {
             xAnimation.duration = 0
@@ -170,7 +172,7 @@ Item {
             zoomAnimation.duration = animationDuration
         }
 
-        zoomAnimation.to = fitToHeight ? flickableArea.height / originalSize.height : flickableArea.width / originalSize.width
+        zoomAnimation.to = fitToHeight ? flickableArea.height / effectiveOriginalSize.height : flickableArea.width / effectiveOriginalSize.width
         xAnimation.to = flickableArea.width / 2 - targetWidth / 2
         yAnimation.to = flickableArea.height / 2 - targetHeight / 2
 
@@ -193,6 +195,48 @@ Item {
         }
     }
 
+    function rotate(direction) {
+        viewerImageCrop.source = ""
+
+        if (zoomFitView) {
+            rotationMode = (rotationMode + direction) % 4
+            zoomToFit(true)
+        } else {
+            let ow = effectiveOriginalSize.width
+            let oh = effectiveOriginalSize.height
+            
+            let centerX = (flickableArea.width / 2 - viewerImage.x) / zoomScale
+            let centerY = (flickableArea.height / 2 - viewerImage.y) / zoomScale
+            
+            let newCenterX, newCenterY;
+            if (direction === 1) {
+                newCenterX = oh - centerY
+                newCenterY = centerX
+            } else if (direction === 2) {
+                newCenterX = ow - centerX
+                newCenterY = oh - centerY
+            } else if (direction === 3) {
+                newCenterX = centerY
+                newCenterY = ow - centerX
+            }
+            
+            rotationMode = (rotationMode + direction) % 4
+            
+            let targetX = flickableArea.width / 2 - newCenterX * zoomScale
+            let targetY = flickableArea.height / 2 - newCenterY * zoomScale
+            
+            viewerImage.x = fitViewerImageInViewportBoundsX(targetX, zoomScale)
+            viewerImage.y = fitViewerImageInViewportBoundsY(targetY, zoomScale)
+            
+            if (viewportAnimation.running) {
+                viewportAnimation.stop()
+                xAnimation.to = viewerImage.x
+                yAnimation.to = viewerImage.y
+                zoomAnimation.to = zoomScale
+            }
+        }
+    }
+
     function fitViewerImageInViewportBounds() {
         viewerImage.x = fitViewerImageInViewportBoundsX(viewerImage.x)
         viewerImage.y = fitViewerImageInViewportBoundsY(viewerImage.y)
@@ -202,7 +246,7 @@ Item {
         if (targetScale === undefined) {
             targetScale = zoomScale
         }
-        let targetWidth = originalSize.width * targetScale
+        let targetWidth = effectiveOriginalSize.width * targetScale
         targetX = Math.min(0, Math.max(targetX, flickableArea.width - targetWidth))
         if (targetWidth < flickableArea.width) {
             targetX = flickableArea.width / 2 - targetWidth / 2
@@ -214,7 +258,7 @@ Item {
         if (targetScale === undefined) {
             targetScale = zoomScale
         }
-        let targetHeight = originalSize.height * targetScale
+        let targetHeight = effectiveOriginalSize.height * targetScale
         targetY = Math.min(0, Math.max(targetY, flickableArea.height - targetHeight))
         if (targetHeight < flickableArea.height) {
             targetY = flickableArea.height / 2 - targetHeight / 2
@@ -245,8 +289,8 @@ Item {
         }
     }
 
-    function setImage(imageIdUrl, originalSize, fromIndex, level) {
-        console.log("SET IMAGE |", imageIdUrl, "|", originalSize, fromIndex, level)
+    function setImage(imageIdUrl, originalSize_, fromIndex, level) {
+        console.log("SET IMAGE |", imageIdUrl, "|", originalSize_, fromIndex, level)
         delayedIdSetter.stop()
         if (level === 0 && fromIndex !== image.fromIndex) {
             image.source = imageIdUrl
@@ -285,7 +329,7 @@ Item {
                 targetY = viewerImage.y
             }
 
-            if (flickableArea.width > originalSize.width / dpr * zoomAnimation.to || flickableArea.height > originalSize.height / dpr * zoomAnimation.to) {
+            if (flickableArea.width > effectiveOriginalSize.width * zoomAnimation.to || flickableArea.height > effectiveOriginalSize.height * zoomAnimation.to) {
                 console.log("Not using partial decode", zoomScale, zoomAnimation.running, zoomAnimation.to)
                 viewerImage2.source = ""
                 viewerImageCrop.source = ""
@@ -293,23 +337,53 @@ Item {
             }
             else {
                 console.log("Requesting partial decode")
-                viewerImageCrop.targetX = -Math.floor(targetX)
-                viewerImageCrop.targetY = -Math.floor(targetY)
-                viewerImageCrop.targetWidth = flickableArea.width
-                viewerImageCrop.targetHeight = flickableArea.height
-                // TODO: Math.round() is not accurate here
+                let rx = -targetX / zoomAnimation.to
+                let ry = -targetY / zoomAnimation.to
+                let rw = flickableArea.width / zoomAnimation.to
+                let rh = flickableArea.height / zoomAnimation.to
+                let ow = originalSize_.width / dpr
+                let oh = originalSize_.height / dpr
+
+                let origCropX, origCropY, origCropWidth, origCropHeight
+                if (rotationMode === 0) {
+                    origCropX = rx
+                    origCropY = ry
+                    origCropWidth = rw
+                    origCropHeight = rh
+                } else if (rotationMode === 1) {
+                    origCropX = ry
+                    origCropY = oh - (rx + rw)
+                    origCropWidth = rh
+                    origCropHeight = rw
+                } else if (rotationMode === 2) {
+                    origCropX = ow - (rx + rw)
+                    origCropY = oh - (ry + rh)
+                    origCropWidth = rw
+                    origCropHeight = rh
+                } else if (rotationMode === 3) {
+                    origCropX = ow - (ry + rh)
+                    origCropY = rx
+                    origCropWidth = rh
+                    origCropHeight = rw
+                }
+
+                viewerImageCrop.unscaledCenterX = rx + rw / 2
+                viewerImageCrop.unscaledCenterY = ry + rh / 2
+                viewerImageCrop.unscaledCropWidth = origCropWidth
+                viewerImageCrop.unscaledCropHeight = origCropHeight
+
                 viewerImageCrop.source = imageIdUrl + "/" +
-                        Math.round(viewerImageCrop.targetX * dpr) + "," +
-                        Math.round(viewerImageCrop.targetY * dpr) + "," +
-                        Math.round(flickableArea.width * dpr) + "," +
-                        Math.round(flickableArea.height * dpr)
+                        Math.round(origCropX * dpr) + "," +
+                        Math.round(origCropY * dpr) + "," +
+                        Math.round(origCropWidth * dpr) + "," +
+                        Math.round(origCropHeight * dpr)
                 viewerImage2.fromIndex = fromIndex
             }
 
             delayedIdSetter.idToSet = imageIdUrl
             delayedIdSetter.restart()
         }
-        flickableArea.originalSize = Qt.size(originalSize.width / dpr, originalSize.height / dpr)
+        flickableArea.originalSize = Qt.size(originalSize_.width / dpr, originalSize_.height / dpr)
     }
 
     Timer {
@@ -401,8 +475,8 @@ Item {
         id: viewerImage
         cache: false
 
-        width: originalSize.width * zoomScale
-        height: originalSize.height * zoomScale
+        width: effectiveOriginalSize.width * zoomScale
+        height: effectiveOriginalSize.height * zoomScale
         mipmap: false
         asynchronous: false
 
@@ -438,6 +512,7 @@ Item {
         property bool showCheckerboard: masonryLayout.view.showTransparentGrid
         property int checkerboardSize: 4 * dpr
         property int borderRadius: 0
+        property int rotationMode: flickableArea.rotationMode
 
         fragmentShader: "qrc:/resources/shader.frag.qsb"
 
@@ -445,15 +520,16 @@ Item {
             id: viewerImageCrop
             cache: false
 
-            property real targetX
-            property real targetY
-            property real targetWidth
-            property real targetHeight
+            property real unscaledCenterX
+            property real unscaledCenterY
+            property real unscaledCropWidth
+            property real unscaledCropHeight
 
-            x: targetX * zoomScale
-            y: targetY * zoomScale
-            width: targetWidth * zoomScale
-            height: targetHeight * zoomScale
+            x: unscaledCenterX * zoomScale - width / 2
+            y: unscaledCenterY * zoomScale - height / 2
+            width: unscaledCropWidth * zoomScale
+            height: unscaledCropHeight * zoomScale
+            rotation: rotationMode * 90
 
             // mipmap: false
             // asynchronous: false

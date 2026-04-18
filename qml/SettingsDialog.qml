@@ -158,6 +158,9 @@ Dialog {
 
                     ShortcutKey { text: "S / P" }
                     ShortcutDesc { text: "Toggle spheric viewer mode" }
+
+                    ShortcutKey { text: "[ / ]" }
+                    ShortcutDesc { text: "Rotate image left / right" }
                 }
             }
         }

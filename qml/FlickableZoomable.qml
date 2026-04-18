@@ -111,25 +111,25 @@ Item {
         frameAnimation.running = x || y || scale
     }
 
-    function zoomTo100(keepMousePosition) {
-        zoomAnimation.to = 1
+    function zoomToScale(targetScale, keepMousePosition) {
+        zoomAnimation.to = targetScale
         let targetX
         let targetY
         if (keepMousePosition) {
-            targetX = viewerMouse.mouseX - (imagePressedX) * 1
-            targetY = viewerMouse.mouseY - (imagePressedY) * 1
+            targetX = viewerMouse.mouseX - (imagePressedX) * targetScale
+            targetY = viewerMouse.mouseY - (imagePressedY) * targetScale
         }
         else {
             if (!viewportAnimation.running) {
                 imagePressedX = (flickableArea.width / 2 - viewerImage.x) / zoomScale
                 imagePressedY = (flickableArea.height / 2 - viewerImage.y) / zoomScale
             }
-            targetX = flickableArea.width / 2 - (imagePressedX) * 1
-            targetY = flickableArea.height / 2 - (imagePressedY) * 1
+            targetX = flickableArea.width / 2 - (imagePressedX) * targetScale
+            targetY = flickableArea.height / 2 - (imagePressedY) * targetScale
         }
 
-        xAnimation.to = fitViewerImageInViewportBoundsX(targetX, zoomScale)
-        yAnimation.to = fitViewerImageInViewportBoundsY(targetY, zoomScale)
+        xAnimation.to = fitViewerImageInViewportBoundsX(targetX, targetScale)
+        yAnimation.to = fitViewerImageInViewportBoundsY(targetY, targetScale)
 
         xAnimation.duration = animationDuration
         yAnimation.duration = animationDuration
@@ -139,6 +139,10 @@ Item {
         viewportAnimation.restart()
 
         zoomFitView = false
+    }
+
+    function zoomTo100(keepMousePosition) {
+        zoomToScale(1, keepMousePosition)
     }
 
     function zoomToFit(skipAnimation) {
@@ -194,18 +198,26 @@ Item {
         viewerImage.y = fitViewerImageInViewportBoundsY(viewerImage.y)
     }
 
-    function fitViewerImageInViewportBoundsX(targetX, targetZoomScale = 1) {
-        targetX = Math.min(0, Math.max(targetX, flickableArea.width - viewerImage.width / targetZoomScale))
-        if (viewerImage.width / targetZoomScale < flickableArea.width) {
-            targetX = flickableArea.width / 2 - viewerImage.width / targetZoomScale / 2
+    function fitViewerImageInViewportBoundsX(targetX, targetScale) {
+        if (targetScale === undefined) {
+            targetScale = zoomScale
+        }
+        let targetWidth = originalSize.width * targetScale
+        targetX = Math.min(0, Math.max(targetX, flickableArea.width - targetWidth))
+        if (targetWidth < flickableArea.width) {
+            targetX = flickableArea.width / 2 - targetWidth / 2
         }
         return targetX
     }
 
-    function fitViewerImageInViewportBoundsY(targetY, targetZoomScale = 1) {
-        targetY = Math.min(0, Math.max(targetY, flickableArea.height - viewerImage.height / targetZoomScale))
-        if (viewerImage.height / targetZoomScale < flickableArea.height) {
-            targetY = flickableArea.height / 2 - viewerImage.height / targetZoomScale / 2
+    function fitViewerImageInViewportBoundsY(targetY, targetScale) {
+        if (targetScale === undefined) {
+            targetScale = zoomScale
+        }
+        let targetHeight = originalSize.height * targetScale
+        targetY = Math.min(0, Math.max(targetY, flickableArea.height - targetHeight))
+        if (targetHeight < flickableArea.height) {
+            targetY = flickableArea.height / 2 - targetHeight / 2
         }
         return targetY
     }

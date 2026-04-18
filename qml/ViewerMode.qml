@@ -183,6 +183,25 @@ Item {
     property bool zoomOutPressed: false
     property bool controlPressed: false
 
+    property int previousImageIndex: -1
+    property int lastKnownIndex: -1
+
+    Connections {
+        target: root
+        function onStateChanged() {
+            if (root.state === "thumbnails") {
+                previousImageIndex = -1
+            }
+        }
+    }
+
+    Connections {
+        target: viewerController
+        function onCurrentPathChanged() {
+            previousImageIndex = -1
+        }
+    }
+
     Keys.onPressed:
         (event) => {
             let nextIndex = -1
@@ -247,11 +266,36 @@ Item {
             else if (event.key === Qt.Key_Asterisk || event.key === Qt.Key_9) {
                 flickableArea.zoomTo100()
             }
+            else if (event.key === Qt.Key_1 && (event.modifiers & Qt.ControlModifier)) {
+                flickableArea.zoomTo100()
+            }
+            else if (event.key === Qt.Key_2 && (event.modifiers & Qt.ControlModifier)) {
+                flickableArea.zoomToScale(0.5)
+            }
+            else if (event.key === Qt.Key_3 && (event.modifiers & Qt.ControlModifier)) {
+                flickableArea.zoomToScale(0.25)
+            }
             else if (event.key === Qt.Key_0 && (event.modifiers & Qt.ControlModifier)) {
                 flickableArea.zoomToFit()
             }
-            else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Slash || event.key === Qt.Key_0) {
+            else if (event.key === Qt.Key_Z || event.key === Qt.Key_Slash || event.key === Qt.Key_0) {
                 flickableArea.toggleZoomToFit()
+            }
+            else if (event.key === Qt.Key_Tab) {
+                panelsVisible = !panelsVisible
+            }
+            else if (event.key === Qt.Key_QuoteLeft || event.key === Qt.Key_AsciiTilde || event.key === 1025) {
+                if (previousImageIndex !== -1) {
+                    nextIndex = previousImageIndex
+                    masonryLayout.setCurrentIndex(nextIndex)
+                } else {
+                    let potentialNext = masonryLayout.view.nextImageIndex(true, false)
+                    if (potentialNext !== currentIndex) {
+                        nextIndex = masonryLayout.moveInImageList(true, false)
+                    } else {
+                        nextIndex = masonryLayout.moveInImageList(false, false)
+                    }
+                }
             }
             else if (event.key === Qt.Key_S || event.key === Qt.Key_P) {
                 console.log("ZZ SP")
@@ -317,6 +361,11 @@ Item {
         target: masonryLayout.view
         function onCurrentIndexChanged() {
             if (root.state === "viewer") {
+                if (lastKnownIndex !== -1 && lastKnownIndex !== masonryLayout.view.currentIndex) {
+                    previousImageIndex = lastKnownIndex
+                }
+                lastKnownIndex = masonryLayout.view.currentIndex
+
                 let imageIdUrl = masonryLayout.view.indexImageIdUrl(masonryLayout.view.currentIndex)
                 // console.log("ZZ INDEX CHANGE 2", masonryLayout.view.currentIndex, imageIdUrl)
                 if (imageIdUrl) {
@@ -330,6 +379,9 @@ Item {
                         // console.log("ZZ ELSE")
                     }
                 }
+            }
+            else {
+                lastKnownIndex = masonryLayout.view.currentIndex
             }
         }
     }
@@ -353,8 +405,6 @@ Item {
             height: parent.height
             animationDuration: viewerMode.animationDuration
             scrollBarsRightMargin: panelsVisible ? rightPanel.width : 0
-
-            onClicked: panelsVisible = !panelsVisible
 
             Rectangle {
                 id: delegateOutline
@@ -728,7 +778,7 @@ Item {
                     implicitHeight: titleBar.viewerHeight
 
                     icon.source: "qrc:/resources/Settings.svg"
-                    // onClicked: topLevelWindow.showMinimized()
+                    onClicked: panelsVisible = !panelsVisible
                     Component.onCompleted: {
                         windowAgent.setHitTestVisible(settingsButton)
                     }

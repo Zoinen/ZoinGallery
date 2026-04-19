@@ -72,7 +72,6 @@ BrickItem {
             property bool showCheckerboard: masonryLayout.showTransparentGrid
             property int checkerboardSize: 4 * dpr
             property real borderRadius: 4.1 * dpr
-            property int rotationMode: 0
 
             fragmentShader: "qrc:/resources/shader.frag.qsb"
             visible: internalImage.source != ""

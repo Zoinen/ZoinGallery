@@ -9,7 +9,37 @@ Item {
     property alias image: viewerImage
     property size originalSize
     property int rotationMode: 0
+    property bool animateRotation: false
     property size effectiveOriginalSize: (rotationMode % 2 === 1) ? Qt.size(originalSize.height, originalSize.width) : originalSize
+
+    property real animatedEffectiveWidth: effectiveOriginalSize.width
+    onAnimatedEffectiveWidthChanged: {
+        if (isRotating) updatePinnedPosition()
+    }
+    Behavior on animatedEffectiveWidth {
+        enabled: animateRotation && zoomFitView
+        NumberAnimation { duration: animationDuration; easing.type: Easing.InOutQuad }
+    }
+
+    property real animatedEffectiveHeight: effectiveOriginalSize.height
+    onAnimatedEffectiveHeightChanged: {
+        if (isRotating) updatePinnedPosition()
+    }
+    Behavior on animatedEffectiveHeight {
+        enabled: animateRotation && zoomFitView
+        NumberAnimation { duration: animationDuration; easing.type: Easing.InOutQuad }
+    }
+
+    onZoomScaleChanged: {
+        if (isRotating) updatePinnedPosition()
+    }
+
+    NumberAnimation {
+        id: rotationZoomAnimation
+        target: flickableArea
+        property: "zoomScale"
+        easing.type: Easing.InOutQuad
+    }
 
     property bool zoomFitView: true
 
@@ -195,46 +225,56 @@ Item {
         }
     }
 
+    property real pinnedVx: 0
+    property real pinnedVy: 0
+    property bool isRotating: false
+
+    Timer {
+        id: rotationTimer
+        interval: animationDuration
+        onTriggered: {
+            isRotating = false
+            onControlReleased()
+        }
+    }
+
+    function updatePinnedPosition() {
+        let rad = unrotatedContent.rotation * Math.PI / 180
+        let vpx = pinnedVx * Math.cos(rad) - pinnedVy * Math.sin(rad)
+        let vpy = pinnedVx * Math.sin(rad) + pinnedVy * Math.cos(rad)
+        
+        viewerImage.x = flickableArea.width / 2 - viewerImage.width / 2 - vpx
+        viewerImage.y = flickableArea.height / 2 - viewerImage.height / 2 - vpy
+    }
+
     function rotate(direction) {
+        animateRotation = true
         viewerImageCrop.source = ""
 
-        if (zoomFitView) {
-            rotationMode = (rotationMode + direction) % 4
-            zoomToFit(true)
-        } else {
-            let ow = effectiveOriginalSize.width
-            let oh = effectiveOriginalSize.height
-            
-            let centerX = (flickableArea.width / 2 - viewerImage.x) / zoomScale
-            let centerY = (flickableArea.height / 2 - viewerImage.y) / zoomScale
-            
-            let newCenterX, newCenterY;
-            if (direction === 1) {
-                newCenterX = oh - centerY
-                newCenterY = centerX
-            } else if (direction === 2) {
-                newCenterX = ow - centerX
-                newCenterY = oh - centerY
-            } else if (direction === 3) {
-                newCenterX = centerY
-                newCenterY = ow - centerX
-            }
-            
-            rotationMode = (rotationMode + direction) % 4
-            
-            let targetX = flickableArea.width / 2 - newCenterX * zoomScale
-            let targetY = flickableArea.height / 2 - newCenterY * zoomScale
-            
-            viewerImage.x = fitViewerImageInViewportBoundsX(targetX, zoomScale)
-            viewerImage.y = fitViewerImageInViewportBoundsY(targetY, zoomScale)
-            
-            if (viewportAnimation.running) {
-                viewportAnimation.stop()
-                xAnimation.to = viewerImage.x
-                yAnimation.to = viewerImage.y
-                zoomAnimation.to = zoomScale
-            }
+        if (viewportAnimation.running) {
+            viewportAnimation.stop()
         }
+        
+        let currentVx = (flickableArea.width / 2 - viewerImage.x) - viewerImage.width / 2
+        let currentVy = (flickableArea.height / 2 - viewerImage.y) - viewerImage.height / 2
+        
+        let rad = -unrotatedContent.rotation * Math.PI / 180
+        pinnedVx = currentVx * Math.cos(rad) - currentVy * Math.sin(rad)
+        pinnedVy = currentVx * Math.sin(rad) + currentVy * Math.cos(rad)
+        
+        isRotating = true
+        rotationTimer.restart()
+        
+        rotationMode = (rotationMode + direction) % 4
+        
+        if (zoomFitView) {
+            let targetZoom = fitToHeight ? flickableArea.height / effectiveOriginalSize.height : flickableArea.width / effectiveOriginalSize.width
+            rotationZoomAnimation.to = targetZoom
+            rotationZoomAnimation.duration = animationDuration
+            rotationZoomAnimation.restart()
+        }
+        
+        updatePinnedPosition()
     }
 
     function fitViewerImageInViewportBounds() {
@@ -290,6 +330,7 @@ Item {
     }
 
     function setImage(imageIdUrl, originalSize_, fromIndex, level) {
+        animateRotation = false
         console.log("SET IMAGE |", imageIdUrl, "|", originalSize_, fromIndex, level)
         delayedIdSetter.stop()
         if (level === 0 && fromIndex !== image.fromIndex) {
@@ -367,10 +408,10 @@ Item {
                     origCropHeight = rw
                 }
 
-                viewerImageCrop.unscaledCenterX = rx + rw / 2
-                viewerImageCrop.unscaledCenterY = ry + rh / 2
-                viewerImageCrop.unscaledCropWidth = origCropWidth
-                viewerImageCrop.unscaledCropHeight = origCropHeight
+                viewerImageCrop.unscaledX = origCropX
+                viewerImageCrop.unscaledY = origCropY
+                viewerImageCrop.unscaledWidth = origCropWidth
+                viewerImageCrop.unscaledHeight = origCropHeight
 
                 viewerImageCrop.source = imageIdUrl + "/" +
                         Math.round(origCropX * dpr) + "," +
@@ -471,72 +512,89 @@ Item {
         }
     }
 
-    Image {
+    Item {
         id: viewerImage
-        cache: false
 
-        width: effectiveOriginalSize.width * zoomScale
-        height: effectiveOriginalSize.height * zoomScale
-        mipmap: false
-        asynchronous: false
+        width: animatedEffectiveWidth * zoomScale
+        height: animatedEffectiveHeight * zoomScale
 
+        property string source: ""
         property int fromIndex: -1
         property int fromLevel: -1
 
-        visible: false
+        Item {
+            id: unrotatedContent
+            x: (parent.width - width) / 2
+            y: (parent.height - height) / 2
+            width: originalSize.width * zoomScale
+            height: originalSize.height * zoomScale
 
-
-        Image {
-            id: viewerImage2
-            cache: false
-
-            width: parent.width
-            height: parent.height
-            mipmap: true
-            asynchronous: true
-
-            property int fromIndex: -1
-
-            // visible: false
-        }
-    }
-
-    ShaderEffect {
-        id: viewerImageShader
-        anchors.fill: viewerImage
-        // visible: !viewerMouse.pressed
-
-        property var source: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImage
-        property var viewportSize: Qt.size(viewerImageShader.width * dpr, viewerImageShader.height * dpr)
-        property real sharpenAmount: zoomScale < 1 ? 1.5 : 0
-        property bool showCheckerboard: masonryLayout.view.showTransparentGrid
-        property int checkerboardSize: 4 * dpr
-        property int borderRadius: 0
-        property int rotationMode: flickableArea.rotationMode
-
-        fragmentShader: "qrc:/resources/shader.frag.qsb"
-
-        Image {
-            id: viewerImageCrop
-            cache: false
-
-            property real unscaledCenterX
-            property real unscaledCenterY
-            property real unscaledCropWidth
-            property real unscaledCropHeight
-
-            x: unscaledCenterX * zoomScale - width / 2
-            y: unscaledCenterY * zoomScale - height / 2
-            width: unscaledCropWidth * zoomScale
-            height: unscaledCropHeight * zoomScale
             rotation: rotationMode * 90
+            onRotationChanged: {
+                if (isRotating) {
+                    updatePinnedPosition()
+                }
+            }
+            Behavior on rotation {
+                enabled: animateRotation
+                RotationAnimation {
+                    duration: animationDuration
+                    direction: RotationAnimation.Shortest
+                    easing.type: Easing.InOutQuad
+                }
+            }
 
-            // mipmap: false
-            // asynchronous: false
+            Image {
+                id: viewerImageBase
+                anchors.fill: parent
+                source: viewerImage.source
+                cache: false
+                mipmap: false
+                asynchronous: false
+                visible: false
+            }
 
-            property int fromIndex: -1
+            Image {
+                id: viewerImage2
+                anchors.fill: parent
+                cache: false
+                mipmap: true
+                asynchronous: true
+                property int fromIndex: -1
+                visible: false
+            }
 
-            visible: viewerImage2.status !== Image.Ready
+            ShaderEffect {
+                id: viewerImageShader
+                anchors.fill: parent
+                property var source: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImageBase
+                property var viewportSize: Qt.size(width * dpr, height * dpr)
+                property real sharpenAmount: zoomScale < 1 ? 1.5 : 0
+                property bool showCheckerboard: masonryLayout.view.showTransparentGrid
+                property int checkerboardSize: 4 * dpr
+                property int borderRadius: 0
+
+                fragmentShader: "qrc:/resources/shader.frag.qsb"
+
+                Image {
+                    id: viewerImageCrop
+                    cache: false
+
+                    property real unscaledX
+                    property real unscaledY
+                    property real unscaledWidth
+                    property real unscaledHeight
+
+                    x: unscaledX * zoomScale
+                    y: unscaledY * zoomScale
+                    width: unscaledWidth * zoomScale
+                    height: unscaledHeight * zoomScale
+
+                    property int fromIndex: -1
+
+                    visible: viewerImage2.status !== Image.Ready
+                }
+            }
         }
     }
 

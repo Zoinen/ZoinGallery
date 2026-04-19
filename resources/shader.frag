@@ -20,6 +20,8 @@ void main() {
     //fragColor = texture(source, qt_TexCoord0);
     vec4 outColor;
 
+    vec2 texCoord = qt_TexCoord0;
+
     // Use texture size for offset calculation
     vec2 texSize = vec2(textureSize(source, 0));
     vec2 texOffset = 1.0 / texSize;
@@ -27,21 +29,21 @@ void main() {
     // Unrolled blur calculation
     vec4 blurColor = vec4(0.0);
 
-    blurColor += texture(source, qt_TexCoord0 + vec2(-1.0, -1.0) * texOffset) * 1.0;
-    blurColor += texture(source, qt_TexCoord0 + vec2( 0.0, -1.0) * texOffset) * 2.0;
-    blurColor += texture(source, qt_TexCoord0 + vec2( 1.0, -1.0) * texOffset) * 1.0;
+    blurColor += texture(source, texCoord + vec2(-1.0, -1.0) * texOffset) * 1.0;
+    blurColor += texture(source, texCoord + vec2( 0.0, -1.0) * texOffset) * 2.0;
+    blurColor += texture(source, texCoord + vec2( 1.0, -1.0) * texOffset) * 1.0;
 
-    blurColor += texture(source, qt_TexCoord0 + vec2(-1.0,  0.0) * texOffset) * 2.0;
-    blurColor += texture(source, qt_TexCoord0 + vec2( 0.0,  0.0) * texOffset) * 4.0;
-    blurColor += texture(source, qt_TexCoord0 + vec2( 1.0,  0.0) * texOffset) * 2.0;
+    blurColor += texture(source, texCoord + vec2(-1.0,  0.0) * texOffset) * 2.0;
+    blurColor += texture(source, texCoord + vec2( 0.0,  0.0) * texOffset) * 4.0;
+    blurColor += texture(source, texCoord + vec2( 1.0,  0.0) * texOffset) * 2.0;
 
-    blurColor += texture(source, qt_TexCoord0 + vec2(-1.0,  1.0) * texOffset) * 1.0;
-    blurColor += texture(source, qt_TexCoord0 + vec2( 0.0,  1.0) * texOffset) * 2.0;
-    blurColor += texture(source, qt_TexCoord0 + vec2( 1.0,  1.0) * texOffset) * 1.0;
+    blurColor += texture(source, texCoord + vec2(-1.0,  1.0) * texOffset) * 1.0;
+    blurColor += texture(source, texCoord + vec2( 0.0,  1.0) * texOffset) * 2.0;
+    blurColor += texture(source, texCoord + vec2( 1.0,  1.0) * texOffset) * 1.0;
 
     blurColor /= 16.0;
 
-    vec4 originalColor = texture(source, qt_TexCoord0);
+    vec4 originalColor = texture(source, texCoord);
     vec4 mask = originalColor - blurColor;
 
     vec4 sharpenedPixel = originalColor + mask * ubuf.sharpenAmount;

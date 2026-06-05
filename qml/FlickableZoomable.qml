@@ -7,6 +7,7 @@ Item {
     id: flickableArea
 
     property alias image: viewerImage
+    property var textureSource: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImageBase
     property size originalSize
     property int rotationMode: 0
     property bool animateRotation: false
@@ -343,7 +344,7 @@ Item {
                 viewerImage2.fromIndex = -1
             }
         }
-        else if (level === 1 && (fromIndex !== image.fromIndex || image.fromLevel === 0)) {
+        else if (level === 1 && (fromIndex !== image.fromIndex || image.fromLevel === 0 || image.source !== imageIdUrl)) {
             image.source = imageIdUrl
             image.fromIndex = fromIndex
             image.fromLevel = level
@@ -353,7 +354,7 @@ Item {
                 viewerImage2.fromIndex = -1
             }
         }
-        else if (level === 2 && fromIndex !== viewerImage2.fromIndex) {
+        else if (level === 2 && (fromIndex !== viewerImage2.fromIndex || viewerImage2.source !== imageIdUrl)) {
             let targetX
             let targetY
             if (viewportAnimation.running) {

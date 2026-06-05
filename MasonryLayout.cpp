@@ -10,6 +10,7 @@
 #include <QQmlEngine>
 #include <QQmlProperty>
 #include <QQuickWindow>
+#include <QDir>
 #include <QSettings>
 
 static void registerMyQmlTypes() {
@@ -123,6 +124,13 @@ QString MasonryLayout::indexImageIdUrl(int index) const {
 QString MasonryLayout::indexText(int index) const {
     if (index >= 0 && index < _bricks.size()) {
         return _bricks[index].image->fileName();
+    }
+    return QString();
+}
+
+QString MasonryLayout::indexFullPath(int index) const {
+    if (index >= 0 && index < _bricks.size()) {
+        return QDir::toNativeSeparators(_bricks[index].image->fullPath());
     }
     return QString();
 }

@@ -235,6 +235,7 @@ qt_add_resources(ZoinGallery
         resources/SphereScrollIdle.svg
         resources/Sphere.svg
         resources/Settings.svg
+        resources/TildeLock.svg
 )
 
 # Enable QML Language Server configuration generation

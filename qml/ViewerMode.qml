@@ -17,14 +17,11 @@ Item {
     property bool sphericViewerMode: false
     onSphericViewerModeChanged: {
         if (sphericViewerMode) {
-            flickableArea.image.mipmap = false
-
             fileListModel.cancelAllDecodeViewerRunners()
             fileListModel.requestViewer(masonryLayout.view.currentIndex)
             sphericViewerLoader.sourceComponent = sphericViewerComponent
         }
         else {
-            flickableArea.image.mipmap = true
             sphericViewerLoader.sourceComponent = undefined
         }
     }
@@ -189,12 +186,60 @@ Item {
 
     property int previousImageIndex: -1
     property int lastKnownIndex: -1
+    property bool previousImageLocked: false
+    property int lockedPreviousReturnIndex: -1
+    property string lockedPreviousImageIdUrl: previousImageLocked && previousImageIndex !== -1 ? masonryLayout.view.indexImageIdUrl(previousImageIndex) : ""
+    property string lockedPreviousPath: previousImageLocked && previousImageIndex !== -1 ? masonryLayout.view.indexFullPath(previousImageIndex) : ""
+
+    function isTildeKey(event) {
+        return event.key === Qt.Key_QuoteLeft || event.key === Qt.Key_AsciiTilde || event.key === 1025
+    }
+
+    function clearPreviousImage() {
+        previousImageIndex = -1
+        previousImageLocked = false
+        lockedPreviousReturnIndex = -1
+    }
+
+    function togglePreviousImageLock(index) {
+        if (previousImageLocked) {
+            if (previousImageIndex === index) {
+                previousImageLocked = false
+                previousImageIndex = lockedPreviousReturnIndex
+                lockedPreviousReturnIndex = -1
+            }
+            return
+        }
+
+        lockedPreviousReturnIndex = previousImageIndex !== index ? previousImageIndex : -1
+        previousImageIndex = index
+        previousImageLocked = true
+    }
+
+    function switchToPreviousImage(currentIndex) {
+        if (previousImageLocked) {
+            if (currentIndex === previousImageIndex) {
+                if (lockedPreviousReturnIndex !== -1) {
+                    masonryLayout.setCurrentIndex(lockedPreviousReturnIndex)
+                    return lockedPreviousReturnIndex
+                }
+                return -1
+            }
+
+            lockedPreviousReturnIndex = currentIndex
+        }
+
+        masonryLayout.setCurrentIndex(previousImageIndex)
+        return previousImageIndex
+    }
 
     Connections {
         target: root
         function onStateChanged() {
             if (root.state === "thumbnails") {
-                previousImageIndex = -1
+                if (!previousImageLocked) {
+                    previousImageIndex = -1
+                }
                 flickableArea.rotationMode = 0
             }
         }
@@ -203,7 +248,7 @@ Item {
     Connections {
         target: viewerController
         function onCurrentPathChanged() {
-            previousImageIndex = -1
+            clearPreviousImage()
         }
     }
 
@@ -289,10 +334,14 @@ Item {
             else if (event.key === Qt.Key_Tab) {
                 panelsVisible = !panelsVisible
             }
-            else if (event.key === Qt.Key_QuoteLeft || event.key === Qt.Key_AsciiTilde || event.key === 1025) {
+            else if (isTildeKey(event)) {
+                if (event.modifiers & Qt.ShiftModifier) {
+                    togglePreviousImageLock(currentIndex)
+                    return
+                }
+
                 if (previousImageIndex !== -1) {
-                    nextIndex = previousImageIndex
-                    masonryLayout.setCurrentIndex(nextIndex)
+                    nextIndex = switchToPreviousImage(currentIndex)
                 } else {
                     let potentialNext = masonryLayout.view.nextImageIndex(true, false)
                     if (potentialNext !== currentIndex) {
@@ -375,7 +424,13 @@ Item {
         function onCurrentIndexChanged() {
             if (root.state === "viewer") {
                 if (lastKnownIndex !== -1 && lastKnownIndex !== masonryLayout.view.currentIndex) {
-                    previousImageIndex = lastKnownIndex
+                    if (previousImageLocked) {
+                        if (masonryLayout.view.currentIndex !== previousImageIndex) {
+                            lockedPreviousReturnIndex = masonryLayout.view.currentIndex
+                        }
+                    } else {
+                        previousImageIndex = lastKnownIndex
+                    }
                 }
                 lastKnownIndex = masonryLayout.view.currentIndex
 
@@ -514,7 +569,7 @@ Item {
 
         SphericViewer {
             originalSize: flickableArea.originalSize
-            source: flickableArea.image
+            source: flickableArea.textureSource
             opacity: sphericViewerOpacity
         }
     }
@@ -782,9 +837,76 @@ Item {
                     Layout.preferredWidth: implicitWidth
                     Layout.maximumWidth: implicitWidth
 
-                    text: sphericViewerMode ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))
+                    text: sphericViewerMode ? (sphericViewerLoader.item ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : "") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))
                     font.pixelSize: 14
                     color: Style.viewerMainText
+                }
+
+                Item {
+                    id: previousLockIndicator
+
+                    Layout.leftMargin: 8
+                    Layout.preferredWidth: 28
+                    Layout.preferredHeight: titleBar.viewerHeight
+
+                    visible: previousImageLocked && previousImageIndex !== -1
+
+                    IconLabel {
+                        anchors.centerIn: parent
+
+                        icon.source: "qrc:/resources/TildeLock.svg"
+                        icon.width: 16
+                        icon.height: 16
+                        icon.color: Style.viewerMainText
+                    }
+
+                    MouseArea {
+                        id: previousLockMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                    }
+
+                    ToolTip {
+                        visible: previousLockMouse.containsMouse
+                        delay: 500
+                        timeout: 5000
+
+                        contentItem: ColumnLayout {
+                            spacing: 8
+
+                            Image {
+                                Layout.alignment: Qt.AlignHCenter
+                                Layout.preferredWidth: 96
+                                Layout.preferredHeight: 96
+
+                                source: lockedPreviousImageIdUrl
+                                sourceSize.width: 96
+                                sourceSize.height: 96
+                                fillMode: Image.PreserveAspectFit
+                                asynchronous: true
+                                cache: false
+                            }
+
+                            Text {
+                                Layout.maximumWidth: 260
+
+                                text: lockedPreviousPath
+                                wrapMode: Text.WrapAnywhere
+                                font.pixelSize: 12
+                                color: Style.text
+                            }
+                        }
+
+                        background: Rectangle {
+                            color: Style.tooltipBackground
+                            border.color: Style.tooltipBorder
+                            radius: 5
+                        }
+                    }
+
+                    Component.onCompleted: {
+                        windowAgent.setHitTestVisible(previousLockIndicator)
+                    }
                 }
 
                 Button {

@@ -19,7 +19,7 @@ Item {
         anchors.fill: parent
         // visible: !viewerMouse.pressed
 
-        property var source //: viewerImage
+        property var source
         // property var viewportSize: Qt.size(viewerImageShader.width * dpr, viewerImageShader.height * dpr)
         // property real sharpenAmount: zoomScale < 1 ? 1.5 : 0
 
@@ -29,7 +29,7 @@ Item {
         }
         property real tilt: 0 // Tilt angle in degrees
         property real pan: 0 // Pan angle in degrees
-        property real aspect: originalSize.width / originalSize.height
+        property real aspect: originalSize.height > 0 ? originalSize.width / originalSize.height : 1.0
 
         fragmentShader: "qrc:/resources/sphere.frag.qsb"
     }

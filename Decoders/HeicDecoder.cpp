@@ -1,0 +1,218 @@
+#include "HeicDecoder.h"
+#include "TinyEXIF.h"
+
+#include <libheif/heif.h>
+
+#include <QBuffer>
+#include <QDebug>
+#include <QFile>
+#include <QFileInfo>
+
+#include <cstring>
+
+REGISTER_DECODER_DEFINITION(HeicDecoder)
+
+static const QStringList HeicExtensions = {"heic", "heif", "avif"};
+
+// --- RAII helpers -----------------------------------------------------------
+
+struct HeicContext {
+    heif_context* ctx = heif_context_alloc();
+    ~HeicContext() { if (ctx) heif_context_free(ctx); }
+    operator heif_context*() const { return ctx; }
+};
+
+struct HeicHandle {
+    heif_image_handle* h = nullptr;
+    ~HeicHandle() { if (h) heif_image_handle_release(h); }
+    operator heif_image_handle*() const { return h; }
+    heif_image_handle** operator&() { return &h; }
+};
+
+struct HeicImage {
+    heif_image* img = nullptr;
+    ~HeicImage() { if (img) heif_image_release(img); }
+    operator heif_image*() const { return img; }
+    heif_image** operator&() { return &img; }
+};
+
+// ---------------------------------------------------------------------------
+
+QStringList HeicDecoder::supportedFormats() {
+    return HeicExtensions;
+}
+
+bool HeicDecoder::readMetadata(ImageInfo &result) {
+    if (!isFormatSupported(result.path))
+        return false;
+
+    HeicContext ctx;
+    heif_error err = heif_context_read_from_file(ctx, result.path.toUtf8().constData(), nullptr);
+    if (err.code != heif_error_Ok) {
+        qDebug() << "HeicDecoder::readMetadata: failed to open" << result.path << err.message;
+        return false;
+    }
+
+    HeicHandle handle;
+    err = heif_context_get_primary_image_handle(ctx, &handle);
+    if (err.code != heif_error_Ok)
+        return false;
+
+    result.imageSize = QSize(heif_image_handle_get_width(handle),
+                             heif_image_handle_get_height(handle));
+
+    // libheif applies all HEIF transformations during decode, so orientation is
+    // always correct after decoding — report Horizontal to avoid double-rotation.
+    result.orientation = ExifOrientation::Horizontal;
+
+    // Extract Exif block for camera/exposure metadata.
+    // The block layout is: [4-byte big-endian skip] ["Exif\0\0" + TIFF data]
+    int exifCount = heif_image_handle_get_number_of_metadata_blocks(handle, "Exif");
+    if (exifCount > 0) {
+        heif_item_id exifId;
+        heif_image_handle_get_list_of_metadata_block_IDs(handle, "Exif", &exifId, 1);
+        size_t exifSize = heif_image_handle_get_metadata_size(handle, exifId);
+        if (exifSize > 4) {
+            QByteArray exifBlock(static_cast<int>(exifSize), '\0');
+            err = heif_image_handle_get_metadata(handle, exifId, exifBlock.data());
+            if (err.code == heif_error_Ok) {
+                // Skip the 4-byte TIFF-header-offset field; remaining starts with "Exif\0\0"
+                const auto* exifStart = reinterpret_cast<const uint8_t*>(exifBlock.constData() + 4);
+                unsigned exifLen = static_cast<unsigned>(exifBlock.size() - 4);
+                TinyEXIF::EXIFInfo exifInfo;
+                if (exifInfo.parseFromEXIFSegment(exifStart, exifLen) == TinyEXIF::PARSE_SUCCESS) {
+                    result.exif = readExifToMap(exifInfo);
+                }
+            }
+        }
+    }
+    result.exif["Size"] = QFileInfo(result.path).size();
+
+    return true;
+}
+
+// Decode a heif_image_handle to a self-owned QImage, respecting alpha.
+// Pixels are copied out of the libheif buffer before it is released.
+static QImage decodeHandleToQImage(heif_image_handle* handle) {
+    const bool hasAlpha = heif_image_handle_has_alpha_channel(handle);
+    const auto chroma = hasAlpha ? heif_chroma_interleaved_RGBA : heif_chroma_interleaved_RGB;
+
+    HeicImage img;
+    heif_decoding_options* opts = heif_decoding_options_alloc();
+    opts->ignore_transformations = 0; // apply rotation/mirror
+    heif_error err = heif_decode_image(handle, &img, heif_colorspace_RGB, chroma, opts);
+    heif_decoding_options_free(opts);
+    if (err.code != heif_error_Ok)
+        return {};
+
+    int stride = 0;
+    const uint8_t* pixels = heif_image_get_plane_readonly(img, heif_channel_interleaved, &stride);
+    int w = heif_image_get_width(img, heif_channel_interleaved);
+    int h = heif_image_get_height(img, heif_channel_interleaved);
+    if (!pixels || w <= 0 || h <= 0)
+        return {};
+
+    const auto qtFormat = hasAlpha ? QImage::Format_RGBA8888 : QImage::Format_RGB888;
+    const size_t bytesPerPixel = hasAlpha ? 4 : 3;
+
+    // Copy pixels: HeicImage RAII will release libheif's buffer on return,
+    // so the QImage must own its data before that happens.
+    QImage result(w, h, qtFormat);
+    for (int y = 0; y < h; ++y)
+        std::memcpy(result.scanLine(y), pixels + static_cast<ptrdiff_t>(y) * stride, static_cast<size_t>(w) * bytesPerPixel);
+    return result;
+}
+
+// Decode a heif_image_handle to a JPEG-compressed QByteArray.
+// Alpha images are composited onto white by Qt during JPEG save.
+// Returns an empty array on failure.
+static QByteArray decodeHandleToJpeg(heif_image_handle* handle) {
+    QImage qimg = decodeHandleToQImage(handle);
+    if (qimg.isNull())
+        return {};
+
+    QByteArray jpegBytes;
+    QBuffer buf(&jpegBytes);
+    buf.open(QBuffer::WriteOnly);
+    qimg.save(&buf, "JPEG", 85);
+    return jpegBytes;
+}
+
+bool HeicDecoder::readPreviewAndMime(ImageData &result) {
+    if (!isFormatSupported(result.request.info.path))
+        return false;
+
+    HeicContext ctx;
+    heif_error err = heif_context_read_from_file(
+        ctx, result.request.info.path.toUtf8().constData(), nullptr);
+    if (err.code != heif_error_Ok)
+        return false;
+
+    HeicHandle primary;
+    err = heif_context_get_primary_image_handle(ctx, &primary);
+    if (err.code != heif_error_Ok)
+        return false;
+
+    // Always set the MIME type so the full-decode path works correctly.
+    result.mimeType = "image/heic";
+
+    // Try embedded thumbnail first (fast path for masonry thumbnails).
+    int thumbCount = heif_image_handle_get_number_of_thumbnails(primary);
+    if (thumbCount > 0) {
+        heif_item_id thumbId;
+        heif_image_handle_get_list_of_thumbnail_IDs(primary, &thumbId, 1);
+
+        HeicHandle thumb;
+        err = heif_image_handle_get_thumbnail(primary, thumbId, &thumb);
+        if (err.code == heif_error_Ok) {
+            QByteArray jpegBytes = decodeHandleToJpeg(thumb);
+            if (!jpegBytes.isEmpty()) {
+                result.previewDataSize = jpegBytes.size();
+                result.previewData = std::shared_ptr<char>(
+                    new char[jpegBytes.size()],
+                    [](char* p) { delete[] p; });
+                std::memcpy(result.previewData.get(), jpegBytes.constData(), jpegBytes.size());
+                result.previewMimeType = "image/jpeg";
+                result.previewUsed = "HEIC thumbnail";
+                return true;
+            }
+        }
+    }
+
+    // No usable thumbnail — read the whole file so the pipeline can decode it.
+    QFile f(result.request.info.path);
+    if (!f.open(QFile::ReadOnly))
+        return false;
+    result.data = f.readAll();
+    return !result.data.isEmpty();
+}
+
+QImage HeicDecoder::decode(const QString &mimeType, const QByteArray &data, QSize targetSize) {
+    if (mimeType != "image/heic")
+        return {};
+
+    HeicContext ctx;
+    heif_error err = heif_context_read_from_memory_without_copy(
+        ctx, data.constData(), static_cast<size_t>(data.size()), nullptr);
+    if (err.code != heif_error_Ok) {
+        qDebug() << "HeicDecoder::decode: context read failed:" << err.message;
+        return {};
+    }
+
+    HeicHandle handle;
+    err = heif_context_get_primary_image_handle(ctx, &handle);
+    if (err.code != heif_error_Ok)
+        return {};
+
+    QImage result = decodeHandleToQImage(handle);
+    if (result.isNull()) {
+        qDebug() << "HeicDecoder::decode: pixel decode failed";
+        return {};
+    }
+
+    if (!targetSize.isEmpty() &&
+        (result.width() > targetSize.width() || result.height() > targetSize.height())) {
+        result = result.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    return result;
+}

@@ -4,8 +4,11 @@
 #include <QStringList>
 #include <QImage>
 #include <QSize>
+#include <QVariantMap>
 
 #include "ImageDecoderFactory.h"
+
+namespace TinyEXIF { class EXIFInfo; }
 
 struct ImageInfo;
 struct ImageData;
@@ -26,6 +29,7 @@ protected:
     static QString formatShutterSpeed(double shutterSpeed);
     static QString convertDMSToDD(double latitudeDegrees, double latitudeMinutes, double latitudeSeconds, char latitudeDirection,
                                   double longitudeDegrees, double longitudeMinutes, double longitudeSeconds, char longitudeDirection);
+    static QVariantMap readExifToMap(const TinyEXIF::EXIFInfo &exifInfo);
 };
 
 #endif // IMAGEDECODERINTERFACE_H

@@ -48,6 +48,7 @@ find_package(libraw REQUIRED)
 find_package(PNG REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(libjpeg-turbo REQUIRED)
+find_package(libheif REQUIRED)
 
 # Explicitly add the libjpeg-turbo include path (fix for missing turbojpeg.h)
 find_path(TURBOJPEG_INCLUDE_DIR "turbojpeg.h")
@@ -131,6 +132,8 @@ set(PROJECT_SOURCES
     Decoders/PngDecoder.h
     Decoders/DdsDecoder.cpp
     Decoders/DdsDecoder.h
+    Decoders/HeicDecoder.cpp
+    Decoders/HeicDecoder.h
     TinyEXIF/TinyEXIF.h
     TinyEXIF/TinyEXIF.cpp
     TinyEXIF/tinyxml2.cpp
@@ -173,7 +176,7 @@ add_executable(ZoinGallery MACOSX_BUNDLE ${PROJECT_SOURCES} ${RESOURCE_FILES})
 
 set_target_properties(${PROJECT_NAME}
     PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>"
 )
 
 set_source_files_properties(ZGStyle/Style.qml PROPERTIES
@@ -298,6 +301,7 @@ target_link_libraries(ZoinGallery PRIVATE
     PNG::PNG
     JPEG::JPEG
     libjpeg-turbo::libjpeg-turbo
+    libheif::heif
 )
 
 # Remove the hardcoded library paths

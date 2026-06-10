@@ -1,5 +1,8 @@
 #include "ImageDecoderInterface.h"
 #include "ImageFile.h"
+#include "TinyEXIF.h"
+
+#include <QDateTime>
 
 bool ImageDecoderInterface::isFormatSupported(const QString &path) {
     return isExtensionMatch(path, supportedFormats());
@@ -47,4 +50,40 @@ QString ImageDecoderInterface::convertDMSToDD(double latitudeDegrees, double lat
     return QString("%1, %2")
         .arg(lat, 0, 'f', 6)
         .arg(lon, 0, 'f', 6);
+}
+
+QVariantMap ImageDecoderInterface::readExifToMap(const TinyEXIF::EXIFInfo &exifInfo) {
+    QVariantMap out;
+    if (!exifInfo.DateTimeOriginal.empty()) {
+        out["DateTime"] = QDateTime::fromString(QString::fromStdString(exifInfo.DateTimeOriginal), "yyyy:MM:dd hh:mm:ss");
+    }
+    if (exifInfo.ExposureTime) {
+        out["ShutterSpeed"] = formatShutterSpeed(exifInfo.ExposureTime);
+    }
+    if (exifInfo.FNumber) {
+        out["FNumber"] = QString::number(exifInfo.FNumber);
+    }
+    if (exifInfo.ISOSpeedRatings) {
+        out["ISO"] = QString::number(exifInfo.ISOSpeedRatings);
+    }
+    if (!exifInfo.Make.empty() || !exifInfo.Model.empty()) {
+        out["Camera"] = QString::fromStdString(exifInfo.Make) + " " + QString::fromStdString(exifInfo.Model);
+    }
+    if (exifInfo.LensInfo.FocalLengthIn35mm) {
+        out["FocalLength"] = QString::number(exifInfo.LensInfo.FocalLengthIn35mm);
+    }
+    if (!exifInfo.LensInfo.Make.empty() || !exifInfo.LensInfo.Model.empty()) {
+        out["Lens"] = QString::fromStdString(exifInfo.LensInfo.Make) + " " + QString::fromStdString(exifInfo.LensInfo.Model);
+    }
+    if (exifInfo.GeoLocation.hasLatLon()) {
+        out["Location"] = convertDMSToDD(
+            exifInfo.GeoLocation.LatComponents.degrees, exifInfo.GeoLocation.LatComponents.minutes,
+            exifInfo.GeoLocation.LatComponents.seconds, exifInfo.GeoLocation.LatComponents.direction,
+            exifInfo.GeoLocation.LonComponents.degrees, exifInfo.GeoLocation.LonComponents.minutes,
+            exifInfo.GeoLocation.LonComponents.seconds, exifInfo.GeoLocation.LonComponents.direction);
+    }
+    if (exifInfo.GPano.UsePanoramaViewer) {
+        out["Panorama"] = "True";
+    }
+    return out;
 }

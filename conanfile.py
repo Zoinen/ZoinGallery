@@ -10,6 +10,7 @@ class ZoinGalleryConan(ConanFile):
         "libtiff/4.7.0",
         "libraw/0.21.3",
         "libpng/1.6.45",
+        "libheif/1.20.1",
     ]
 
     generators = "CMakeToolchain", "CMakeDeps"

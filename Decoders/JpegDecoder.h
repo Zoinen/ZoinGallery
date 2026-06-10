@@ -21,7 +21,6 @@ public:
 private:
     static ExifOrientation readOrientationFromExif(const TinyEXIF::EXIFInfo &exifInfo);
     static QSize readResolutionFromExif(const TinyEXIF::EXIFInfo &exifInfo);
-    static QVariantMap readExifToMap(const TinyEXIF::EXIFInfo &exifInfo);
 };
 
 #endif // JPEGDECODER_H

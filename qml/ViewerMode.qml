@@ -207,6 +207,9 @@ Item {
                 previousImageLocked = false
                 previousImageIndex = lockedPreviousReturnIndex
                 lockedPreviousReturnIndex = -1
+            } else {
+                lockedPreviousReturnIndex = previousImageIndex
+                previousImageIndex = index
             }
             return
         }
@@ -229,8 +232,11 @@ Item {
             lockedPreviousReturnIndex = currentIndex
         }
 
-        masonryLayout.setCurrentIndex(previousImageIndex)
-        return previousImageIndex
+        // Capture the target before setCurrentIndex(), since changing the index
+        // synchronously reassigns previousImageIndex via the view's onCurrentIndexChanged handler.
+        let targetIndex = previousImageIndex
+        masonryLayout.setCurrentIndex(targetIndex)
+        return targetIndex
     }
 
     Connections {

@@ -4,6 +4,7 @@
 #include <QStandardItemModel>
 #include <QHash>
 #include <QAbstractProxyModel>
+#include <QSet>
 
 #include "ImageFile.h"
 
@@ -95,6 +96,7 @@ public:
 
     static bool isImage(const QString &fileName);
 
+    Q_INVOKABLE void openImageDirectly(const QString &path, int width = -1, int height = -1);
     Q_INVOKABLE void requestViewer(int index, int width = -1, int height = -1); // -1 means full size
     QImage viewerForImageId(const QString &imageId);
     QImage fullSizeViewerForImageId(const QString &imageId);
@@ -121,16 +123,57 @@ public:
 signals:
     void viewerImageIdUrlChanged(const QString &imageId, int level); // 0 is thumbnail, 1 is viewer, 2 is full resolution
     void viewerReset();
+    void directOpenReady(int index);
 
     void runningTasksChanged(const QString &tasks, const QStringList &tasksInfo);
     void runningTasksDebugChanged();
 
 private:
+    enum class DirectOpenStage {
+        None,
+        WaitingInfo,
+        WaitingFitDecode,
+        WaitingFullDecode,
+        WaitingNeighborInfo,
+        WaitingNeighborDecode
+    };
+
+    struct DirectOpenState {
+        int generation = 0;
+        DirectOpenStage stage = DirectOpenStage::None;
+        QString path;
+        QString folderPath;
+        QString fileName;
+        QSize viewerSize;
+        int currentIndex = -1;
+        bool sameFolder = false;
+        ImageInfo info;
+        QSet<QString> pendingNeighborInfoPaths;
+        QSet<QString> pendingNeighborDecodePaths;
+    };
+
     QString generateNewId();
     void updateImageId(ImageFile *item);
     ImageFile *createFileItem(const QString &folderPath, const QString &fileName, const QDateTime &lastModified = QDateTime());
     void cleanupModelBeforeCd();
+    void clearModelData(bool clearViewerData);
+    int populateFolderItems(const QString &path, const QString &itemToSelect = QString());
+    void startRegularFolderWork();
     ImageDecodeRequest imageDecodeRequestFromEmbeddedImageInfo(const ImageInfo &info) const;
+    void handleDirectOpenImageInfo(const ImageInfo &result);
+    bool handleDirectOpenImageReady(const ImageDecodeRequest &request, const QImage &image,
+                                    const DecodedImageInfo &decodedInfo);
+    void requestDirectOpenFitDecode();
+    void requestDirectOpenFullSizeDecode();
+    void populateFolderAfterDirectOpenFullDecode();
+    void requestDirectOpenNeighbors();
+    void requestDirectOpenNeighborDecodes();
+    void finishDirectOpenPriorityWork();
+    QList<int> directOpenNeighborIndexes() const;
+    QList<ImageDecodeRequest> directOpenViewerRequestsForIndexes(const QList<int> &indexes, QSet<QString> *queuedPaths);
+    void emitViewerImagesForCurrentIndex();
+    bool isActiveDirectOpenInfo(const ImageInfo &info) const;
+    bool isActiveDirectOpenRequest(const ImageDecodeRequest &request) const;
 
     QString _root;
     QHash<QString, ImageFile *> _fileToItem;
@@ -160,6 +203,8 @@ private:
     QHash<int, RootProxyModel *> _folderModels;
     QSize _folderViewImageSize;
     int _folderViewImageCount = 16;
+
+    DirectOpenState _directOpen;
 };
 
 #endif // FILELISTMODEL_H

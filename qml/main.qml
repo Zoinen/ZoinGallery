@@ -21,7 +21,10 @@ MainWindow {
     onClosing: (closeEvent) => {
         closeEvent.accepted = false
         topLevelWindow.hide()
-        viewerController.prepareToClose()
+        if (viewerController.backgroundMode)
+            viewerController.hideToTray()
+        else
+            viewerController.prepareToClose()
     }
 
     // CacheViewer {
@@ -67,7 +70,7 @@ MainWindow {
 
         function onWindowIsReady() {
             masonryZoomSlider.updateTargetSize()
-            viewerController.initialCd()
+            viewerController.initialCd(Math.round(viewerMode.width * dpr), Math.round(viewerMode.height * dpr))
         }
     }
 
@@ -90,6 +93,22 @@ MainWindow {
         target: viewerController
         function onCurrentPathChanged() {
             masonryZoomSlider.updateTargetSize()
+        }
+
+        function onExternalActivateRequested() {
+            topLevelWindow.showAndActivate()
+        }
+
+        function onExternalFileOpened() {
+            viewerController.openPendingExternalFileInViewer(Math.round(viewerMode.width * dpr), Math.round(viewerMode.height * dpr))
+            topLevelWindow.showAndActivate()
+        }
+
+        function onSetCurrentIndex(index) {
+            if (viewerController.pendingOpenInViewer) {
+                viewerController.clearPendingOpenInViewer()
+                Qt.callLater(() => root.tryOpenExternalInViewer())
+            }
         }
     }
 
@@ -118,17 +137,37 @@ MainWindow {
             }
         }
 
-        function switchToViewer() {
+        function tryOpenExternalInViewer(attempts) {
+            if (attempts === undefined) {
+                attempts = 0
+            }
+            let size = masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex)
+            if ((size.width <= 1 || size.height <= 1) && attempts < 300) {
+                Qt.callLater(() => root.tryOpenExternalInViewer(attempts + 1))
+                return
+            }
+            root.switchToViewer(false)
+        }
+
+        function switchToViewer(animated = true) {
             viewerMode.forceActiveFocus()
             root.state = "viewer"
 
-            if (!viewerMode.animation.running) {
-                let mappedGeometry = root.mapFromItem(masonryLayout.view, masonryLayout.currentItemImageGeometry())
+            if (animated) {
+                if (!viewerMode.animation.running) {
+                    let mappedGeometry = root.mapFromItem(masonryLayout.view, masonryLayout.currentItemImageGeometry())
 
-                viewerMode.imageContainer.x = mappedGeometry.x
-                viewerMode.imageContainer.y = mappedGeometry.y
-                viewerMode.imageContainer.width = mappedGeometry.width
-                viewerMode.imageContainer.height = mappedGeometry.height
+                    viewerMode.imageContainer.x = mappedGeometry.x
+                    viewerMode.imageContainer.y = mappedGeometry.y
+                    viewerMode.imageContainer.width = mappedGeometry.width
+                    viewerMode.imageContainer.height = mappedGeometry.height
+                }
+            }
+            else {
+                viewerMode.imageContainer.x = 0
+                viewerMode.imageContainer.y = 0
+                viewerMode.imageContainer.width = viewerMode.width
+                viewerMode.imageContainer.height = viewerMode.height
             }
 
             viewerMode.setImage(masonryLayout.view.currentItem.model.imageIdUrl,
@@ -136,11 +175,16 @@ MainWindow {
             let exif = masonryLayout.view.indexExif(masonryLayout.view.currentIndex)
             viewerMode.show(exif["Panorama"])
 
-            viewerMode.animation.x = 0
-            viewerMode.animation.y = 0
-            viewerMode.animation.width = viewerMode.width
-            viewerMode.animation.height = viewerMode.height
-            viewerMode.animation.restart()
+            if (animated) {
+                viewerMode.animation.x = 0
+                viewerMode.animation.y = 0
+                viewerMode.animation.width = viewerMode.width
+                viewerMode.animation.height = viewerMode.height
+                viewerMode.animation.restart()
+            }
+            else {
+                viewerMode.completeInstantOpen()
+            }
         }
 
         function switchToThumbnails() {

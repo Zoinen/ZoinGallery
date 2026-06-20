@@ -142,15 +142,70 @@ Item {
 
     // ZZZ: Viewer size request takes current image's full size for all future images!!!
 
+    function fitCurrentImageWhenReady() {
+        if (!zoomFitView || sphericViewerMode) {
+            delayedFitTimer.stop()
+            return
+        }
+
+        if (flickableArea.originalSize.width > 1 && flickableArea.originalSize.height > 1) {
+            delayedFitTimer.stop()
+            if (!flickableArea.viewportAnimationRunning) {
+                flickableArea.zoomToFit(true)
+            }
+        }
+        else {
+            delayedFitTimer.restartWait()
+        }
+    }
+
     function setImage(imageIdUrl, originalSize, fromIndex, level) {
         flickableArea.setImage(imageIdUrl, originalSize, fromIndex, level)
+    }
+
+    Timer {
+        id: delayedFitTimer
+        interval: 50
+        repeat: true
+        property int attempts: 0
+
+        function restartWait() {
+            attempts = 0
+            restart()
+        }
+
+        onTriggered: {
+            let size = masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex)
+            if (size.width > 1 && size.height > 1) {
+                stop()
+                let level = flickableArea.image.fromLevel >= 0 ? flickableArea.image.fromLevel : 0
+                viewerMode.setImage(flickableArea.image.source, size, masonryLayout.view.currentIndex, level)
+                fitCurrentImageWhenReady()
+                fileListModel.cancelAllDecodeViewerRunners()
+                fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+            }
+            else if (++attempts >= 600) {
+                stop()
+            }
+        }
     }
 
     function show(sphericViewer) {
         sphericViewerMode = sphericViewer === "True"
         onCurrentIndexChanged()
         visible = true
-        flickableArea.zoomToFit(true)
+        fitCurrentImageWhenReady()
+    }
+
+    function completeInstantOpen() {
+        delegateOutline.opacity = 0
+        imageInfoPanel.opacity = 0
+        sphericViewerOpacity = 1
+        flickableArea.x = 0
+        flickableArea.y = 0
+        flickableArea.width = Qt.binding(() => viewerMode.width)
+        flickableArea.height = Qt.binding(() => viewerMode.height)
+        Qt.callLater(() => fitCurrentImageWhenReady())
     }
 
     function onCurrentIndexChanged() {
@@ -427,6 +482,18 @@ Item {
 
     Connections {
         target: masonryLayout.view
+        function onImageCountChanged() {
+            if (root.state === "viewer") {
+                viewerMode.updateTitle()
+            }
+        }
+
+        function onCurrentImageIndexChanged() {
+            if (root.state === "viewer") {
+                viewerMode.updateTitle()
+            }
+        }
+
         function onCurrentIndexChanged() {
             if (root.state === "viewer") {
                 if (lastKnownIndex !== -1 && lastKnownIndex !== masonryLayout.view.currentIndex) {

@@ -20,6 +20,7 @@ public:
     Q_INVOKABLE QPointF mousePos() const;
     Q_INVOKABLE bool isPressedOnTitleBar() const;
     Q_INVOKABLE void setSphereScrollingMouseCursor(bool set, bool idle = false, qreal rotation = 0);
+    Q_INVOKABLE void showAndActivate();
 
     bool isResizing() const;
 
@@ -43,6 +44,7 @@ private:
     QSize _lastSize;
     QRect _normalGeometry;
     qreal _dpr;
+    QWindow::Visibility _lastVisibleVisibility;
     bool _ignoreNormalGeometryChange;
     bool _enableNormalGeometryChangeOnNextExpose;
     QTimer *_delayedNormalGeometryChangeEnabler;

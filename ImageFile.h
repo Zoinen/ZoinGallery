@@ -44,6 +44,7 @@ struct ImageInfo {
     bool isFromEmbeddedView = false;
     bool isCached = false;
     bool isFromScanner = false;
+    int directOpenGeneration = 0;
 };
 
 struct ImageDecodeRequest {
@@ -221,4 +222,3 @@ inline QSize expandToCacheImageResolution(QSize targetSize) {
 bool isExtensionMatch(const QString &path, const QStringList &pattern);
 
 #endif // IMAGEFILE_H
-

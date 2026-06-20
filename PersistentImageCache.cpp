@@ -2,9 +2,23 @@
 
 #include <QImage>
 #include <QFile>
+#include <QFileInfo>
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QBuffer>
+#include <QColorSpace>
+
+namespace {
+constexpr int CacheFormatVersion = 2;
+
+QString cacheDbPath() {
+    return QString("C:/tmp/zg_v%1.db").arg(CacheFormatVersion);
+}
+
+QString cacheChunkPath(uint16_t chunkFileIndex) {
+    return QString("C:/tmp/zg_v%1_%2").arg(CacheFormatVersion).arg(chunkFileIndex);
+}
+}
 
 QHash<QString, PersistentImageCache::ThumbnailInfo> PersistentImageCache::_db;
 QReadWriteLock PersistentImageCache::_dbAccess;
@@ -30,7 +44,10 @@ void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QLi
     _dbAccess.lockForRead();
     for (const QString &path : imagePaths) {
         auto it = _db.find(path);
-        if (it != _db.end()) {
+        const QFileInfo fileInfo(path);
+        const bool cacheIsCurrent = it != _db.end() && fileInfo.exists() && it->lastModified == fileInfo.lastModified();
+        const bool cacheHasUsableSize = it != _db.end() && it->imageSize.width() > 1 && it->imageSize.height() > 1;
+        if (cacheIsCurrent && cacheHasUsableSize) {
             outInfoList.append(ImageInfo {
                 .path = path,
                 .lastModified = it->lastModified,
@@ -49,21 +66,26 @@ void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QLi
 
 QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request) {
     QImage result;
+    const QColorSpace srgb(QColorSpace::SRgb);
     _dbAccess.lockForRead();
     auto it = _db.find(request.info.path);
     _dbAccess.unlock();
     if (it != _db.end()) {
         if (!request.info.lastModified.isValid() || request.info.lastModified == it.value().lastModified) {
-            QFile currentChunkFile(QString("C:/tmp/zg_%1").arg(it.value().location.chunkFileIndex));
+            QFile currentChunkFile(cacheChunkPath(it.value().location.chunkFileIndex));
             _currentChunkFileAccess.lockForRead();
             if (currentChunkFile.open(QFile::ReadOnly)) {
                 if (currentChunkFile.seek(it.value().location.offsetInChunk)) {
                     QByteArray thumbnailData = currentChunkFile.read(it.value().location.thumbnailSize);
 
                     result = QImage::fromData(thumbnailData, "webp");
+                    if (!result.isNull()) {
+                        result.setColorSpace(srgb);
+                    }
                     if (request.targetSize.isValid() && (request.targetSize.width() < result.width() ||
                                                          request.targetSize.height() < result.height())) { // Never upscale
                         result = result.scaled(request.targetSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                        result.setColorSpace(srgb);
                     }
                 }
                 currentChunkFile.close();
@@ -78,13 +100,16 @@ void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArr
     // return;
     _dbAccess.lockForRead();
     auto it = _db.find(imageInfo.path);
+    const bool shouldStore = it == _db.end()
+        || it->lastModified != imageInfo.lastModified
+        || it->imageSize.width() <= 1
+        || it->imageSize.height() <= 1;
     _dbAccess.unlock();
 
-    // TODO: Update when date changes
-    if (it == _db.end()) {
+    if (shouldStore) {
         uint64_t thumbnailSize = imageData.size();
 
-        QFile currentChunkFile(QString("C:/tmp/zg_%1").arg(_currentChunkFileIndex));
+        QFile currentChunkFile(cacheChunkPath(_currentChunkFileIndex));
         _currentChunkFileAccess.lockForWrite();
         uint64_t currentChunkFileSize = 0;
         if (currentChunkFile.open(QFile::WriteOnly | QFile::Append)) {
@@ -116,11 +141,14 @@ QByteArray PersistentImageCache::createImageForCache(const QImage &image) {
     QByteArray imageData;
     QBuffer buffer(&imageData);
     buffer.open(QIODevice::WriteOnly);
+    const QColorSpace srgb(QColorSpace::SRgb);
 
     QImage scaled = image;
+    scaled.setColorSpace(srgb);
     if (CACHE_IMAGE_RESOLUTION.width() < image.width() ||
         CACHE_IMAGE_RESOLUTION.height() < image.height()) { // Never upscale
         scaled = image.scaled(CACHE_IMAGE_RESOLUTION, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        scaled.setColorSpace(srgb);
     }
     // scaled.invertPixels();
     scaled.save(&buffer, "webp", 50);
@@ -153,7 +181,7 @@ QDataStream& operator>>(QDataStream& in, PersistentImageCache::ThumbnailInfo& ob
 void PersistentImageCache::loadDb() {
     _dbAccess.lockForWrite();
 
-    QFile dbFile("C:/tmp/zg.db");
+    QFile dbFile(cacheDbPath());
     if (dbFile.open(QIODevice::ReadOnly)) {
         QDataStream stream(&dbFile);
         stream >> _db;
@@ -169,7 +197,7 @@ void PersistentImageCache::loadDb() {
 void PersistentImageCache::dumpDb() {
     _dbAccess.lockForWrite();
 
-    QFile dbFile("C:/tmp/zg.db");
+    QFile dbFile(cacheDbPath());
     if (dbFile.open(QIODevice::WriteOnly)) {
         QDataStream stream(&dbFile);
         stream << _db;

@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QElapsedTimer>
 #include <QMimeDatabase>
+#include <QColorSpace>
 
 #include <cassert>
 #include <string>
@@ -110,7 +111,35 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
         }
     }
     decodedInfo.decodingTookTime = t.restart();
-    return result;
+    return normalizeToDisplaySrgb(result);
+}
+
+QImage ThumbnailLoader::normalizeToDisplaySrgb(QImage image) {
+    if (image.isNull()) {
+        return image;
+    }
+
+    const QColorSpace displaySpace(QColorSpace::SRgb);
+    const QColorSpace sourceSpace = image.colorSpace();
+    if (!sourceSpace.isValid()) {
+        image.setColorSpace(displaySpace);
+        return image;
+    }
+    if (sourceSpace == displaySpace) {
+        return image;
+    }
+
+    QImage converted = image.convertedToColorSpace(displaySpace, image.format());
+    if (converted.isNull()) {
+        converted = image.convertedToColorSpace(displaySpace);
+    }
+    if (!converted.isNull()) {
+        return converted;
+    }
+
+    qWarning() << "Failed to convert image color space to sRGB; tagging existing pixels as sRGB";
+    image.setColorSpace(displaySpace);
+    return image;
 }
 
 QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions) {

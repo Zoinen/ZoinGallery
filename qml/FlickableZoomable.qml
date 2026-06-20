@@ -43,6 +43,11 @@ Item {
     }
 
     property bool zoomFitView: true
+    readonly property bool viewportAnimationRunning: viewportAnimation.running
+
+    property bool imageTextureReady: (viewerImage2.status === Image.Ready && viewerImage2.implicitWidth > 1 && viewerImage2.implicitHeight > 1)
+        || (viewerImage2.status !== Image.Ready && viewerImageBase.status === Image.Ready
+            && viewerImageBase.implicitWidth > 1 && viewerImageBase.implicitHeight > 1)
 
     property real zoomScale: 1.5
     readonly property real minZoomScale: 0.005
@@ -179,6 +184,10 @@ Item {
     }
 
     function zoomToFit(skipAnimation) {
+        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
+            return
+        }
+
         // Show scrollbars
         delayedScrollbarHiding.stop()
         scrollBarHidingAnimation.stop()
@@ -516,6 +525,8 @@ Item {
     Item {
         id: viewerImage
 
+        opacity: flickableArea.imageTextureReady ? 1 : 0
+
         width: animatedEffectiveWidth * zoomScale
         height: animatedEffectiveHeight * zoomScale
 
@@ -571,7 +582,7 @@ Item {
                 property var source: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImageBase
                 property var viewportSize: Qt.size(width * dpr, height * dpr)
                 property real sharpenAmount: zoomScale < 1 ? 1.5 : 0
-                property bool showCheckerboard: masonryLayout.view.showTransparentGrid
+                property bool showCheckerboard: masonryLayout.view.showTransparentGrid && flickableArea.imageTextureReady
                 property int checkerboardSize: 4 * dpr
                 property int borderRadius: 0
 

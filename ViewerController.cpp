@@ -1,5 +1,6 @@
 #include "ViewerController.h"
 
+#include "BackgroundInstance.h"
 #include "ThumbnailLoader.h"
 #include "FileListModel.h"
 #include "QmlImageProvider.h"
@@ -7,9 +8,12 @@
 #include "QmlResourcesProvider.h"
 #include "ImageModel.h"
 #include "CacheViewer.h"
+#include "TrayController.h"
 
 #include <QClipboard>
+#include <QDebug>
 #include <QDir>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -27,11 +31,18 @@ ViewerController::ViewerController(QQmlEngine *engine)
     _indexInHistory = -1;
     _savedContentY = -1;
     _savedCurrentIndex = -1;
+    _trayController = nullptr;
+    _backgroundInstance = nullptr;
+    _backgroundMode = false;
+    _pendingOpenInViewer = false;
 
     engine->rootContext()->setContextProperty("viewerController", this);
 
     _fileListModel = new FileListModel(this);
     engine->rootContext()->setContextProperty("fileListModel", _fileListModel);
+    connect(_fileListModel, &FileListModel::directOpenReady, this, [this] (int index) {
+        emit setCurrentIndex(index);
+    });
 
     _imageModel = new ImageModel(_fileListModel);
     engine->rootContext()->setContextProperty("imageModel", _imageModel);
@@ -207,6 +218,97 @@ void ViewerController::prepareToClose() {
     });
 }
 
+void ViewerController::hideToTray() {
+    if (_trayController && _trayController->isAvailable()) {
+        _trayController->showTray();
+    }
+    else {
+        quitApplication();
+    }
+}
+
+void ViewerController::quitApplication() {
+    if (_backgroundInstance) {
+        _backgroundInstance->stopServer();
+    }
+    if (_trayController) {
+        _trayController->hideTray();
+    }
+    prepareToClose();
+}
+
+bool ViewerController::backgroundMode() const {
+    return _backgroundMode;
+}
+
+bool ViewerController::pendingOpenInViewer() const {
+    return _pendingOpenInViewer;
+}
+
+void ViewerController::setBackgroundMode(bool enabled) {
+    _backgroundMode = enabled;
+}
+
+void ViewerController::setStartupFilePath(const QString &path) {
+    _startupFilePath = path;
+}
+
+void ViewerController::initializeBackgroundMode(QWindow *mainWindow) {
+    _trayController = new TrayController(mainWindow, this);
+    if (!_trayController->isAvailable()) {
+        qWarning() << "System tray is not available; background mode will fall back to quitting on close";
+    }
+    else {
+        connect(_trayController, &TrayController::quitRequested, this, &ViewerController::quitApplication);
+        qDebug() << "Background mode: system tray ready";
+    }
+
+    _backgroundInstance = new BackgroundInstance(this, this);
+    if (!_backgroundInstance->startServer()) {
+        qWarning() << "Failed to start background instance server:" << BackgroundInstance::serverName();
+    }
+    else {
+        qDebug() << "Background mode: IPC server listening on" << BackgroundInstance::serverName();
+    }
+}
+
+void ViewerController::openExternalFile(const QString &path) {
+    QFileInfo fileInfo(path);
+    if (fileInfo.isFile() && FileListModel::isImage(fileInfo.fileName())) {
+        _pendingExternalFilePath = path;
+        _pendingOpenInViewer = true;
+        emit pendingOpenInViewerChanged();
+    }
+    else {
+        _pendingExternalFilePath.clear();
+        _pendingOpenInViewer = false;
+        emit pendingOpenInViewerChanged();
+        cd(path);
+    }
+    emit externalFileOpened();
+}
+
+void ViewerController::activateFromExternal() {
+    emit externalActivateRequested();
+}
+
+void ViewerController::openPendingExternalFileInViewer(int viewerWidth, int viewerHeight) {
+    if (_pendingExternalFilePath.isEmpty()) {
+        return;
+    }
+
+    QString path = _pendingExternalFilePath;
+    _pendingExternalFilePath.clear();
+    openFileInViewer(path, viewerWidth, viewerHeight);
+}
+
+void ViewerController::clearPendingOpenInViewer() {
+    if (_pendingOpenInViewer) {
+        _pendingOpenInViewer = false;
+        emit pendingOpenInViewerChanged();
+    }
+}
+
 void ViewerController::clipboardCopyIndexName(int index) {
     QClipboard *clipboard = QGuiApplication::clipboard();
     clipboard->setText(_fileListModel->index(index).data().toString());
@@ -228,13 +330,22 @@ void ViewerController::enterRecursiveView() {
     _fileListModel->enterRecursiveView();
 }
 
-void ViewerController::initialCd() {
+void ViewerController::initialCd(int viewerWidth, int viewerHeight) {
     QSettings set;
     QString savedPath = set.value("currentPath").toString();
 
-    if (qApp->arguments().size() > 1) {
-        QString path = qApp->arguments()[1].replace("\"", "");
-        cd(path);
+    if (!_startupFilePath.isEmpty()) {
+        QFileInfo startupFileInfo(_startupFilePath);
+        if (startupFileInfo.isFile() && FileListModel::isImage(startupFileInfo.fileName())) {
+            _pendingOpenInViewer = true;
+            emit pendingOpenInViewerChanged();
+            openFileInViewer(_startupFilePath, viewerWidth, viewerHeight);
+        }
+        else {
+            _pendingOpenInViewer = false;
+            emit pendingOpenInViewerChanged();
+            cd(_startupFilePath);
+        }
     }
     else if (!savedPath.isEmpty()) {
         cd(savedPath);
@@ -242,6 +353,35 @@ void ViewerController::initialCd() {
     else {
         cd(QStandardPaths::standardLocations(QStandardPaths::DocumentsLocation).first());
     }
+}
+
+void ViewerController::openFileInViewer(const QString &path, int viewerWidth, int viewerHeight, bool changeHistory) {
+    QString imagePath = path.trimmed();
+    if (imagePath.startsWith("\"")) {
+        imagePath = imagePath.right(imagePath.size() - 1);
+    }
+    if (imagePath.endsWith("\"")) {
+        imagePath = imagePath.left(imagePath.size() - 1);
+    }
+    imagePath = imagePath.trimmed();
+
+    QFileInfo fileInfo(imagePath);
+    if (!fileInfo.isFile() || !FileListModel::isImage(fileInfo.fileName())) {
+        cd(path, changeHistory);
+        return;
+    }
+
+    QString folderPath = fileInfo.dir().absolutePath();
+    if (_currentPath != folderPath) {
+        _currentPath = folderPath;
+        QSettings set;
+        set.setValue("currentPath", _currentPath);
+        emit currentPathChanged();
+    }
+
+    loadSavedState();
+    updateHistory(changeHistory);
+    _fileListModel->openImageDirectly(fileInfo.absoluteFilePath(), viewerWidth, viewerHeight);
 }
 
 /*QColor ViewerController::adjustHSL(const QColor &color, qreal h, qreal s, qreal l) {

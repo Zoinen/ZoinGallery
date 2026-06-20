@@ -6,6 +6,8 @@
 
 #include "tiffio.hxx"
 
+#include <QColorSpace>
+
 REGISTER_DECODER_DEFINITION(TiffDecoder)
 
 static const QStringList TiffExtensions = {"tiff", "tif"};
@@ -41,6 +43,19 @@ QStringList TiffDecoder::supportedFormats() {
     return TiffExtensions;
 }
 
+static QColorSpace tiffColorSpace(TIFF *tif) {
+    uint32_t iccProfileSize = 0;
+    void *iccProfileData = nullptr;
+    if (TIFFGetField(tif, TIFFTAG_ICCPROFILE, &iccProfileSize, &iccProfileData) && iccProfileData && iccProfileSize) {
+        const QByteArray iccProfile(reinterpret_cast<const char *>(iccProfileData), static_cast<qsizetype>(iccProfileSize));
+        const QColorSpace colorSpace = QColorSpace::fromIccProfile(iccProfile);
+        if (colorSpace.isValid()) {
+            return colorSpace;
+        }
+    }
+    return QColorSpace(QColorSpace::SRgb);
+}
+
 QImage TiffDecoder::decode(const QString &mimeType, const QByteArray &data, QSize targetSize) {
     if (mimeType != "image/tiff") {
         return QImage();
@@ -58,6 +73,7 @@ QImage TiffDecoder::decode(const QString &mimeType, const QByteArray &data, QSiz
 
         TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w);
         TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
+        const QColorSpace colorSpace = tiffColorSpace(tif);
         npixels = w * h;
         uint32_t *tiffRaster = (uint32_t*) _TIFFmalloc(npixels * sizeof(uint32_t));
         if (tiffRaster != NULL) {
@@ -66,6 +82,7 @@ QImage TiffDecoder::decode(const QString &mimeType, const QByteArray &data, QSiz
 
                 QImage img((uchar *)tiffRaster, w, h, QImage::Format_RGBA8888,
                            [] (void *ptr) { if (ptr) _TIFFfree(ptr); }, tiffRaster);
+                img.setColorSpace(colorSpace);
                 return img;
             }
             else {

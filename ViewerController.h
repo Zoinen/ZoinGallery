@@ -7,6 +7,8 @@
 class QQmlEngine;
 class FileListModel;
 class ImageModel;
+class TrayController;
+class BackgroundInstance;
 
 class ViewerController : public QObject {
     Q_OBJECT
@@ -16,6 +18,8 @@ class ViewerController : public QObject {
     Q_PROPERTY(bool canForward READ canForward NOTIFY canForwardChanged)
     Q_PROPERTY(QStringList backMenu READ backMenu NOTIFY historyChanged)
     Q_PROPERTY(QStringList forwardMenu READ forwardMenu NOTIFY historyChanged)
+    Q_PROPERTY(bool backgroundMode READ backgroundMode CONSTANT)
+    Q_PROPERTY(bool pendingOpenInViewer READ pendingOpenInViewer NOTIFY pendingOpenInViewerChanged)
 
 public:
     ViewerController(QQmlEngine *engine);
@@ -41,15 +45,30 @@ public:
     Q_INVOKABLE void jumpForward(int forwardIndex);
 
     Q_INVOKABLE void prepareToClose();
+    Q_INVOKABLE void hideToTray();
+    Q_INVOKABLE void quitApplication();
     Q_INVOKABLE void clipboardCopyIndexName(int index);
     Q_INVOKABLE void clipboardCopyIndexFullPath(int index);
     Q_INVOKABLE QUrl indexUrl(int index);
 
     Q_INVOKABLE void enterRecursiveView();
 
-    Q_INVOKABLE void initialCd();
+    Q_INVOKABLE void initialCd(int viewerWidth = -1, int viewerHeight = -1);
+    Q_INVOKABLE void openPendingExternalFileInViewer(int viewerWidth = -1, int viewerHeight = -1);
 
     Q_INVOKABLE QColor adjustHSL(const QColor &color, qreal h, qreal s, qreal l);
+
+    bool backgroundMode() const;
+    bool pendingOpenInViewer() const;
+
+    void setBackgroundMode(bool enabled);
+    void setStartupFilePath(const QString &path);
+    void initializeBackgroundMode(QWindow *mainWindow);
+
+    void openExternalFile(const QString &path);
+    void activateFromExternal();
+
+    Q_INVOKABLE void clearPendingOpenInViewer();
 
 signals:
     void currentPathChanged();
@@ -60,15 +79,24 @@ signals:
     void canForwardChanged();
     void historyChanged();
 
+    void externalActivateRequested();
+    void externalFileOpened();
+    void pendingOpenInViewerChanged();
+
 private:
     void updateHistory(bool changeHistory);
     void loadSavedState();
     int setCurrentPath(const QString &newPath, const QString &itemToSelect = QString());
+    void openFileInViewer(const QString &path, int viewerWidth, int viewerHeight, bool changeHistory = true);
 
     FileListModel *_fileListModel;
     ImageModel *_imageModel;
+    TrayController *_trayController;
+    BackgroundInstance *_backgroundInstance;
 
     QString _currentPath;
+    QString _startupFilePath;
+    QString _pendingExternalFilePath;
     struct HistoryEntity {
         QString path;
         int currentIndex;
@@ -86,6 +114,9 @@ private:
 
     qreal _savedContentY;
     int _savedCurrentIndex;
+
+    bool _backgroundMode;
+    bool _pendingOpenInViewer;
 };
 
 #endif // VIEWERCONTROLLER_H

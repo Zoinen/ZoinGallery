@@ -29,8 +29,8 @@ void CachedImageStoreRunner::run() {
 
 
 
-CachedImageInfoRunner::CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView)
-    : _imagePaths(imagePaths), _isFromEmbeddedView(isFromEmbeddedView) {
+CachedImageInfoRunner::CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView, int directOpenGeneration)
+    : _imagePaths(imagePaths), _isFromEmbeddedView(isFromEmbeddedView), _directOpenGeneration(directOpenGeneration) {
 }
 
 void CachedImageInfoRunner::run() {
@@ -50,10 +50,11 @@ void CachedImageInfoRunner::run() {
             info.isLast = true;
         }
         info.isFromEmbeddedView = _isFromEmbeddedView;
+        info.directOpenGeneration = _directOpenGeneration;
     }
 
     // qDebug() << "ZZ FINISHED CACHE RETRIEVAL" << _imagePaths.size() << ":" << t.restart() << "ms" << ", not found" << notFound;
 
-    emit cachedImageInfoRetrieved(results, notFound, _isFromEmbeddedView, _imagePaths.last());
+    emit cachedImageInfoRetrieved(results, notFound, _isFromEmbeddedView, _imagePaths.last(), _directOpenGeneration);
     emit finished(this);
 }

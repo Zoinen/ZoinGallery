@@ -7,7 +7,8 @@ class ImageInfoReadRunner : public Runner {
     Q_OBJECT
 
 public:
-    ImageInfoReadRunner(const QString &path, bool isLast, bool isFromEmbeddedView, bool isFromScanner = false);
+    ImageInfoReadRunner(const QString &path, bool isLast, bool isFromEmbeddedView, bool isFromScanner = false,
+                        int directOpenGeneration = 0);
 
     RunnerType type() override { return RunnerType::ImageInfoRead; }
     void run() override;
@@ -24,6 +25,7 @@ private:
     bool _isLast;
     bool _isFromEmbeddedView;
     bool _isFromScanner;
+    int _directOpenGeneration;
 };
 
 #endif // IMAGEINFOREADRUNNER_H

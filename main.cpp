@@ -1,12 +1,15 @@
-#include <QGuiApplication>
+#include <QApplication>
 #include <QQmlApplicationEngine>
 #include <QElapsedTimer>
 #include <QQuickStyle>
 #include <QSettings>
+#include <QDebug>
 #include <QImageReader>
 
 #include "ViewerController.h"
 #include "MainWindow.h"
+#include "LaunchOptions.h"
+#include "BackgroundInstance.h"
 
 #if defined(__USE_QWK)
 #include <QWKQuick/qwkquickglobal.h>
@@ -14,6 +17,11 @@
 #include "DummyQWK.h"
 #endif
 #include <QDirIterator>
+
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#include <cstdio>
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -23,6 +31,11 @@ int main(int argc, char *argv[])
 
 #if defined(Q_OS_WIN)
     // qputenv("QT_QPA_PLATFORM", "windows:darkmode=2");
+    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+        (void)freopen("CONOUT$", "w", stdout);
+        (void)freopen("CONOUT$", "w", stderr);
+    }
+    qputenv("QT_FORCE_STDERR_LOGGING", "1");
 #endif
     //qputenv("QSG_INFO", "1");
 #if defined(Q_OS_WIN)
@@ -30,10 +43,19 @@ int main(int argc, char *argv[])
 #endif
     // qputenv("QSG_NO_VSYNC", "1");
 
-    QGuiApplication app(argc, argv);
+    QApplication app(argc, argv);
     app.setOrganizationName("Zoin");
     app.setOrganizationDomain("zoingallery.com");
     app.setApplicationName("ZoinGallery");
+
+    const LaunchOptions launchOptions = parseLaunchOptions(app.arguments());
+
+    if (launchOptions.backgroundMode) {
+        if (BackgroundInstance::tryForwardToRunningInstance(launchOptions.filePath)) {
+            return 0;
+        }
+        app.setQuitOnLastWindowClosed(false);
+    }
 
     QQuickStyle::setStyle("ZGStyle");
 #if defined(__USE_QWK)
@@ -49,11 +71,6 @@ int main(int argc, char *argv[])
     QQmlApplicationEngine engine;
     engine.addImportPath(":/");
     engine.addImportPath(":/ZoinGallery");
-    // // Recursively list all resources in :/
-    // QDirIterator it(":/", QDirIterator::Subdirectories);
-    // while (it.hasNext()) {
-    //     qDebug() << "Resource:" << it.next();
-    // }
     const QUrl url(QStringLiteral("qrc:/ZoinGallery/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated, &app, [url](QObject *obj, const QUrl &objUrl) {
         if (!obj && url == objUrl) {
@@ -71,7 +88,24 @@ int main(int argc, char *argv[])
     DummyQWK::registerTypes(&engine);
 #endif
 
+    if (!launchOptions.filePath.isEmpty()) {
+        controller->setStartupFilePath(launchOptions.filePath);
+    }
+
+    if (launchOptions.backgroundMode) {
+        controller->setBackgroundMode(true);
+    }
+
     engine.load(url);
+
+    if (launchOptions.backgroundMode) {
+        const QList<QObject *> roots = engine.rootObjects();
+        if (!roots.isEmpty()) {
+            if (auto *mainWindow = qobject_cast<MainWindow *>(roots.first())) {
+                controller->initializeBackgroundMode(mainWindow);
+            }
+        }
+    }
 
     return app.exec();
 }

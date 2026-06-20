@@ -3,8 +3,10 @@
 
 #include <QThread>
 
-ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool isFromEmbeddedView, bool isFromScanner)
-    : _path(path), _isLast(isLast), _isFromEmbeddedView(isFromEmbeddedView), _isFromScanner(isFromScanner) {
+ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool isFromEmbeddedView, bool isFromScanner,
+                                         int directOpenGeneration)
+    : _path(path), _isLast(isLast), _isFromEmbeddedView(isFromEmbeddedView), _isFromScanner(isFromScanner),
+      _directOpenGeneration(directOpenGeneration) {
 }
 
 void ImageInfoReadRunner::run() {
@@ -12,7 +14,8 @@ void ImageInfoReadRunner::run() {
         .path = _path,
         .isLast = _isLast,
         .isFromEmbeddedView = _isFromEmbeddedView,
-        .isFromScanner = _isFromScanner
+        .isFromScanner = _isFromScanner,
+        .directOpenGeneration = _directOpenGeneration
     };
 
     ThumbnailLoader::readMetadata(result);

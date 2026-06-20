@@ -4,9 +4,11 @@
 #include <libheif/heif.h>
 
 #include <QBuffer>
+#include <QColorSpace>
 #include <QDebug>
 #include <QFile>
 #include <QFileInfo>
+#include <QPointF>
 
 #include <cstring>
 
@@ -91,6 +93,94 @@ bool HeicDecoder::readMetadata(ImageInfo &result) {
     return true;
 }
 
+static bool nclxTransferToQt(heif_transfer_characteristics transfer,
+                             QColorSpace::TransferFunction &qtTransfer) {
+    switch (transfer) {
+    case heif_transfer_characteristic_linear:
+        qtTransfer = QColorSpace::TransferFunction::Linear;
+        return true;
+    case heif_transfer_characteristic_IEC_61966_2_1:
+    case heif_transfer_characteristic_ITU_R_BT_709_5:
+        qtTransfer = QColorSpace::TransferFunction::SRgb;
+        return true;
+    case heif_transfer_characteristic_ITU_R_BT_2020_2_10bit:
+    case heif_transfer_characteristic_ITU_R_BT_2020_2_12bit:
+        qtTransfer = QColorSpace::TransferFunction::Bt2020;
+        return true;
+    case heif_transfer_characteristic_ITU_R_BT_2100_0_PQ:
+        qtTransfer = QColorSpace::TransferFunction::St2084;
+        return true;
+    case heif_transfer_characteristic_ITU_R_BT_2100_0_HLG:
+        qtTransfer = QColorSpace::TransferFunction::Hlg;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static QColorSpace colorSpaceFromNclx(const heif_color_profile_nclx *nclx) {
+    if (!nclx) {
+        return QColorSpace(QColorSpace::SRgb);
+    }
+
+    QColorSpace::TransferFunction transferFunction;
+    if (!nclxTransferToQt(nclx->transfer_characteristics, transferFunction)) {
+        return QColorSpace(QColorSpace::SRgb);
+    }
+
+    if (nclx->color_primaries == heif_color_primaries_ITU_R_BT_709_5 &&
+        transferFunction == QColorSpace::TransferFunction::SRgb) {
+        return QColorSpace(QColorSpace::SRgb);
+    }
+    if (nclx->color_primaries == heif_color_primaries_SMPTE_EG_432_1 &&
+        transferFunction == QColorSpace::TransferFunction::SRgb) {
+        return QColorSpace(QColorSpace::DisplayP3);
+    }
+    if (nclx->color_primaries == heif_color_primaries_ITU_R_BT_2020_2_and_2100_0 &&
+        transferFunction == QColorSpace::TransferFunction::Bt2020) {
+        return QColorSpace(QColorSpace::Bt2020);
+    }
+
+    if (nclx->color_primary_white_x > 0.0f && nclx->color_primary_red_x > 0.0f &&
+        nclx->color_primary_green_x > 0.0f && nclx->color_primary_blue_x > 0.0f) {
+        QColorSpace colorSpace(
+            QPointF(nclx->color_primary_white_x, nclx->color_primary_white_y),
+            QPointF(nclx->color_primary_red_x, nclx->color_primary_red_y),
+            QPointF(nclx->color_primary_green_x, nclx->color_primary_green_y),
+            QPointF(nclx->color_primary_blue_x, nclx->color_primary_blue_y),
+            transferFunction);
+        if (colorSpace.isValid()) {
+            return colorSpace;
+        }
+    }
+
+    return QColorSpace(QColorSpace::SRgb);
+}
+
+static QColorSpace colorSpaceFromHeicHandle(heif_image_handle *handle) {
+    const size_t iccProfileSize = heif_image_handle_get_raw_color_profile_size(handle);
+    if (iccProfileSize > 0) {
+        QByteArray iccProfile(static_cast<qsizetype>(iccProfileSize), Qt::Uninitialized);
+        const heif_error err = heif_image_handle_get_raw_color_profile(handle, iccProfile.data());
+        if (err.code == heif_error_Ok) {
+            const QColorSpace colorSpace = QColorSpace::fromIccProfile(iccProfile);
+            if (colorSpace.isValid()) {
+                return colorSpace;
+            }
+        }
+    }
+
+    heif_color_profile_nclx *nclx = nullptr;
+    const heif_error err = heif_image_handle_get_nclx_color_profile(handle, &nclx);
+    if (err.code == heif_error_Ok && nclx) {
+        const QColorSpace colorSpace = colorSpaceFromNclx(nclx);
+        heif_nclx_color_profile_free(nclx);
+        return colorSpace;
+    }
+
+    return QColorSpace(QColorSpace::SRgb);
+}
+
 // Decode a heif_image_handle to a self-owned QImage, respecting alpha.
 // Pixels are copied out of the libheif buffer before it is released.
 static QImage decodeHandleToQImage(heif_image_handle* handle) {
@@ -120,6 +210,7 @@ static QImage decodeHandleToQImage(heif_image_handle* handle) {
     QImage result(w, h, qtFormat);
     for (int y = 0; y < h; ++y)
         std::memcpy(result.scanLine(y), pixels + static_cast<ptrdiff_t>(y) * stride, static_cast<size_t>(w) * bytesPerPixel);
+    result.setColorSpace(colorSpaceFromHeicHandle(handle));
     return result;
 }
 
@@ -130,6 +221,15 @@ static QByteArray decodeHandleToJpeg(heif_image_handle* handle) {
     QImage qimg = decodeHandleToQImage(handle);
     if (qimg.isNull())
         return {};
+
+    const QColorSpace srgb(QColorSpace::SRgb);
+    if (qimg.colorSpace().isValid() && qimg.colorSpace() != srgb) {
+        QImage converted = qimg.convertedToColorSpace(srgb, qimg.format());
+        if (!converted.isNull()) {
+            qimg = converted;
+        }
+    }
+    qimg.setColorSpace(srgb);
 
     QByteArray jpegBytes;
     QBuffer buf(&jpegBytes);

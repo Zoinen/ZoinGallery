@@ -55,9 +55,9 @@ DecodeManager::DecodeManager(QObject *parent)
     }
 }
 
-void DecodeManager::readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView) {
+void DecodeManager::readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView, int directOpenGeneration) {
     if (!_disableCache) {
-        CachedImageInfoRunner *runner = new CachedImageInfoRunner(paths, isFromEmbeddedView);
+        CachedImageInfoRunner *runner = new CachedImageInfoRunner(paths, isFromEmbeddedView, directOpenGeneration);
         runner->connections.append(
             connect(runner, &CachedImageInfoRunner::cachedImageInfoRetrieved,
                     this, &DecodeManager::onCachedImageInfoRetrieved)
@@ -66,11 +66,11 @@ void DecodeManager::readImagesInfo(const QList<QString> &paths, bool isFromEmbed
         processQueue();
     }
     else {
-        onInfoNotFoundInCache(paths, isFromEmbeddedView);
+        onInfoNotFoundInCache(paths, isFromEmbeddedView, directOpenGeneration);
     }
 }
 
-void DecodeManager::onInfoNotFoundInCache(const QList<QString> &imagePaths, bool isFromEmbeddedView) {
+void DecodeManager::onInfoNotFoundInCache(const QList<QString> &imagePaths, bool isFromEmbeddedView, int directOpenGeneration) {
     int insertIndex = _taskQueue.size();
     // Info requests from visible subviews should be first
     if (isFromEmbeddedView) {
@@ -82,7 +82,8 @@ void DecodeManager::onInfoNotFoundInCache(const QList<QString> &imagePaths, bool
     }
 
     for (int i = 0; i < imagePaths.size(); i++) {
-        ImageInfoReadRunner *runner = new ImageInfoReadRunner(imagePaths[i], i == imagePaths.size() - 1, isFromEmbeddedView);
+        ImageInfoReadRunner *runner = new ImageInfoReadRunner(imagePaths[i], i == imagePaths.size() - 1,
+                                                              isFromEmbeddedView, false, directOpenGeneration);
         runner->connections.append(
             connect(runner, &ImageInfoReadRunner::imageInfoReady,
                     this, &DecodeManager::onImageInfoReady)
@@ -226,6 +227,7 @@ void DecodeManager::cancelAllDecodeRunners() {
             if (runner->isViewerRequest()) {
                 emit viewerRunnerCanceled(runner->path());
             }
+            runner->cancel();
             runner->deleteLater();
             i--;
         }
@@ -243,7 +245,14 @@ void DecodeManager::cancelAllRunners() {
             }
         }
     }
-    _taskQueue.clear();
+    while (!_taskQueue.isEmpty()) {
+        Runner *runner = _taskQueue.dequeue();
+        if (runner->isViewerRequest()) {
+            emit viewerRunnerCanceled(runner->path());
+        }
+        runner->cancel();
+        runner->deleteLater();
+    }
 }
 
 void DecodeManager::cancelAllDecodeViewerRunners() {
@@ -266,6 +275,7 @@ void DecodeManager::cancelAllDecodeViewerRunners() {
             if (runner->isViewerRequest()) {
                 emit viewerRunnerCanceled(runner->path());
             }
+            runner->cancel();
             runner->deleteLater();
             i--;
         }
@@ -490,14 +500,16 @@ void DecodeManager::onStoreInCache(const ImageDecodeRequest &request, const QByt
     processQueue();
 }
 
-void DecodeManager::onCachedImageInfoRetrieved(const QList<ImageInfo> &results, const QStringList &notFound, bool isFromEmbeddedView, const QString &lastPath) {
+void DecodeManager::onCachedImageInfoRetrieved(const QList<ImageInfo> &results, const QStringList &notFound,
+                                               bool isFromEmbeddedView, const QString &lastPath,
+                                               int directOpenGeneration) {
     if (qobject_cast<Runner *>(sender())->isCanceled()) {
         return;
     }
 
     emit imagesInfoReady(results);
 
-    onInfoNotFoundInCache(notFound, isFromEmbeddedView);
+    onInfoNotFoundInCache(notFound, isFromEmbeddedView, directOpenGeneration);
 }
 
 bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType) {

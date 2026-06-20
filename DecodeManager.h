@@ -51,7 +51,7 @@ class DecodeManager : public QObject {
 
 public:
     explicit DecodeManager(QObject *parent = nullptr);
-    void readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView);
+    void readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView, int directOpenGeneration = 0);
     void decodeImages(const QList<ImageDecodeRequest> &requests);
     void readFolderList(const QStringList &paths, int totalImages = -1);
 
@@ -89,8 +89,8 @@ private:
 
     void onStoreInCache(const ImageDecodeRequest &request, const QByteArray &imageData);
     void onCachedImageInfoRetrieved(const QList<ImageInfo> &results, const QStringList &notFound,
-                                    bool isFromEmbeddedView, const QString &lastPath);
-    void onInfoNotFoundInCache(const QList<QString> &paths, bool isFromEmbeddedView);
+                                    bool isFromEmbeddedView, const QString &lastPath, int directOpenGeneration);
+    void onInfoNotFoundInCache(const QList<QString> &paths, bool isFromEmbeddedView, int directOpenGeneration = 0);
     bool isRunnerTypeMatchesThreadType(Runner *runner, int threadType);
     void updateRunningTasksCount();
     QString runnerToString(Runner *task);

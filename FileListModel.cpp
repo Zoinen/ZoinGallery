@@ -56,6 +56,10 @@ FileListModel::FileListModel(QObject *parent)
     });
 
     connect(_decodeManager, &DecodeManager::imageInfoReady, this, [&] (const ImageInfo &result) {
+        if (result.directOpenGeneration && result.directOpenGeneration != _directOpen.generation) {
+            return;
+        }
+
         auto it = _fileToItem.find(result.path);
         // qDebug() << "INFO RECEIVED" << result.path << result.imageSize;
         if (it != _fileToItem.end()) {
@@ -63,6 +67,7 @@ FileListModel::FileListModel(QObject *parent)
             item->setFullSize(rotateToOrientation(result.imageSize, result.orientation));
             item->setInfo(result);
             if (!result.imageSize.isValid()) {
+                handleDirectOpenImageInfo(result);
                 return;
             }
 
@@ -80,6 +85,8 @@ FileListModel::FileListModel(QObject *parent)
             if (result.isFromEmbeddedView) {
                 decodeImages({imageDecodeRequestFromEmbeddedImageInfo(result)});
             }
+
+            handleDirectOpenImageInfo(result);
         }
         else {
             qDebug() << "ZZ NOT FOUND" << result.path << _fileToItem.keys();
@@ -91,6 +98,17 @@ FileListModel::FileListModel(QObject *parent)
             return;
         }
         // qDebug() << "ZZ on DecodeManager::imagesInfoReady" << results.size();
+        QList<ImageInfo> currentResults;
+        currentResults.reserve(results.size());
+        for (const ImageInfo &result : results) {
+            if (!result.directOpenGeneration || result.directOpenGeneration == _directOpen.generation) {
+                currentResults.append(result);
+            }
+        }
+        if (!currentResults.size()) {
+            return;
+        }
+
         QList<ImageDecodeRequest> requests;
 
         int flushIndex = -1;
@@ -99,7 +117,7 @@ FileListModel::FileListModel(QObject *parent)
         // TODO: If differents parent come in one signal here it will mess everything up
         QModelIndex parent;
 
-        for (const ImageInfo &result : results) {
+        for (const ImageInfo &result : currentResults) {
             auto it = _fileToItem.find(result.path);
             // qDebug() << "INFO RECEIVED" << result.path << result.imageSize << result.orientation;
             if (it != _fileToItem.end()) {
@@ -118,6 +136,8 @@ FileListModel::FileListModel(QObject *parent)
                 if (result.isFromEmbeddedView) {
                     requests.append(imageDecodeRequestFromEmbeddedImageInfo(result));
                 }
+
+                handleDirectOpenImageInfo(result);
             }
             else {
                 qDebug() << "ZZ NOT FOUND" << result.path << _fileToItem.keys();
@@ -144,6 +164,10 @@ FileListModel::FileListModel(QObject *parent)
 
     connect(_decodeManager, &DecodeManager::imageReady, this, [&] (const ImageDecodeRequest &request,
                                                                    const QImage &image, const DecodedImageInfo &decodedInfo) {
+        if (request.info.directOpenGeneration && request.info.directOpenGeneration != _directOpen.generation) {
+            return;
+        }
+
         // image.save(QString("c:/tmp/zg/%1.png").arg(QFileInfo(request.info.path).fileName()));
         // qDebug() << "ZZ IMAGE READEY" << request.info.path << request.info.imageSize << request.targetSize << image.size();
         auto it = _fileToItem.find(request.info.path);
@@ -154,15 +178,18 @@ FileListModel::FileListModel(QObject *parent)
             }
             if (decodedInfo.isFromCache && (image.width() <= item->image().width() ||
                                             image.height() <= item->image().height())) {
+                handleDirectOpenImageReady(request, image, decodedInfo);
                 return;
             }
             if (request.viewerRequest) {
                 // qDebug() << "ZZ Viewer image SET";
                 QString imageId = generateNewId();
-                if (request.targetSize == request.info.imageSize) {
+                if (request.targetSize == request.info.imageSize ||
+                    request.targetSize == rotateToOrientation(request.info.imageSize, request.info.orientation)) {
                     auto it = _fullSizeViewerImages.find(request.info.path);
                     if (it != _fullSizeViewerImages.end()) {
                         if (it->image.width() > image.width() && it->image.height() > image.height()) {
+                            handleDirectOpenImageReady(request, image, decodedInfo);
                             return;
                         }
                     }
@@ -192,6 +219,7 @@ FileListModel::FileListModel(QObject *parent)
                     auto it = _viewerImages.find(request.info.path);
                     if (it != _viewerImages.end()) {
                         if (it->image.width() > image.width() && it->image.height() > image.height()) {
+                            handleDirectOpenImageReady(request, image, decodedInfo);
                             return;
                         }
                     }
@@ -223,6 +251,8 @@ FileListModel::FileListModel(QObject *parent)
                 item->setIsCachedThumbnail(decodedInfo.isFromCache);
                 updateImageId(item);
             }
+
+            handleDirectOpenImageReady(request, image, decodedInfo);
         }
         else {
             qDebug() << "Decoded image is not found in model" << request.info.path;
@@ -345,12 +375,25 @@ void FileListModel::prepareToClose() {
 }
 
 int FileListModel::cd(const QString &path, const QString &itemToSelect) {
+    _directOpen.generation++;
+    _directOpen.stage = DirectOpenStage::None;
+    _directOpen.pendingNeighborInfoPaths.clear();
+    _directOpen.pendingNeighborDecodePaths.clear();
+
     _root = path;
-    int indexToSelect = 0;
 
     beginResetModel();
     cleanupModelBeforeCd();
+    int indexToSelect = populateFolderItems(path, itemToSelect);
+    endResetModel();
 
+    startRegularFolderWork();
+
+    return indexToSelect;
+}
+
+int FileListModel::populateFolderItems(const QString &path, const QString &itemToSelect) {
+    int indexToSelect = 0;
     if (path == "Computer") {
         for (const auto &drive : QDir::drives()) {
             QString drivePath = drive.path();
@@ -403,12 +446,13 @@ int FileListModel::cd(const QString &path, const QString &itemToSelect) {
             _items.append(item);
         }
     }
-    endResetModel();
-
-    _decodeManager->readImagesInfo(_imagePaths, false);
-    _decodeManager->readFolderList(_folderImagePaths, 16); // TODO: FIX!
 
     return indexToSelect;
+}
+
+void FileListModel::startRegularFolderWork() {
+    _decodeManager->readImagesInfo(_imagePaths, false);
+    _decodeManager->readFolderList(_folderImagePaths, 16); // TODO: FIX!
 }
 
 QString FileListModel::rootPath() const {
@@ -470,12 +514,18 @@ ImageFile *FileListModel::createFileItem(const QString &folderPath, const QStrin
 
 void FileListModel::cleanupModelBeforeCd() {
     cancelAllRunners();
+    clearModelData(true);
+}
 
-    //Viewer
-    _viewerImages.clear();
-    _fullSizeViewerImages.clear();
-    _imageIdToViewer.clear();
-    _imageIdToFullSizeViewer.clear();
+void FileListModel::clearModelData(bool clearViewerData) {
+    if (clearViewerData) {
+        // Viewer
+        _viewerImages.clear();
+        _fullSizeViewerImages.clear();
+        _imageIdToViewer.clear();
+        _imageIdToFullSizeViewer.clear();
+        emit viewerReset();
+    }
     _currentViewIndex = -1;
 
     for (auto it = _folderModels.begin(); it != _folderModels.end(); ++it) {
@@ -491,7 +541,6 @@ void FileListModel::cleanupModelBeforeCd() {
         delete _items[i];
     }
     _items.clear();
-    emit viewerReset();
 }
 
 ImageDecodeRequest FileListModel::imageDecodeRequestFromEmbeddedImageInfo(const ImageInfo &info) const {
@@ -577,6 +626,11 @@ QList<RecursiveFolderInfo> getAllSubfoldersWithNestingLevel(const QString &start
 
 
 void FileListModel::enterRecursiveView() {
+    _directOpen.generation++;
+    _directOpen.stage = DirectOpenStage::None;
+    _directOpen.pendingNeighborInfoPaths.clear();
+    _directOpen.pendingNeighborDecodePaths.clear();
+
     beginResetModel();
     cleanupModelBeforeCd();
 
@@ -635,6 +689,413 @@ void FileListModel::enterRecursiveView() {
 
 bool FileListModel::isImage(const QString &fileName) {
     return ThumbnailLoader::isFormatSupported(fileName);
+}
+
+void FileListModel::openImageDirectly(const QString &path, int width, int height) {
+    QString imagePath = path.trimmed();
+    if (imagePath.startsWith("\"")) {
+        imagePath = imagePath.right(imagePath.size() - 1);
+    }
+    if (imagePath.endsWith("\"")) {
+        imagePath = imagePath.left(imagePath.size() - 1);
+    }
+    imagePath = imagePath.trimmed();
+
+    QFileInfo fileInfo(imagePath);
+    if (!fileInfo.isFile() || !isImage(fileInfo.fileName())) {
+        return;
+    }
+
+    const QString folderPath = fileInfo.dir().absolutePath();
+    const QString fileName = fileInfo.fileName();
+    const QString fullPath = QDir(folderPath).absoluteFilePath(fileName);
+
+    const int generation = _directOpen.generation + 1;
+    _directOpen = DirectOpenState();
+    _directOpen.generation = generation;
+    _directOpen.stage = DirectOpenStage::WaitingInfo;
+    _directOpen.path = fullPath;
+    _directOpen.folderPath = folderPath;
+    _directOpen.fileName = fileName;
+    _directOpen.viewerSize = QSize(width, height);
+
+    _decodeManager->cancelAllRunners();
+
+    int existingIndex = -1;
+    if (!_root.isEmpty() && _root != "Computer" &&
+        !QString::compare(QDir(_root).absolutePath(), folderPath, Qt::CaseInsensitive)) {
+        existingIndex = fileIndex(fileName);
+    }
+
+    _directOpen.sameFolder = existingIndex >= 0;
+    if (_directOpen.sameFolder) {
+        _directOpen.currentIndex = existingIndex;
+        _currentViewIndex = existingIndex;
+    }
+    else {
+        beginResetModel();
+        clearModelData(true);
+        _root = folderPath;
+
+        ImageFile *item = createFileItem(folderPath, fileName, fileInfo.lastModified());
+        item->setIndex(0);
+        _items.append(item);
+        if (item->isImage()) {
+            _imagePaths.append(item->fullPath());
+        }
+
+        _directOpen.currentIndex = 0;
+        _currentViewIndex = 0;
+        endResetModel();
+    }
+
+    auto itemIt = _fileToItem.find(fullPath);
+    if (itemIt != _fileToItem.end() && itemIt.value()->fullSize().isValid() &&
+        itemIt.value()->info().imageSize.isValid()) {
+        ImageInfo info = itemIt.value()->info();
+        info.directOpenGeneration = generation;
+        handleDirectOpenImageInfo(info);
+    }
+    else {
+        _decodeManager->readImagesInfo({fullPath}, false, generation);
+    }
+}
+
+bool FileListModel::isActiveDirectOpenInfo(const ImageInfo &info) const {
+    return info.directOpenGeneration &&
+           info.directOpenGeneration == _directOpen.generation &&
+           _directOpen.stage != DirectOpenStage::None;
+}
+
+bool FileListModel::isActiveDirectOpenRequest(const ImageDecodeRequest &request) const {
+    return request.info.directOpenGeneration &&
+           request.info.directOpenGeneration == _directOpen.generation &&
+           _directOpen.stage != DirectOpenStage::None;
+}
+
+void FileListModel::handleDirectOpenImageInfo(const ImageInfo &result) {
+    if (!isActiveDirectOpenInfo(result)) {
+        return;
+    }
+
+    if (_directOpen.stage == DirectOpenStage::WaitingInfo && result.path == _directOpen.path) {
+        if (!result.imageSize.isValid()) {
+            qWarning() << "Direct open metadata is invalid" << result.path << result.imageSize;
+            _directOpen.stage = DirectOpenStage::None;
+            return;
+        }
+
+        _directOpen.info = result;
+        _directOpen.info.directOpenGeneration = _directOpen.generation;
+        requestDirectOpenFitDecode();
+        return;
+    }
+
+    if (_directOpen.stage == DirectOpenStage::WaitingNeighborInfo &&
+        _directOpen.pendingNeighborInfoPaths.contains(result.path)) {
+        _directOpen.pendingNeighborInfoPaths.remove(result.path);
+        if (_directOpen.pendingNeighborInfoPaths.isEmpty()) {
+            requestDirectOpenNeighborDecodes();
+        }
+    }
+}
+
+void FileListModel::requestDirectOpenFitDecode() {
+    auto itemIt = _fileToItem.find(_directOpen.path);
+    if (itemIt == _fileToItem.end()) {
+        return;
+    }
+
+    ImageFile *item = itemIt.value();
+    QSize targetSize = item->fullSize();
+    if (!targetSize.isValid()) {
+        targetSize = rotateToOrientation(_directOpen.info.imageSize, _directOpen.info.orientation);
+    }
+    if (_directOpen.viewerSize.isValid()) {
+        targetSize = targetSize.scaled(_directOpen.viewerSize, Qt::KeepAspectRatio);
+    }
+    if (!targetSize.isValid()) {
+        return;
+    }
+
+    auto viewerIt = _viewerImages.find(_directOpen.path);
+    if (viewerIt == _viewerImages.end()) {
+        _viewerImages[_directOpen.path] = ViewerImage{.requestedSize = targetSize};
+    }
+    else if (viewerIt->requestedSize.width() < targetSize.width() ||
+             viewerIt->requestedSize.height() < targetSize.height()) {
+        viewerIt->requestedSize = targetSize;
+    }
+
+    ImageInfo info = _directOpen.info;
+    info.directOpenGeneration = _directOpen.generation;
+    _directOpen.stage = DirectOpenStage::WaitingFitDecode;
+    _decodeManager->decodeImages({ImageDecodeRequest{
+        .info = info,
+        .targetSize = targetSize,
+        .viewerRequest = true,
+        .checkCache = info.isCached
+    }});
+}
+
+void FileListModel::requestDirectOpenFullSizeDecode() {
+    auto itemIt = _fileToItem.find(_directOpen.path);
+    if (itemIt == _fileToItem.end()) {
+        return;
+    }
+
+    ImageFile *item = itemIt.value();
+    QSize targetSize = item->fullSize();
+    if (!targetSize.isValid()) {
+        targetSize = rotateToOrientation(_directOpen.info.imageSize, _directOpen.info.orientation);
+    }
+    if (!targetSize.isValid()) {
+        return;
+    }
+
+    auto fullSizeIt = _fullSizeViewerImages.find(_directOpen.path);
+    if (fullSizeIt == _fullSizeViewerImages.end()) {
+        _fullSizeViewerImages[_directOpen.path] = ViewerImage{.requestedSize = targetSize};
+    }
+    else if (fullSizeIt->requestedSize.width() < targetSize.width() ||
+             fullSizeIt->requestedSize.height() < targetSize.height()) {
+        fullSizeIt->requestedSize = targetSize;
+    }
+
+    ImageInfo info = _directOpen.info;
+    info.directOpenGeneration = _directOpen.generation;
+    _directOpen.stage = DirectOpenStage::WaitingFullDecode;
+    _decodeManager->decodeImages({ImageDecodeRequest{
+        .info = info,
+        .targetSize = targetSize,
+        .viewerRequest = true,
+        .checkCache = info.isCached
+    }});
+}
+
+bool FileListModel::handleDirectOpenImageReady(const ImageDecodeRequest &request, const QImage &image,
+                                               const DecodedImageInfo &decodedInfo) {
+    if (!isActiveDirectOpenRequest(request)) {
+        return false;
+    }
+
+    if (request.info.path == _directOpen.path && _directOpen.stage == DirectOpenStage::WaitingFitDecode) {
+        auto itemIt = _fileToItem.find(_directOpen.path);
+        if (itemIt != _fileToItem.end() && !image.isNull() && itemIt.value()->imageIdUrl().isEmpty()) {
+            itemIt.value()->setImage(image);
+            itemIt.value()->setIsCachedThumbnail(decodedInfo.isFromCache);
+            updateImageId(itemIt.value());
+        }
+
+        if (_directOpen.currentIndex >= 0) {
+            emit directOpenReady(_directOpen.currentIndex);
+        }
+        requestDirectOpenFullSizeDecode();
+        return true;
+    }
+
+    const bool fullSizeRequest = request.targetSize == request.info.imageSize ||
+                                 request.targetSize == rotateToOrientation(request.info.imageSize, request.info.orientation);
+    if (request.info.path == _directOpen.path && _directOpen.stage == DirectOpenStage::WaitingFullDecode &&
+        fullSizeRequest) {
+        populateFolderAfterDirectOpenFullDecode();
+        requestDirectOpenNeighbors();
+        return true;
+    }
+
+    if (_directOpen.stage == DirectOpenStage::WaitingNeighborDecode &&
+        _directOpen.pendingNeighborDecodePaths.contains(request.info.path)) {
+        _directOpen.pendingNeighborDecodePaths.remove(request.info.path);
+        if (_directOpen.pendingNeighborDecodePaths.isEmpty()) {
+            finishDirectOpenPriorityWork();
+        }
+        return true;
+    }
+
+    return false;
+}
+
+void FileListModel::populateFolderAfterDirectOpenFullDecode() {
+    if (_directOpen.stage != DirectOpenStage::WaitingFullDecode) {
+        return;
+    }
+
+    if (!_directOpen.sameFolder) {
+        beginResetModel();
+        clearModelData(false);
+        _root = _directOpen.folderPath;
+        populateFolderItems(_root, _directOpen.fileName);
+
+        auto targetIt = _fileToItem.find(_directOpen.path);
+        if (targetIt != _fileToItem.end()) {
+            targetIt.value()->setFullSize(rotateToOrientation(_directOpen.info.imageSize, _directOpen.info.orientation));
+            targetIt.value()->setInfo(_directOpen.info);
+        }
+        endResetModel();
+
+        const int targetIndex = fileIndex(_directOpen.fileName);
+        _directOpen.currentIndex = targetIndex >= 0 ? targetIndex : 0;
+    }
+
+    _currentViewIndex = _directOpen.currentIndex;
+
+    auto itemIt = _fileToItem.find(_directOpen.path);
+    if (itemIt != _fileToItem.end()) {
+        ImageFile *item = itemIt.value();
+        item->setFullSize(rotateToOrientation(_directOpen.info.imageSize, _directOpen.info.orientation));
+        item->setInfo(_directOpen.info);
+
+        auto viewerIt = _viewerImages.find(_directOpen.path);
+        if (viewerIt != _viewerImages.end() && !viewerIt->image.isNull() && item->imageIdUrl().isEmpty()) {
+            item->setImage(viewerIt->image);
+            item->setIsCachedThumbnail(viewerIt->decodedInfo.isFromCache);
+            updateImageId(item);
+        }
+
+        QModelIndex modelIndex = index(item->index(), 0, indexFromItem(item->imageFileParent()));
+        if (modelIndex.isValid()) {
+            emit dataChanged(modelIndex, modelIndex, {ImageFullSizeRole, ImageIdUrlRole});
+        }
+    }
+
+    if (_directOpen.currentIndex >= 0) {
+        emit directOpenReady(_directOpen.currentIndex);
+        emitViewerImagesForCurrentIndex();
+    }
+}
+
+QList<int> FileListModel::directOpenNeighborIndexes() const {
+    QList<int> result;
+    if (_directOpen.currentIndex < 0 || _directOpen.currentIndex >= _items.size()) {
+        return result;
+    }
+
+    for (int i = _directOpen.currentIndex - 1; i >= 0; i--) {
+        if (_items[i]->isImage()) {
+            result.append(i);
+            break;
+        }
+    }
+    for (int i = _directOpen.currentIndex + 1; i < _items.size(); i++) {
+        if (_items[i]->isImage()) {
+            result.append(i);
+            break;
+        }
+    }
+    return result;
+}
+
+void FileListModel::requestDirectOpenNeighbors() {
+    QList<int> neighborIndexes = directOpenNeighborIndexes();
+    QStringList pathsNeedingInfo;
+    _directOpen.pendingNeighborInfoPaths.clear();
+
+    for (int index : neighborIndexes) {
+        ImageFile *item = _items[index];
+        if (!item->fullSize().isValid() || !item->info().imageSize.isValid()) {
+            pathsNeedingInfo.append(item->fullPath());
+            _directOpen.pendingNeighborInfoPaths.insert(item->fullPath());
+        }
+    }
+
+    if (!_directOpen.pendingNeighborInfoPaths.isEmpty()) {
+        _directOpen.stage = DirectOpenStage::WaitingNeighborInfo;
+        _decodeManager->readImagesInfo(pathsNeedingInfo, false, _directOpen.generation);
+        return;
+    }
+
+    requestDirectOpenNeighborDecodes();
+}
+
+QList<ImageDecodeRequest> FileListModel::directOpenViewerRequestsForIndexes(const QList<int> &indexes,
+                                                                            QSet<QString> *queuedPaths) {
+    QList<ImageDecodeRequest> requests;
+    for (int index : indexes) {
+        if (index < 0 || index >= _items.size() || !_items[index]->isImage()) {
+            continue;
+        }
+
+        ImageFile *item = _items[index];
+        QSize targetSize = item->fullSize();
+        if (_directOpen.viewerSize.isValid()) {
+            targetSize = targetSize.scaled(_directOpen.viewerSize, Qt::KeepAspectRatio);
+        }
+        if (!targetSize.isValid()) {
+            continue;
+        }
+
+        const QString requestedPath = item->fullPath();
+        auto viewerIt = _viewerImages.find(requestedPath);
+        if (viewerIt != _viewerImages.end() && !viewerIt->image.isNull() &&
+            viewerIt->requestedSize.width() >= targetSize.width() &&
+            viewerIt->requestedSize.height() >= targetSize.height()) {
+            continue;
+        }
+        if (viewerIt == _viewerImages.end()) {
+            _viewerImages[requestedPath] = ViewerImage{.requestedSize = targetSize};
+        }
+        else {
+            viewerIt->requestedSize = targetSize;
+        }
+
+        ImageInfo info = item->info();
+        info.directOpenGeneration = _directOpen.generation;
+        requests.append(ImageDecodeRequest{
+            .info = info,
+            .targetSize = targetSize,
+            .viewerRequest = true,
+            .checkCache = info.isCached
+        });
+        if (queuedPaths) {
+            queuedPaths->insert(requestedPath);
+        }
+    }
+    return requests;
+}
+
+void FileListModel::requestDirectOpenNeighborDecodes() {
+    QSet<QString> queuedPaths;
+    QList<ImageDecodeRequest> requests = directOpenViewerRequestsForIndexes(directOpenNeighborIndexes(), &queuedPaths);
+    if (requests.isEmpty()) {
+        finishDirectOpenPriorityWork();
+        return;
+    }
+
+    _directOpen.pendingNeighborDecodePaths = queuedPaths;
+    _directOpen.stage = DirectOpenStage::WaitingNeighborDecode;
+    _decodeManager->decodeImages(requests);
+}
+
+void FileListModel::finishDirectOpenPriorityWork() {
+    if (_directOpen.stage == DirectOpenStage::None) {
+        return;
+    }
+
+    _directOpen.stage = DirectOpenStage::None;
+    _directOpen.pendingNeighborInfoPaths.clear();
+    _directOpen.pendingNeighborDecodePaths.clear();
+    startRegularFolderWork();
+}
+
+void FileListModel::emitViewerImagesForCurrentIndex() {
+    if (_currentViewIndex < 0 || _currentViewIndex >= _items.size()) {
+        return;
+    }
+
+    const QString requestedPath = _items[_currentViewIndex]->fullPath();
+    if (!_items[_currentViewIndex]->imageIdUrl().isEmpty()) {
+        emit viewerImageIdUrlChanged(_items[_currentViewIndex]->imageIdUrl(), 0);
+    }
+
+    auto viewerIt = _viewerImages.find(requestedPath);
+    if (viewerIt != _viewerImages.end() && !viewerIt->image.isNull()) {
+        emit viewerImageIdUrlChanged(QString("image://thumbnails/") + viewerIt->imageId, 1);
+    }
+
+    auto fullSizeIt = _fullSizeViewerImages.find(requestedPath);
+    if (fullSizeIt != _fullSizeViewerImages.end() && !fullSizeIt->image.isNull()) {
+        emit viewerImageIdUrlChanged(QString("image://async/") + fullSizeIt->imageId, 2);
+    }
 }
 
 void FileListModel::requestViewer(int index, int width, int height) {
@@ -759,6 +1220,10 @@ QImage FileListModel::fullSizeViewerForImageId(const QString &imageId) {
 }
 
 void FileListModel::cancelAllRunners() {
+    _directOpen.generation++;
+    _directOpen.stage = DirectOpenStage::None;
+    _directOpen.pendingNeighborInfoPaths.clear();
+    _directOpen.pendingNeighborDecodePaths.clear();
     _decodeManager->cancelAllRunners();
 }
 

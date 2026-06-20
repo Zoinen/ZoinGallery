@@ -7,20 +7,21 @@ class CachedImageInfoRunner : public Runner {
     Q_OBJECT
 
 public:
-    CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView);
+    CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView, int directOpenGeneration = 0);
 
     RunnerType type() override { return RunnerType::CachedImageInfo; }
     void run() override;
 
 signals:
     void cachedImageInfoRetrieved(const QList<ImageInfo> &result, const QStringList &notFound, bool isFromEmbeddedView,
-                                  const QString &lastPath);
+                                  const QString &lastPath, int directOpenGeneration);
 
 private:
     friend class DecodeManager;
 
     QStringList _imagePaths;
     bool _isFromEmbeddedView;
+    int _directOpenGeneration;
 };
 
 

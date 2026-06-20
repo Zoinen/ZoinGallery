@@ -9,6 +9,7 @@
 
 #if defined(Q_OS_WIN)
 #include "dwmapi.h"
+#include <windows.h>
 #endif
 
 MainWindow::MainWindow(QWindow *parent)
@@ -30,6 +31,7 @@ MainWindow::MainWindow(QWindow *parent)
     });
 
     _dpr = -1;
+    _lastVisibleVisibility = QWindow::Windowed;
     updateDpr();
 
     QSettings set;
@@ -61,6 +63,12 @@ MainWindow::MainWindow(QWindow *parent)
         _normalGeometry = QRect(screen()->virtualGeometry().center() - QPoint(size.width() / 2, size.height() / 2), size);
     }
     setGeometry(_normalGeometry);
+
+    connect(this, &QWindow::visibilityChanged, this, [this] (QWindow::Visibility visibility) {
+        if (visibility != QWindow::Hidden && visibility != QWindow::Minimized) {
+            _lastVisibleVisibility = visibility;
+        }
+    });
 
     enableWindowAnimations(false);
 
@@ -143,10 +151,14 @@ void MainWindow::showEvent(QShowEvent *event) {
     // Temporary workaround for transparent window BG bug
 
     QSettings set;
-    QWindow::Visibility windowVisibility = set.value("windowVisibility", QWindow::Windowed).value<QWindow::Visibility>();
-    if (windowVisibility == Minimized) {
-        windowVisibility = Windowed;
+    QWindow::Visibility windowVisibility = set.value("windowVisibility", _lastVisibleVisibility).value<QWindow::Visibility>();
+    if (windowVisibility == QWindow::Minimized || windowVisibility == QWindow::Hidden) {
+        windowVisibility = _lastVisibleVisibility;
     }
+    if (windowVisibility == QWindow::Minimized || windowVisibility == QWindow::Hidden) {
+        windowVisibility = QWindow::Windowed;
+    }
+    _lastVisibleVisibility = windowVisibility;
     QRect geom = geometry();
     setGeometry(QRect(0, 0, 0, 0));
     QTimer::singleShot(0, this, [=] () {
@@ -228,7 +240,11 @@ bool MainWindow::event(QEvent *event) {
         }
         QSettings set;
         set.setValue("normalGeometry", _normalGeometry);
-        set.setValue("windowVisibility", visibility());
+        QWindow::Visibility windowVisibility = visibility();
+        if (windowVisibility == QWindow::Hidden || windowVisibility == QWindow::Minimized) {
+            windowVisibility = _lastVisibleVisibility;
+        }
+        set.setValue("windowVisibility", windowVisibility);
     }
     else if (event->type() == QEvent::Expose && _enableNormalGeometryChangeOnNextExpose) {
         if (visibility() != QWindow::FullScreen) {
@@ -241,4 +257,46 @@ bool MainWindow::event(QEvent *event) {
 
 int MainWindow::availableScreenHeight() const {
     return screen()->availableSize().height();
+}
+
+void MainWindow::showAndActivate() {
+    const QWindow::Visibility currentVisibility = visibility();
+    if (currentVisibility == QWindow::Hidden) {
+        QSettings set;
+        QWindow::Visibility savedVisibility = set.value("windowVisibility", _lastVisibleVisibility).value<QWindow::Visibility>();
+        if (savedVisibility == QWindow::Hidden || savedVisibility == QWindow::Minimized) {
+            savedVisibility = _lastVisibleVisibility;
+        }
+        if (savedVisibility == QWindow::Hidden || savedVisibility == QWindow::Minimized) {
+            savedVisibility = QWindow::Windowed;
+        }
+        setVisibility(savedVisibility);
+    }
+    else if (currentVisibility == QWindow::Minimized) {
+        QWindow::Visibility restoreVisibility = _lastVisibleVisibility;
+        if (restoreVisibility == QWindow::Hidden || restoreVisibility == QWindow::Minimized) {
+            restoreVisibility = QWindow::Windowed;
+        }
+        setVisibility(restoreVisibility);
+    }
+
+    auto activate = [this] () {
+        raise();
+        requestActivate();
+#if defined(Q_OS_WIN)
+        const HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (hwnd) {
+            if (IsIconic(hwnd)) {
+                ShowWindow(hwnd, _lastVisibleVisibility == QWindow::Maximized ? SW_SHOWMAXIMIZED : SW_RESTORE);
+            }
+            SetForegroundWindow(hwnd);
+        }
+#endif
+    };
+
+    activate();
+
+    // showEvent restores geometry/visibility asynchronously, so activate once more
+    // after Qt has processed that queued work.
+    QTimer::singleShot(0, this, activate);
 }

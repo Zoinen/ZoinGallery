@@ -27,6 +27,7 @@ private:
     static QStringList ImageQtExtensions;
 
     static QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize, DecodedImageInfo &decodedInfo);
+    static QImage normalizeToDisplaySrgb(QImage image);
     static QImage rotateAndFlip(const QImage &image, ExifOrientation orientation);
 };
 

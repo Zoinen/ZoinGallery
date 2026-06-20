@@ -2,14 +2,74 @@
 
 #include <QFile>
 #include <QDebug>
+#include <QColorSpace>
 
 #include <iostream>
 #include "TinyEXIF.h"
+#include <csetjmp>
+#include <cstdio>
+#include <jpeglib.h>
 #include <turbojpeg.h>
 
 REGISTER_DECODER_DEFINITION(JpegDecoder)
 
 static const QStringList JpegExtensions = {"jpg", "jpeg", "jpe", "jfif"};
+
+struct JpegIccErrorManager {
+    jpeg_error_mgr pub;
+    jmp_buf setjmpBuffer;
+};
+
+static void jpegIccErrorExit(j_common_ptr cinfo) {
+    auto *errorManager = reinterpret_cast<JpegIccErrorManager *>(cinfo->err);
+    longjmp(errorManager->setjmpBuffer, 1);
+}
+
+static QByteArray readJpegIccProfile(const QByteArray &data) {
+    jpeg_decompress_struct cinfo {};
+    JpegIccErrorManager errorManager;
+
+    cinfo.err = jpeg_std_error(&errorManager.pub);
+    errorManager.pub.error_exit = jpegIccErrorExit;
+
+    if (setjmp(errorManager.setjmpBuffer)) {
+        if (cinfo.global_state != 0) {
+            jpeg_destroy_decompress(&cinfo);
+        }
+        return {};
+    }
+
+    jpeg_create_decompress(&cinfo);
+    jpeg_mem_src(&cinfo, reinterpret_cast<const unsigned char *>(data.constData()),
+                 static_cast<unsigned long>(data.size()));
+    jpeg_save_markers(&cinfo, JPEG_APP0 + 2, 0xFFFF);
+
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+        jpeg_destroy_decompress(&cinfo);
+        return {};
+    }
+
+    JOCTET *iccData = nullptr;
+    unsigned int iccDataSize = 0;
+    QByteArray profile;
+    if (jpeg_read_icc_profile(&cinfo, &iccData, &iccDataSize) && iccData && iccDataSize) {
+        profile = QByteArray(reinterpret_cast<const char *>(iccData), static_cast<qsizetype>(iccDataSize));
+    }
+
+    jpeg_destroy_decompress(&cinfo);
+    return profile;
+}
+
+static QColorSpace jpegColorSpace(const QByteArray &data) {
+    const QByteArray iccProfile = readJpegIccProfile(data);
+    if (!iccProfile.isEmpty()) {
+        const QColorSpace colorSpace = QColorSpace::fromIccProfile(iccProfile);
+        if (colorSpace.isValid()) {
+            return colorSpace;
+        }
+    }
+    return QColorSpace(QColorSpace::SRgb);
+}
 
 QSize getJPEGSize(const uchar* mappedFile, qint64 fileSize)
 {
@@ -51,24 +111,25 @@ bool JpegDecoder::readMetadata(ImageInfo &result) {
     }
     uchar *mappedFile = f.map(0, f.size());
     if (!mappedFile) {
-        f.unmap(mappedFile);
         return false;
     }
+
+    result.imageSize = getJPEGSize(mappedFile, f.size());
 
     TinyEXIF::EXIFInfo exifInfo;
-    if (exifInfo.parseFrom(mappedFile, f.size()) != TinyEXIF::PARSE_SUCCESS) {
-        f.unmap(mappedFile);
-        return false;
+    if (exifInfo.parseFrom(mappedFile, f.size()) == TinyEXIF::PARSE_SUCCESS) {
+        result.orientation = readOrientationFromExif(exifInfo);
+        result.exif = readExifToMap(exifInfo);
+        if (!result.imageSize.isValid()) {
+            result.imageSize = readResolutionFromExif(exifInfo);
+        }
+        result.imageSize = rotateToOrientation(result.imageSize, result.orientation);
     }
 
-    result.orientation = readOrientationFromExif(exifInfo);
-    // result.imageSize = readResolutionFromExif(exifInfo);
-    result.imageSize = getJPEGSize(mappedFile, f.size());
-    result.exif = readExifToMap(exifInfo);
     result.exif["Size"] = f.size();
 
     f.unmap(mappedFile);
-    return true;
+    return result.imageSize.isValid();
 }
 
 ExifOrientation JpegDecoder::readOrientationFromExif(const TinyEXIF::EXIFInfo &exifInfo) {
@@ -141,6 +202,7 @@ QImage JpegDecoder::decode(const QString& mimeType, const QByteArray &data, QSiz
     tjDestroy(_jpegDecompressor);
 
     QImage img(buffer, width, height, QImage::Format_RGB888, [] (void *ptr) {delete[] (uint8_t *)ptr;}, buffer);
+    img.setColorSpace(jpegColorSpace(data));
     /*int taken3 = t.restart();
     qDebug() << "time:" << path << taken << taken2 << taken3;*/
     // static int index = 0;

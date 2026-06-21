@@ -5,6 +5,11 @@
 #include <QSettings>
 #include <QDebug>
 #include <QImageReader>
+#include <QDate>
+#include <QDir>
+#include <QFile>
+#include <QStandardPaths>
+#include <QTimer>
 
 #include "ViewerController.h"
 #include "MainWindow.h"
@@ -18,10 +23,222 @@
 #endif
 #include <QDirIterator>
 
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+
 #if defined(Q_OS_WIN)
 #include <windows.h>
-#include <cstdio>
+#else
+#include <unistd.h>
 #endif
+
+namespace
+{
+QDate currentLogDate;
+int lastStdoutRedirectError = 0;
+int lastStderrRedirectError = 0;
+std::mutex messageLogMutex;
+
+#if defined(Q_OS_WIN)
+HANDLE messageLogHandle = INVALID_HANDLE_VALUE;
+HANDLE stdoutLogHandle = INVALID_HANDLE_VALUE;
+HANDLE stderrLogHandle = INVALID_HANDLE_VALUE;
+#else
+FILE *messageLogFile = nullptr;
+#endif
+
+QString dailyLogFilePath(const QDate &date)
+{
+    const QString logFileName = QStringLiteral("ZoinGallery-%1.log").arg(date.toString(QStringLiteral("yyyy-MM-dd")));
+    const QString relativeLogDirectory = QStringLiteral("logs/%1/%2")
+                                            .arg(date.toString(QStringLiteral("yyyy")),
+                                                 date.toString(QStringLiteral("MM")));
+
+    const QString appDataPath = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    const QString basePath = appDataPath.isEmpty()
+                                 ? QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("logs"))
+                                 : appDataPath;
+
+    QDir baseDirectory(basePath);
+    if (baseDirectory.mkpath(relativeLogDirectory)) {
+        return baseDirectory.filePath(QStringLiteral("%1/%2").arg(relativeLogDirectory, logFileName));
+    }
+
+    QDir fallbackDirectory(QCoreApplication::applicationDirPath());
+    fallbackDirectory.mkpath(relativeLogDirectory);
+    return fallbackDirectory.filePath(QStringLiteral("%1/%2").arg(relativeLogDirectory, logFileName));
+}
+
+bool redirectStandardStreams(const QString &logFilePath)
+{
+    fflush(stdout);
+    fflush(stderr);
+
+#if defined(Q_OS_WIN)
+    const std::wstring nativePath = QDir::toNativeSeparators(logFilePath).toStdWString();
+    auto openLogHandle = [&nativePath]() -> HANDLE {
+        return CreateFileW(nativePath.c_str(),
+                           FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr,
+                           OPEN_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    };
+
+    HANDLE newStdoutHandle = openLogHandle();
+    const bool stdoutOpened = newStdoutHandle != INVALID_HANDLE_VALUE && SetStdHandle(STD_OUTPUT_HANDLE, newStdoutHandle);
+    lastStdoutRedirectError = stdoutOpened ? 0 : static_cast<int>(GetLastError());
+
+    HANDLE newStderrHandle = openLogHandle();
+    const bool stderrOpened = newStderrHandle != INVALID_HANDLE_VALUE && SetStdHandle(STD_ERROR_HANDLE, newStderrHandle);
+    lastStderrRedirectError = stderrOpened ? 0 : static_cast<int>(GetLastError());
+
+    if (stdoutOpened && stderrOpened) {
+        std::lock_guard<std::mutex> lock(messageLogMutex);
+        HANDLE oldStdoutHandle = stdoutLogHandle;
+        HANDLE oldStderrHandle = stderrLogHandle;
+        stdoutLogHandle = newStdoutHandle;
+        stderrLogHandle = newStderrHandle;
+        if (oldStdoutHandle != INVALID_HANDLE_VALUE) {
+            CloseHandle(oldStdoutHandle);
+        }
+        if (oldStderrHandle != INVALID_HANDLE_VALUE) {
+            CloseHandle(oldStderrHandle);
+        }
+    } else {
+        if (newStdoutHandle != INVALID_HANDLE_VALUE) {
+            CloseHandle(newStdoutHandle);
+        }
+        if (newStderrHandle != INVALID_HANDLE_VALUE) {
+            CloseHandle(newStderrHandle);
+        }
+    }
+#else
+    const QByteArray nativePath = QFile::encodeName(logFilePath);
+    FILE *stdoutFile = freopen(nativePath.constData(), "a", stdout);
+    FILE *stderrFile = freopen(nativePath.constData(), "a", stderr);
+    lastStdoutRedirectError = stdoutFile == nullptr ? errno : 0;
+    lastStderrRedirectError = stderrFile == nullptr ? errno : 0;
+    const bool stdoutOpened = stdoutFile != nullptr;
+    const bool stderrOpened = stderrFile != nullptr;
+#endif
+
+#if !defined(Q_OS_WIN)
+    if (stdoutOpened) {
+        setvbuf(stdout, nullptr, _IOLBF, 0);
+    }
+    if (stderrOpened) {
+        setvbuf(stderr, nullptr, _IONBF, 0);
+    }
+#endif
+
+    return stdoutOpened && stderrOpened;
+}
+
+bool openMessageLogSink(const QString &logFilePath)
+{
+#if defined(Q_OS_WIN)
+    const std::wstring nativePath = QDir::toNativeSeparators(logFilePath).toStdWString();
+    HANDLE newHandle = CreateFileW(nativePath.c_str(),
+                                   FILE_APPEND_DATA,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                   nullptr,
+                                   OPEN_ALWAYS,
+                                   FILE_ATTRIBUTE_NORMAL,
+                                   nullptr);
+    if (newHandle == INVALID_HANDLE_VALUE) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(messageLogMutex);
+    HANDLE oldHandle = messageLogHandle;
+    messageLogHandle = newHandle;
+    if (oldHandle != INVALID_HANDLE_VALUE) {
+        CloseHandle(oldHandle);
+    }
+#else
+    const QByteArray nativePath = QFile::encodeName(logFilePath);
+    FILE *newFile = fopen(nativePath.constData(), "a");
+    if (newFile == nullptr) {
+        return false;
+    }
+    setvbuf(newFile, nullptr, _IONBF, 0);
+
+    std::lock_guard<std::mutex> lock(messageLogMutex);
+    FILE *oldFile = messageLogFile;
+    messageLogFile = newFile;
+    if (oldFile != nullptr) {
+        fclose(oldFile);
+    }
+#endif
+
+    return true;
+}
+
+void writeMessageLogLine(const QByteArray &line)
+{
+    std::lock_guard<std::mutex> lock(messageLogMutex);
+
+#if defined(Q_OS_WIN)
+    if (messageLogHandle != INVALID_HANDLE_VALUE) {
+        DWORD bytesWritten = 0;
+        WriteFile(messageLogHandle, line.constData(), static_cast<DWORD>(line.size()), &bytesWritten, nullptr);
+        WriteFile(messageLogHandle, "\n", 1, &bytesWritten, nullptr);
+    }
+#else
+    if (messageLogFile != nullptr) {
+        fprintf(messageLogFile, "%s\n", line.constData());
+        fflush(messageLogFile);
+    }
+#endif
+}
+
+void logMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &message)
+{
+    const QByteArray formattedMessage = qFormatLogMessage(type, context, message).toUtf8();
+    writeMessageLogLine(formattedMessage);
+
+    if (type == QtFatalMsg) {
+        std::abort();
+    }
+}
+
+void updateDailyLogFile()
+{
+    const QDate today = QDate::currentDate();
+    if (currentLogDate == today) {
+        return;
+    }
+
+    const QString logFilePath = dailyLogFilePath(today);
+    const bool messageLogOpened = openMessageLogSink(logFilePath);
+    if (messageLogOpened) {
+        currentLogDate = today;
+        writeMessageLogLine(QStringLiteral("Logging to %1").arg(QDir::toNativeSeparators(logFilePath)).toUtf8());
+    }
+    const bool streamsRedirected = redirectStandardStreams(logFilePath);
+    if (messageLogOpened && !streamsRedirected) {
+        qWarning() << "Failed to redirect stdout/stderr to the daily log file"
+                   << "stdout error" << lastStdoutRedirectError
+                   << "stderr error" << lastStderrRedirectError;
+    }
+}
+
+void installDailyLogRedirection(QObject *parent)
+{
+    qInstallMessageHandler(logMessageHandler);
+    updateDailyLogFile();
+
+    auto *logRolloverTimer = new QTimer(parent);
+    QObject::connect(logRolloverTimer, &QTimer::timeout, []() {
+        updateDailyLogFile();
+    });
+    logRolloverTimer->start(60 * 1000);
+}
+}
 
 int main(int argc, char *argv[])
 {
@@ -31,10 +248,6 @@ int main(int argc, char *argv[])
 
 #if defined(Q_OS_WIN)
     // qputenv("QT_QPA_PLATFORM", "windows:darkmode=2");
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        (void)freopen("CONOUT$", "w", stdout);
-        (void)freopen("CONOUT$", "w", stderr);
-    }
     qputenv("QT_FORCE_STDERR_LOGGING", "1");
 #endif
     //qputenv("QSG_INFO", "1");
@@ -47,6 +260,7 @@ int main(int argc, char *argv[])
     app.setOrganizationName("Zoin");
     app.setOrganizationDomain("zoingallery.com");
     app.setApplicationName("ZoinGallery");
+    installDailyLogRedirection(&app);
 
     const LaunchOptions launchOptions = parseLaunchOptions(app.arguments());
 

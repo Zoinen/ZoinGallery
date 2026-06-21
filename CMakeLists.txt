@@ -178,7 +178,7 @@ if(APPLE)
     set(RESOURCE_FILES ${ICON_PATH})
 endif()
 
-add_executable(ZoinGallery MACOSX_BUNDLE ${PROJECT_SOURCES} ${RESOURCE_FILES})
+add_executable(ZoinGallery WIN32 MACOSX_BUNDLE ${PROJECT_SOURCES} ${RESOURCE_FILES})
 
 set_target_properties(${PROJECT_NAME}
     PROPERTIES

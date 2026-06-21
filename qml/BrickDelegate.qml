@@ -17,7 +17,8 @@ BrickItem {
     property real folderGridDelegateTop: Math.round(width / 20)
     readonly property real selectionExtendsFor: 5
     readonly property real selectionExtendsForImage: 2
-    property bool isSelected: model !== undefined ? (masonryLayout.currentIndex === model.index) : false
+    property bool isCurrent: model !== undefined ? (masonryLayout.currentIndex === model.index) : false
+    property bool isItemSelected: model !== undefined ? model.isSelected : false
     readonly property real nestingShift: 29
 
     property var imageItem: brickDelegate
@@ -124,6 +125,16 @@ BrickItem {
         }
     }
 
+    component PersistentSelectionBorder : Rectangle {
+        color: "transparent"
+        border.width: 3
+        border.color: Style.persistentSelectionBorder
+        radius: 4
+        visible: isItemSelected
+        z: 20
+        antialiasing: true
+    }
+
     Component {
         id: fileDelegate
 
@@ -137,11 +148,11 @@ BrickItem {
                     bottomMargin: -selectionExtendsFor + fileInfoPanel.height - fileName.contentHeight - sizeBase / 40
                 }
 
-                color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
+                color: brickMouseArea.pressed ? Style.brickPressed : (isCurrent ? Style.brickSelected : Style.brickHovered)
                 border.width: 1
-                border.color: isSelected ? Style.brickSelectedBorder : color
+                border.color: isCurrent ? Style.brickSelectedBorder : color
                 radius: 4
-                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
+                visible: isCurrent || brickMouseArea.containsMouse && !hideHovered
             }
 
             Item {
@@ -194,6 +205,9 @@ BrickItem {
                 }
 
             }
+            PersistentSelectionBorder {
+                anchors.fill: fileDelegateContent
+            }
             Component.onCompleted: {
                 brickDelegate.imageItem = fileDelegateContent
             }
@@ -210,11 +224,11 @@ BrickItem {
                     fill: fileListDelegateContent
                     margins: -selectionExtendsFor
                 }
-                color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
+                color: brickMouseArea.pressed ? Style.brickPressed : (isCurrent ? Style.brickSelected : Style.brickHovered)
                 border.width: 1
-                border.color: isSelected ? Style.brickSelectedBorder : color
+                border.color: isCurrent ? Style.brickSelectedBorder : color
                 radius: 4
-                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
+                visible: isCurrent || brickMouseArea.containsMouse && !hideHovered
             }
 
             TreeBranch {
@@ -258,6 +272,11 @@ BrickItem {
                 }
             }
 
+            PersistentSelectionBorder {
+                anchors.fill: fileListDelegateContent
+                radius: 3
+            }
+
             Component.onCompleted: {
                 brickDelegate.imageItem = fileListDelegateContent
             }
@@ -268,22 +287,26 @@ BrickItem {
         id: imageDelegate
 
         Item {
-            visible: !(isSelected && root.viewerShowAnimationRunning)
+            visible: !(isCurrent && root.viewerShowAnimationRunning)
             Rectangle {
                 id: delegateOutline
                 anchors {
                     fill: image
                     margins: -selectionExtendsForImage
                 }
-                color: brickMouseArea.pressed ? Style.brickImagePressed : (isSelected ? Style.brickImageSelected : Style.brickImageHovered)
+                color: brickMouseArea.pressed ? Style.brickImagePressed : (isCurrent ? Style.brickImageSelected : Style.brickImageHovered)
                 radius: 4
-                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
+                visible: isCurrent || brickMouseArea.containsMouse && !hideHovered
             }
 
             ImageView {
                 id: image
                 padding: masonryLayout.spacing
                 source: model.imageIdUrl
+            }
+
+            PersistentSelectionBorder {
+                anchors.fill: image
             }
 
             Item {
@@ -298,7 +321,7 @@ BrickItem {
                 }
                 height: imageText.height + 10
                 visible: brickMouseArea.containsMouse && !hideHovered ||
-                         isSelected ||
+                         isCurrent ||
                          masonryView.alwaysShowFileNames ||
                          masonryView.quickSearchMode
                 z: 1
@@ -308,7 +331,7 @@ BrickItem {
                     anchors.fill: parent
                     anchors.topMargin: -radius
                     radius: 4
-                    color: brickMouseArea.pressed ? Style.brickInfoPanelPressed : (isSelected ? Style.brickInfoPanelSelected : Style.brickInfoPanelHovered)
+                    color: brickMouseArea.pressed ? Style.brickInfoPanelPressed : (isCurrent ? Style.brickInfoPanelSelected : Style.brickInfoPanelHovered)
                 }
 
 
@@ -362,11 +385,11 @@ BrickItem {
                     fill: folderViewDelegateContent
                     margins: -selectionExtendsFor
                 }
-                color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
+                color: brickMouseArea.pressed ? Style.brickPressed : (isCurrent ? Style.brickSelected : Style.brickHovered)
                 border.width: 1
-                border.color: isSelected ? Style.brickSelectedBorder : color
+                border.color: isCurrent ? Style.brickSelectedBorder : color
                 radius: 4
-                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
+                visible: isCurrent || brickMouseArea.containsMouse && !hideHovered
             }
 
             TreeBranch {
@@ -491,6 +514,10 @@ BrickItem {
                     }
                 }
             }
+            PersistentSelectionBorder {
+                anchors.fill: folderViewDelegateContent
+                radius: 3
+            }
             Component.onCompleted: {
                 brickDelegate.imageItem = folderViewDelegateContent
             }
@@ -524,11 +551,11 @@ BrickItem {
                     fill: folderViewDelegateGridContent
                     margins: -selectionExtendsFor
                 }
-                color: brickMouseArea.pressed ? Style.brickPressed : (isSelected ? Style.brickSelected : Style.brickHovered)
+                color: brickMouseArea.pressed ? Style.brickPressed : (isCurrent ? Style.brickSelected : Style.brickHovered)
                 border.width: 1
-                border.color: isSelected ? Style.brickSelectedBorder : color
+                border.color: isCurrent ? Style.brickSelectedBorder : color
                 radius: 4
-                visible: isSelected || brickMouseArea.containsMouse && !hideHovered
+                visible: isCurrent || brickMouseArea.containsMouse && !hideHovered
             }
 
             Item {
@@ -654,17 +681,109 @@ BrickItem {
                     }
                 }
             }
+
+            PersistentSelectionBorder {
+                anchors.fill: folderViewDelegateGridContent
+            }
         }
     }
 
     Item {
         id: draggable
 
+        property var dragUrls: []
+        property var dragPreviewItems: []
+        property int dragPreviewTotalCount: 0
+        property int dragPreviewRemainingCount: 0
+
         anchors.fill: parent
         Drag.active: brickMouseArea.drag.active
         Drag.dragType: Drag.Automatic
-        Drag.mimeData: {
-            "text/uri-list": [viewerController.indexUrl(masonryLayout.currentIndex)]
+        Drag.mimeData: ({
+            "text/uri-list": dragUrls
+        })
+
+        function updateDragPayload(sourceIndex) {
+            dragUrls = fileListModel.dragUrlsForIndex(sourceIndex)
+            let preview = fileListModel.dragPreviewItemsForIndex(sourceIndex, 5)
+            dragPreviewItems = preview.items || []
+            dragPreviewTotalCount = preview.totalCount || dragPreviewItems.length
+            dragPreviewRemainingCount = preview.remainingCount || 0
+            draggable.Drag.imageSource = ""
+        }
+
+        function grabCompactPreview() {
+            dragPreviewSource.visible = true
+            Qt.callLater(function() {
+                dragPreviewSource.grabToImage(function(result) {
+                    draggable.Drag.imageSource = result.url
+                    dragPreviewSource.visible = false
+                })
+            })
+        }
+
+        Item {
+            id: dragPreviewSource
+
+            x: -width - 1000
+            y: -height - 1000
+            width: dragPreviewRow.implicitWidth + 12
+            height: 58
+            visible: false
+
+            Rectangle {
+                anchors.fill: parent
+                radius: 6
+                color: Style.popupBackground
+                border.width: 1
+                border.color: Style.popupBorder
+            }
+
+            Row {
+                id: dragPreviewRow
+                anchors.centerIn: parent
+                spacing: 6
+
+                Repeater {
+                    model: draggable.dragPreviewItems
+
+                    Rectangle {
+                        width: 46
+                        height: 46
+                        radius: 4
+                        color: Style.darker
+                        border.width: 1
+                        border.color: Style.lighter2
+                        clip: true
+
+                        Image {
+                            anchors.fill: parent
+                            anchors.margins: 3
+                            source: modelData.imageIdUrl !== "" ? modelData.imageIdUrl : modelData.iconPath
+                            sourceSize.width: width
+                            sourceSize.height: height
+                            fillMode: modelData.imageIdUrl !== "" ? Image.PreserveAspectCrop : Image.PreserveAspectFit
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: 46
+                    height: 46
+                    radius: 4
+                    color: Style.lighter
+                    border.width: 1
+                    border.color: Style.persistentSelectionBorder
+                    visible: draggable.dragPreviewRemainingCount > 0
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "+" + draggable.dragPreviewRemainingCount
+                        color: Style.text
+                        font.bold: true
+                    }
+                }
+            }
         }
     }
 
@@ -677,13 +796,22 @@ BrickItem {
 
         onPressed:
             (mouse) => {
+                draggable.updateDragPayload(model.index)
+
                 if (imageItem !== undefined) {
                     let mappedPos = imageItem.mapFromItem(brickMouseArea, mouse.x, mouse.y)
-                    draggable.Drag.hotSpot.x = mappedPos.x
-                    draggable.Drag.hotSpot.y = mappedPos.y
-                    imageItem.grabToImage(function(result) {
-                        draggable.Drag.imageSource = result.url
-                    })
+                    if (draggable.dragPreviewTotalCount > 1) {
+                        draggable.Drag.hotSpot.x = 18
+                        draggable.Drag.hotSpot.y = 18
+                        draggable.grabCompactPreview()
+                    }
+                    else {
+                        draggable.Drag.hotSpot.x = mappedPos.x
+                        draggable.Drag.hotSpot.y = mappedPos.y
+                        imageItem.grabToImage(function(result) {
+                            draggable.Drag.imageSource = result.url
+                        })
+                    }
                 }
 
                 focusProxy.forceActiveFocus()
@@ -691,6 +819,18 @@ BrickItem {
                 if (scrollingMode) {
                     endScrolling()
                 }
+
+                if (mouse.modifiers & Qt.ShiftModifier) {
+                    masonryView.shiftClickSelection(model.index)
+                    return
+                }
+
+                if (mouse.modifiers & Qt.ControlModifier) {
+                    setCurrentIndex(model.index)
+                    fileListModel.toggleSelection(model.index)
+                    return
+                }
+
                 setCurrentIndex(model.index)
         }
 

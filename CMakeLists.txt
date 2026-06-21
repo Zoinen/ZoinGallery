@@ -104,6 +104,8 @@ set(PROJECT_SOURCES
     SvgCursor.cpp
     PersistentImageCache.h
     PersistentImageCache.cpp
+    PersistentSelectionCache.h
+    PersistentSelectionCache.cpp
     PersistentFolderCache.cpp
     PersistentFolderCache.h
     DecodeManager.h
@@ -245,6 +247,7 @@ qt_add_resources(ZoinGallery
         resources/Sphere.svg
         resources/Settings.svg
         resources/TildeLock.svg
+        resources/SelectionHistory.svg
         resources/ZoinGallery.ico
 )
 

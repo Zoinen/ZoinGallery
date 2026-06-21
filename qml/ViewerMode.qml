@@ -238,6 +238,9 @@ Item {
     property bool zoomInPressed: false
     property bool zoomOutPressed: false
     property bool controlPressed: false
+    property bool shiftSelectionActive: false
+    property int shiftSelectionAnchorIndex: -1
+    property bool shiftNavigationSelectionValue: true
 
     property int previousImageIndex: -1
     property int lastKnownIndex: -1
@@ -248,6 +251,30 @@ Item {
 
     function isTildeKey(event) {
         return event.key === Qt.Key_QuoteLeft || event.key === Qt.Key_AsciiTilde || event.key === 1025
+    }
+
+    function beginShiftSelection() {
+        if (shiftSelectionActive) {
+            return
+        }
+        shiftSelectionActive = true
+        shiftSelectionAnchorIndex = masonryLayout.view.currentIndex
+        shiftNavigationSelectionValue = !fileListModel.isIndexSelected(shiftSelectionAnchorIndex)
+        fileListModel.beginSelectionPreview()
+    }
+
+    function updateShiftNavigationSelection(targetIndex) {
+        beginShiftSelection()
+        fileListModel.previewSelectionRange(shiftSelectionAnchorIndex, targetIndex, shiftNavigationSelectionValue, false)
+    }
+
+    function finishShiftSelection() {
+        if (!shiftSelectionActive) {
+            return
+        }
+        fileListModel.commitSelectionPreview(shiftNavigationSelectionValue ? "Range selection" : "Range deselection")
+        shiftSelectionActive = false
+        shiftSelectionAnchorIndex = -1
     }
 
     function clearPreviousImage() {
@@ -317,7 +344,17 @@ Item {
         (event) => {
             let nextIndex = -1
             let currentIndex = masonryLayout.view.currentIndex
-            if (!zoomFitView && (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Up ||
+            if (event.key === Qt.Key_Shift && !event.isAutoRepeat) {
+                beginShiftSelection()
+                return
+            }
+            if (event.key === Qt.Key_Insert) {
+                fileListModel.setSelection(currentIndex, true)
+            }
+            else if (event.key === Qt.Key_Delete) {
+                fileListModel.setSelection(currentIndex, false)
+            }
+            else if (!zoomFitView && (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Up ||
                                  event.key === Qt.Key_Down) ||
                                  event.key === Qt.Key_Plus || event.key === Qt.Key_Minus || event.key === Qt.Key_Equal ||
                                  event.key === Qt.Key_Control) {
@@ -430,6 +467,9 @@ Item {
             }
 
             if (nextIndex !== -1 && nextIndex !== currentIndex) {
+                if (event.modifiers & Qt.ShiftModifier) {
+                    updateShiftNavigationSelection(nextIndex)
+                }
                 onCurrentIndexChanged()
             }
     }
@@ -457,6 +497,9 @@ Item {
                 }
                 else if (event.key === Qt.Key_Control) {
                     controlPressed = false
+                }
+                else if (event.key === Qt.Key_Shift) {
+                    finishShiftSelection()
                 }
             }
 
@@ -910,7 +953,9 @@ Item {
                     Layout.preferredWidth: implicitWidth
                     Layout.maximumWidth: implicitWidth
 
-                    text: sphericViewerMode ? (sphericViewerLoader.item ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : "") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))
+                    text: (sphericViewerMode ? (sphericViewerLoader.item ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : "") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))) +
+                          "  " + (fileListModel.isIndexSelected(masonryLayout.view.currentIndex) ? "Selected" : "Not selected") +
+                          " " + fileListModel.selectedCount
                     font.pixelSize: 14
                     color: Style.viewerMainText
                 }
@@ -1200,14 +1245,28 @@ Item {
 
                 Rectangle {
                     anchors.centerIn: parent
-                    width: filmstripImage.paintedWidth
-                    height: filmstripImage.paintedHeight
+                    width: imageShader.width + 6
+                    height: imageShader.height + 6
                     visible: isCurrent || thumbnailMouse.containsMouse
 
                     color: "transparent"
                     border.width: 2
                     border.color: thumbnailMouse.pressed ? Style.brickImagePressed : (isCurrent ? Style.brickImageSelected : Style.brickImageHovered)
+                    radius: 6
+                    z: 2
+                }
+
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: imageShader.width
+                    height: imageShader.height
+                    visible: model.selectedRole
+
+                    color: "transparent"
+                    border.width: 3
+                    border.color: Style.persistentSelectionBorder
                     radius: 4
+                    z: 3
                 }
 
                 MouseArea {

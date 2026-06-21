@@ -11,6 +11,7 @@
 #include <QStack>
 #include <QStandardPaths>
 #include <QDateTime>
+#include <QUrl>
 
 #include <chrono>
 using namespace std::chrono_literals;
@@ -300,6 +301,7 @@ QHash<int, QByteArray> FileListModel::roleNames() const {
     QHash<int,QByteArray> names;
     // names[Qt::DisplayRole] = "displayRole";
     names[ImageIdUrlRole] = "imageIdUrlRole";
+    names[SelectedRole] = "selectedRole";
     return names;
 }
 
@@ -334,6 +336,9 @@ QVariant FileListModel::data(const QModelIndex &index, int role) const {
         }
         else if (role == FolderViewRole) {
             return imageFile->subfiles().size() != 0;
+        }
+        else if (role == SelectedRole) {
+            return imageFile->isSelected();
         }
     }
     return QVariant();
@@ -370,6 +375,7 @@ int FileListModel::columnCount(const QModelIndex &parent) const {
 }
 
 void FileListModel::prepareToClose() {
+    PersistentSelectionCache::dumpDb();
     _decodeManager->prepareToClose();
     qApp->exit(0);
 }
@@ -385,6 +391,7 @@ int FileListModel::cd(const QString &path, const QString &itemToSelect) {
     beginResetModel();
     cleanupModelBeforeCd();
     int indexToSelect = populateFolderItems(path, itemToSelect);
+    loadSelectionStatesForVisibleItems();
     endResetModel();
 
     startRegularFolderWork();
@@ -527,6 +534,8 @@ void FileListModel::clearModelData(bool clearViewerData) {
         emit viewerReset();
     }
     _currentViewIndex = -1;
+    _selectionPreviewActive = false;
+    _selectionPreviewSnapshot.clear();
 
     for (auto it = _folderModels.begin(); it != _folderModels.end(); ++it) {
         it.value()->deleteLater();
@@ -681,6 +690,7 @@ void FileListModel::enterRecursiveView() {
             _items.append(item);
         }*/
     }
+    loadSelectionStatesForVisibleItems();
     endResetModel();
 
     _decodeManager->readImagesInfo(_imagePaths, true);
@@ -746,6 +756,7 @@ void FileListModel::openImageDirectly(const QString &path, int width, int height
 
         _directOpen.currentIndex = 0;
         _currentViewIndex = 0;
+        loadSelectionStatesForVisibleItems();
         endResetModel();
     }
 
@@ -925,6 +936,7 @@ void FileListModel::populateFolderAfterDirectOpenFullDecode() {
         clearModelData(false);
         _root = _directOpen.folderPath;
         populateFolderItems(_root, _directOpen.fileName);
+        loadSelectionStatesForVisibleItems();
 
         auto targetIt = _fileToItem.find(_directOpen.path);
         if (targetIt != _fileToItem.end()) {
@@ -1413,4 +1425,544 @@ void FileListModel::dumpCurrentImage() {
     } else {
         qDebug() << "Failed to save image to" << savePath;
     }
+}
+
+int FileListModel::selectedCount() const {
+    int count = 0;
+    for (const ImageFile *item : _items) {
+        if (item->isSelected()) {
+            count++;
+        }
+    }
+    return count;
+}
+
+bool FileListModel::isIndexSelected(int index_) const {
+    if (index_ < 0 || index_ >= _items.size()) {
+        return false;
+    }
+    return _items[index_]->isSelected();
+}
+
+void FileListModel::toggleSelection(int index_) {
+    if (index_ < 0 || index_ >= _items.size()) {
+        return;
+    }
+    setSelection(index_, !_items[index_]->isSelected());
+}
+
+void FileListModel::setSelection(int index_, bool selected) {
+    if (index_ < 0 || index_ >= _items.size()) {
+        return;
+    }
+
+    const QString containerKey = selectionContainerForItem(_items[index_]);
+    ensureSelectionStateLoaded(containerKey);
+    const QSet<QString> previousSelection = _selectionStates[containerKey].selectedNames;
+    if (!setSelectionInState(index_, selected)) {
+        return;
+    }
+
+    pushSelectionHistory(containerKey, selected ? QString("Select %1").arg(_items[index_]->fileName())
+                                               : QString("Deselect %1").arg(_items[index_]->fileName()),
+                         previousSelection);
+    emitSelectionDataChanged(index_, index_);
+}
+
+void FileListModel::invertSelection() {
+    QHash<QString, QSet<QString>> previousSelections;
+    QSet<QString> changedContainers;
+
+    for (int i = 0; i < _items.size(); i++) {
+        const QString containerKey = selectionContainerForItem(_items[i]);
+        ensureSelectionStateLoaded(containerKey);
+        if (!previousSelections.contains(containerKey)) {
+            previousSelections.insert(containerKey, _selectionStates[containerKey].selectedNames);
+        }
+
+        if (setSelectionInState(i, !_items[i]->isSelected())) {
+            changedContainers.insert(containerKey);
+        }
+    }
+
+    for (const QString &containerKey : changedContainers) {
+        pushSelectionHistory(containerKey, "Invert selection", previousSelections[containerKey]);
+    }
+    if (!changedContainers.isEmpty()) {
+        emitSelectionDataChanged();
+    }
+}
+
+void FileListModel::setAllSelection(bool selected) {
+    QHash<QString, QSet<QString>> previousSelections;
+    QSet<QString> changedContainers;
+
+    for (int i = 0; i < _items.size(); i++) {
+        const QString containerKey = selectionContainerForItem(_items[i]);
+        ensureSelectionStateLoaded(containerKey);
+        if (!previousSelections.contains(containerKey)) {
+            previousSelections.insert(containerKey, _selectionStates[containerKey].selectedNames);
+        }
+
+        if (setSelectionInState(i, selected)) {
+            changedContainers.insert(containerKey);
+        }
+    }
+
+    for (const QString &containerKey : changedContainers) {
+        pushSelectionHistory(containerKey, selected ? "Select all" : "Deselect all", previousSelections[containerKey]);
+    }
+    if (!changedContainers.isEmpty()) {
+        emitSelectionDataChanged();
+    }
+}
+
+void FileListModel::setSameKindSelection(int index_, bool selected) {
+    if (index_ < 0 || index_ >= _items.size()) {
+        return;
+    }
+
+    ImageFile *currentItem = _items[index_];
+    const QString currentContainer = selectionContainerForItem(currentItem);
+    ensureSelectionStateLoaded(currentContainer);
+    const QSet<QString> previousSelection = _selectionStates[currentContainer].selectedNames;
+    const QString currentSuffix = QFileInfo(currentItem->fileName()).suffix().toLower();
+    bool changed = false;
+
+    for (int i = 0; i < _items.size(); i++) {
+        ImageFile *item = _items[i];
+        if (selectionContainerForItem(item) != currentContainer) {
+            continue;
+        }
+
+        bool matches = false;
+        if (currentContainer == "Computer" && currentItem->folderPath().isEmpty()) {
+            matches = item->folderPath().isEmpty();
+        }
+        else if (currentItem->isFolder()) {
+            matches = item->isFolder();
+        }
+        else if (!item->isFolder()) {
+            matches = QFileInfo(item->fileName()).suffix().toLower() == currentSuffix;
+        }
+
+        if (matches && setSelectionInState(i, selected)) {
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        pushSelectionHistory(currentContainer, sameKindDescription(index_, selected), previousSelection);
+        emitSelectionDataChanged();
+    }
+}
+
+QVariantList FileListModel::dragIndexesForIndex(int index_) const {
+    QVariantList result;
+    if (index_ < 0 || index_ >= _items.size()) {
+        return result;
+    }
+
+    if (_items[index_]->isSelected()) {
+        for (int i = 0; i < _items.size(); i++) {
+            if (_items[i]->isSelected()) {
+                result.append(i);
+            }
+        }
+    }
+    else {
+        result.append(index_);
+    }
+    return result;
+}
+
+QVariantList FileListModel::dragUrlsForIndex(int index_) const {
+    QVariantList result;
+    const QVariantList indexes = dragIndexesForIndex(index_);
+    for (const QVariant &indexValue : indexes) {
+        bool ok = false;
+        const int itemIndex = indexValue.toInt(&ok);
+        if (ok && itemIndex >= 0 && itemIndex < _items.size()) {
+            const ImageFile *item = _items[itemIndex];
+            QString fullPath = item->fullPath();
+            if (_root == "Computer" && item->folderPath().isEmpty() &&
+                    !fullPath.endsWith("/") && !fullPath.endsWith("\\")) {
+                fullPath += "/";
+            }
+            result.append(QUrl::fromLocalFile(fullPath));
+        }
+    }
+    return result;
+}
+
+QVariantMap FileListModel::dragPreviewItemsForIndex(int index_, int limit) const {
+    QVariantMap result;
+    QVariantList items;
+    const QVariantList indexes = dragIndexesForIndex(index_);
+    const int totalCount = indexes.size();
+    const int cappedCount = limit < 0 ? totalCount : qMin(limit, totalCount);
+
+    for (int i = 0; i < cappedCount; i++) {
+        bool ok = false;
+        const int itemIndex = indexes[i].toInt(&ok);
+        if (!ok || itemIndex < 0 || itemIndex >= _items.size()) {
+            continue;
+        }
+
+        const ImageFile *item = _items[itemIndex];
+        QVariantMap previewItem;
+        previewItem["index"] = itemIndex;
+        previewItem["text"] = item->text();
+        previewItem["imageIdUrl"] = item->imageIdUrl();
+        previewItem["iconPath"] = item->iconPath();
+        previewItem["isImage"] = item->isImage();
+        previewItem["isFolder"] = item->isFolder();
+        previewItem["fullPath"] = item->fullPath();
+        items.append(previewItem);
+    }
+
+    result["items"] = items;
+    result["totalCount"] = totalCount;
+    result["remainingCount"] = qMax(0, totalCount - items.size());
+    return result;
+}
+
+void FileListModel::beginSelectionPreview() {
+    if (_selectionPreviewActive) {
+        return;
+    }
+
+    _selectionPreviewActive = true;
+    _selectionPreviewSnapshot.clear();
+    for (ImageFile *item : _items) {
+        const QString containerKey = selectionContainerForItem(item);
+        ensureSelectionStateLoaded(containerKey);
+        if (!_selectionPreviewSnapshot.contains(containerKey)) {
+            _selectionPreviewSnapshot.insert(containerKey, _selectionStates[containerKey].selectedNames);
+        }
+    }
+}
+
+void FileListModel::previewSelectionRange(int anchorIndex, int targetIndex, bool selected, bool includeTarget) {
+    if (anchorIndex < 0 || anchorIndex >= _items.size() || targetIndex < 0 || targetIndex >= _items.size()) {
+        return;
+    }
+    if (!_selectionPreviewActive) {
+        beginSelectionPreview();
+    }
+
+    for (auto it = _selectionPreviewSnapshot.constBegin(); it != _selectionPreviewSnapshot.constEnd(); ++it) {
+        ensureSelectionStateLoaded(it.key());
+        _selectionStates[it.key()].selectedNames = it.value();
+    }
+    syncVisibleItemSelection();
+
+    int first = qMin(anchorIndex, targetIndex);
+    int last = qMax(anchorIndex, targetIndex);
+    if (!includeTarget) {
+        if (targetIndex > anchorIndex) {
+            last = targetIndex - 1;
+        }
+        else if (targetIndex < anchorIndex) {
+            first = targetIndex + 1;
+        }
+        else {
+            emitSelectionDataChanged();
+            return;
+        }
+    }
+
+    QList<int> indexes;
+    for (int i = first; i <= last; i++) {
+        indexes.append(i);
+    }
+    mutateSelectionForIndexes(indexes, selected);
+    emitSelectionDataChanged();
+}
+
+void FileListModel::previewSelectionIndexes(const QVariantList &indexes, int mode) {
+    if (!_selectionPreviewActive) {
+        beginSelectionPreview();
+    }
+
+    for (auto it = _selectionPreviewSnapshot.constBegin(); it != _selectionPreviewSnapshot.constEnd(); ++it) {
+        ensureSelectionStateLoaded(it.key());
+        _selectionStates[it.key()].selectedNames = it.value();
+    }
+    syncVisibleItemSelection();
+
+    QList<int> intIndexes;
+    intIndexes.reserve(indexes.size());
+    for (const QVariant &indexValue : indexes) {
+        bool ok = false;
+        const int index_ = indexValue.toInt(&ok);
+        if (ok) {
+            intIndexes.append(index_);
+        }
+    }
+
+    if (mode == SelectionPreviewReplace) {
+        for (int i = 0; i < _items.size(); i++) {
+            setSelectionInState(i, false);
+        }
+        mutateSelectionForIndexes(intIndexes, true);
+    }
+    else if (mode == SelectionPreviewToggle) {
+        for (int index_ : intIndexes) {
+            if (index_ < 0 || index_ >= _items.size()) {
+                continue;
+            }
+
+            const ImageFile *item = _items[index_];
+            const QString containerKey = selectionContainerForItem(item);
+            const QString itemKey = selectionItemKey(item);
+            const bool wasSelected = _selectionPreviewSnapshot.value(containerKey).contains(itemKey);
+            setSelectionInState(index_, !wasSelected);
+        }
+    }
+    else {
+        mutateSelectionForIndexes(intIndexes, mode != SelectionPreviewDeselect);
+    }
+    emitSelectionDataChanged();
+}
+
+void FileListModel::commitSelectionPreview(const QString &description) {
+    if (!_selectionPreviewActive) {
+        return;
+    }
+
+    QSet<QString> changedContainers;
+    for (auto it = _selectionPreviewSnapshot.constBegin(); it != _selectionPreviewSnapshot.constEnd(); ++it) {
+        ensureSelectionStateLoaded(it.key());
+        if (_selectionStates[it.key()].selectedNames != it.value()) {
+            changedContainers.insert(it.key());
+        }
+    }
+
+    for (const QString &containerKey : changedContainers) {
+        pushSelectionHistory(containerKey, description, _selectionPreviewSnapshot[containerKey]);
+    }
+
+    _selectionPreviewActive = false;
+    _selectionPreviewSnapshot.clear();
+    if (!changedContainers.isEmpty()) {
+        emitSelectionDataChanged();
+    }
+}
+
+void FileListModel::cancelSelectionPreview() {
+    if (!_selectionPreviewActive) {
+        return;
+    }
+
+    for (auto it = _selectionPreviewSnapshot.constBegin(); it != _selectionPreviewSnapshot.constEnd(); ++it) {
+        ensureSelectionStateLoaded(it.key());
+        _selectionStates[it.key()].selectedNames = it.value();
+    }
+    _selectionPreviewActive = false;
+    _selectionPreviewSnapshot.clear();
+    syncVisibleItemSelection();
+    emitSelectionDataChanged();
+}
+
+QVariantList FileListModel::selectionHistoryForIndex(int index_) const {
+    QVariantList result;
+    const QString containerKey = selectionContainerForIndex(index_);
+    const auto stateIt = _selectionStates.constFind(containerKey);
+    if (stateIt == _selectionStates.constEnd()) {
+        return result;
+    }
+
+    const auto &history = stateIt->history;
+    for (int i = 0; i < history.size(); i++) {
+        QVariantMap row;
+        row["index"] = i;
+        row["description"] = history[i].description;
+        row["timestamp"] = history[i].timestamp.toString("yyyy-MM-dd hh:mm:ss");
+        row["selectedCount"] = history[i].selectedNames.size();
+        row["current"] = i == stateIt->historyIndex;
+        result.append(row);
+    }
+    return result;
+}
+
+int FileListModel::selectionHistoryIndexForIndex(int index_) const {
+    const QString containerKey = selectionContainerForIndex(index_);
+    const auto stateIt = _selectionStates.constFind(containerKey);
+    return stateIt == _selectionStates.constEnd() ? -1 : stateIt->historyIndex;
+}
+
+QString FileListModel::selectionContainerForIndex(int index_) const {
+    if (index_ >= 0 && index_ < _items.size()) {
+        return selectionContainerForItem(_items[index_]);
+    }
+    return PersistentSelectionCache::normalizeContainerKey(_root);
+}
+
+void FileListModel::selectionHistoryBack(int index_) {
+    const QString containerKey = selectionContainerForIndex(index_);
+    ensureSelectionStateLoaded(containerKey);
+    const int historyIndex = _selectionStates[containerKey].historyIndex;
+    if (historyIndex > 0) {
+        applySelectionHistoryState(containerKey, historyIndex - 1);
+    }
+}
+
+void FileListModel::selectionHistoryForward(int index_) {
+    const QString containerKey = selectionContainerForIndex(index_);
+    ensureSelectionStateLoaded(containerKey);
+    const int historyIndex = _selectionStates[containerKey].historyIndex;
+    if (historyIndex >= 0 && historyIndex < _selectionStates[containerKey].history.size() - 1) {
+        applySelectionHistoryState(containerKey, historyIndex + 1);
+    }
+}
+
+void FileListModel::jumpSelectionHistory(int index_, int historyIndex) {
+    const QString containerKey = selectionContainerForIndex(index_);
+    ensureSelectionStateLoaded(containerKey);
+    applySelectionHistoryState(containerKey, historyIndex);
+}
+
+QString FileListModel::selectionContainerForItem(const ImageFile *item) const {
+    if (!item) {
+        return PersistentSelectionCache::normalizeContainerKey(_root);
+    }
+    if (_root == "Computer" && item->folderPath().isEmpty()) {
+        return "Computer";
+    }
+    return PersistentSelectionCache::normalizeContainerKey(item->folderPath());
+}
+
+QString FileListModel::selectionItemKey(const ImageFile *item) const {
+    return item ? item->fileName() : QString();
+}
+
+void FileListModel::ensureSelectionStateLoaded(const QString &containerKey) {
+    const QString normalizedKey = PersistentSelectionCache::normalizeContainerKey(containerKey);
+    if (!_selectionStates.contains(normalizedKey)) {
+        _selectionStates.insert(normalizedKey, PersistentSelectionCache::retrieveContainer(normalizedKey));
+    }
+}
+
+void FileListModel::loadSelectionStatesForVisibleItems() {
+    for (ImageFile *item : _items) {
+        ensureSelectionStateLoaded(selectionContainerForItem(item));
+    }
+    syncVisibleItemSelection();
+}
+
+void FileListModel::syncVisibleItemSelection() {
+    for (ImageFile *item : _items) {
+        const QString containerKey = selectionContainerForItem(item);
+        ensureSelectionStateLoaded(containerKey);
+        item->setIsSelected(_selectionStates[containerKey].selectedNames.contains(selectionItemKey(item)));
+    }
+}
+
+void FileListModel::emitSelectionDataChanged(int firstIndex, int lastIndex) {
+    if (!_items.isEmpty()) {
+        if (firstIndex < 0 || lastIndex < 0) {
+            firstIndex = 0;
+            lastIndex = _items.size() - 1;
+        }
+        firstIndex = qBound(0, firstIndex, _items.size() - 1);
+        lastIndex = qBound(0, lastIndex, _items.size() - 1);
+        if (firstIndex > lastIndex) {
+            std::swap(firstIndex, lastIndex);
+        }
+        emit dataChanged(index(firstIndex, 0), index(lastIndex, 0), {SelectedRole});
+    }
+    emit selectionChanged();
+}
+
+void FileListModel::pushSelectionHistory(const QString &containerKey, const QString &description,
+                                         const QSet<QString> &previousSelectedNames) {
+    const QString normalizedKey = PersistentSelectionCache::normalizeContainerKey(containerKey);
+    ensureSelectionStateLoaded(normalizedKey);
+    auto &state = _selectionStates[normalizedKey];
+    if (state.historyIndex < state.history.size() - 1) {
+        state.history.resize(state.historyIndex + 1);
+    }
+    if (state.history.isEmpty()) {
+        state.history.append(PersistentSelectionCache::HistoryEntry{
+            .description = "Initial state",
+            .timestamp = QDateTime::currentDateTime(),
+            .selectedNames = previousSelectedNames
+        });
+    }
+    state.history.append(PersistentSelectionCache::HistoryEntry{
+        .description = description,
+        .timestamp = QDateTime::currentDateTime(),
+        .selectedNames = state.selectedNames
+    });
+    state.historyIndex = state.history.size() - 1;
+    PersistentSelectionCache::storeContainer(normalizedKey, state);
+    emit selectionHistoryChanged();
+}
+
+void FileListModel::mutateSelectionForIndexes(const QList<int> &indexes, bool selected) {
+    for (int index_ : indexes) {
+        setSelectionInState(index_, selected);
+    }
+}
+
+bool FileListModel::setSelectionInState(int index_, bool selected) {
+    if (index_ < 0 || index_ >= _items.size()) {
+        return false;
+    }
+
+    ImageFile *item = _items[index_];
+    const QString containerKey = selectionContainerForItem(item);
+    ensureSelectionStateLoaded(containerKey);
+    auto &selectedNames = _selectionStates[containerKey].selectedNames;
+    const QString itemKey = selectionItemKey(item);
+    const bool wasSelected = selectedNames.contains(itemKey);
+    if (wasSelected == selected) {
+        return false;
+    }
+
+    if (selected) {
+        selectedNames.insert(itemKey);
+    }
+    else {
+        selectedNames.remove(itemKey);
+    }
+    item->setIsSelected(selected);
+    return true;
+}
+
+void FileListModel::applySelectionHistoryState(const QString &containerKey, int historyIndex) {
+    const QString normalizedKey = PersistentSelectionCache::normalizeContainerKey(containerKey);
+    ensureSelectionStateLoaded(normalizedKey);
+    auto &state = _selectionStates[normalizedKey];
+    if (historyIndex < 0 || historyIndex >= state.history.size()) {
+        return;
+    }
+
+    state.historyIndex = historyIndex;
+    state.selectedNames = state.history[historyIndex].selectedNames;
+    PersistentSelectionCache::storeContainer(normalizedKey, state);
+    syncVisibleItemSelection();
+    emitSelectionDataChanged();
+    emit selectionHistoryChanged();
+}
+
+QString FileListModel::sameKindDescription(int index_, bool selected) const {
+    if (index_ < 0 || index_ >= _items.size()) {
+        return selected ? "Select matching items" : "Deselect matching items";
+    }
+
+    ImageFile *item = _items[index_];
+    QString target;
+    if (selectionContainerForItem(item) == "Computer" && item->folderPath().isEmpty()) {
+        target = "drives";
+    }
+    else if (item->isFolder()) {
+        target = "folders";
+    }
+    else {
+        const QString suffix = QFileInfo(item->fileName()).suffix();
+        target = suffix.isEmpty() ? "extensionless files" : QString(".%1 files").arg(suffix);
+    }
+    return QString("%1 %2").arg(selected ? "Select" : "Deselect", target);
 }

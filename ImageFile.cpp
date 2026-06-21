@@ -406,3 +406,14 @@ void ImageFile::setSearchText(const QString &searchText) {
         }
     }
 }
+
+bool ImageFile::isSelected() const {
+    return _isSelected;
+}
+
+void ImageFile::setIsSelected(bool isSelected) {
+    if (_isSelected != isSelected) {
+        _isSelected = isSelected;
+        emit isSelectedChanged();
+    }
+}

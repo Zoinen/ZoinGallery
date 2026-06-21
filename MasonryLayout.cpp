@@ -97,6 +97,25 @@ int MasonryLayout::indexAt(qreal x, qreal y) const {
     return -1;
 }
 
+int MasonryLayout::indexAtViewport(qreal x, qreal y) const {
+    return indexAt(x - _paddingLeft, y + _contentY);
+}
+
+QVariantList MasonryLayout::indexesInViewportRect(qreal x, qreal y, qreal width, qreal height) const {
+    QRectF viewportRect(x, y, width, height);
+    viewportRect = viewportRect.normalized();
+    QRectF contentRect(viewportRect.x() - _paddingLeft, viewportRect.y() + _contentY,
+                       viewportRect.width(), viewportRect.height());
+
+    QVariantList result;
+    for (int i = 0; i < _bricks.size(); i++) {
+        if (_bricks[i].geometry().intersects(contentRect)) {
+            result.append(i);
+        }
+    }
+    return result;
+}
+
 QRectF MasonryLayout::indexGeometry(int index) const {
     if (index >= 0 && index < _bricks.size()) {
         if (_bricks[index].row == _bricks[_bricks.size() - 1].row) {

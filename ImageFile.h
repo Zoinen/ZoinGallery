@@ -92,6 +92,7 @@ class ImageFile : public QObject {
     Q_PROPERTY(bool isPanorama READ isPanorama NOTIFY isPanoramaChanged)
     Q_PROPERTY(bool isFilteredOut READ isFilteredOut NOTIFY isFilteredOutChanged)
     Q_PROPERTY(QSize fullSize READ fullSize NOTIFY fullSizeChanged)
+    Q_PROPERTY(bool isSelected READ isSelected WRITE setIsSelected NOTIFY isSelectedChanged)
 
 public:
     using QObject::QObject;
@@ -156,6 +157,9 @@ public:
 
     void setSearchText(const QString &searchText);
 
+    bool isSelected() const;
+    void setIsSelected(bool isSelected);
+
 signals:
     void fullPathChanged();
     void nestingInfoChanged();
@@ -172,6 +176,7 @@ signals:
     void fullSizeChanged();
 
     void isFilteredOutChanged();
+    void isSelectedChanged();
 
 private:
     QString _folderPath;
@@ -188,6 +193,7 @@ private:
     int _index = -1;
     QString _nestingInfo;
     ImageInfo _info;
+    bool _isSelected = false;
 
     QList<ImageFile *> _subfiles;
     ImageFile *_imageFileParent = nullptr;

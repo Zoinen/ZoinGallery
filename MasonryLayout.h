@@ -78,6 +78,8 @@ public:
 
     Q_INVOKABLE QQuickItem *itemAt(qreal x, qreal y) const;
     Q_INVOKABLE int indexAt(qreal x, qreal y) const;
+    Q_INVOKABLE int indexAtViewport(qreal x, qreal y) const;
+    Q_INVOKABLE QVariantList indexesInViewportRect(qreal x, qreal y, qreal width, qreal height) const;
     Q_INVOKABLE QRectF indexGeometry(int index) const;
     Q_INVOKABLE QString indexImageIdUrl(int index) const;
     Q_INVOKABLE QString indexText(int index) const;

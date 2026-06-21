@@ -51,6 +51,7 @@ QtObject {
     property color brickInfoPanelSelected: isDarkTheme ? "#B33d5d7b" : Qt.lighter(Qt.rgba(0, 0.55, 1, 0.7), 1.7)
     property color brickInfoPanelHovered: isDarkTheme ? Qt.rgba(0.15, 0.15, 0.15, 0.7) : Qt.lighter(Qt.rgba(0, 0.55, 1, 0.7), 1.9)
     property color brickInfoPanelPressed: isDarkTheme ? "#B31a384e" : Qt.lighter(Qt.rgba(0, 0.55, 1, 0.7), 1.6)
+    property color persistentSelectionBorder: "#ffd43b"
 
     property color folderIcon: isDarkTheme ? "#397db1" : "#397db2"
     property color closeButtonPressed: "#b3271c"

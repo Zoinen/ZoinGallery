@@ -55,6 +55,11 @@ MouseArea {
     onPressed: (mouse) => {
         if (mouse.button === Qt.LeftButton) {
             focusProxy.forceActiveFocus()
+            let p = masonryLayout.mapFromItem(masonryView, mouse.x, mouse.y)
+            if (p.x >= 0 && p.y >= 0 && p.x <= masonryLayout.width && p.y <= masonryLayout.height &&
+                    masonryLayout.indexAtViewport(p.x, p.y) === -1) {
+                startRubberBand(mouse.x, mouse.y, mouse.modifiers)
+            }
         }
         else {
             if (mouse.button === Qt.MiddleButton && !scrollingMode) {
@@ -67,7 +72,10 @@ MouseArea {
     }
 
     onReleased: (mouse) => {
-        if (mouse.button !== Qt.LeftButton) {
+        if (mouse.button === Qt.LeftButton) {
+            finishRubberBand()
+        }
+        else {
             if (scrollingStarted) {
                 endScrolling()
             }
@@ -110,6 +118,11 @@ MouseArea {
 
     hoverEnabled: true
     onPositionChanged: {
+        if (rubberBandPending || rubberBandActive) {
+            rubberBandCurrentX = mouseX
+            rubberBandCurrentY = mouseY
+            updateRubberBandSelection()
+        }
         if (!scrollingMode) {
             hideHovered = false
         }
@@ -119,6 +132,21 @@ MouseArea {
     property real currentItemCenterX: 0
     property real currentItemCenterY: 0
     property bool alwaysShowFileNames: false
+    property bool shiftSelectionActive: false
+    property int shiftSelectionAnchorIndex: -1
+    property bool shiftNavigationSelectionValue: true
+    property string shiftSelectionDescription: "Range selection"
+    readonly property int rubberBandModeAdd: 0
+    readonly property int rubberBandModeReplace: 2
+    readonly property int rubberBandModeToggle: 3
+    readonly property real rubberBandThreshold: 4
+    property bool rubberBandPending: false
+    property bool rubberBandActive: false
+    property int rubberBandMode: rubberBandModeReplace
+    property real rubberBandStartX: 0
+    property real rubberBandStartY: 0
+    property real rubberBandCurrentX: 0
+    property real rubberBandCurrentY: 0
 
     Connections {
         target: masonryLayout
@@ -233,11 +261,134 @@ MouseArea {
         setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
     }
 
+    function beginShiftSelection() {
+        if (shiftSelectionActive) {
+            return
+        }
+        shiftSelectionActive = true
+        shiftSelectionAnchorIndex = masonryLayout.currentIndex
+        shiftNavigationSelectionValue = true
+        shiftSelectionDescription = "Range selection"
+        fileListModel.beginSelectionPreview()
+    }
+
+    function updateShiftNavigationSelection(targetIndex) {
+        beginShiftSelection()
+        shiftSelectionDescription = shiftNavigationSelectionValue ? "Range selection" : "Range deselection"
+        fileListModel.previewSelectionRange(shiftSelectionAnchorIndex, targetIndex, shiftNavigationSelectionValue, false)
+    }
+
+    function shiftClickSelection(targetIndex) {
+        beginShiftSelection()
+        shiftSelectionDescription = "Range selection"
+        fileListModel.previewSelectionRange(shiftSelectionAnchorIndex, targetIndex, true, true)
+        setCurrentIndex(targetIndex)
+    }
+
+    function finishShiftSelection() {
+        if (!shiftSelectionActive) {
+            return
+        }
+        fileListModel.commitSelectionPreview(shiftSelectionDescription)
+        shiftSelectionActive = false
+        shiftSelectionAnchorIndex = -1
+    }
+
+    function updateSelectionAfterKeyboardNavigation(event) {
+        if (event.modifiers & Qt.ShiftModifier) {
+            updateShiftNavigationSelection(masonryLayout.currentIndex)
+        }
+    }
+
+    function startRubberBand(mouseX, mouseY, modifiers) {
+        rubberBandPending = true
+        rubberBandActive = false
+        rubberBandStartX = mouseX
+        rubberBandStartY = mouseY
+        rubberBandCurrentX = mouseX
+        rubberBandCurrentY = mouseY
+        if (modifiers & Qt.ControlModifier) {
+            rubberBandMode = rubberBandModeToggle
+        }
+        else if (modifiers & Qt.ShiftModifier) {
+            rubberBandMode = rubberBandModeAdd
+        }
+        else {
+            rubberBandMode = rubberBandModeReplace
+        }
+    }
+
+    function rubberBandMovedFarEnough() {
+        return Math.abs(rubberBandCurrentX - rubberBandStartX) >= rubberBandThreshold ||
+               Math.abs(rubberBandCurrentY - rubberBandStartY) >= rubberBandThreshold
+    }
+
+    function activateRubberBandIfNeeded() {
+        if (rubberBandActive) {
+            return true
+        }
+        if (!rubberBandPending || !rubberBandMovedFarEnough()) {
+            return false
+        }
+        rubberBandActive = true
+        fileListModel.beginSelectionPreview()
+        return true
+    }
+
+    function rubberBandDescription() {
+        if (rubberBandMode === rubberBandModeToggle) {
+            return "Rubber band toggle selection"
+        }
+        if (rubberBandMode === rubberBandModeAdd) {
+            return "Rubber band add selection"
+        }
+        return "Rubber band selection"
+    }
+
+    function updateRubberBandSelection() {
+        if (!activateRubberBandIfNeeded()) {
+            return
+        }
+        let x1 = Math.min(rubberBandStartX, rubberBandCurrentX)
+        let y1 = Math.min(rubberBandStartY, rubberBandCurrentY)
+        let x2 = Math.max(rubberBandStartX, rubberBandCurrentX)
+        let y2 = Math.max(rubberBandStartY, rubberBandCurrentY)
+        let p = masonryLayout.mapFromItem(masonryView, x1, y1)
+        let indexes = masonryLayout.indexesInViewportRect(p.x, p.y, x2 - x1, y2 - y1)
+        fileListModel.previewSelectionIndexes(indexes, rubberBandMode)
+    }
+
+    function finishRubberBand() {
+        if (!rubberBandPending && !rubberBandActive) {
+            return
+        }
+
+        if (rubberBandActive) {
+            fileListModel.commitSelectionPreview(rubberBandDescription())
+        }
+        else {
+            if (shiftSelectionActive) {
+                fileListModel.cancelSelectionPreview()
+            }
+            fileListModel.setAllSelection(false)
+        }
+
+        if (shiftSelectionActive) {
+            shiftSelectionActive = false
+            shiftSelectionAnchorIndex = -1
+        }
+        rubberBandPending = false
+        rubberBandActive = false
+    }
+
     property bool backspaceDisabledUntilKeyUp: false
     Keys.onPressed:
         (event) => {
             event.accepted = true
-            if (event.key === Qt.Key_Left && (event.modifiers & Qt.AltModifier)) {
+            if (event.key === Qt.Key_Shift && !event.isAutoRepeat) {
+                beginShiftSelection()
+            }
+            else if (event.key === Qt.Key_Left && (event.modifiers & Qt.AltModifier)) {
                 viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                 viewerController.back()
                 masonryLayout.loadSavedState()
@@ -247,11 +398,32 @@ MouseArea {
                 viewerController.forward()
                 masonryLayout.loadSavedState()
             }
+            else if (event.key === Qt.Key_Insert && !(event.modifiers & Qt.ControlModifier)) {
+                fileListModel.toggleSelection(masonryLayout.currentIndex)
+                setCurrentIndex(masonryLayout.currentIndex + 1)
+            }
+            else if (event.key === Qt.Key_Asterisk) {
+                fileListModel.invertSelection()
+            }
+            else if ((event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
+                fileListModel.setSameKindSelection(masonryLayout.currentIndex, true)
+            }
+            else if (event.key === Qt.Key_Minus && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
+                fileListModel.setSameKindSelection(masonryLayout.currentIndex, false)
+            }
+            else if ((event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) && (event.modifiers & Qt.ShiftModifier) && !quickSearchMode) {
+                fileListModel.setAllSelection(true)
+            }
+            else if (event.key === Qt.Key_Minus && (event.modifiers & Qt.ShiftModifier) && !quickSearchMode) {
+                fileListModel.setAllSelection(false)
+            }
             else if (event.key === Qt.Key_Left) {
                 setCurrentIndex(masonryLayout.currentIndex - 1)
+                updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_Right) {
                 setCurrentIndex(masonryLayout.currentIndex + 1)
+                updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_Up && !(event.modifiers & Qt.AltModifier)) {
                 let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
@@ -263,9 +435,11 @@ MouseArea {
                         setCurrentIndex(indexAbove, true, false, true)
                         let newCurrentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
                         scrollBy(newCurrentItemGeometry.y - currentItemGeometry.y)
+                        updateSelectionAfterKeyboardNavigation(event)
                     }
                     else {
                         setCurrentIndex(indexAbove, true)
+                        updateSelectionAfterKeyboardNavigation(event)
                     }
                 }
             }
@@ -292,17 +466,21 @@ MouseArea {
                         setCurrentIndex(indexBelow, true, false, true)
                         let newCurrentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
                         scrollBy(newCurrentItemGeometry.y - currentItemGeometry.y)
+                        updateSelectionAfterKeyboardNavigation(event)
                     }
                     else {
                         setCurrentIndex(indexBelow, true)
+                        updateSelectionAfterKeyboardNavigation(event)
                     }
                 }
             }
             else if (event.key === Qt.Key_Home) {
                 setCurrentIndex(0)
+                updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_End) {
                 setCurrentIndex(masonryLayout.count - 1)
+                updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_PageUp && !(event.modifiers & Qt.ControlModifier)) {
                 let deltaY = (masonryLayout.height - masonryLayout.height / 8)
@@ -323,6 +501,7 @@ MouseArea {
                 }
 
                 setCurrentIndex(newCurrentIndex, !hitStart, !hitStart)
+                updateSelectionAfterKeyboardNavigation(event)
                 scrollBy(-deltaY)
             }
             else if (event.key === Qt.Key_PageDown && !(event.modifiers & Qt.ControlModifier)) {
@@ -349,6 +528,7 @@ MouseArea {
                 }
 
                 setCurrentIndex(newCurrentIndex2, !hitEnd, !hitEnd)
+                updateSelectionAfterKeyboardNavigation(event)
                 scrollBy(deltaY)
             }
             else if ((event.key === Qt.Key_Backspace && !quickSearchMode && !backspaceDisabledUntilKeyUp) ||
@@ -410,6 +590,9 @@ MouseArea {
         (event) => {
             if (!event.isAutoRepeat) {
                 backspaceDisabledUntilKeyUp = false
+                if (event.key === Qt.Key_Shift) {
+                    finishShiftSelection()
+                }
             }
         }
 
@@ -505,6 +688,19 @@ MouseArea {
             duration: 150
             easing.type: Easing.OutSine
         }
+    }
+
+    Rectangle {
+        x: Math.min(rubberBandStartX, rubberBandCurrentX)
+        y: Math.min(rubberBandStartY, rubberBandCurrentY)
+        width: Math.abs(rubberBandCurrentX - rubberBandStartX)
+        height: Math.abs(rubberBandCurrentY - rubberBandStartY)
+        visible: rubberBandActive && (width > 2 || height > 2)
+        color: Qt.rgba(1, 0.83, 0.23, 0.12)
+        border.width: 1
+        border.color: Style.persistentSelectionBorder
+        radius: 2
+        z: 20
     }
 
     ScrollBar {

@@ -7,6 +7,7 @@
 #include <QSet>
 
 #include "ImageFile.h"
+#include "PersistentSelectionCache.h"
 
 class DecodeManager;
 class FileListModel;
@@ -56,6 +57,7 @@ private:
 class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterface {
     Q_OBJECT
     Q_PROPERTY(bool runningTasksDebug READ runningTasksDebug WRITE setRunningTasksDebug NOTIFY runningTasksDebugChanged)
+    Q_PROPERTY(int selectedCount READ selectedCount NOTIFY selectionChanged)
 
 public:
     enum ItemUserRoles {
@@ -66,7 +68,8 @@ public:
         ImageFileRole,
         FolderViewRole,
         ExifRole,
-        TimeToFlushRole
+        TimeToFlushRole,
+        SelectedRole
     };
 
     FileListModel(QObject *parent = nullptr);
@@ -117,6 +120,28 @@ public:
 
     Q_INVOKABLE void dumpCurrentImage();
 
+    int selectedCount() const;
+    Q_INVOKABLE bool isIndexSelected(int index) const;
+    Q_INVOKABLE void toggleSelection(int index);
+    Q_INVOKABLE void setSelection(int index, bool selected);
+    Q_INVOKABLE void invertSelection();
+    Q_INVOKABLE void setAllSelection(bool selected);
+    Q_INVOKABLE void setSameKindSelection(int index, bool selected);
+    Q_INVOKABLE QVariantList dragIndexesForIndex(int index) const;
+    Q_INVOKABLE QVariantList dragUrlsForIndex(int index) const;
+    Q_INVOKABLE QVariantMap dragPreviewItemsForIndex(int index, int limit) const;
+    Q_INVOKABLE void beginSelectionPreview();
+    Q_INVOKABLE void previewSelectionRange(int anchorIndex, int targetIndex, bool selected, bool includeTarget);
+    Q_INVOKABLE void previewSelectionIndexes(const QVariantList &indexes, int mode);
+    Q_INVOKABLE void commitSelectionPreview(const QString &description);
+    Q_INVOKABLE void cancelSelectionPreview();
+    Q_INVOKABLE QVariantList selectionHistoryForIndex(int index) const;
+    Q_INVOKABLE int selectionHistoryIndexForIndex(int index) const;
+    Q_INVOKABLE QString selectionContainerForIndex(int index) const;
+    Q_INVOKABLE void selectionHistoryBack(int index);
+    Q_INVOKABLE void selectionHistoryForward(int index);
+    Q_INVOKABLE void jumpSelectionHistory(int index, int historyIndex);
+
     bool runningTasksDebug() const;
     void setRunningTasksDebug(bool isRunningTasksDebug);
 
@@ -127,8 +152,17 @@ signals:
 
     void runningTasksChanged(const QString &tasks, const QStringList &tasksInfo);
     void runningTasksDebugChanged();
+    void selectionChanged();
+    void selectionHistoryChanged();
 
 private:
+    enum SelectionPreviewMode {
+        SelectionPreviewSelect = 0,
+        SelectionPreviewDeselect = 1,
+        SelectionPreviewReplace = 2,
+        SelectionPreviewToggle = 3
+    };
+
     enum class DirectOpenStage {
         None,
         WaitingInfo,
@@ -174,6 +208,17 @@ private:
     void emitViewerImagesForCurrentIndex();
     bool isActiveDirectOpenInfo(const ImageInfo &info) const;
     bool isActiveDirectOpenRequest(const ImageDecodeRequest &request) const;
+    QString selectionContainerForItem(const ImageFile *item) const;
+    QString selectionItemKey(const ImageFile *item) const;
+    void ensureSelectionStateLoaded(const QString &containerKey);
+    void loadSelectionStatesForVisibleItems();
+    void syncVisibleItemSelection();
+    void emitSelectionDataChanged(int firstIndex = -1, int lastIndex = -1);
+    void pushSelectionHistory(const QString &containerKey, const QString &description, const QSet<QString> &previousSelectedNames);
+    void mutateSelectionForIndexes(const QList<int> &indexes, bool selected);
+    bool setSelectionInState(int index, bool selected);
+    void applySelectionHistoryState(const QString &containerKey, int historyIndex);
+    QString sameKindDescription(int index, bool selected) const;
 
     QString _root;
     QHash<QString, ImageFile *> _fileToItem;
@@ -205,6 +250,9 @@ private:
     int _folderViewImageCount = 16;
 
     DirectOpenState _directOpen;
+    QHash<QString, PersistentSelectionCache::ContainerState> _selectionStates;
+    bool _selectionPreviewActive = false;
+    QHash<QString, QSet<QString>> _selectionPreviewSnapshot;
 };
 
 #endif // FILELISTMODEL_H

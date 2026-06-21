@@ -754,12 +754,24 @@ MainWindow {
 
                     ToolbarButton {
                         Layout.leftMargin: 8
-                        Layout.rightMargin: isQWK ? 0 : 7
                         icon.source: "qrc:/resources/RecursiveView.svg"
                         ToolTip.text: "Recursive View\tF10"
 
                         onReleased: {
                             viewerController.enterRecursiveView()
+                        }
+                    }
+
+                    ToolbarButton {
+                        icon.source: "qrc:/resources/SelectionHistory.svg"
+                        ToolTip.text: "Selection history\tCtrl+Shift+H"
+                        Layout.rightMargin: isQWK ? 0 : 7
+
+                        onReleased: {
+                            selectionHistoryWindow.visible = !selectionHistoryWindow.visible
+                            if (selectionHistoryWindow.visible) {
+                                selectionHistoryWindow.refresh(true)
+                            }
                         }
                     }
 
@@ -809,6 +821,208 @@ MainWindow {
 
         SettingsDialog {
             id: settingsDialog
+        }
+
+        Shortcut {
+            sequence: "Ctrl+Shift+H"
+            onActivated: {
+                selectionHistoryWindow.visible = !selectionHistoryWindow.visible
+                if (selectionHistoryWindow.visible) {
+                    selectionHistoryWindow.refresh(true)
+                }
+            }
+        }
+
+        Window {
+            id: selectionHistoryWindow
+            width: 520
+            height: 620
+            x: topLevelWindow.x + Math.max(0, topLevelWindow.width - width - 40)
+            y: topLevelWindow.y + 80
+            title: "Selection history"
+            visible: false
+            color: Style.windowBackgroundNoQWK
+
+            property var historyModel: []
+            property int historyIndex: -1
+
+            function refresh(scrollToNewest = false) {
+                historyModel = fileListModel.selectionHistoryForIndex(masonryLayout.view.currentIndex)
+                historyIndex = fileListModel.selectionHistoryIndexForIndex(masonryLayout.view.currentIndex)
+                if (scrollToNewest) {
+                    scrollHistoryToBottom()
+                }
+            }
+
+            function scrollHistoryToBottom() {
+                Qt.callLater(function() {
+                    if (selectionHistoryList.count > 0) {
+                        selectionHistoryList.positionViewAtEnd()
+                    }
+                })
+            }
+
+            Connections {
+                target: fileListModel
+                function onSelectionChanged() {
+                    if (selectionHistoryWindow.visible) {
+                        selectionHistoryWindow.refresh()
+                    }
+                }
+                function onSelectionHistoryChanged() {
+                    if (selectionHistoryWindow.visible) {
+                        selectionHistoryWindow.refresh(true)
+                    }
+                }
+            }
+
+            Connections {
+                target: masonryLayout.view
+                function onCurrentIndexChanged() {
+                    if (selectionHistoryWindow.visible) {
+                        selectionHistoryWindow.refresh()
+                    }
+                }
+            }
+
+            Connections {
+                target: viewerController
+                function onCurrentPathChanged() {
+                    if (selectionHistoryWindow.visible) {
+                        selectionHistoryWindow.refresh()
+                    }
+                }
+            }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 14
+                spacing: 10
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 2
+
+                        Text {
+                            Layout.fillWidth: true
+                            text: fileListModel.selectionContainerForIndex(masonryLayout.view.currentIndex)
+                            color: Style.text
+                            elide: Text.ElideMiddle
+                            maximumLineCount: 1
+                        }
+
+                        Text {
+                            text: fileListModel.selectedCount + " selected"
+                            color: Style.viewerSecondaryText
+                            font.pixelSize: 12
+                        }
+                    }
+
+                    Button {
+                        implicitWidth: 36
+                        implicitHeight: 32
+                        icon.source: "qrc:/resources/Back.svg"
+                        inactive: selectionHistoryWindow.historyIndex <= 0
+                        onClicked: {
+                            if (!inactive) {
+                                fileListModel.selectionHistoryBack(masonryLayout.view.currentIndex)
+                            }
+                        }
+                    }
+
+                    Button {
+                        implicitWidth: 36
+                        implicitHeight: 32
+                        icon.source: "qrc:/resources/Forward.svg"
+                        inactive: selectionHistoryWindow.historyIndex < 0 ||
+                                  selectionHistoryWindow.historyIndex >= selectionHistoryWindow.historyModel.length - 1
+                        onClicked: {
+                            if (!inactive) {
+                                fileListModel.selectionHistoryForward(masonryLayout.view.currentIndex)
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    color: Style.lighter2
+                }
+
+                ListView {
+                    id: selectionHistoryList
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    model: selectionHistoryWindow.historyModel
+                    rightMargin: selectionHistoryScrollBar.width
+
+                    ScrollBar.vertical: ScrollBar {
+                        id: selectionHistoryScrollBar
+                        policy: ScrollBar.AlwaysOn
+                    }
+
+                    delegate: Rectangle {
+                        width: selectionHistoryList.width - selectionHistoryScrollBar.width
+                        height: 48
+                        radius: 4
+                        color: modelData.current ? Style.brickSelected : historyMouse.containsMouse ? Style.lighter : "transparent"
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 10
+                            anchors.rightMargin: 10
+                            spacing: 10
+
+                            Text {
+                                Layout.preferredWidth: 34
+                                text: modelData.index
+                                color: Style.viewerSecondaryText
+                                horizontalAlignment: Text.AlignRight
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 2
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.description
+                                    color: Style.text
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: modelData.timestamp
+                                    color: Style.viewerSecondaryText
+                                    font.pixelSize: 11
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            Text {
+                                Layout.preferredWidth: 86
+                                text: modelData.selectedCount + " selected"
+                                color: Style.viewerSecondaryText
+                                horizontalAlignment: Text.AlignRight
+                            }
+                        }
+
+                        MouseArea {
+                            id: historyMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            onClicked: fileListModel.jumpSelectionHistory(masonryLayout.view.currentIndex, modelData.index)
+                        }
+                    }
+                }
+            }
         }
 
         state: "thumbnails"

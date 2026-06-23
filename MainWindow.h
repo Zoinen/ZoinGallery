@@ -32,6 +32,7 @@ signals:
     void isResizingChanged();
     void dprChanged();
     void windowIsReady();
+    void openSettingsRequested();
 
 protected:
     void showEvent(QShowEvent *event) override;

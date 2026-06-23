@@ -917,8 +917,10 @@ Item {
                 id: topPanelRow
                 anchors {
                     left: parent.left
+                    leftMargin: topLevelWindow.macTitleBarLeftPadding
                     top: parent.top
-                    right: titleBarButtonsRow.left
+                    right: parent.right
+                    rightMargin: topLevelWindow.useMacNativeTitleBar ? 0 : titleBarButtonsRow.width
                     bottom: parent.bottom
                 }
                 spacing: 0
@@ -1052,7 +1054,7 @@ Item {
                 }
 
                 Separator {
-
+                    visible: !topLevelWindow.useMacNativeTitleBar
                 }
             }
 
@@ -1062,6 +1064,7 @@ Item {
                     right: parent.right
                     top: parent.top
                 }
+                visible: !topLevelWindow.useMacNativeTitleBar
 
                 TitleProxyButton {
                     proxyControl: minButton
@@ -1099,6 +1102,7 @@ Item {
                 right: parent.right
             }
             spacing: 0
+            visible: !topLevelWindow.useMacNativeTitleBar
 
             TitleProxyButton {
                 proxyControl: minButton

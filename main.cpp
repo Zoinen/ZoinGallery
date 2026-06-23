@@ -11,6 +11,12 @@
 #include <QStandardPaths>
 #include <QTimer>
 
+#if defined(Q_OS_MACOS)
+#include <QAction>
+#include <QMenu>
+#include <QMenuBar>
+#endif
+
 #include "ViewerController.h"
 #include "MainWindow.h"
 #include "LaunchOptions.h"
@@ -238,6 +244,18 @@ void installDailyLogRedirection(QObject *parent)
     });
     logRolloverTimer->start(60 * 1000);
 }
+
+#if defined(Q_OS_MACOS)
+void installMacSettingsMenu(MainWindow *mainWindow)
+{
+    auto *menuBar = new QMenuBar();
+    auto *settingsMenu = menuBar->addMenu(QStringLiteral("Settings"));
+    QAction *settingsAction = settingsMenu->addAction(QStringLiteral("Settings..."));
+    QObject::connect(settingsAction, &QAction::triggered, mainWindow, [mainWindow]() {
+        emit mainWindow->openSettingsRequested();
+    });
+}
+#endif
 }
 
 int main(int argc, char *argv[])
@@ -311,6 +329,14 @@ int main(int argc, char *argv[])
     }
 
     engine.load(url);
+
+    if (const QList<QObject *> roots = engine.rootObjects(); !roots.isEmpty()) {
+        if (auto *mainWindow = qobject_cast<MainWindow *>(roots.first())) {
+#if defined(Q_OS_MACOS)
+            installMacSettingsMenu(mainWindow);
+#endif
+        }
+    }
 
     if (launchOptions.backgroundMode) {
         const QList<QObject *> roots = engine.rootObjects();

@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QGuiApplication>
 #include <QQuickItem>
+#include <QScreen>
 #include <QSettings>
 #include <QTimer>
 
@@ -11,6 +12,80 @@
 #include "dwmapi.h"
 #include <windows.h>
 #endif
+
+namespace
+{
+constexpr QSize kDefaultWindowSize(1250, 700);
+
+QRect primaryAvailableGeometry()
+{
+    if (QScreen *primaryScreen = QGuiApplication::primaryScreen()) {
+        return primaryScreen->availableGeometry();
+    }
+    return QRect(QPoint(0, 0), kDefaultWindowSize);
+}
+
+QRect centeredIn(const QRect &bounds, QSize size)
+{
+    size.setWidth(qMin(size.width(), bounds.width()));
+    size.setHeight(qMin(size.height(), bounds.height()));
+    return QRect(bounds.center() - QPoint(size.width() / 2, size.height() / 2), size);
+}
+
+QRect bestAvailableGeometryFor(const QRect &geometry)
+{
+    QRect bestAvailableGeometry;
+    qsizetype bestVisibleArea = 0;
+
+    const QList<QScreen *> screens = QGuiApplication::screens();
+    for (QScreen *screen : screens) {
+        const QRect availableGeometry = screen->availableGeometry();
+        const QRect visibleRect = geometry.intersected(availableGeometry);
+        const qsizetype visibleArea = static_cast<qsizetype>(visibleRect.width()) * visibleRect.height();
+        if (visibleArea > bestVisibleArea) {
+            bestVisibleArea = visibleArea;
+            bestAvailableGeometry = availableGeometry;
+        }
+    }
+
+    return bestVisibleArea > 0 ? bestAvailableGeometry : primaryAvailableGeometry();
+}
+
+QRect fitGeometryToAvailableBounds(QRect geometry, const QRect &bounds)
+{
+    if (!geometry.isValid()) {
+        return centeredIn(bounds, kDefaultWindowSize);
+    }
+
+    geometry.setWidth(qMin(geometry.width(), bounds.width()));
+    geometry.setHeight(qMin(geometry.height(), bounds.height()));
+
+    if (geometry.left() < bounds.left()) {
+        geometry.moveLeft(bounds.left());
+    }
+    if (geometry.right() > bounds.right()) {
+        geometry.moveRight(bounds.right());
+    }
+    if (geometry.top() < bounds.top()) {
+        geometry.moveTop(bounds.top());
+    }
+    if (geometry.bottom() > bounds.bottom()) {
+        geometry.moveBottom(bounds.bottom());
+    }
+
+    return geometry;
+}
+
+QRect initialNormalGeometry(const QVariant &savedGeometryVar)
+{
+    if (!savedGeometryVar.isValid()) {
+        return centeredIn(primaryAvailableGeometry(), kDefaultWindowSize);
+    }
+
+    const QRect savedGeometry = savedGeometryVar.toRect();
+    return fitGeometryToAvailableBounds(savedGeometry, bestAvailableGeometryFor(savedGeometry));
+}
+}
 
 MainWindow::MainWindow(QWindow *parent)
     : QQuickWindow(parent) {
@@ -35,33 +110,7 @@ MainWindow::MainWindow(QWindow *parent)
     updateDpr();
 
     QSettings set;
-    QVariant savedGeometryVar = set.value("normalGeometry");
-    if (savedGeometryVar.isValid()) {
-        _normalGeometry = savedGeometryVar.toRect();
-        QRect availableRect = QGuiApplication::primaryScreen()->availableGeometry();
-        if (_normalGeometry.right() > availableRect.right()) {
-            _normalGeometry.moveRight(availableRect.right());
-        }
-        if (_normalGeometry.bottom() > availableRect.bottom()) {
-            _normalGeometry.moveBottom(availableRect.bottom());
-        }
-        if (_normalGeometry.left() < availableRect.left()) {
-            _normalGeometry.moveLeft(availableRect.left());
-        }
-        if (_normalGeometry.top() < availableRect.top()) {
-            _normalGeometry.moveTop(availableRect.top());
-        }
-        if (_normalGeometry.width() > availableRect.width()) {
-            _normalGeometry.setWidth(availableRect.width());
-        }
-        if (_normalGeometry.height() > availableRect.height()) {
-            _normalGeometry.setHeight(availableRect.height());
-        }
-    }
-    else if (screen()) {
-        QSize size(1250, 700);
-        _normalGeometry = QRect(screen()->virtualGeometry().center() - QPoint(size.width() / 2, size.height() / 2), size);
-    }
+    _normalGeometry = initialNormalGeometry(set.value("normalGeometry"));
     setGeometry(_normalGeometry);
 
     connect(this, &QWindow::visibilityChanged, this, [this] (QWindow::Visibility visibility) {

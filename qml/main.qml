@@ -13,6 +13,9 @@ MainWindow {
     // visible: true
     color: isQWK ? (isQWKLegacy ? Style.windowBackgroundQWKLegacy : "transparent") : Style.windowBackgroundNoQWK
     property bool isQWKLegacy: false
+    readonly property bool useMacNativeTitleBar: isQWK && Qt.platform.os === "osx"
+    readonly property int macTitleBarLeftPadding: useMacNativeTitleBar ? 86 : 0
+    readonly property int macSystemButtonAreaLeftMargin: 12
     title: "Zoin Gallery"
 
     property bool viewerDirty: false
@@ -71,6 +74,10 @@ MainWindow {
         function onWindowIsReady() {
             masonryZoomSlider.updateTargetSize()
             viewerController.initialCd(Math.round(viewerMode.width * dpr), Math.round(viewerMode.height * dpr))
+        }
+
+        function onOpenSettingsRequested() {
+            settingsDialog.open()
         }
     }
 
@@ -229,6 +236,15 @@ MainWindow {
             z: 1
             visible: isQWK
 
+            Item {
+                id: macSystemButtonArea
+                visible: false
+                x: topLevelWindow.macSystemButtonAreaLeftMargin
+                y: 0
+                width: 70
+                height: titleBar.height
+            }
+
             RowLayout {
                 id: titleBarButtonsLayout
                 anchors {
@@ -237,6 +253,7 @@ MainWindow {
                     bottom: parent.bottom
                 }
                 spacing: 0
+                visible: !topLevelWindow.useMacNativeTitleBar
 
                 TitleButton {
                     id: minButton
@@ -245,7 +262,11 @@ MainWindow {
 
                     source: "qrc:/resources/WindowMinimize.svg"
                     onClicked: topLevelWindow.showMinimized()
-                    Component.onCompleted: windowAgent.setSystemButton(WindowAgent.Minimize, minButton)
+                    Component.onCompleted: {
+                        if (!topLevelWindow.useMacNativeTitleBar) {
+                            windowAgent.setSystemButton(WindowAgent.Minimize, minButton)
+                        }
+                    }
                 }
 
                 TitleButton {
@@ -266,7 +287,11 @@ MainWindow {
                             topLevelWindow.showMaximized()
                         }
                     }
-                    Component.onCompleted: windowAgent.setSystemButton(WindowAgent.Maximize, maxButton)
+                    Component.onCompleted: {
+                        if (!topLevelWindow.useMacNativeTitleBar) {
+                            windowAgent.setSystemButton(WindowAgent.Maximize, maxButton)
+                        }
+                    }
                 }
 
                 TitleButton {
@@ -290,7 +315,11 @@ MainWindow {
                     }
                     onClicked: topLevelWindow.close()
 
-                    Component.onCompleted: windowAgent.setSystemButton(WindowAgent.Close, closeButton)
+                    Component.onCompleted: {
+                        if (!topLevelWindow.useMacNativeTitleBar) {
+                            windowAgent.setSystemButton(WindowAgent.Close, closeButton)
+                        }
+                    }
                 }
             }
 
@@ -328,6 +357,9 @@ MainWindow {
 
             Component.onCompleted: {
                 windowAgent.setTitleBar(titleBar)
+                if (topLevelWindow.useMacNativeTitleBar) {
+                    windowAgent.setSystemButtonArea(macSystemButtonArea)
+                }
 
                 for (var i = 0; i < titleBarButtonsLayout.children.length; i++) {
                     if (typeof titleBarButtonsLayout.children[i].isPartOfTitleBar === "undefined") {
@@ -380,7 +412,8 @@ MainWindow {
                 RowLayout {
                     id: toolbarLayout
                     anchors.fill: parent
-                    anchors.rightMargin: isQWK ? titleBarButtonsLayout.width : 0
+                    anchors.leftMargin: topLevelWindow.macTitleBarLeftPadding
+                    anchors.rightMargin: isQWK && !topLevelWindow.useMacNativeTitleBar ? titleBarButtonsLayout.width : 0
                     spacing: 0
                     clip: true
 
@@ -412,7 +445,7 @@ MainWindow {
                         id: appIcon
                         implicitWidth: 46
                         implicitHeight: parent.height
-                        visible: isQWK
+                        visible: isQWK && !topLevelWindow.useMacNativeTitleBar
 
                         icon.width: 18
                         icon.height: 18
@@ -777,7 +810,7 @@ MainWindow {
 
                     Separator {
                         Layout.rightMargin: 7
-                        visible: isQWK
+                        visible: isQWK && !topLevelWindow.useMacNativeTitleBar
                     }
                 }
 

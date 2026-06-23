@@ -36,6 +36,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _visibleEnd = -1;
     _topItem = 0;
     _topItemOffset = 0;
+    _currentIndexOffsetOverride = -1;
     _contentY = 0;
     _model = nullptr;
     _delegate = nullptr;
@@ -57,6 +58,9 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _paddingRight = 0;
     _paddingTop = 0;
     _paddingBottom = 0;
+
+    _preserveCurrentItemPositionOnNextModelReset = false;
+    _preservedCurrentIndexOffset = -1;
 
     _quickSearch = new MasonryLayoutQuickSearch(this);
 }
@@ -208,6 +212,21 @@ void MasonryLayout::reReadAndDecodeThumbnails() {
     }
 }
 
+void MasonryLayout::preserveCurrentItemPositionForNextModelReset() {
+    if (_currentIndex < 0 || _currentIndex >= _bricks.size()) {
+        return;
+    }
+
+    const MasonryBrick &currentBrick = _bricks[_currentIndex];
+    if (!currentBrick.image) {
+        return;
+    }
+
+    _preservedCurrentItemFullPath = currentBrick.image->fullPath();
+    _preservedCurrentIndexOffset = _contentY - currentBrick.y;
+    _preserveCurrentItemPositionOnNextModelReset = !_preservedCurrentItemFullPath.isEmpty();
+}
+
 void MasonryLayout::zoomIn() {
     zoom(true);
 }
@@ -285,8 +304,9 @@ void MasonryLayout::rewrap() {
    //     qDebug() << "no rewrap, zero width";
    //     return;
    // }
-    int currentIndexOffset = -1;
-    if (_currentIndex != -1 && _currentIndex >= _visibleStart && _currentIndex <= _visibleEnd) {
+    int currentIndexOffset = _currentIndexOffsetOverride;
+    _currentIndexOffsetOverride = -1;
+    if (currentIndexOffset == -1 && _currentIndex != -1 && _currentIndex >= _visibleStart && _currentIndex <= _visibleEnd) {
         currentIndexOffset = _contentY - _bricks[_currentIndex].y;
     }
 
@@ -821,6 +841,7 @@ void MasonryLayout::onModelReset() {
             });
         }
     }
+    restorePreservedCurrentItemPosition();
     emit modelChanged();
     rewrap();
     if (_viewport) {
@@ -838,6 +859,28 @@ void MasonryLayout::onModelReset() {
     emit countChanged();
 
     emit currentIndexChanged();
+}
+
+void MasonryLayout::restorePreservedCurrentItemPosition() {
+    if (!_preserveCurrentItemPositionOnNextModelReset) {
+        return;
+    }
+
+    _preserveCurrentItemPositionOnNextModelReset = false;
+    if (_preservedCurrentItemFullPath.isEmpty()) {
+        return;
+    }
+
+    for (int i = 0; i < _bricks.size(); i++) {
+        if (_bricks[i].image && _bricks[i].image->fullPath() == _preservedCurrentItemFullPath) {
+            setCurrentIndex(i);
+            _currentIndexOffsetOverride = _preservedCurrentIndexOffset;
+            break;
+        }
+    }
+
+    _preservedCurrentItemFullPath.clear();
+    _preservedCurrentIndexOffset = -1;
 }
 
 void MasonryLayout::zoom(bool in) {

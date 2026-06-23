@@ -14,8 +14,9 @@ MainWindow {
     color: isQWK ? (isQWKLegacy ? Style.windowBackgroundQWKLegacy : "transparent") : Style.windowBackgroundNoQWK
     property bool isQWKLegacy: false
     readonly property bool useMacNativeTitleBar: isQWK && Qt.platform.os === "osx"
-    readonly property int macTitleBarLeftPadding: useMacNativeTitleBar ? 86 : 0
+    readonly property int macTitleBarLeftPadding: useMacNativeTitleBar && visibility !== Window.FullScreen ? 86 : 0
     readonly property int macSystemButtonAreaLeftMargin: 12
+    readonly property int thumbnailsTitleBarSidePadding: 8
     title: "Zoin Gallery"
 
     property bool viewerDirty: false
@@ -412,8 +413,8 @@ MainWindow {
                 RowLayout {
                     id: toolbarLayout
                     anchors.fill: parent
-                    anchors.leftMargin: topLevelWindow.macTitleBarLeftPadding
-                    anchors.rightMargin: isQWK && !topLevelWindow.useMacNativeTitleBar ? titleBarButtonsLayout.width : 0
+                    anchors.leftMargin: topLevelWindow.macTitleBarLeftPadding + topLevelWindow.thumbnailsTitleBarSidePadding
+                    anchors.rightMargin: (isQWK && !topLevelWindow.useMacNativeTitleBar ? titleBarButtonsLayout.width : 0) + topLevelWindow.thumbnailsTitleBarSidePadding
                     spacing: 0
                     clip: true
 

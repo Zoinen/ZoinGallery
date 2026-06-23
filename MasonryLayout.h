@@ -88,6 +88,7 @@ public:
     Q_INVOKABLE QVariantMap indexExif(int index) const;
     Q_INVOKABLE int nextImageIndex(bool forward, bool moveToEnd);
 
+    Q_INVOKABLE void preserveCurrentItemPositionForNextModelReset();
     Q_INVOKABLE void reReadAndDecodeThumbnails();
     Q_INVOKABLE void zoomIn();
     Q_INVOKABLE void zoomOut();
@@ -233,6 +234,7 @@ private:
                            bool lastRowMatchesPrevious, qreal paddingTop, CalcLayoutMode layoutMode);
     void updateProperties(bool animate = false);
     void setContentYInternal(qreal newContentY);
+    void restorePreservedCurrentItemPosition();
 
     void setContentHeight(int newContentHeight);
 
@@ -261,6 +263,7 @@ private:
     int _visibleEnd;
     int _topItem;
     int _topItemOffset;
+    int _currentIndexOffsetOverride;
     QQuickItem *_viewport;
 
     const QSizeF GridView_Folder = QSizeF(1, 1);
@@ -291,6 +294,10 @@ private:
     qreal _paddingRight;
     qreal _paddingTop;
     qreal _paddingBottom;
+
+    bool _preserveCurrentItemPositionOnNextModelReset;
+    QString _preservedCurrentItemFullPath;
+    int _preservedCurrentIndexOffset;
 };
 
 #endif // MASONRYLAYOUT_H

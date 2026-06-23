@@ -579,7 +579,8 @@ MouseArea {
                 viewerController.clipboardCopyIndexFullPath(masonryLayout.currentIndex)
             }
             else if (event.key === Qt.Key_F5 || (event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) {
-                viewerController.cd(viewerController.currentPath)
+                masonryLayout.preserveCurrentItemPositionForNextModelReset()
+                viewerController.cd(viewerController.currentPath, false)
             }
             else {
                 event.accepted = false

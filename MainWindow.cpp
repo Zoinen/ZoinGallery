@@ -133,8 +133,8 @@ void MainWindow::toggleFullscreen() {
 
     QRect prevGeometry = geometry();
     if (visibility() == QWindow::FullScreen) {
-#if defined(__USE_QWK)
-        // Temporary workaround for transparent window BG bug
+#if defined(Q_OS_WIN) && defined(__USE_QWK)
+        // Temporary Windows workaround for transparent window BG bug
         setGeometry(QRect(0, 0, 0, 0));
         QTimer::singleShot(0, this, [=] () {
             setGeometry(_normalGeometry.adjusted(1, 0, 0, 0));

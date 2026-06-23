@@ -1,5 +1,7 @@
 #include "PersistentFolderCache.h"
 
+#include "NaturalSort.h"
+
 #include <QBuffer>
 #include <QImage>
 #include <QFile>
@@ -25,6 +27,7 @@ void PersistentFolderCache::retrieveFolders(const QStringList &folders, QList<Fo
                 .path = path,
                 .subfiles = it.value(),
             };
+            sortFileInfosNaturally(result.subfiles);
             outInfoList.append(result);
         }
         else {
@@ -37,14 +40,18 @@ void PersistentFolderCache::retrieveFolders(const QStringList &folders, QList<Fo
 void PersistentFolderCache::storeFolders(QList<FolderInfo> &folders) {
     _dbAccess.lockForWrite();
     for (FolderInfo &info : folders) {
+        sortFileInfosNaturally(info.subfiles);
         _db.insert(info.path, info.subfiles);
     }
     _dbAccess.unlock();
 }
 
 void PersistentFolderCache::storeFolder(const FolderInfo &folder) {
+    QList<FileInfo> subfiles = folder.subfiles;
+    sortFileInfosNaturally(subfiles);
+
     _dbAccess.lockForWrite();
-    _db.insert(folder.path, folder.subfiles);
+    _db.insert(folder.path, subfiles);
     _dbAccess.unlock();
 }
 

@@ -1,5 +1,6 @@
 #include "RecursiveFolderScanner.h"
 
+#include "NaturalSort.h"
 #include "PersistentImageCache.h"
 #include "ThumbnailLoader.h"
 
@@ -18,13 +19,15 @@ void RecursiveFolderScanner::run() {
 
     while (!stack.isEmpty() && !isCanceled()) {
         QDir currentDir = stack.pop();
-        QStringList dirs = currentDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        QStringList dirs = currentDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::NoSort);
+        sortNamesNaturally(dirs);
         for (int i = 0; i < dirs.size() && !isCanceled(); ++i) {
             stack.push(QDir(currentDir.absoluteFilePath(dirs[i])));
         }
 
         QStringList images;
-        QStringList files = currentDir.entryList(ThumbnailLoader::supportedFormats(), QDir::Files | QDir::NoDotAndDotDot);
+        QStringList files = currentDir.entryList(ThumbnailLoader::supportedFormats(), QDir::Files | QDir::NoDotAndDotDot, QDir::NoSort);
+        sortNamesNaturally(files);
         for (int i = 0; i < files.size() && !isCanceled(); ++i) {
             QString filePath = currentDir.absoluteFilePath(files.at(i));
             if (!PersistentImageCache::hasImage(filePath)) {

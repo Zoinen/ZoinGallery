@@ -79,6 +79,7 @@ set(PROJECT_SOURCES
     TrayController.cpp
     ThumbnailLoader.h
     ThumbnailLoader.cpp
+    NaturalSort.h
     FileListModel.h
     FileListModel.cpp
     ImageFile.h

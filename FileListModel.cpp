@@ -1,5 +1,6 @@
 #include "FileListModel.h"
 #include "DecodeManager.h"
+#include "NaturalSort.h"
 #include "ThumbnailLoader.h"
 
 #include <QDir>
@@ -422,7 +423,8 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
     }
     else {
         QDir dir(_root);
-        QStringList folders = dir.entryList(QDir::NoDotAndDotDot | QDir::Dirs | QDir::Hidden | QDir::System);
+        QStringList folders = dir.entryList(QDir::NoDotAndDotDot | QDir::Dirs | QDir::Hidden | QDir::System, QDir::NoSort);
+        sortNamesNaturally(folders);
         for (const auto &folder : folders) {
             ImageFile *item = new ImageFile(this);
             item->setFolderPath(_root);
@@ -443,7 +445,8 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
             }
         }
 
-        auto files = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::Files | QDir::Hidden | QDir::System);
+        auto files = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::Files | QDir::Hidden | QDir::System, QDir::NoSort);
+        sortFileInfosNaturally(files);
         for (const auto &file : files) {
             ImageFile *item = createFileItem(_root, file.fileName(), file.lastModified());
             if (item->isImage()) {
@@ -615,7 +618,8 @@ QList<RecursiveFolderInfo> getAllSubfoldersWithNestingLevel(const QString &start
         allFoldersWithLevels.append(dirInfo);
 
         // Get a list of all subdirectories in the current directory
-        QStringList subDirs = QDir(dirInfo.path).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        QStringList subDirs = QDir(dirInfo.path).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::NoSort);
+        sortNamesNaturally(subDirs);
         for (int i = subDirs.count() - 1; i >= 0; --i) {
             QString subDir = subDirs.at(i);
             QString newPath = QDir(dirInfo.path).filePath(subDir);

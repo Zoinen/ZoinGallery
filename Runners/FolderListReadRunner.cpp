@@ -1,5 +1,6 @@
 #include "FolderListReadRunner.h"
 
+#include "NaturalSort.h"
 #include "PersistentFolderCache.h"
 #include "ThumbnailLoader.h"
 
@@ -11,7 +12,8 @@ FolderListReadRunner::FolderListReadRunner(const QString &path, int totalImages)
 
 void FolderListReadRunner::run() {
     QDir dir(_path);
-    auto images = dir.entryInfoList(ThumbnailLoader::supportedFormats(), QDir::Files, QDir::Name);
+    auto images = dir.entryInfoList(ThumbnailLoader::supportedFormats(), QDir::Files, QDir::NoSort);
+    sortFileInfosNaturally(images);
     if (_totalImages == -1) {
         QList<FileInfo> subfiles;
         for (QFileInfo &image : images) {

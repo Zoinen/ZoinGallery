@@ -5,7 +5,7 @@ if(POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
 
-set (CMAKE_OSX_DEPLOYMENT_TARGET "10.13")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS deployment target")
 
 project(ZoinGallery LANGUAGES C CXX)
 

@@ -6,6 +6,7 @@ class ZoinGalleryConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
     
     requires = [
+        "qt/6.11.1",
         "exiv2/0.28.3",
         "libtiff/4.7.0",
         "libraw/0.21.3",
@@ -16,6 +17,12 @@ class ZoinGalleryConan(ConanFile):
     generators = "CMakeToolchain", "CMakeDeps"
 
     default_options = {
+        "qt/*:shared": True,
+        "qt/*:qtdeclarative": True,
+        "qt/*:qtsvg": True,
+        "qt/*:qtshadertools": True,
+        "qt/*:with_pq": False,
+        "qt/*:with_odbc": False,
         "libtiff/*:jpeg": "libjpeg-turbo",
         "libraw/*:shared": True,
         "libraw/*:with_jpeg": "libjpeg-turbo",
@@ -34,9 +41,12 @@ class ZoinGalleryConan(ConanFile):
     def generate(self):
         for dep in self.dependencies.values():
             if self.settings.compiler == "apple-clang":
-                copy(self, "*.dylib", src=dep.cpp_info.libdirs[0], dst=os.path.join(self.cpp.build.libdirs, str(self.settings.build_type)), keep_path=False)
+                for libdir in dep.cpp_info.libdirs:
+                    copy(self, "*.dylib", src=libdir, dst=os.path.join(self.cpp.build.libdirs, str(self.settings.build_type)), keep_path=False)
             elif self.settings.compiler == "gcc":
-                copy(self, "*.so", src=dep.cpp_info.libdirs[0], dst=os.path.join(self.cpp.build.libdirs, str(self.settings.build_type)), keep_path=False)
+                for libdir in dep.cpp_info.libdirs:
+                    copy(self, "*.so", src=libdir, dst=os.path.join(self.cpp.build.libdirs, str(self.settings.build_type)), keep_path=False)
             elif self.settings.compiler == "msvc":
                 # copy(self, "*.lib", src=dep.cpp_info.libdirs[0], dst=os.path.join(self.cpp.build.libdirs, ""), keep_path=False)  
-                copy(self, "*.dll", src=dep.cpp_info.bindirs[0], dst=os.path.join(self.cpp.build.bindirs, str(self.settings.build_type)),keep_path=False)
+                for bindir in dep.cpp_info.bindirs:
+                    copy(self, "*.dll", src=bindir, dst=os.path.join(self.cpp.build.bindirs, str(self.settings.build_type)),keep_path=False)

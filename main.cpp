@@ -13,6 +13,7 @@
 
 #if defined(Q_OS_MACOS)
 #include <QAction>
+#include <QFileOpenEvent>
 #include <QMenu>
 #include <QMenuBar>
 #endif
@@ -245,6 +246,58 @@ void installDailyLogRedirection(QObject *parent)
     logRolloverTimer->start(60 * 1000);
 }
 
+class ZoinApplication : public QApplication {
+public:
+    ZoinApplication(int &argc, char **argv)
+        : QApplication(argc, argv)
+        , _controller(nullptr)
+        , _startupFileOpenMode(true) {
+    }
+
+    void setViewerController(ViewerController *controller) {
+        _controller = controller;
+    }
+
+    void finishStartupFileOpenMode() {
+        _startupFileOpenMode = false;
+    }
+
+    QString takeQueuedFilePath() {
+        QString path = _queuedFilePath;
+        _queuedFilePath.clear();
+        return path;
+    }
+
+protected:
+    bool event(QEvent *event) override {
+#if defined(Q_OS_MACOS)
+        if (event->type() == QEvent::FileOpen) {
+            auto *fileOpenEvent = static_cast<QFileOpenEvent *>(event);
+            const QString path = fileOpenEvent->file();
+            if (!path.isEmpty()) {
+                handleFileOpen(path);
+            }
+            return true;
+        }
+#endif
+        return QApplication::event(event);
+    }
+
+private:
+    void handleFileOpen(const QString &path) {
+        if (!_controller || _startupFileOpenMode) {
+            _queuedFilePath = path;
+            return;
+        }
+
+        _controller->openExternalFile(path);
+    }
+
+    ViewerController *_controller;
+    QString _queuedFilePath;
+    bool _startupFileOpenMode;
+};
+
 #if defined(Q_OS_MACOS)
 void installMacSettingsMenu(MainWindow *mainWindow)
 {
@@ -274,7 +327,7 @@ int main(int argc, char *argv[])
 #endif
     // qputenv("QSG_NO_VSYNC", "1");
 
-    QApplication app(argc, argv);
+    ZoinApplication app(argc, argv);
     app.setOrganizationName("Zoin");
     app.setOrganizationDomain("zoingallery.com");
     app.setApplicationName("ZoinGallery");
@@ -311,6 +364,7 @@ int main(int argc, char *argv[])
     }, Qt::QueuedConnection);
 
     ViewerController *controller = new ViewerController(&engine);
+    app.setViewerController(controller);
 
 #if defined(__USE_QWK)
     qDebug() << "Using QWK";
@@ -320,8 +374,12 @@ int main(int argc, char *argv[])
     DummyQWK::registerTypes(&engine);
 #endif
 
+    const QString queuedFilePath = app.takeQueuedFilePath();
     if (!launchOptions.filePath.isEmpty()) {
         controller->setStartupFilePath(launchOptions.filePath);
+    }
+    else if (!queuedFilePath.isEmpty()) {
+        controller->setStartupFilePath(queuedFilePath);
     }
 
     if (launchOptions.backgroundMode) {
@@ -329,6 +387,12 @@ int main(int argc, char *argv[])
     }
 
     engine.load(url);
+
+    const QString startupQueuedFilePath = app.takeQueuedFilePath();
+    if (!startupQueuedFilePath.isEmpty()) {
+        controller->setStartupFilePath(startupQueuedFilePath);
+    }
+    app.finishStartupFileOpenMode();
 
     if (const QList<QObject *> roots = engine.rootObjects(); !roots.isEmpty()) {
         if (auto *mainWindow = qobject_cast<MainWindow *>(roots.first())) {

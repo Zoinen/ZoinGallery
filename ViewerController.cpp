@@ -21,6 +21,40 @@
 #include <QStandardPaths>
 #include <QTimer>
 
+#if defined(Q_OS_MACOS)
+#include <CoreFoundation/CoreFoundation.h>
+
+extern "C" {
+OSStatus LSRegisterURL(CFURLRef inURL, Boolean inUpdate);
+OSStatus LSSetDefaultRoleHandlerForContentType(CFStringRef inContentType, UInt32 inRole, CFStringRef inHandlerBundleID);
+}
+#endif
+
+namespace
+{
+#if defined(Q_OS_MACOS)
+constexpr const char *kZoinGalleryBundleIdentifier = "su.zoin";
+constexpr UInt32 kZoinGalleryLsRolesAll = 0xFFFFFFFF;
+
+bool registerCurrentBundle()
+{
+    CFBundleRef bundle = CFBundleGetMainBundle();
+    if (!bundle) {
+        return false;
+    }
+
+    CFURLRef bundleUrl = CFBundleCopyBundleURL(bundle);
+    if (!bundleUrl) {
+        return false;
+    }
+
+    const OSStatus status = LSRegisterURL(bundleUrl, true);
+    CFRelease(bundleUrl);
+    return status == noErr;
+}
+#endif
+}
+
 ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
     ThumbnailLoader::init();
@@ -324,6 +358,34 @@ QUrl ViewerController::indexUrl(int index) {
         return QUrl();
     }
     return QUrl::fromLocalFile(_fileListModel->itemFromIndex(_fileListModel->index(index))->fullPath());
+}
+
+QString ViewerController::makeDefaultImageViewer() {
+#if defined(Q_OS_MACOS)
+    registerCurrentBundle();
+
+    CFStringRef bundleIdentifier = CFStringCreateWithCString(kCFAllocatorDefault,
+                                                             kZoinGalleryBundleIdentifier,
+                                                             kCFStringEncodingUTF8);
+    if (!bundleIdentifier) {
+        return QStringLiteral("Could not set default image viewer.");
+    }
+
+    CFStringRef imageContentType = CFSTR("public.image");
+    const OSStatus status = LSSetDefaultRoleHandlerForContentType(imageContentType,
+                                                                  kZoinGalleryLsRolesAll,
+                                                                  bundleIdentifier);
+    CFRelease(bundleIdentifier);
+
+    if (status == noErr) {
+        return QStringLiteral("ZoinGallery is now the default image viewer.");
+    }
+
+    qWarning() << "Failed to set default handler for public.image:" << status;
+    return QStringLiteral("Could not set default image viewer.");
+#else
+    return QStringLiteral("Default image viewer setup is available on macOS.");
+#endif
 }
 
 void ViewerController::enterRecursiveView() {

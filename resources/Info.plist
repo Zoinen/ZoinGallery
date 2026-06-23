@@ -22,6 +22,113 @@
 	<string>@PROJECT_VERSION@.@BUILD_NUMBER@</string>
 	<key>CFBundleVersion</key>
 	<string>@PROJECT_VERSION@.@BUILD_NUMBER@</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Image files</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.image</string>
+				<string>public.png</string>
+				<string>public.jpeg</string>
+				<string>public.tiff</string>
+				<string>public.svg-image</string>
+				<string>public.bmp</string>
+				<string>public.heic</string>
+				<string>public.heif</string>
+				<string>public.avif</string>
+				<string>com.compuserve.gif</string>
+				<string>su.zoin.zoingallery.image.ext-3fr</string>
+				<string>su.zoin.zoingallery.image.ext-arq</string>
+				<string>su.zoin.zoingallery.image.ext-arw</string>
+				<string>su.zoin.zoingallery.image.ext-avif</string>
+				<string>su.zoin.zoingallery.image.ext-bay</string>
+				<string>su.zoin.zoingallery.image.ext-cr2</string>
+				<string>su.zoin.zoingallery.image.ext-cr3</string>
+				<string>su.zoin.zoingallery.image.ext-crw</string>
+				<string>su.zoin.zoingallery.image.ext-cs1</string>
+				<string>su.zoin.zoingallery.image.ext-cur</string>
+				<string>su.zoin.zoingallery.image.ext-dcr</string>
+				<string>su.zoin.zoingallery.image.ext-dds</string>
+				<string>su.zoin.zoingallery.image.ext-dng</string>
+				<string>su.zoin.zoingallery.image.ext-erf</string>
+				<string>su.zoin.zoingallery.image.ext-fff</string>
+				<string>su.zoin.zoingallery.image.ext-ico</string>
+				<string>su.zoin.zoingallery.image.ext-iiq</string>
+				<string>su.zoin.zoingallery.image.ext-jfif</string>
+				<string>su.zoin.zoingallery.image.ext-jpe</string>
+				<string>su.zoin.zoingallery.image.ext-k25</string>
+				<string>su.zoin.zoingallery.image.ext-kdc</string>
+				<string>su.zoin.zoingallery.image.ext-mef</string>
+				<string>su.zoin.zoingallery.image.ext-mos</string>
+				<string>su.zoin.zoingallery.image.ext-nef</string>
+				<string>su.zoin.zoingallery.image.ext-nrw</string>
+				<string>su.zoin.zoingallery.image.ext-orf</string>
+				<string>su.zoin.zoingallery.image.ext-pbm</string>
+				<string>su.zoin.zoingallery.image.ext-pef</string>
+				<string>su.zoin.zoingallery.image.ext-pgm</string>
+				<string>su.zoin.zoingallery.image.ext-ppm</string>
+				<string>su.zoin.zoingallery.image.ext-raf</string>
+				<string>su.zoin.zoingallery.image.ext-rw2</string>
+				<string>su.zoin.zoingallery.image.ext-rwl</string>
+				<string>su.zoin.zoingallery.image.ext-sr2</string>
+				<string>su.zoin.zoingallery.image.ext-srf</string>
+				<string>su.zoin.zoingallery.image.ext-srw</string>
+				<string>su.zoin.zoingallery.image.ext-svgz</string>
+				<string>su.zoin.zoingallery.image.ext-x3f</string>
+				<string>su.zoin.zoingallery.image.ext-xbm</string>
+				<string>su.zoin.zoingallery.image.ext-xpm</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-3fr</string><key>UTTypeDescription</key><string>ZoinGallery 3FR image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>3fr</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-arq</string><key>UTTypeDescription</key><string>ZoinGallery ARQ image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>arq</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-arw</string><key>UTTypeDescription</key><string>ZoinGallery ARW image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>arw</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-avif</string><key>UTTypeDescription</key><string>ZoinGallery AVIF image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>avif</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-bay</string><key>UTTypeDescription</key><string>ZoinGallery BAY image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>bay</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-cr2</string><key>UTTypeDescription</key><string>ZoinGallery CR2 image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>cr2</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-cr3</string><key>UTTypeDescription</key><string>ZoinGallery CR3 image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>cr3</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-crw</string><key>UTTypeDescription</key><string>ZoinGallery CRW image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>crw</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-cs1</string><key>UTTypeDescription</key><string>ZoinGallery CS1 image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>cs1</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-cur</string><key>UTTypeDescription</key><string>ZoinGallery cursor image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>cur</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-dcr</string><key>UTTypeDescription</key><string>ZoinGallery DCR image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>dcr</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-dds</string><key>UTTypeDescription</key><string>ZoinGallery DDS image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>dds</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-dng</string><key>UTTypeDescription</key><string>ZoinGallery DNG image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>dng</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-erf</string><key>UTTypeDescription</key><string>ZoinGallery ERF image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>erf</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-fff</string><key>UTTypeDescription</key><string>ZoinGallery FFF image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>fff</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-ico</string><key>UTTypeDescription</key><string>ZoinGallery icon image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>ico</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-iiq</string><key>UTTypeDescription</key><string>ZoinGallery IIQ image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>iiq</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-jfif</string><key>UTTypeDescription</key><string>ZoinGallery JFIF image</string><key>UTTypeConformsTo</key><array><string>public.jpeg</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>jfif</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-jpe</string><key>UTTypeDescription</key><string>ZoinGallery JPE image</string><key>UTTypeConformsTo</key><array><string>public.jpeg</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>jpe</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-k25</string><key>UTTypeDescription</key><string>ZoinGallery K25 image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>k25</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-kdc</string><key>UTTypeDescription</key><string>ZoinGallery KDC image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>kdc</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-mef</string><key>UTTypeDescription</key><string>ZoinGallery MEF image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>mef</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-mos</string><key>UTTypeDescription</key><string>ZoinGallery MOS image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>mos</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-nef</string><key>UTTypeDescription</key><string>ZoinGallery NEF image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>nef</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-nrw</string><key>UTTypeDescription</key><string>ZoinGallery NRW image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>nrw</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-orf</string><key>UTTypeDescription</key><string>ZoinGallery ORF image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>orf</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-pbm</string><key>UTTypeDescription</key><string>ZoinGallery PBM image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>pbm</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-pef</string><key>UTTypeDescription</key><string>ZoinGallery PEF image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>pef</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-pgm</string><key>UTTypeDescription</key><string>ZoinGallery PGM image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>pgm</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-ppm</string><key>UTTypeDescription</key><string>ZoinGallery PPM image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>ppm</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-raf</string><key>UTTypeDescription</key><string>ZoinGallery RAF image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>raf</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-rw2</string><key>UTTypeDescription</key><string>ZoinGallery RW2 image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>rw2</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-rwl</string><key>UTTypeDescription</key><string>ZoinGallery RWL image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>rwl</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-sr2</string><key>UTTypeDescription</key><string>ZoinGallery SR2 image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>sr2</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-srf</string><key>UTTypeDescription</key><string>ZoinGallery SRF image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>srf</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-srw</string><key>UTTypeDescription</key><string>ZoinGallery SRW image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>srw</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-svgz</string><key>UTTypeDescription</key><string>ZoinGallery SVGZ image</string><key>UTTypeConformsTo</key><array><string>public.svg-image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>svgz</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-x3f</string><key>UTTypeDescription</key><string>ZoinGallery X3F image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>x3f</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-xbm</string><key>UTTypeDescription</key><string>ZoinGallery XBM image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>xbm</string></dict></dict>
+		<dict><key>UTTypeIdentifier</key><string>su.zoin.zoingallery.image.ext-xpm</string><key>UTTypeDescription</key><string>ZoinGallery XPM image</string><key>UTTypeConformsTo</key><array><string>public.image</string></array><key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><string>xpm</string></dict></dict>
+	</array>
 
 	<key>SUPublicDSAKeyFile</key>
 	<string>dsa_pub.pem</string>

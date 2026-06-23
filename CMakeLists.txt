@@ -341,4 +341,5 @@ if(APPLE)
     target_link_options(${PROJECT_NAME} PRIVATE
         "-Wl,-rpath,${_qt_bin_dir}/../lib/,-rpath,@loader_path/../Frameworks,-rpath,@executable_path/../,-rpath,@executable_path/../Frameworks"
         )
+    target_link_libraries(ZoinGallery PRIVATE "-framework CoreServices")
 endif()

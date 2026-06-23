@@ -35,6 +35,23 @@ Dialog {
             }
         }
 
+        Button {
+            id: defaultImageViewerButton
+            text: "Make Default Image Viewer"
+            Layout.fillWidth: true
+            onClicked: {
+                defaultImageViewerStatus.text = viewerController.makeDefaultImageViewer()
+            }
+        }
+
+        Text {
+            id: defaultImageViewerStatus
+            Layout.fillWidth: true
+            color: Style.text
+            wrapMode: Text.Wrap
+            visible: text !== ""
+        }
+
         Rectangle {
             Layout.fillWidth: true
             height: 1

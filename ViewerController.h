@@ -57,6 +57,7 @@ public:
     Q_INVOKABLE void openPendingExternalFileInViewer(int viewerWidth = -1, int viewerHeight = -1);
 
     Q_INVOKABLE QColor adjustHSL(const QColor &color, qreal h, qreal s, qreal l);
+    Q_INVOKABLE QString makeDefaultImageViewer();
 
     bool backgroundMode() const;
     bool pendingOpenInViewer() const;

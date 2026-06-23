@@ -55,6 +55,10 @@ DecodeManager::DecodeManager(QObject *parent)
     }
 }
 
+DecodeManager::~DecodeManager() {
+    prepareToClose();
+}
+
 void DecodeManager::readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView, int directOpenGeneration) {
     if (!_disableCache) {
         CachedImageInfoRunner *runner = new CachedImageInfoRunner(paths, isFromEmbeddedView, directOpenGeneration);
@@ -283,14 +287,34 @@ void DecodeManager::cancelAllDecodeViewerRunners() {
 }
 
 void DecodeManager::prepareToClose() {
-    cancelAllRunners();
+    if (_isClosing) {
+        return;
+    }
+    _isClosing = true;
+    _runningTasksUpdateTimer.stop();
+
+    for (int i = 0; i < _workers.size(); i++) {
+        if (Runner *runner = _workers[i].runner) {
+            runner->cancel();
+        }
+    }
+
+    while (!_taskQueue.isEmpty()) {
+        Runner *runner = _taskQueue.dequeue();
+        runner->cancel();
+        delete runner;
+    }
 
     for (int i = 0; i < _workers.size(); i++) {
         _workers[i].thread->quit();
     }
 
     for (int i = 0; i < _workers.size(); i++) {
-        _workers[i].thread->wait(QDeadlineTimer(2000ms));
+        if (!_workers[i].thread->wait(QDeadlineTimer(10s))) {
+            qWarning() << "Decode worker did not stop in time; forcing shutdown" << i;
+            _workers[i].thread->terminate();
+            _workers[i].thread->wait();
+        }
     }
 
     if (!_disableCache) {
@@ -364,6 +388,9 @@ void DecodeManager::updateRunningTasksCount() {
 
 void DecodeManager::processQueue() {
     // qDebug() << __FUNCTION__ << _taskQueue.size();
+    if (_isClosing) {
+        return;
+    }
     if (!_timer.isValid()) {
         _timer.start();
         // qDebug() << "ZZ TIMER START";
@@ -411,7 +438,9 @@ void DecodeManager::onRunnerFinished(QObject *runner) {
         if (_workers[i].runner == runner) {
             _workers[i].runner = nullptr;
             runner->deleteLater();
-            processQueue();
+            if (!_isClosing) {
+                processQueue();
+            }
             break;
         }
     }

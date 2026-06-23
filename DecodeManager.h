@@ -51,6 +51,7 @@ class DecodeManager : public QObject {
 
 public:
     explicit DecodeManager(QObject *parent = nullptr);
+    ~DecodeManager() override;
     void readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView, int directOpenGeneration = 0);
     void decodeImages(const QList<ImageDecodeRequest> &requests);
     void readFolderList(const QStringList &paths, int totalImages = -1);
@@ -117,6 +118,7 @@ private:
 
     bool _disableCache = true;
     bool _runningTasksDebug = false;
+    bool _isClosing = false;
 };
 
 #endif // DECODEMANAGER_H

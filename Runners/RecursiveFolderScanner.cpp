@@ -16,16 +16,16 @@ void RecursiveFolderScanner::run() {
     stack.push(QDir(_root));
     qDebug() << "RecursiveFolderScanner: Starting folder scanning...";
 
-    while (!stack.isEmpty()) {
+    while (!stack.isEmpty() && !isCanceled()) {
         QDir currentDir = stack.pop();
         QStringList dirs = currentDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-        for (int i = 0; i < dirs.size(); ++i) {
+        for (int i = 0; i < dirs.size() && !isCanceled(); ++i) {
             stack.push(QDir(currentDir.absoluteFilePath(dirs[i])));
         }
 
         QStringList images;
         QStringList files = currentDir.entryList(ThumbnailLoader::supportedFormats(), QDir::Files | QDir::NoDotAndDotDot);
-        for (int i = 0; i < files.size(); ++i) {
+        for (int i = 0; i < files.size() && !isCanceled(); ++i) {
             QString filePath = currentDir.absoluteFilePath(files.at(i));
             if (!PersistentImageCache::hasImage(filePath)) {
                 // qDebug() << "RecursiveFolderScanner: File added" << filePath;
@@ -43,6 +43,9 @@ void RecursiveFolderScanner::run() {
 
     qDebug() << "RecursiveFolderScanner: Folder scanning complete. Starting decode";
     for (QStringList &images : _foldersToDecode) {
+        if (isCanceled()) {
+            break;
+        }
         emit scanImages(images);
     }
 

@@ -292,6 +292,53 @@ Item {
         viewerImage.y = fitViewerImageInViewportBoundsY(viewerImage.y)
     }
 
+    function canPanHorizontally() {
+        return !zoomFitView && viewerImage.width > flickableArea.width + 0.5
+    }
+
+    function canPanVertically() {
+        return !zoomFitView && viewerImage.height > flickableArea.height + 0.5
+    }
+
+    function panBy(deltaX, deltaY) {
+        if (zoomFitView) {
+            return Qt.point(deltaX, deltaY)
+        }
+
+        viewportAnimation.stop()
+
+        let oldX = viewerImage.x
+        let oldY = viewerImage.y
+        let targetX = fitViewerImageInViewportBoundsX(viewerImage.x + deltaX)
+        let targetY = fitViewerImageInViewportBoundsY(viewerImage.y + deltaY)
+
+        viewerImage.x = targetX
+        viewerImage.y = targetY
+        xAnimation.to = targetX
+        yAnimation.to = targetY
+        zoomAnimation.to = zoomScale
+
+        forceShowScrollBars = true
+        forceShowScrollBars = false
+
+        return Qt.point(deltaX - (targetX - oldX), deltaY - (targetY - oldY))
+    }
+
+    function settlePan() {
+        if (zoomFitView) {
+            return
+        }
+
+        xAnimation.to = fitViewerImageInViewportBoundsX(viewerImage.x)
+        yAnimation.to = fitViewerImageInViewportBoundsY(viewerImage.y)
+        zoomAnimation.to = zoomScale
+        xAnimation.duration = animationDuration
+        yAnimation.duration = animationDuration
+        zoomAnimation.duration = 0
+        viewportAnimation.easing = Easing.OutSine
+        viewportAnimation.restart()
+    }
+
     function fitViewerImageInViewportBoundsX(targetX, targetScale) {
         if (targetScale === undefined) {
             targetScale = zoomScale

@@ -213,6 +213,7 @@ FileListModel::FileListModel(QObject *parent)
                         };
                     }
                     _imageIdToFullSizeViewer[imageId] = request.info.path;
+                    emit viewerImageCacheChanged(item->index());
                     if (item->index() == _currentViewIndex) {
                         emit viewerImageIdUrlChanged(QString("image://async/") + imageId, 2);
                     }
@@ -243,6 +244,7 @@ FileListModel::FileListModel(QObject *parent)
                         };
                     }
                     _imageIdToViewer[imageId] = request.info.path;
+                    emit viewerImageCacheChanged(item->index());
                     if (item->index() == _currentViewIndex) {
                         emit viewerImageIdUrlChanged(QString("image://thumbnails/") + imageId, 1);
                     }
@@ -1213,6 +1215,27 @@ void FileListModel::requestViewer(int index, int width, int height) {
     // qDebug() << __FUNCTION__ << "REQUEST FOR DECODE" << requests.size();
 
     _decodeManager->decodeImages(requests);
+}
+
+QString FileListModel::bestViewerImageUrlForIndex(int index) const {
+    if (index < 0 || index >= _items.size()) {
+        return QString();
+    }
+
+    const ImageFile *item = _items[index];
+    const QString requestedPath = item->fullPath();
+
+    auto fullSizeIt = _fullSizeViewerImages.find(requestedPath);
+    if (fullSizeIt != _fullSizeViewerImages.end() && !fullSizeIt->image.isNull()) {
+        return QString("image://async/") + fullSizeIt->imageId;
+    }
+
+    auto viewerIt = _viewerImages.find(requestedPath);
+    if (viewerIt != _viewerImages.end() && !viewerIt->image.isNull()) {
+        return QString("image://thumbnails/") + viewerIt->imageId;
+    }
+
+    return item->imageIdUrl();
 }
 
 QImage FileListModel::viewerForImageId(const QString &imageId) {

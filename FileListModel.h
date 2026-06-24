@@ -101,6 +101,7 @@ public:
 
     Q_INVOKABLE void openImageDirectly(const QString &path, int width = -1, int height = -1);
     Q_INVOKABLE void requestViewer(int index, int width = -1, int height = -1); // -1 means full size
+    Q_INVOKABLE QString bestViewerImageUrlForIndex(int index) const;
     QImage viewerForImageId(const QString &imageId);
     QImage fullSizeViewerForImageId(const QString &imageId);
 
@@ -147,6 +148,7 @@ public:
 
 signals:
     void viewerImageIdUrlChanged(const QString &imageId, int level); // 0 is thumbnail, 1 is viewer, 2 is full resolution
+    void viewerImageCacheChanged(int index);
     void viewerReset();
     void directOpenReady(int index);
 

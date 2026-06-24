@@ -9,6 +9,10 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS deployment t
 
 project(ZoinGallery LANGUAGES C CXX)
 
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
+
 option(USE_QWK "Use QWindowKit" ON)
 option(USE_EXIV2 "Use Exiv2 for metadata extraction" OFF)
 
@@ -98,6 +102,10 @@ set(PROJECT_SOURCES
     MasonryLayoutQuickSearch.cpp
     MainWindow.h
     MainWindow.cpp
+    ViewerWheelArea.h
+    ViewerWheelArea.cpp
+    ViewerWheelAreaNative.h
+    ViewerWheelAreaNative.cpp
     ImageModel.h
     ImageModel.cpp
     DummyQWK.h
@@ -179,6 +187,7 @@ if(APPLE)
     set(ICON_FILENAME ZoinGallery.icns)
     set(ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/resources/${ICON_FILENAME})
     set(RESOURCE_FILES ${ICON_PATH})
+    list(APPEND PROJECT_SOURCES ViewerWheelAreaNative_mac.mm)
 endif()
 
 add_executable(ZoinGallery WIN32 MACOSX_BUNDLE ${PROJECT_SOURCES} ${RESOURCE_FILES})

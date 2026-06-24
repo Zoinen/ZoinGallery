@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Effects
+import ZoinGallery 1.0
 
 Item {
     id: viewerMode
@@ -249,8 +250,476 @@ Item {
     property string lockedPreviousImageIdUrl: previousImageLocked && previousImageIndex !== -1 ? masonryLayout.view.indexImageIdUrl(previousImageIndex) : ""
     property string lockedPreviousPath: previousImageLocked && previousImageIndex !== -1 ? masonryLayout.view.indexFullPath(previousImageIndex) : ""
 
+    property real viewerNavigationOffsetX: 0
+    property real viewerNavigationOverdrag: 0
+    property real viewerNavigationVelocityX: 0
+    property real viewerNavigationLastTime: 0
+    property bool viewerGestureLogging: true
+    property bool viewerNavigationActive: false
+    property bool viewerNavigationRevealed: false
+    property bool viewerNavigationCommitAfterAnimation: false
+    property bool viewerNavigationGestureActive: false
+    property bool viewerNavigationGestureCommitted: false
+    property bool viewerNavigationGestureHasPhase: false
+    property bool viewerNavigationSuppressMomentum: false
+    property int viewerNavigationGestureSerial: 0
+    property int viewerNavigationDirection: 0 // -1 = previous image, 1 = next image
+    property int viewerNavigationTargetIndex: -1
+    property string viewerNavigationTargetSource: ""
+    readonly property size viewerNavigationTargetOriginalSize: viewerNavigationTargetIndex !== -1 ?
+            masonryLayout.view.indexOriginalSize(viewerNavigationTargetIndex) : Qt.size(0, 0)
+    readonly property bool viewerNavigationTargetHasSize: viewerNavigationTargetOriginalSize.width > 1 &&
+            viewerNavigationTargetOriginalSize.height > 1 && viewerMode.width > 0 && viewerMode.height > 0
+    readonly property real viewerNavigationTargetAspect: viewerNavigationTargetHasSize ?
+            viewerNavigationTargetOriginalSize.width / viewerNavigationTargetOriginalSize.height : 1
+    readonly property bool viewerNavigationTargetFitToHeight: viewerNavigationTargetHasSize ?
+            viewerNavigationTargetAspect <= viewerMode.width / viewerMode.height : false
+    readonly property real viewerNavigationTargetDisplayWidth: viewerNavigationTargetHasSize ?
+            (viewerNavigationTargetFitToHeight ? viewerMode.height * viewerNavigationTargetAspect : viewerMode.width) :
+            viewerMode.width
+    readonly property real viewerNavigationTargetDisplayHeight: viewerNavigationTargetHasSize ?
+            (viewerNavigationTargetFitToHeight ? viewerMode.height : viewerMode.width / viewerNavigationTargetAspect) :
+            viewerMode.height
+    readonly property real viewerNavigationTargetTravelDistance: viewerNavigationDirection < 0 ?
+            Math.max(1, (viewerMode.width + viewerNavigationTargetDisplayWidth) * 0.5) : Math.max(1, viewerMode.width)
+    readonly property real viewerNavigationProgress: Math.min(1, Math.abs(viewerNavigationOffsetX) / Math.max(1, viewerMode.width * 0.5))
+    readonly property real viewerNavigationCoverProgress: Math.min(1, Math.abs(viewerNavigationOffsetX) / viewerNavigationTargetTravelDistance)
+    readonly property real viewerNavigationTargetOpacity: viewerNavigationDirection < 0 ? 1 : viewerNavigationProgress
+    readonly property real viewerNavigationCurrentOpacity: viewerNavigationDirection < 0 && viewerNavigationTargetIndex !== -1 ? 1 - viewerNavigationCoverProgress : 1
+    readonly property real viewerNavigationCurrentOffsetX: viewerNavigationDirection < 0 && viewerNavigationTargetIndex !== -1 ? 0 : viewerNavigationOffsetX
+    readonly property real viewerNavigationTargetImageX: viewerNavigationDirection < 0 ?
+            -viewerNavigationTargetDisplayWidth + Math.min(Math.max(viewerNavigationOffsetX, 0), viewerNavigationTargetTravelDistance) :
+            (viewerMode.width - viewerNavigationTargetDisplayWidth) * 0.5
+    readonly property real viewerNavigationTargetImageY: (viewerMode.height - viewerNavigationTargetDisplayHeight) * 0.5
+    readonly property real viewerNavigationOverdragThreshold: Math.min(48, viewerMode.width * 0.08)
+    readonly property real viewerNavigationCommitThreshold: Math.max(80, viewerMode.width * 0.25)
+
     function isTildeKey(event) {
         return event.key === Qt.Key_QuoteLeft || event.key === Qt.Key_AsciiTilde || event.key === 1025
+    }
+
+    function viewerGestureNumber(value) {
+        return Number(value).toFixed(2)
+    }
+
+    function viewerGesturePhaseName(phase) {
+        if (phase === ViewerWheelArea.ScrollBegin) {
+            return "begin"
+        }
+        if (phase === ViewerWheelArea.ScrollUpdate) {
+            return "update"
+        }
+        if (phase === ViewerWheelArea.ScrollEnd) {
+            return "end"
+        }
+        if (phase === ViewerWheelArea.ScrollMomentum) {
+            return "momentum"
+        }
+        return "none"
+    }
+
+    function viewerGestureDirectionName(direction) {
+        if (direction > 0) {
+            return "next"
+        }
+        if (direction < 0) {
+            return "previous"
+        }
+        return "none"
+    }
+
+    function viewerGestureSnapshot() {
+        return "gesture=" + viewerNavigationGestureSerial +
+                " gestureActive=" + viewerNavigationGestureActive +
+                " committed=" + viewerNavigationGestureCommitted +
+                " phaseAware=" + viewerNavigationGestureHasPhase +
+                " suppressMomentum=" + viewerNavigationSuppressMomentum +
+                " navActive=" + viewerNavigationActive +
+                " revealed=" + viewerNavigationRevealed +
+                " dir=" + viewerGestureDirectionName(viewerNavigationDirection) +
+                " offset=" + viewerGestureNumber(viewerNavigationOffsetX) +
+                " overdrag=" + viewerGestureNumber(viewerNavigationOverdrag) +
+                " velocity=" + viewerGestureNumber(viewerNavigationVelocityX) +
+                " current=" + masonryLayout.view.currentIndex +
+                " target=" + viewerNavigationTargetIndex +
+                " zoomFit=" + flickableArea.zoomFitView
+    }
+
+    function logViewerGesture(message) {
+        if (!viewerGestureLogging) {
+            return
+        }
+        console.log("[ViewerGesture] " + message + " | " + viewerGestureSnapshot())
+    }
+
+    function resetViewerNavigation(reason) {
+        if (reason !== undefined && (viewerNavigationActive || Math.abs(viewerNavigationOffsetX) > 0.1 ||
+                viewerNavigationOverdrag > 0.1 || viewerNavigationTargetIndex !== -1)) {
+            logViewerGesture("reset reason=" + reason)
+        }
+        viewerNavigationFinishTimer.stop()
+        viewerNavigationOffsetAnimation.stop()
+        viewerNavigationOffsetX = 0
+        viewerNavigationOverdrag = 0
+        viewerNavigationVelocityX = 0
+        viewerNavigationLastTime = 0
+        viewerNavigationActive = false
+        viewerNavigationRevealed = false
+        viewerNavigationCommitAfterAnimation = false
+        viewerNavigationDirection = 0
+        viewerNavigationTargetIndex = -1
+        viewerNavigationTargetSource = ""
+    }
+
+    function beginViewerNavigationGesture(forceNew, hasPhase) {
+        if (hasPhase) {
+            viewerNavigationGestureEndTimer.stop()
+        }
+        if (forceNew || !viewerNavigationGestureActive) {
+            viewerNavigationResidualQuietTimer.stop()
+            viewerNavigationGestureSerial += 1
+            viewerNavigationGestureActive = true
+            viewerNavigationGestureCommitted = false
+            viewerNavigationSuppressMomentum = false
+            viewerNavigationLastTime = 0
+            logViewerGesture("gesture begin forceNew=" + forceNew + " phaseAware=" + hasPhase)
+        }
+        viewerNavigationGestureHasPhase = hasPhase
+    }
+
+    function continueViewerNavigationGesture(hasPhase) {
+        beginViewerNavigationGesture(false, hasPhase)
+        if (!hasPhase) {
+            viewerNavigationGestureEndTimer.restart()
+        }
+    }
+
+    function endViewerNavigationGesture(clearCommitted) {
+        logViewerGesture("gesture end clearCommitted=" + (clearCommitted === undefined ? true : clearCommitted))
+        viewerNavigationGestureEndTimer.stop()
+        viewerNavigationGestureActive = false
+        viewerNavigationGestureHasPhase = false
+        if (clearCommitted === undefined || clearCommitted) {
+            viewerNavigationGestureCommitted = false
+            viewerNavigationSuppressMomentum = false
+            viewerNavigationResidualQuietTimer.stop()
+        }
+        viewerNavigationLastTime = 0
+    }
+
+    function startViewerNavigationResidualSuppression(reason) {
+        if (!viewerNavigationSuppressMomentum) {
+            logViewerGesture("residual suppression begin reason=" + reason)
+        }
+        viewerNavigationSuppressMomentum = true
+        viewerNavigationResidualQuietTimer.restart()
+    }
+
+    function clearViewerNavigationResidualSuppression(reason) {
+        if (!viewerNavigationSuppressMomentum) {
+            return
+        }
+
+        if (viewerNavigationOffsetAnimation.running || viewerNavigationCommitAfterAnimation) {
+            viewerNavigationResidualQuietTimer.restart()
+            return
+        }
+
+        logViewerGesture("residual suppression clear reason=" + reason)
+        viewerNavigationSuppressMomentum = false
+        if (!viewerNavigationGestureActive) {
+            viewerNavigationGestureCommitted = false
+        }
+    }
+
+    function hiddenNavigationOffset(overdrag) {
+        return Math.min(overdrag * 0.35, viewerNavigationOverdragThreshold * 0.5)
+    }
+
+    function updateViewerNavigationTargetSource() {
+        if (viewerNavigationTargetIndex !== -1) {
+            viewerNavigationTargetSource = fileListModel.bestViewerImageUrlForIndex(viewerNavigationTargetIndex)
+        }
+    }
+
+    function beginViewerNavigation(direction) {
+        let currentIndex = masonryLayout.view.currentIndex
+        let targetIndex = masonryLayout.view.nextImageIndex(direction > 0, false)
+
+        viewerNavigationActive = true
+        viewerNavigationDirection = direction
+        viewerNavigationTargetIndex = targetIndex !== currentIndex ? targetIndex : -1
+        viewerNavigationTargetSource = ""
+        updateViewerNavigationTargetSource()
+        logViewerGesture("navigation begin direction=" + viewerGestureDirectionName(direction) +
+                         " current=" + currentIndex + " target=" + viewerNavigationTargetIndex +
+                         " sourceReady=" + (viewerNavigationTargetSource !== ""))
+    }
+
+    function applyViewerNavigationDelta(deltaX) {
+        if (Math.abs(deltaX) < 0.1) {
+            return
+        }
+
+        let direction = deltaX < 0 ? 1 : -1
+        if (!viewerNavigationActive || viewerNavigationDirection !== direction && !viewerNavigationRevealed) {
+            resetViewerNavigation("new-direction direction=" + viewerGestureDirectionName(direction))
+            beginViewerNavigation(direction)
+        }
+
+        let signedDelta = -viewerNavigationDirection * deltaX
+        viewerNavigationOverdrag = Math.max(0, viewerNavigationOverdrag + signedDelta)
+
+        if (viewerNavigationOverdrag <= 0.1) {
+            resetViewerNavigation("overdrag-cleared deltaX=" + viewerGestureNumber(deltaX))
+            return
+        }
+
+        if (viewerNavigationTargetIndex === -1) {
+            viewerNavigationRevealed = false
+            viewerNavigationOffsetX = -viewerNavigationDirection *
+                    Math.min(viewerNavigationOverdrag * 0.25, viewerNavigationOverdragThreshold * 0.6)
+            logViewerGesture("edge resistance noTarget deltaX=" + viewerGestureNumber(deltaX))
+            return
+        }
+
+        if (viewerNavigationOverdrag < viewerNavigationOverdragThreshold) {
+            viewerNavigationRevealed = false
+            viewerNavigationOffsetX = viewerNavigationDirection < 0 ?
+                    viewerNavigationOverdrag : -viewerNavigationDirection * hiddenNavigationOffset(viewerNavigationOverdrag)
+            logViewerGesture("hidden overdrag deltaX=" + viewerGestureNumber(deltaX) +
+                             " threshold=" + viewerGestureNumber(viewerNavigationOverdragThreshold))
+            return
+        }
+
+        if (!viewerNavigationRevealed) {
+            logViewerGesture("neighbor reveal")
+        }
+        viewerNavigationRevealed = true
+        let visibleDistance = viewerNavigationDirection < 0 ?
+                viewerNavigationOverdrag :
+                hiddenNavigationOffset(viewerNavigationOverdragThreshold) +
+                viewerNavigationOverdrag - viewerNavigationOverdragThreshold
+        let maxOffset = viewerNavigationDirection < 0 ? viewerNavigationTargetTravelDistance : viewerMode.width
+        viewerNavigationOffsetX = -viewerNavigationDirection * Math.min(visibleDistance, maxOffset)
+        logViewerGesture("drag progress deltaX=" + viewerGestureNumber(deltaX) +
+                         " visibleDistance=" + viewerGestureNumber(visibleDistance))
+    }
+
+    function finishViewerNavigation() {
+        viewerNavigationFinishTimer.stop()
+        if (!viewerNavigationActive) {
+            logViewerGesture("finish without active navigation")
+            flickableArea.settlePan()
+            return
+        }
+
+        let signedVelocity = -viewerNavigationDirection * viewerNavigationVelocityX
+        let signedOffset = -viewerNavigationDirection * viewerNavigationOffsetX
+        let shouldCommit = viewerNavigationTargetIndex !== -1 && viewerNavigationRevealed &&
+                (signedOffset >= viewerNavigationCommitThreshold || signedVelocity > 900)
+
+        if (shouldCommit) {
+            viewerNavigationGestureCommitted = true
+        }
+        logViewerGesture("finish shouldCommit=" + shouldCommit +
+                         " signedOffset=" + viewerGestureNumber(signedOffset) +
+                         " signedVelocity=" + viewerGestureNumber(signedVelocity) +
+                         " threshold=" + viewerGestureNumber(viewerNavigationCommitThreshold))
+        viewerNavigationCommitAfterAnimation = shouldCommit
+        viewerNavigationOffsetAnimation.to = shouldCommit ?
+                (viewerNavigationDirection < 0 ? viewerNavigationTargetTravelDistance : -viewerNavigationDirection * viewerMode.width) : 0
+        viewerNavigationOffsetAnimation.duration = shouldCommit ? viewerMode.animationDuration : 220
+        viewerNavigationOffsetAnimation.restart()
+    }
+
+    function commitViewerNavigation() {
+        let targetIndex = viewerNavigationTargetIndex
+        logViewerGesture("commit target=" + targetIndex)
+        viewerNavigationGestureCommitted = true
+        startViewerNavigationResidualSuppression("commit")
+        resetViewerNavigation("commit")
+        if (targetIndex === -1 || targetIndex === masonryLayout.view.currentIndex) {
+            return
+        }
+
+        masonryLayout.setCurrentIndex(targetIndex)
+        onCurrentIndexChanged()
+    }
+
+    function finishViewerNavigationAnimationNow(reason) {
+        if (!viewerNavigationOffsetAnimation.running && !viewerNavigationCommitAfterAnimation) {
+            return
+        }
+
+        logViewerGesture("finish animation now reason=" + reason)
+        viewerNavigationOffsetAnimation.stop()
+        if (viewerNavigationCommitAfterAnimation) {
+            commitViewerNavigation()
+        }
+        else {
+            resetViewerNavigation("interrupted animation: " + reason)
+            flickableArea.settlePan()
+        }
+    }
+
+    function wheelDeltaPixels(pixelDelta, angleDelta) {
+        if (pixelDelta !== 0) {
+            return pixelDelta
+        }
+
+        return angleDelta / 120 * 80
+    }
+
+    function switchImageForLegacyWheel(angleDeltaY) {
+        let nextIndex = -1
+        let currentIndex = masonryLayout.view.currentIndex
+        if (angleDeltaY < 0) {
+            nextIndex = masonryLayout.moveInImageList(true, false)
+        }
+        else if (angleDeltaY > 0) {
+            nextIndex = masonryLayout.moveInImageList(false, false)
+        }
+
+        if (nextIndex !== -1 && nextIndex !== currentIndex) {
+            logViewerGesture("legacy wheel switch angleDeltaY=" + angleDeltaY + " target=" + nextIndex)
+            onCurrentIndexChanged()
+        }
+    }
+
+    function handleViewerWheel(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, modifiers,
+                               buttons, hasPixelDelta, inverted, source, deviceType,
+                               nativeMomentum, nativePhase, nativeMomentumPhase) {
+        let phaseAware = phase !== ViewerWheelArea.NoScrollPhase
+        let effectivePhase = nativeMomentum && phase === ViewerWheelArea.ScrollBegin ?
+                ViewerWheelArea.ScrollMomentum : phase
+        logViewerGesture("wheel phase=" + viewerGesturePhaseName(phase) +
+                         " px=(" + viewerGestureNumber(pixelDeltaX) + "," + viewerGestureNumber(pixelDeltaY) + ")" +
+                         " angle=(" + viewerGestureNumber(angleDeltaX) + "," + viewerGestureNumber(angleDeltaY) + ")" +
+                         " hasPixel=" + hasPixelDelta +
+                         " inverted=" + inverted +
+                         " source=" + source +
+                         " device=" + deviceType +
+                         " nativeMomentum=" + nativeMomentum +
+                         " nativePhase=" + nativePhase +
+                         " nativeMomentumPhase=" + nativeMomentumPhase +
+                         " modifiers=" + modifiers +
+                         " buttons=" + buttons)
+
+        if (viewerNavigationSuppressMomentum && !viewerNavigationGestureActive) {
+            let physicalScrollRestart = !nativeMomentum &&
+                    effectivePhase !== ViewerWheelArea.ScrollMomentum &&
+                    effectivePhase !== ViewerWheelArea.ScrollEnd
+            if (physicalScrollRestart) {
+                clearViewerNavigationResidualSuppression("new physical scroll " +
+                                                         viewerGesturePhaseName(effectivePhase))
+            }
+            else {
+                viewerNavigationResidualQuietTimer.restart()
+                logViewerGesture("wheel suppressed as residual tail phase=" +
+                                 viewerGesturePhaseName(effectivePhase))
+                return
+            }
+        }
+
+        if (nativeMomentum && !viewerNavigationGestureActive) {
+            startViewerNavigationResidualSuppression("stray native momentum")
+            logViewerGesture("native momentum suppressed")
+            return
+        }
+
+        if (effectivePhase === ViewerWheelArea.ScrollBegin) {
+            if (viewerNavigationCommitAfterAnimation) {
+                finishViewerNavigationAnimationNow("new gesture begin")
+            }
+            else if (viewerNavigationOffsetAnimation.running) {
+                finishViewerNavigationAnimationNow("new gesture begin")
+            }
+            beginViewerNavigationGesture(true, true)
+            viewerNavigationFinishTimer.stop()
+            return
+        }
+
+        if (effectivePhase === ViewerWheelArea.ScrollEnd) {
+            if (!viewerNavigationGestureActive) {
+                logViewerGesture("duplicate end ignored")
+                return
+            }
+            finishViewerNavigation()
+            endViewerNavigationGesture(false)
+            startViewerNavigationResidualSuppression("phase end")
+            logViewerGesture("phase end suppressing following momentum")
+            return
+        }
+
+        if (effectivePhase === ViewerWheelArea.ScrollMomentum &&
+                (viewerNavigationSuppressMomentum || !viewerNavigationGestureActive)) {
+            startViewerNavigationResidualSuppression("stray momentum")
+            logViewerGesture("momentum suppressed")
+            return
+        }
+
+        if (viewerNavigationCommitAfterAnimation) {
+            logViewerGesture("wheel ignored while commit animation is running")
+            return
+        }
+
+        continueViewerNavigationGesture(phaseAware)
+
+        if (viewerNavigationGestureCommitted) {
+            logViewerGesture("wheel ignored after commit")
+            return
+        }
+
+        let hasUsablePixelDelta = hasPixelDelta && (pixelDeltaX !== 0 || pixelDeltaY !== 0)
+        if (!hasUsablePixelDelta && angleDeltaX === 0 && angleDeltaY !== 0) {
+            logViewerGesture("legacy vertical wheel path")
+            switchImageForLegacyWheel(angleDeltaY)
+            return
+        }
+
+        let deltaX = wheelDeltaPixels(pixelDeltaX, angleDeltaX)
+        let deltaY = wheelDeltaPixels(pixelDeltaY, angleDeltaY)
+        let horizontalIntent = viewerNavigationActive || Math.abs(deltaX) >= Math.abs(deltaY) * 0.6
+
+        if (!horizontalIntent) {
+            logViewerGesture("vertical intent deltaX=" + viewerGestureNumber(deltaX) +
+                             " deltaY=" + viewerGestureNumber(deltaY))
+            if (!flickableArea.zoomFitView) {
+                flickableArea.panBy(0, deltaY)
+                if (!phaseAware) {
+                    viewerNavigationFinishTimer.restart()
+                }
+            }
+            return
+        }
+
+        if (!viewerNavigationActive && !flickableArea.zoomFitView) {
+            let leftover = flickableArea.panBy(deltaX, deltaY)
+            logViewerGesture("zoom pan first deltaX=" + viewerGestureNumber(deltaX) +
+                             " deltaY=" + viewerGestureNumber(deltaY) +
+                             " leftoverX=" + viewerGestureNumber(leftover.x) +
+                             " leftoverY=" + viewerGestureNumber(leftover.y))
+            deltaX = leftover.x
+        }
+
+        if (Math.abs(deltaX) < 0.1) {
+            logViewerGesture("horizontal delta consumed")
+            if (!phaseAware) {
+                viewerNavigationFinishTimer.restart()
+            }
+            return
+        }
+
+        let now = Date.now()
+        let dt = viewerNavigationLastTime ? Math.max(1, now - viewerNavigationLastTime) : 16
+        viewerNavigationVelocityX = deltaX / dt * 1000
+        viewerNavigationLastTime = now
+
+        applyViewerNavigationDelta(deltaX)
+        if (!phaseAware) {
+            viewerNavigationFinishTimer.restart()
+        }
     }
 
     function beginShiftSelection() {
@@ -328,6 +797,8 @@ Item {
                 if (!previousImageLocked) {
                     previousImageIndex = -1
                 }
+                resetViewerNavigation()
+                endViewerNavigationGesture()
                 flickableArea.rotationMode = 0
             }
         }
@@ -337,6 +808,8 @@ Item {
         target: viewerController
         function onCurrentPathChanged() {
             clearPreviousImage()
+            resetViewerNavigation()
+            endViewerNavigationGesture()
         }
     }
 
@@ -575,6 +1048,12 @@ Item {
         function onViewerImageIdUrlChanged(newImageIdUrl, level) {
             viewerMode.setImage(newImageIdUrl, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, level)
         }
+
+        function onViewerImageCacheChanged(index) {
+            if (index === viewerNavigationTargetIndex) {
+                updateViewerNavigationTargetSource()
+            }
+        }
     }
 
     Item {
@@ -589,6 +1068,8 @@ Item {
             height: parent.height
             animationDuration: viewerMode.animationDuration
             scrollBarsRightMargin: panelsVisible ? rightPanel.width : 0
+            opacity: viewerNavigationCurrentOpacity
+            transform: Translate { x: viewerNavigationCurrentOffsetX }
 
             Rectangle {
                 id: delegateOutline
@@ -678,6 +1159,8 @@ Item {
         y: flickableArea.y
         width: flickableArea.width
         height: flickableArea.height
+        opacity: viewerNavigationCurrentOpacity
+        transform: Translate { x: viewerNavigationCurrentOffsetX }
     }
 
     Component {
@@ -687,6 +1170,86 @@ Item {
             originalSize: flickableArea.originalSize
             source: flickableArea.textureSource
             opacity: sphericViewerOpacity
+        }
+    }
+
+    Item {
+        id: viewerNavigationNeighbor
+        x: 0
+        y: 0
+        width: viewerMode.width
+        height: viewerMode.height
+        z: viewerNavigationDirection < 0 ? 1 : -1
+        opacity: viewerNavigationTargetOpacity
+        visible: opacity > 0 &&
+                 viewerNavigationActive &&
+                 viewerNavigationTargetIndex !== -1 && viewerNavigationTargetSource !== ""
+
+        Image {
+            x: viewerNavigationTargetImageX
+            y: viewerNavigationTargetImageY
+            width: viewerNavigationTargetDisplayWidth
+            height: viewerNavigationTargetDisplayHeight
+            source: viewerNavigationTargetSource
+            fillMode: Image.PreserveAspectFit
+            asynchronous: true
+            cache: false
+            mipmap: true
+        }
+    }
+
+    Timer {
+        id: viewerNavigationFinishTimer
+        interval: 140
+        onTriggered: finishViewerNavigation()
+    }
+
+    Timer {
+        id: viewerNavigationGestureEndTimer
+        interval: 350
+        onTriggered: endViewerNavigationGesture()
+    }
+
+    Timer {
+        id: viewerNavigationResidualQuietTimer
+        interval: 180
+        onTriggered: clearViewerNavigationResidualSuppression("quiet")
+    }
+
+    NumberAnimation {
+        id: viewerNavigationOffsetAnimation
+        target: viewerMode
+        property: "viewerNavigationOffsetX"
+        easing.type: Easing.OutCubic
+
+        onFinished: {
+            if (viewerNavigationCommitAfterAnimation) {
+                commitViewerNavigation()
+            }
+            else {
+                resetViewerNavigation()
+                flickableArea.settlePan()
+            }
+        }
+    }
+
+    ViewerWheelArea {
+        id: viewerWheelArea
+        anchors.fill: parent
+        enabled: root.state === "viewer"
+        z: 2
+
+        onWheelReceived:
+            (pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, modifiers, buttons,
+             hasPixelDelta, inverted, source, deviceType, nativeMomentum, nativePhase, nativeMomentumPhase) => {
+                handleViewerWheel(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, modifiers,
+                                  buttons, hasPixelDelta, inverted, source, deviceType,
+                                  nativeMomentum, nativePhase, nativeMomentumPhase)
+            }
+
+        onWheelForwarded: {
+            logViewerGesture("wheel forwarded to zoom/drag handler")
+            finishViewerNavigation()
         }
     }
 
@@ -704,27 +1267,6 @@ Item {
                 }
                 else if (mouse.button === Qt.LeftButton) {
                     mouse.accepted = false
-                }
-            }
-
-        onWheel:
-            (wheel) => {
-                if (!(wheel.modifiers === Qt.ControlModifier || (wheel.buttons & Qt.LeftButton))) {
-                    let nextIndex = -1
-                    let currentIndex = masonryLayout.view.currentIndex
-                    if (wheel.angleDelta.y < 0) {
-                        nextIndex = masonryLayout.moveInImageList(true, false)
-                    }
-                    else {
-                        nextIndex = masonryLayout.moveInImageList(false, false)
-                    }
-
-                    if (nextIndex !== currentIndex) {
-                        onCurrentIndexChanged()
-                    }
-                }
-                else {
-                    wheel.accepted = false
                 }
             }
     }

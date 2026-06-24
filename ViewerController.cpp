@@ -33,7 +33,7 @@ OSStatus LSSetDefaultRoleHandlerForContentType(CFStringRef inContentType, UInt32
 namespace
 {
 #if defined(Q_OS_MACOS)
-constexpr const char *kZoinGalleryBundleIdentifier = "su.zoin";
+constexpr const char *kZoinGalleryBundleIdentifier = "gallery.zoin";
 constexpr UInt32 kZoinGalleryLsRolesAll = 0xFFFFFFFF;
 
 bool registerCurrentBundle()

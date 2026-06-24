@@ -188,6 +188,9 @@ if(APPLE)
     set(ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/resources/${ICON_FILENAME})
     set(RESOURCE_FILES ${ICON_PATH})
     list(APPEND PROJECT_SOURCES ViewerWheelAreaNative_mac.mm)
+    option(ZOIN_MACOS_CODE_SIGN "Code sign the macOS app bundle after building" ON)
+    set(ZOIN_MACOS_CODE_SIGN_IDENTITY "ZoinGallery Local Code Signing" CACHE STRING "Code signing identity for macOS builds. Set empty to skip signing.")
+    mark_as_advanced(ZOIN_MACOS_CODE_SIGN_IDENTITY)
 endif()
 
 add_executable(ZoinGallery WIN32 MACOSX_BUNDLE ${PROJECT_SOURCES} ${RESOURCE_FILES})
@@ -351,4 +354,37 @@ if(APPLE)
         "-Wl,-rpath,${_qt_bin_dir}/../lib/,-rpath,@loader_path/../Frameworks,-rpath,@executable_path/../,-rpath,@executable_path/../Frameworks"
         )
     target_link_libraries(ZoinGallery PRIVATE "-framework CoreServices")
+
+    if(ZOIN_MACOS_CODE_SIGN)
+        find_program(CODESIGN_EXECUTABLE codesign)
+        if(NOT CODESIGN_EXECUTABLE)
+            message(WARNING "codesign was not found; ZoinGallery.app will not be signed after build.")
+        elseif(ZOIN_MACOS_CODE_SIGN_IDENTITY STREQUAL "")
+            message(WARNING "ZOIN_MACOS_CODE_SIGN_IDENTITY is empty; ZoinGallery.app will not be signed after build.")
+        else()
+            set(_zoin_codesign_identity_found TRUE)
+            find_program(SECURITY_EXECUTABLE security)
+            if(SECURITY_EXECUTABLE)
+                execute_process(
+                    COMMAND "${SECURITY_EXECUTABLE}" find-identity -p codesigning
+                    OUTPUT_VARIABLE _zoin_codesign_identities
+                    ERROR_QUIET
+                    OUTPUT_STRIP_TRAILING_WHITESPACE)
+                string(FIND "${_zoin_codesign_identities}" "\"${ZOIN_MACOS_CODE_SIGN_IDENTITY}\"" _zoin_codesign_identity_pos)
+                if(_zoin_codesign_identity_pos EQUAL -1)
+                    set(_zoin_codesign_identity_found FALSE)
+                endif()
+            endif()
+
+            if(_zoin_codesign_identity_found)
+                message(STATUS "Code signing macOS app with identity: ${ZOIN_MACOS_CODE_SIGN_IDENTITY}")
+                add_custom_command(TARGET ZoinGallery POST_BUILD
+                    COMMAND "${CODESIGN_EXECUTABLE}" --force --deep --timestamp=none --sign "${ZOIN_MACOS_CODE_SIGN_IDENTITY}" "$<TARGET_BUNDLE_DIR:ZoinGallery>"
+                    COMMENT "Code signing ZoinGallery.app"
+                    VERBATIM)
+            else()
+                message(WARNING "Code signing identity '${ZOIN_MACOS_CODE_SIGN_IDENTITY}' was not found; ZoinGallery.app will not be signed after build.")
+            endif()
+        endif()
+    endif()
 endif()

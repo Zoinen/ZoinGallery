@@ -645,6 +645,26 @@ Item {
         }
     }
 
+    function isLegacyWheelImageSwitch(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY,
+                                      phase, hasPixelDelta, nativeMomentum,
+                                      nativePhase, nativeMomentumPhase) {
+        if (angleDeltaY === 0 || angleDeltaX !== 0 || nativeMomentum) {
+            return false
+        }
+
+        if (!hasPixelDelta) {
+            return true
+        }
+
+        let phaseFree = phase === ViewerWheelArea.NoScrollPhase &&
+                nativePhase === 0 && nativeMomentumPhase === 0
+        if (!phaseFree) {
+            return false
+        }
+
+        return Math.abs(pixelDeltaY) > 0 && Math.abs(pixelDeltaX) < Math.abs(pixelDeltaY) * 0.2
+    }
+
     function panZoomedImageFromWheel(deltaX, deltaY, recordVelocity) {
         if (flickableArea.zoomFitView) {
             return Qt.point(deltaX, deltaY)
@@ -679,7 +699,6 @@ Item {
                          " modifiers=" + modifiers +
                          " buttons=" + buttons)
 
-        let hasUsablePixelDelta = hasPixelDelta && (pixelDeltaX !== 0 || pixelDeltaY !== 0)
         let deltaX = wheelDeltaPixels(pixelDeltaX, angleDeltaX)
         let deltaY = wheelDeltaPixels(pixelDeltaY, angleDeltaY)
 
@@ -787,16 +806,23 @@ Item {
             return
         }
 
+        if (isLegacyWheelImageSwitch(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY,
+                                     phase, hasPixelDelta, nativeMomentum,
+                                     nativePhase, nativeMomentumPhase)) {
+            logViewerGesture("legacy vertical wheel path hasPixel=" + hasPixelDelta)
+            if (viewerNavigationOffsetAnimation.running) {
+                finishViewerNavigationAnimationNow("legacy wheel")
+            }
+            endViewerNavigationGesture(true)
+            flickableArea.cancelWheelPan()
+            switchImageForLegacyWheel(angleDeltaY)
+            return
+        }
+
         continueViewerNavigationGesture(phaseAware)
 
         if (viewerNavigationGestureCommitted) {
             logViewerGesture("wheel ignored after commit")
-            return
-        }
-
-        if (!hasUsablePixelDelta && angleDeltaX === 0 && angleDeltaY !== 0) {
-            logViewerGesture("legacy vertical wheel path")
-            switchImageForLegacyWheel(angleDeltaY)
             return
         }
 

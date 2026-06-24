@@ -45,6 +45,7 @@ Item {
     property bool zoomFitView: true
     readonly property bool viewportAnimationRunning: viewportAnimation.running
     property bool pinchZoomEnabled: true
+    property real pinchZoomOutToThumbnailsStartScaleDistanceRatio: 0.5
     property real pinchZoomOutToThumbnailsScaleDistanceRatio: 0.45
     property real pinchZoomOutToThumbnailsCommitProgress: 0.35
 
@@ -61,8 +62,11 @@ Item {
     property real imagePressedY: 0
 
     property bool forceShowScrollBars: false
+    property bool hideVerticalScrollBar: false
     property bool dragZoomActive: viewerMouse.pressed || viewportAnimation.running
-    property bool scrollBarsVisible: (hbar.hovered || hbar.pressed || vbar.hovered || vbar.pressed || dragZoomActive || frameAnimation.running || forceShowScrollBars) && !zoomFitView
+    property bool scrollBarsVisible: (hbar.hovered || hbar.pressed ||
+            (!hideVerticalScrollBar && (vbar.hovered || vbar.pressed)) ||
+            dragZoomActive || frameAnimation.running || forceShowScrollBars) && !zoomFitView
 
     property bool fitToHeight: effectiveOriginalSize.width / effectiveOriginalSize.height <= flickableArea.width / flickableArea.height
     property real scrollBarsRightMargin: 0
@@ -74,10 +78,18 @@ Item {
             delayedScrollbarHiding.stop()
             scrollBarHidingAnimation.stop()
             hbar.opacity = 1
-            vbar.opacity = 1
+            if (!hideVerticalScrollBar) {
+                vbar.opacity = 1
+            }
         }
         else {
             delayedScrollbarHiding.start()
+        }
+    }
+
+    onHideVerticalScrollBarChanged: {
+        if (hideVerticalScrollBar) {
+            vbar.opacity = 0
         }
     }
 
@@ -104,6 +116,11 @@ Item {
     property var velocityHistoryX: [] // Array to hold the history of x velocities
     property var velocityHistoryY: [] // Array to hold the history of y velocities
     property int historySize: 5 // Size of the history buffer
+    property var wheelPanVelocityHistoryX: []
+    property var wheelPanVelocityHistoryY: []
+    property int wheelPanHistorySize: 5
+    property real wheelPanLastTime: 0
+    property bool wheelPanActive: false
 
     property real infiniteMoveSpeed: 1.4
     property real infiniteZoomSpeed: 2.5
@@ -261,12 +278,22 @@ Item {
         let targetScale = clampZoomScale(pinchStartZoomScale * scale)
         let fittedScale = fitZoomScale()
         let transitionDistance = Math.max(0.001, fittedScale * pinchZoomOutToThumbnailsScaleDistanceRatio)
-        let transitionProgress = Math.max(0, Math.min(1, (fittedScale - targetScale) / transitionDistance))
+        let transitionStartDistance = Math.min(transitionDistance * 0.8,
+                Math.max(0, fittedScale * pinchZoomOutToThumbnailsStartScaleDistanceRatio))
+        let activeTransitionDistance = Math.max(0.001, transitionDistance - transitionStartDistance)
+        let transitionProgress = Math.max(0,
+                Math.min(1, (fittedScale - transitionStartDistance - targetScale) / activeTransitionDistance))
 
         if (pinchZoomOutToThumbnailsActive) {
-            pinchZoomOutToThumbnailsProgress = transitionProgress
-            pinchZoomOutToThumbnailsProgressed(transitionProgress)
-            return
+            if (transitionProgress > 0) {
+                pinchZoomOutToThumbnailsProgress = transitionProgress
+                pinchZoomOutToThumbnailsProgressed(transitionProgress)
+                return
+            }
+
+            pinchZoomOutToThumbnailsActive = false
+            pinchZoomOutToThumbnailsProgress = 0
+            pinchZoomOutToThumbnailsProgressed(0)
         }
 
         let targetX = pinchStartCenterX - pinchStartImagePointX * targetScale
@@ -463,7 +490,81 @@ Item {
         return !zoomFitView && viewerImage.height > flickableArea.height + 0.5
     }
 
-    function panBy(deltaX, deltaY) {
+    function updateWheelPanVelocityHistory(history, velocity, size) {
+        history.push(velocity)
+        if (history.length > size) {
+            history.shift()
+        }
+    }
+
+    function averageWheelPanVelocity(history) {
+        if (!history.length) {
+            return 0
+        }
+
+        let sum = history.reduce(function(a, b) {
+            return a + b
+        }, 0)
+        return sum / history.length
+    }
+
+    function beginWheelPan() {
+        if (zoomFitView) {
+            return
+        }
+
+        viewportAnimation.stop()
+        wheelPanVelocityHistoryX = []
+        wheelPanVelocityHistoryY = []
+        wheelPanLastTime = 0
+        wheelPanActive = true
+    }
+
+    function cancelWheelPan() {
+        wheelPanVelocityHistoryX = []
+        wheelPanVelocityHistoryY = []
+        wheelPanLastTime = 0
+        wheelPanActive = false
+    }
+
+    function recordWheelPanVelocity(consumedX, consumedY) {
+        if (!wheelPanActive) {
+            beginWheelPan()
+        }
+
+        let now = Date.now()
+        let dt = wheelPanLastTime ? Math.max(1, now - wheelPanLastTime) : 16
+        updateWheelPanVelocityHistory(wheelPanVelocityHistoryX, consumedX / dt * 1000, wheelPanHistorySize)
+        updateWheelPanVelocityHistory(wheelPanVelocityHistoryY, consumedY / dt * 1000, wheelPanHistorySize)
+        wheelPanLastTime = now
+    }
+
+    function finishWheelPan() {
+        if (zoomFitView) {
+            cancelWheelPan()
+            return
+        }
+
+        let avgVelocityX = averageWheelPanVelocity(wheelPanVelocityHistoryX)
+        let avgVelocityY = averageWheelPanVelocity(wheelPanVelocityHistoryY)
+        let useInertia = wheelPanActive && (Math.abs(avgVelocityX) > 20 || Math.abs(avgVelocityY) > 20)
+        let decelerationFactor = 0.1
+        let targetX = viewerImage.x + (useInertia ? avgVelocityX * decelerationFactor : 0)
+        let targetY = viewerImage.y + (useInertia ? avgVelocityY * decelerationFactor : 0)
+
+        xAnimation.to = fitViewerImageInViewportBoundsX(targetX)
+        yAnimation.to = fitViewerImageInViewportBoundsY(targetY)
+        zoomAnimation.to = zoomScale
+        xAnimation.duration = useInertia ? 500 : animationDuration
+        yAnimation.duration = useInertia ? 500 : animationDuration
+        zoomAnimation.duration = 0
+        viewportAnimation.easing = useInertia ? Easing.OutCirc : Easing.OutSine
+        viewportAnimation.restart()
+
+        cancelWheelPan()
+    }
+
+    function panBy(deltaX, deltaY, recordVelocity) {
         if (zoomFitView) {
             return Qt.point(deltaX, deltaY)
         }
@@ -480,6 +581,9 @@ Item {
         xAnimation.to = targetX
         yAnimation.to = targetY
         zoomAnimation.to = zoomScale
+        if (recordVelocity) {
+            recordWheelPanVelocity(targetX - oldX, targetY - oldY)
+        }
 
         forceShowScrollBars = true
         forceShowScrollBars = false
@@ -670,7 +774,7 @@ Item {
         orientation: Qt.Vertical
 
         active: dragZoomActive
-        visible: (!zoomFitView || viewportAnimation.running) && size < 1
+        visible: !hideVerticalScrollBar && (!zoomFitView || viewportAnimation.running) && size < 1
         opacity: 0
 
         onPositionChanged: {

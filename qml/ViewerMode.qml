@@ -275,18 +275,47 @@ Item {
             masonryLayout.view.indexOriginalSize(viewerNavigationTargetIndex) : Qt.size(0, 0)
     readonly property bool viewerNavigationTargetHasSize: viewerNavigationTargetOriginalSize.width > 1 &&
             viewerNavigationTargetOriginalSize.height > 1 && viewerMode.width > 0 && viewerMode.height > 0
+    readonly property size viewerNavigationTargetDisplayOriginalSize: viewerNavigationTargetHasSize ?
+            Qt.size(viewerNavigationTargetOriginalSize.width / dpr, viewerNavigationTargetOriginalSize.height / dpr) :
+            Qt.size(0, 0)
+    readonly property size viewerNavigationTargetEffectiveOriginalSize: viewerNavigationTargetHasSize ?
+            (flickableArea.rotationMode % 2 === 1 ?
+                 Qt.size(viewerNavigationTargetDisplayOriginalSize.height, viewerNavigationTargetDisplayOriginalSize.width) :
+                 viewerNavigationTargetDisplayOriginalSize) : Qt.size(0, 0)
+    readonly property bool viewerNavigationTargetKeepsZoom: viewerNavigationTargetHasSize && !flickableArea.zoomFitView
     readonly property real viewerNavigationTargetAspect: viewerNavigationTargetHasSize ?
-            viewerNavigationTargetOriginalSize.width / viewerNavigationTargetOriginalSize.height : 1
+            viewerNavigationTargetEffectiveOriginalSize.width / viewerNavigationTargetEffectiveOriginalSize.height : 1
     readonly property bool viewerNavigationTargetFitToHeight: viewerNavigationTargetHasSize ?
             viewerNavigationTargetAspect <= viewerMode.width / viewerMode.height : false
+    readonly property real viewerNavigationTargetScale: !viewerNavigationTargetHasSize ? 1 : viewerNavigationTargetKeepsZoom ?
+            flickableArea.zoomScale :
+            (viewerNavigationTargetFitToHeight ?
+                 viewerMode.height / viewerNavigationTargetEffectiveOriginalSize.height :
+                 viewerMode.width / viewerNavigationTargetEffectiveOriginalSize.width)
     readonly property real viewerNavigationTargetDisplayWidth: viewerNavigationTargetHasSize ?
-            (viewerNavigationTargetFitToHeight ? viewerMode.height * viewerNavigationTargetAspect : viewerMode.width) :
+            viewerNavigationTargetEffectiveOriginalSize.width * viewerNavigationTargetScale :
             viewerMode.width
     readonly property real viewerNavigationTargetDisplayHeight: viewerNavigationTargetHasSize ?
-            (viewerNavigationTargetFitToHeight ? viewerMode.height : viewerMode.width / viewerNavigationTargetAspect) :
+            viewerNavigationTargetEffectiveOriginalSize.height * viewerNavigationTargetScale :
             viewerMode.height
+    readonly property real viewerNavigationTargetPreservedImageX: viewerNavigationTargetDisplayWidth < viewerMode.width ?
+            (viewerMode.width - viewerNavigationTargetDisplayWidth) * 0.5 :
+            Math.min(0, Math.max(flickableArea.image.x, viewerMode.width - viewerNavigationTargetDisplayWidth))
+    readonly property real viewerNavigationTargetLeftAlignedImageX: viewerNavigationTargetDisplayWidth < viewerMode.width ?
+            (viewerMode.width - viewerNavigationTargetDisplayWidth) * 0.5 :
+            0
+    readonly property real viewerNavigationTargetRightAlignedImageX: viewerNavigationTargetDisplayWidth < viewerMode.width ?
+            (viewerMode.width - viewerNavigationTargetDisplayWidth) * 0.5 :
+            viewerMode.width - viewerNavigationTargetDisplayWidth
+    readonly property real viewerNavigationTargetFinalImageX: viewerNavigationTargetKeepsZoom ?
+            (viewerNavigationDirection < 0 ? viewerNavigationTargetRightAlignedImageX :
+                 viewerNavigationDirection > 0 ? viewerNavigationTargetLeftAlignedImageX :
+                     viewerNavigationTargetPreservedImageX) : viewerNavigationTargetPreservedImageX
+    readonly property real viewerNavigationTargetFinalImageY: viewerNavigationTargetDisplayHeight < viewerMode.height ?
+            (viewerMode.height - viewerNavigationTargetDisplayHeight) * 0.5 :
+            Math.min(0, Math.max(flickableArea.image.y, viewerMode.height - viewerNavigationTargetDisplayHeight))
     readonly property real viewerNavigationTargetTravelDistance: viewerNavigationDirection < 0 ?
-            Math.max(1, (viewerMode.width + viewerNavigationTargetDisplayWidth) * 0.5) : Math.max(1, viewerMode.width)
+            Math.max(1, viewerNavigationTargetDisplayWidth + viewerNavigationTargetFinalImageX) : Math.max(1, viewerMode.width)
     readonly property real viewerNavigationProgress: Math.min(1, Math.abs(viewerNavigationOffsetX) / Math.max(1, viewerMode.width * 0.5))
     readonly property real viewerNavigationCoverProgress: Math.min(1, Math.abs(viewerNavigationOffsetX) / viewerNavigationTargetTravelDistance)
     readonly property real viewerNavigationTargetOpacity: viewerNavigationDirection < 0 ? 1 : viewerNavigationProgress
@@ -294,8 +323,8 @@ Item {
     readonly property real viewerNavigationCurrentOffsetX: viewerNavigationDirection < 0 && viewerNavigationTargetIndex !== -1 ? 0 : viewerNavigationOffsetX
     readonly property real viewerNavigationTargetImageX: viewerNavigationDirection < 0 ?
             -viewerNavigationTargetDisplayWidth + Math.min(Math.max(viewerNavigationOffsetX, 0), viewerNavigationTargetTravelDistance) :
-            (viewerMode.width - viewerNavigationTargetDisplayWidth) * 0.5
-    readonly property real viewerNavigationTargetImageY: (viewerMode.height - viewerNavigationTargetDisplayHeight) * 0.5
+            viewerNavigationTargetFinalImageX
+    readonly property real viewerNavigationTargetImageY: viewerNavigationTargetFinalImageY
     readonly property real viewerNavigationOverdragThreshold: Math.min(48, viewerMode.width * 0.08)
     readonly property real viewerNavigationCommitThreshold: Math.min(120,
             Math.max(viewerNavigationOverdragThreshold * 1.35, viewerMode.width * 0.12))
@@ -456,6 +485,7 @@ Item {
         viewerNavigationDirection = direction
         viewerNavigationTargetIndex = targetIndex !== currentIndex ? targetIndex : -1
         viewerNavigationTargetSource = ""
+        flickableArea.cancelWheelPan()
         updateViewerNavigationTargetSource()
         logViewerGesture("navigation begin direction=" + viewerGestureDirectionName(direction) +
                          " current=" + currentIndex + " target=" + viewerNavigationTargetIndex +
@@ -527,7 +557,7 @@ Item {
         viewerNavigationFinishTimer.stop()
         if (!viewerNavigationActive) {
             logViewerGesture("finish without active navigation")
-            flickableArea.settlePan()
+            flickableArea.finishWheelPan()
             return
         }
 
@@ -557,6 +587,8 @@ Item {
 
     function commitViewerNavigation() {
         let targetIndex = viewerNavigationTargetIndex
+        let targetImageX = viewerNavigationTargetFinalImageX
+        let targetImageY = viewerNavigationTargetFinalImageY
         logViewerGesture("commit target=" + targetIndex)
         viewerNavigationGestureCommitted = true
         startViewerNavigationResidualSuppression("commit")
@@ -565,6 +597,10 @@ Item {
             return
         }
 
+        if (!flickableArea.zoomFitView) {
+            flickableArea.image.x = targetImageX
+            flickableArea.image.y = targetImageY
+        }
         masonryLayout.setCurrentIndex(targetIndex)
         onCurrentIndexChanged()
     }
@@ -609,6 +645,21 @@ Item {
         }
     }
 
+    function panZoomedImageFromWheel(deltaX, deltaY, recordVelocity) {
+        if (flickableArea.zoomFitView) {
+            return Qt.point(deltaX, deltaY)
+        }
+
+        viewerWheelPanFinishTimer.stop()
+        return flickableArea.panBy(deltaX, deltaY, recordVelocity)
+    }
+
+    function scheduleWheelPanFallbackFinish() {
+        if (!flickableArea.zoomFitView) {
+            viewerWheelPanFinishTimer.restart()
+        }
+    }
+
     function handleViewerWheel(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, modifiers,
                                buttons, hasPixelDelta, inverted, source, deviceType,
                                nativeMomentum, nativePhase, nativeMomentumPhase) {
@@ -627,6 +678,19 @@ Item {
                          " nativeMomentumPhase=" + nativeMomentumPhase +
                          " modifiers=" + modifiers +
                          " buttons=" + buttons)
+
+        let hasUsablePixelDelta = hasPixelDelta && (pixelDeltaX !== 0 || pixelDeltaY !== 0)
+        let deltaX = wheelDeltaPixels(pixelDeltaX, angleDeltaX)
+        let deltaY = wheelDeltaPixels(pixelDeltaY, angleDeltaY)
+
+        if (nativeMomentum && !flickableArea.zoomFitView && !viewerNavigationActive &&
+                !viewerNavigationCommitAfterAnimation && !viewerNavigationGestureCommitted &&
+                !viewerNavigationSuppressMomentum) {
+            panZoomedImageFromWheel(deltaX, deltaY, false)
+            logViewerGesture("native momentum panned zoomed image deltaX=" + viewerGestureNumber(deltaX) +
+                             " deltaY=" + viewerGestureNumber(deltaY))
+            return
+        }
 
         if (viewerNavigationSuppressMomentum && !viewerNavigationGestureActive) {
             let physicalScrollRestart = !nativeMomentum &&
@@ -654,10 +718,21 @@ Item {
             if (viewerNavigationActive) {
                 logViewerGesture("native momentum begins; finishing active gesture")
                 finishViewerNavigation()
+                endViewerNavigationGesture(false)
+                startViewerNavigationResidualSuppression("native momentum")
+                logViewerGesture("native momentum tail suppressed after navigation finish")
+                return
+            }
+            if (!flickableArea.zoomFitView) {
+                endViewerNavigationGesture(true)
+                panZoomedImageFromWheel(deltaX, deltaY, false)
+                logViewerGesture("native momentum took over zoom pan deltaX=" + viewerGestureNumber(deltaX) +
+                                 " deltaY=" + viewerGestureNumber(deltaY))
+                return
             }
             endViewerNavigationGesture(false)
             startViewerNavigationResidualSuppression("native momentum")
-            logViewerGesture("native momentum tail suppressed after finish")
+            logViewerGesture("native momentum tail suppressed after fit-view gesture")
             return
         }
 
@@ -669,7 +744,11 @@ Item {
                 finishViewerNavigationAnimationNow("new gesture begin")
             }
             beginViewerNavigationGesture(true, true)
+            if (!flickableArea.zoomFitView) {
+                flickableArea.beginWheelPan()
+            }
             viewerNavigationFinishTimer.stop()
+            viewerWheelPanFinishTimer.stop()
             return
         }
 
@@ -678,10 +757,21 @@ Item {
                 logViewerGesture("duplicate end ignored")
                 return
             }
-            finishViewerNavigation()
+            let hadActiveNavigation = viewerNavigationActive
+            if (hadActiveNavigation) {
+                finishViewerNavigation()
+            }
+            else if (!flickableArea.zoomFitView) {
+                scheduleWheelPanFallbackFinish()
+            }
             endViewerNavigationGesture(false)
-            startViewerNavigationResidualSuppression("phase end")
-            logViewerGesture("phase end suppressing following momentum")
+            if (hadActiveNavigation || flickableArea.zoomFitView) {
+                startViewerNavigationResidualSuppression("phase end")
+                logViewerGesture("phase end suppressing following momentum")
+            }
+            else {
+                logViewerGesture("phase end waiting briefly for zoom pan momentum")
+            }
             return
         }
 
@@ -704,31 +794,28 @@ Item {
             return
         }
 
-        let hasUsablePixelDelta = hasPixelDelta && (pixelDeltaX !== 0 || pixelDeltaY !== 0)
         if (!hasUsablePixelDelta && angleDeltaX === 0 && angleDeltaY !== 0) {
             logViewerGesture("legacy vertical wheel path")
             switchImageForLegacyWheel(angleDeltaY)
             return
         }
 
-        let deltaX = wheelDeltaPixels(pixelDeltaX, angleDeltaX)
-        let deltaY = wheelDeltaPixels(pixelDeltaY, angleDeltaY)
         let horizontalIntent = viewerNavigationActive || Math.abs(deltaX) >= Math.abs(deltaY) * 0.6
 
         if (!horizontalIntent) {
             logViewerGesture("vertical intent deltaX=" + viewerGestureNumber(deltaX) +
                              " deltaY=" + viewerGestureNumber(deltaY))
             if (!flickableArea.zoomFitView) {
-                flickableArea.panBy(0, deltaY)
+                panZoomedImageFromWheel(0, deltaY, true)
                 if (!phaseAware) {
-                    viewerNavigationFinishTimer.restart()
+                    scheduleWheelPanFallbackFinish()
                 }
             }
             return
         }
 
         if (!viewerNavigationActive && !flickableArea.zoomFitView) {
-            let leftover = flickableArea.panBy(deltaX, deltaY)
+            let leftover = panZoomedImageFromWheel(deltaX, deltaY, true)
             logViewerGesture("zoom pan first deltaX=" + viewerGestureNumber(deltaX) +
                              " deltaY=" + viewerGestureNumber(deltaY) +
                              " leftoverX=" + viewerGestureNumber(leftover.x) +
@@ -739,7 +826,7 @@ Item {
         if (Math.abs(deltaX) < 0.1) {
             logViewerGesture("horizontal delta consumed")
             if (!phaseAware) {
-                viewerNavigationFinishTimer.restart()
+                scheduleWheelPanFallbackFinish()
             }
             return
         }
@@ -1101,6 +1188,8 @@ Item {
             height: parent.height
             animationDuration: viewerMode.animationDuration
             scrollBarsRightMargin: panelsVisible ? rightPanel.width : 0
+            hideVerticalScrollBar: viewerNavigationActive || viewerNavigationOffsetAnimation.running ||
+                    viewerNavigationCommitAfterAnimation || Math.abs(viewerNavigationOffsetX) > 0.1
             pinchZoomEnabled: !sphericViewerMode
             opacity: viewerNavigationCurrentOpacity
             transform: Translate { x: viewerNavigationCurrentOffsetX }
@@ -1240,6 +1329,12 @@ Item {
         id: viewerNavigationFinishTimer
         interval: 140
         onTriggered: finishViewerNavigation()
+    }
+
+    Timer {
+        id: viewerWheelPanFinishTimer
+        interval: 70
+        onTriggered: flickableArea.finishWheelPan()
     }
 
     Timer {

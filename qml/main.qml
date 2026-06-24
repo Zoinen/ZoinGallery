@@ -228,8 +228,41 @@ MainWindow {
             return true
         }
 
+        function cancelViewerPinchCloseDuringGesture() {
+            viewerPinchCloseProgressAnimation.stop()
+            viewerPinchCloseFinalizeTimer.stop()
+            viewerPinchCloseActive = false
+            viewerPinchCloseReturning = false
+            viewerPinchCloseFinishingCommit = false
+            viewerPinchCloseProgress = 0
+            toolbarLayout.visible = false
+            viewerMode.imageContainer.x = 0
+            viewerMode.imageContainer.y = 0
+            viewerMode.imageContainer.width = Qt.binding(() => viewerMode.width)
+            viewerMode.imageContainer.height = Qt.binding(() => viewerMode.height)
+        }
+
+        function completeViewerPinchCloseReturn() {
+            viewerPinchCloseProgressAnimation.stop()
+            viewerPinchCloseFinalizeTimer.stop()
+            viewerPinchCloseActive = false
+            viewerPinchCloseReturning = false
+            viewerPinchCloseFinishingCommit = false
+            viewerPinchCloseProgress = 0
+            toolbarLayout.visible = false
+            viewerMode.imageContainer.zoomToFit()
+        }
+
         function updateViewerPinchClose(progress) {
             if (viewerPinchCloseFinishingCommit) {
+                return
+            }
+
+            let clampedProgress = Math.max(0, Math.min(1, progress))
+            if (clampedProgress <= 0) {
+                if (viewerPinchCloseActive) {
+                    cancelViewerPinchCloseDuringGesture()
+                }
                 return
             }
 
@@ -241,7 +274,7 @@ MainWindow {
             viewerPinchCloseFinishingCommit = false
             viewerPinchCloseProgressAnimation.stop()
             viewerPinchCloseFinalizeTimer.stop()
-            viewerPinchCloseProgress = Math.max(0, Math.min(1, progress))
+            viewerPinchCloseProgress = clampedProgress
         }
 
         function applyViewerPinchCloseProgress() {
@@ -324,12 +357,7 @@ MainWindow {
                 return
             }
 
-            viewerPinchCloseReturning = true
-            viewerPinchCloseFinishingCommit = false
-            viewerPinchCloseProgressAnimation.stop()
-            viewerPinchCloseFinalizeTimer.stop()
-            viewerPinchCloseProgressAnimation.to = 0
-            viewerPinchCloseProgressAnimation.restart()
+            completeViewerPinchCloseReturn()
         }
 
         NumberAnimation {
@@ -343,12 +371,8 @@ MainWindow {
                 if (viewerPinchCloseFinishingCommit) {
                     completeViewerPinchClose()
                 }
-                else if (root.state === "viewer" && viewerPinchCloseProgress <= 0.001) {
-                    viewerPinchCloseActive = false
-                    viewerPinchCloseReturning = false
-                    viewerPinchCloseFinishingCommit = false
-                    toolbarLayout.visible = false
-                    viewerMode.imageContainer.zoomToFit()
+                else if (viewerPinchCloseReturning && root.state === "viewer") {
+                    completeViewerPinchCloseReturn()
                 }
             }
         }
@@ -360,6 +384,9 @@ MainWindow {
             onTriggered: {
                 if (viewerPinchCloseFinishingCommit) {
                     completeViewerPinchClose()
+                }
+                else if (viewerPinchCloseReturning && root.state === "viewer") {
+                    completeViewerPinchCloseReturn()
                 }
             }
         }

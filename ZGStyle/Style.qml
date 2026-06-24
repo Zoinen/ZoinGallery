@@ -13,6 +13,7 @@ QtObject {
     property color windowBackgroundQWKLegacy: isDarkTheme ? "#00091a" : "#c3ccd9"
     property color windowBackgroundNoQWK: isDarkTheme ? "#282828" : "#f8f8f8"
     property color windowColor: isDarkTheme ? Qt.rgba(0.2, 0.2, 0.2, 0.7) : Qt.rgba(1, 1, 1, 0.5) // for dark, Qt.rgba(0.3, 0.3, 0.3, 0.4) matches "explorer"
+    property color macGlassWindowColor: "transparent"
     property color masonryViewBackground: isDarkTheme ? Qt.rgba(0, 0, 0, 0.35) : Qt.rgba(1, 1, 1, 0.5)
     property color masonryViewBackgroundBorder: isDarkTheme ? "transparent" : Qt.rgba(0, 0, 0, 0.06)
     property color opaqueMasonryViewBackground: isDarkTheme ? "#242828" : "#eff4f8"

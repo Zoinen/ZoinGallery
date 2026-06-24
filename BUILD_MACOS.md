@@ -52,7 +52,7 @@ step otherwise could not determine an Xcode version.
 QWindowKit was cloned with submodules into the build directory:
 
 ```sh
-git clone --recursive https://github.com/stdware/qwindowkit build/qwindowkit-src
+git clone --recursive --branch codex/macos-glass-effect git@github.com:Zoinen/qwindowkit.git build/qwindowkit-src
 ```
 
 It was configured, built, and installed locally:

@@ -13,7 +13,11 @@ MainWindow {
     // visible: true
     color: isQWK ? (isQWKLegacy ? Style.windowBackgroundQWKLegacy : "transparent") : Style.windowBackgroundNoQWK
     property bool isQWKLegacy: false
+    property bool windowAgentReady: false
+    property int macWindowEffectApplyAttempts: 0
     readonly property bool useMacNativeTitleBar: isQWK && Qt.platform.os === "osx"
+    readonly property string macWindowGlassEffect: useMacNativeTitleBar ? "regular" : "none"
+    readonly property string macWindowFallbackBlurEffect: useMacNativeTitleBar ? (Style.isDarkTheme ? "dark" : "light") : "none"
     readonly property int macTitleBarLeftPadding: useMacNativeTitleBar && visibility !== Window.FullScreen ? 86 : 0
     readonly property int macSystemButtonAreaLeftMargin: 12
     readonly property int thumbnailsTitleBarSidePadding: 8
@@ -40,8 +44,49 @@ MainWindow {
 
     Component.onCompleted: {
         windowAgent.setup(topLevelWindow)
+        windowAgentReady = true
 
-        isQWKLegacy = windowAgent.setWindowAttribute("mica-alt", true) !== true
+        if (Qt.platform.os === "windows") {
+            isQWKLegacy = windowAgent.setWindowAttribute("mica-alt", true) !== true
+        } else if (useMacNativeTitleBar) {
+            applyPlatformWindowEffects()
+        }
+    }
+
+    onMacWindowFallbackBlurEffectChanged: schedulePlatformWindowEffects()
+
+    Timer {
+        id: macWindowEffectRetryTimer
+        interval: 100
+        repeat: false
+        onTriggered: applyPlatformWindowEffects()
+    }
+
+    function schedulePlatformWindowEffects() {
+        if (!windowAgentReady) {
+            return
+        }
+        macWindowEffectApplyAttempts = 0
+        applyPlatformWindowEffects()
+    }
+
+    function applyPlatformWindowEffects() {
+        if (!windowAgentReady) {
+            return
+        }
+        if (useMacNativeTitleBar) {
+            windowAgent.setWindowAttribute("blur-effect", "none")
+            windowAgent.setWindowAttribute("glass-corner-radius", 0)
+            windowAgent.setWindowAttribute("glass-tint-color", "none")
+
+            const glassApplied = windowAgent.setWindowAttribute("glass-effect", macWindowGlassEffect) === true
+            const applied = glassApplied || windowAgent.setWindowAttribute("blur-effect", macWindowFallbackBlurEffect) === true
+            isQWKLegacy = !applied
+            if (!applied && macWindowEffectApplyAttempts < 10) {
+                macWindowEffectApplyAttempts += 1
+                macWindowEffectRetryTimer.restart()
+            }
+        }
     }
 
     Connections {
@@ -75,6 +120,7 @@ MainWindow {
         function onWindowIsReady() {
             masonryZoomSlider.updateTargetSize()
             viewerController.initialCd(Math.round(viewerMode.width * dpr), Math.round(viewerMode.height * dpr))
+            schedulePlatformWindowEffects()
         }
 
         function onOpenSettingsRequested() {
@@ -123,7 +169,7 @@ MainWindow {
     Rectangle {
         id: root
         anchors.fill: parent
-        color: Style.windowColor
+        color: topLevelWindow.useMacNativeTitleBar ? Style.macGlassWindowColor : Style.windowColor
 
         property bool viewerPinchCloseActive: false
         property bool viewerPinchCloseReturning: false

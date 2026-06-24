@@ -44,6 +44,7 @@ Item {
 
     property bool zoomFitView: true
     readonly property bool viewportAnimationRunning: viewportAnimation.running
+    property bool pinchZoomEnabled: true
 
     property bool imageTextureReady: (viewerImage2.status === Image.Ready && viewerImage2.implicitWidth > 1 && viewerImage2.implicitHeight > 1)
         || (viewerImage2.status !== Image.Ready && viewerImageBase.status === Image.Ready
@@ -104,6 +105,11 @@ Item {
 
     property real infiniteMoveSpeed: 1.4
     property real infiniteZoomSpeed: 2.5
+    property real pinchStartZoomScale: 1
+    property real pinchStartImagePointX: 0
+    property real pinchStartImagePointY: 0
+    property real pinchStartCenterX: 0
+    property real pinchStartCenterY: 0
 
     onWidthChanged: if (zoomFitView) { zoomToFit(true) }
     onHeightChanged: if (zoomFitView) { zoomToFit(true) }
@@ -149,7 +155,96 @@ Item {
         frameAnimation.running = x || y || scale
     }
 
+    function fitZoomScale() {
+        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
+            return 1
+        }
+
+        return fitToHeight ? flickableArea.height / effectiveOriginalSize.height :
+                             flickableArea.width / effectiveOriginalSize.width
+    }
+
+    function clampZoomScale(targetScale) {
+        return Math.max(minZoomScale, Math.min(maxZoomScale, targetScale))
+    }
+
+    function setZoomScaleAt(targetScale, centerX, centerY) {
+        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
+            return
+        }
+
+        viewportAnimation.stop()
+        frameAnimation.running = false
+
+        targetScale = clampZoomScale(targetScale)
+        let imagePointX = (centerX - viewerImage.x) / zoomScale
+        let imagePointY = (centerY - viewerImage.y) / zoomScale
+        let targetX = fitViewerImageInViewportBoundsX(centerX - imagePointX * targetScale, targetScale)
+        let targetY = fitViewerImageInViewportBoundsY(centerY - imagePointY * targetScale, targetScale)
+
+        zoomFitView = false
+        zoomScale = targetScale
+        viewerImage.x = targetX
+        viewerImage.y = targetY
+        zoomAnimation.to = targetScale
+        xAnimation.to = targetX
+        yAnimation.to = targetY
+
+        forceShowScrollBars = true
+        forceShowScrollBars = false
+    }
+
+    function beginPinchZoom(centerX, centerY) {
+        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
+            return
+        }
+
+        viewportAnimation.stop()
+        frameAnimation.running = false
+        pinchStartZoomScale = zoomScale
+        pinchStartCenterX = centerX
+        pinchStartCenterY = centerY
+        pinchStartImagePointX = (centerX - viewerImage.x) / zoomScale
+        pinchStartImagePointY = (centerY - viewerImage.y) / zoomScale
+    }
+
+    function updatePinchZoom(scale) {
+        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
+            return
+        }
+
+        let targetScale = clampZoomScale(pinchStartZoomScale * scale)
+        let targetX = pinchStartCenterX - pinchStartImagePointX * targetScale
+        let targetY = pinchStartCenterY - pinchStartImagePointY * targetScale
+
+        zoomFitView = false
+        zoomScale = targetScale
+        viewerImage.x = targetX
+        viewerImage.y = targetY
+        zoomAnimation.to = targetScale
+        xAnimation.to = targetX
+        yAnimation.to = targetY
+
+        forceShowScrollBars = true
+        forceShowScrollBars = false
+    }
+
+    function finishPinchZoom() {
+        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
+            return
+        }
+
+        let fittedScale = fitZoomScale()
+        if (zoomScale <= fittedScale * 1.02) {
+            zoomToFit()
+        }
+        else {
+            onControlReleased()
+        }
+    }
+
     function zoomToScale(targetScale, keepMousePosition) {
+        targetScale = clampZoomScale(targetScale)
         zoomAnimation.to = targetScale
         let targetX
         let targetY
@@ -654,6 +749,29 @@ Item {
                     visible: viewerImage2.status !== Image.Ready
                 }
             }
+        }
+    }
+
+    PinchArea {
+        id: pinchZoomArea
+        anchors.fill: parent
+        enabled: pinchZoomEnabled && root.state === "viewer"
+        z: 2
+
+        onPinchStarted: (pinch) => {
+            beginPinchZoom(pinch.center.x, pinch.center.y)
+            updatePinchZoom(pinch.scale)
+            pinch.accepted = true
+        }
+
+        onPinchUpdated: (pinch) => {
+            updatePinchZoom(pinch.scale)
+            pinch.accepted = true
+        }
+
+        onPinchFinished: (pinch) => {
+            finishPinchZoom()
+            pinch.accepted = true
         }
     }
 

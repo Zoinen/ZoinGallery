@@ -292,7 +292,8 @@ Item {
             (viewerMode.width - viewerNavigationTargetDisplayWidth) * 0.5
     readonly property real viewerNavigationTargetImageY: (viewerMode.height - viewerNavigationTargetDisplayHeight) * 0.5
     readonly property real viewerNavigationOverdragThreshold: Math.min(48, viewerMode.width * 0.08)
-    readonly property real viewerNavigationCommitThreshold: Math.max(80, viewerMode.width * 0.25)
+    readonly property real viewerNavigationCommitThreshold: Math.min(120,
+            Math.max(viewerNavigationOverdragThreshold * 1.35, viewerMode.width * 0.12))
 
     function isTildeKey(event) {
         return event.key === Qt.Key_QuoteLeft || event.key === Qt.Key_AsciiTilde || event.key === 1025
@@ -506,6 +507,17 @@ Item {
                          " visibleDistance=" + viewerGestureNumber(visibleDistance))
     }
 
+    function viewerNavigationFinishAnimationDuration(targetOffset, shouldCommit) {
+        if (!shouldCommit) {
+            return viewerMode.animationDuration
+        }
+
+        let fullDistance = viewerNavigationDirection < 0 ? viewerNavigationTargetTravelDistance : viewerMode.width
+        let remainingDistance = Math.abs(targetOffset - viewerNavigationOffsetX)
+        let remainingRatio = Math.min(1, remainingDistance / Math.max(1, fullDistance))
+        return viewerMode.animationDuration * (1 + remainingRatio)
+    }
+
     function finishViewerNavigation() {
         viewerNavigationFinishTimer.stop()
         if (!viewerNavigationActive) {
@@ -516,20 +528,25 @@ Item {
 
         let signedVelocity = -viewerNavigationDirection * viewerNavigationVelocityX
         let signedOffset = -viewerNavigationDirection * viewerNavigationOffsetX
+        let gestureDistance = viewerNavigationOverdrag
         let shouldCommit = viewerNavigationTargetIndex !== -1 && viewerNavigationRevealed &&
-                (signedOffset >= viewerNavigationCommitThreshold || signedVelocity > 900)
+                (gestureDistance >= viewerNavigationCommitThreshold || signedVelocity > 900)
 
         if (shouldCommit) {
             viewerNavigationGestureCommitted = true
         }
+        let targetOffset = shouldCommit ?
+                (viewerNavigationDirection < 0 ? viewerNavigationTargetTravelDistance : -viewerNavigationDirection * viewerMode.width) : 0
+        let finishDuration = viewerNavigationFinishAnimationDuration(targetOffset, shouldCommit)
         logViewerGesture("finish shouldCommit=" + shouldCommit +
                          " signedOffset=" + viewerGestureNumber(signedOffset) +
+                         " gestureDistance=" + viewerGestureNumber(gestureDistance) +
                          " signedVelocity=" + viewerGestureNumber(signedVelocity) +
-                         " threshold=" + viewerGestureNumber(viewerNavigationCommitThreshold))
+                         " threshold=" + viewerGestureNumber(viewerNavigationCommitThreshold) +
+                         " duration=" + viewerGestureNumber(finishDuration))
         viewerNavigationCommitAfterAnimation = shouldCommit
-        viewerNavigationOffsetAnimation.to = shouldCommit ?
-                (viewerNavigationDirection < 0 ? viewerNavigationTargetTravelDistance : -viewerNavigationDirection * viewerMode.width) : 0
-        viewerNavigationOffsetAnimation.duration = shouldCommit ? viewerMode.animationDuration : 220
+        viewerNavigationOffsetAnimation.to = targetOffset
+        viewerNavigationOffsetAnimation.duration = finishDuration
         viewerNavigationOffsetAnimation.restart()
     }
 
@@ -625,6 +642,17 @@ Item {
         if (nativeMomentum && !viewerNavigationGestureActive) {
             startViewerNavigationResidualSuppression("stray native momentum")
             logViewerGesture("native momentum suppressed")
+            return
+        }
+
+        if (nativeMomentum && viewerNavigationGestureActive) {
+            if (viewerNavigationActive) {
+                logViewerGesture("native momentum begins; finishing active gesture")
+                finishViewerNavigation()
+            }
+            endViewerNavigationGesture(false)
+            startViewerNavigationResidualSuppression("native momentum")
+            logViewerGesture("native momentum tail suppressed after finish")
             return
         }
 
@@ -1068,6 +1096,7 @@ Item {
             height: parent.height
             animationDuration: viewerMode.animationDuration
             scrollBarsRightMargin: panelsVisible ? rightPanel.width : 0
+            pinchZoomEnabled: !sphericViewerMode
             opacity: viewerNavigationCurrentOpacity
             transform: Translate { x: viewerNavigationCurrentOffsetX }
 
@@ -1220,7 +1249,7 @@ Item {
         id: viewerNavigationOffsetAnimation
         target: viewerMode
         property: "viewerNavigationOffsetX"
-        easing.type: Easing.OutCubic
+        easing.type: viewerMode.easingType
 
         onFinished: {
             if (viewerNavigationCommitAfterAnimation) {

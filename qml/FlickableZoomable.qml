@@ -45,6 +45,8 @@ Item {
     property bool zoomFitView: true
     readonly property bool viewportAnimationRunning: viewportAnimation.running
     property bool pinchZoomEnabled: true
+    property real pinchZoomOutToThumbnailsScaleDistanceRatio: 0.45
+    property real pinchZoomOutToThumbnailsCommitProgress: 0.35
 
     property bool imageTextureReady: (viewerImage2.status === Image.Ready && viewerImage2.implicitWidth > 1 && viewerImage2.implicitHeight > 1)
         || (viewerImage2.status !== Image.Ready && viewerImageBase.status === Image.Ready
@@ -110,6 +112,11 @@ Item {
     property real pinchStartImagePointY: 0
     property real pinchStartCenterX: 0
     property real pinchStartCenterY: 0
+    property bool pinchZoomOutToThumbnailsActive: false
+    property real pinchZoomOutToThumbnailsProgress: 0
+
+    signal pinchZoomOutToThumbnailsProgressed(real progress)
+    signal pinchZoomOutToThumbnailsFinished(bool commit)
 
     onWidthChanged: if (zoomFitView) { zoomToFit(true) }
     onHeightChanged: if (zoomFitView) { zoomToFit(true) }
@@ -168,6 +175,42 @@ Item {
         return Math.max(minZoomScale, Math.min(maxZoomScale, targetScale))
     }
 
+    function imageRectFittedInRect(targetRect) {
+        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1 ||
+                targetRect === undefined || targetRect.width <= 1 || targetRect.height <= 1) {
+            return Qt.rect(0, 0, 0, 0)
+        }
+
+        let targetScale = effectiveOriginalSize.width / effectiveOriginalSize.height <= targetRect.width / targetRect.height ?
+                targetRect.height / effectiveOriginalSize.height :
+                targetRect.width / effectiveOriginalSize.width
+        let targetWidth = effectiveOriginalSize.width * targetScale
+        let targetHeight = effectiveOriginalSize.height * targetScale
+        return Qt.rect(targetRect.x + (targetRect.width - targetWidth) / 2,
+                       targetRect.y + (targetRect.height - targetHeight) / 2,
+                       targetWidth,
+                       targetHeight)
+    }
+
+    function setImageRect(targetRect) {
+        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1 ||
+                targetRect === undefined || targetRect.width <= 1 || targetRect.height <= 1) {
+            return
+        }
+
+        viewportAnimation.stop()
+        frameAnimation.running = false
+
+        let targetScale = clampZoomScale(targetRect.width / effectiveOriginalSize.width)
+        zoomFitView = false
+        zoomScale = targetScale
+        viewerImage.x = targetRect.x
+        viewerImage.y = targetRect.y
+        zoomAnimation.to = targetScale
+        xAnimation.to = targetRect.x
+        yAnimation.to = targetRect.y
+    }
+
     function setZoomScaleAt(targetScale, centerX, centerY) {
         if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
             return
@@ -201,6 +244,8 @@ Item {
 
         viewportAnimation.stop()
         frameAnimation.running = false
+        pinchZoomOutToThumbnailsActive = false
+        pinchZoomOutToThumbnailsProgress = 0
         pinchStartZoomScale = zoomScale
         pinchStartCenterX = centerX
         pinchStartCenterY = centerY
@@ -214,6 +259,16 @@ Item {
         }
 
         let targetScale = clampZoomScale(pinchStartZoomScale * scale)
+        let fittedScale = fitZoomScale()
+        let transitionDistance = Math.max(0.001, fittedScale * pinchZoomOutToThumbnailsScaleDistanceRatio)
+        let transitionProgress = Math.max(0, Math.min(1, (fittedScale - targetScale) / transitionDistance))
+
+        if (pinchZoomOutToThumbnailsActive) {
+            pinchZoomOutToThumbnailsProgress = transitionProgress
+            pinchZoomOutToThumbnailsProgressed(transitionProgress)
+            return
+        }
+
         let targetX = pinchStartCenterX - pinchStartImagePointX * targetScale
         let targetY = pinchStartCenterY - pinchStartImagePointY * targetScale
 
@@ -227,10 +282,23 @@ Item {
 
         forceShowScrollBars = true
         forceShowScrollBars = false
+
+        if (root.state === "viewer" && transitionProgress > 0) {
+            pinchZoomOutToThumbnailsActive = true
+            pinchZoomOutToThumbnailsProgress = transitionProgress
+            pinchZoomOutToThumbnailsProgressed(transitionProgress)
+        }
     }
 
     function finishPinchZoom() {
-        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
+        if (pinchZoomOutToThumbnailsActive) {
+            let commit = pinchZoomOutToThumbnailsProgress >= pinchZoomOutToThumbnailsCommitProgress
+            pinchZoomOutToThumbnailsActive = false
+            pinchZoomOutToThumbnailsFinished(commit)
+            return
+        }
+
+        if (root.state !== "viewer" || effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
             return
         }
 

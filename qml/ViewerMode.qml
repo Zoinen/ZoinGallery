@@ -29,9 +29,14 @@ Item {
 
     property bool panelsVisible: false
     property alias zoomFitView: flickableArea.zoomFitView
+    readonly property real viewerChromeOpacity: root.state === "viewer" ?
+            (root.viewerPinchCloseActive ? 1 - root.viewerPinchCloseProgress : 1) : 0
 
     property alias animation: viewerAnimation
     property alias imageContainer: flickableArea
+
+    signal pinchZoomOutToThumbnailsProgressed(real progress)
+    signal pinchZoomOutToThumbnailsFinished(bool commit)
 
     component BlurBackground : MultiEffect {
         id: blurItem
@@ -1099,6 +1104,10 @@ Item {
             pinchZoomEnabled: !sphericViewerMode
             opacity: viewerNavigationCurrentOpacity
             transform: Translate { x: viewerNavigationCurrentOffsetX }
+            onPinchZoomOutToThumbnailsProgressed: (progress) =>
+                    viewerMode.pinchZoomOutToThumbnailsProgressed(progress)
+            onPinchZoomOutToThumbnailsFinished: (commit) =>
+                    viewerMode.pinchZoomOutToThumbnailsFinished(commit)
 
             Rectangle {
                 id: delegateOutline
@@ -1420,7 +1429,7 @@ Item {
         }
         height: titleBar.viewerHeight
 
-        opacity: root.state === "viewer"
+        opacity: viewerMode.viewerChromeOpacity
         visible: opacity !== 0
         Behavior on opacity {
             NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
@@ -1460,7 +1469,7 @@ Item {
 
         BlurBackground {
             id: topBarBackground
-            opacity: root.state === "viewer" && topPanel.hovered
+            opacity: topPanel.hovered ? viewerMode.viewerChromeOpacity : 0
             visible: opacity !== 0
             Behavior on opacity {
                 NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
@@ -1708,7 +1717,7 @@ Item {
 
         property bool listContentsFitScreen: rightPanel.fullContentHeight < rightPanel.parent.height - rightPanel.y
 
-        opacity: root.state === "viewer" && (panelsVisible || rightPanel.containsMouse)
+        opacity: (panelsVisible || rightPanel.containsMouse) ? viewerMode.viewerChromeOpacity : 0
         visible: opacity !== 0
         Behavior on opacity {
             NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
@@ -1908,7 +1917,7 @@ Item {
         width: 180
         height: exifLayout.height > 0 ? (exifLayout.height + 10) : 0
 
-        opacity: root.state === "viewer" && (panelsVisible || leftPanel.containsMouse)
+        opacity: (panelsVisible || leftPanel.containsMouse) ? viewerMode.viewerChromeOpacity : 0
         visible: opacity !== 0
         Behavior on opacity {
             NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }

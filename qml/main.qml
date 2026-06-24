@@ -125,7 +125,24 @@ MainWindow {
         anchors.fill: parent
         color: Style.windowColor
 
-        property bool viewerShowAnimationRunning: viewerMode.animation.running
+        property bool viewerPinchCloseActive: false
+        property bool viewerPinchCloseReturning: false
+        property bool viewerPinchCloseFinishingCommit: false
+        property real viewerPinchCloseProgress: 0
+        property rect viewerPinchCloseStartGeometry: Qt.rect(0, 0, 0, 0)
+        property rect viewerPinchCloseTargetGeometry: Qt.rect(0, 0, 0, 0)
+        property bool viewerShowAnimationRunning: viewerMode.animation.running || viewerPinchCloseActive
+
+        onViewerPinchCloseProgressChanged: {
+            applyViewerPinchCloseProgress()
+            if (viewerPinchCloseFinishingCommit && viewerPinchCloseProgress >= 0.999) {
+                Qt.callLater(() => {
+                    if (viewerPinchCloseFinishingCommit) {
+                        completeViewerPinchClose()
+                    }
+                })
+            }
+        }
 
         function toggleViewer() {
             if (root.state === "thumbnails") {
@@ -136,12 +153,214 @@ MainWindow {
                 switchToViewer()
             }
             else {
-                switchToThumbnails()
-                if (thumbnailsDirty) {
-                    thumbnailsDirty = false
-                    masonryLayout.view.reReadAndDecodeThumbnails()
+                closeViewer()
+            }
+        }
+
+        function closeViewer(startGeometry) {
+            switchToThumbnails(startGeometry)
+            if (thumbnailsDirty) {
+                thumbnailsDirty = false
+                masonryLayout.view.reReadAndDecodeThumbnails()
+            }
+            fileListModel.cancelAllDecodeViewerRunners()
+        }
+
+        function validGeometry(geometry) {
+            return geometry !== undefined && geometry.width > 1 && geometry.height > 1
+        }
+
+        function currentThumbnailGeometry() {
+            if (!masonryLayout.view.currentItem) {
+                return undefined
+            }
+
+            return root.mapFromItem(masonryLayout.view, masonryLayout.currentItemImageGeometry())
+        }
+
+        function currentThumbnailImageGeometry() {
+            let thumbnailGeometry = currentThumbnailGeometry()
+            if (!validGeometry(thumbnailGeometry)) {
+                return undefined
+            }
+
+            return viewerMode.imageContainer.imageRectFittedInRect(thumbnailGeometry)
+        }
+
+        function lerp(start, end, progress) {
+            return start + (end - start) * progress
+        }
+
+        function easeViewerPinchCloseProgress(progress) {
+            return Math.sin(Math.max(0, Math.min(1, progress)) * Math.PI / 2)
+        }
+
+        function beginViewerPinchClose() {
+            if (viewerPinchCloseActive) {
+                return true
+            }
+
+            if (root.state !== "viewer") {
+                return false
+            }
+
+            let startGeometry = currentViewerImageGeometry()
+            let targetGeometry = currentThumbnailImageGeometry()
+            if (!validGeometry(startGeometry) || !validGeometry(targetGeometry)) {
+                return false
+            }
+
+            viewerMode.animation.stop()
+            viewerPinchCloseProgressAnimation.stop()
+            viewerPinchCloseFinalizeTimer.stop()
+            viewerPinchCloseStartGeometry = startGeometry
+            viewerPinchCloseTargetGeometry = targetGeometry
+            viewerPinchCloseReturning = false
+            viewerPinchCloseFinishingCommit = false
+            viewerPinchCloseActive = true
+            toolbarLayout.visible = true
+
+            viewerMode.imageContainer.x = 0
+            viewerMode.imageContainer.y = 0
+            viewerMode.imageContainer.width = Qt.binding(() => viewerMode.width)
+            viewerMode.imageContainer.height = Qt.binding(() => viewerMode.height)
+            viewerMode.imageContainer.setImageRect(startGeometry)
+            return true
+        }
+
+        function updateViewerPinchClose(progress) {
+            if (viewerPinchCloseFinishingCommit) {
+                return
+            }
+
+            if (!beginViewerPinchClose()) {
+                return
+            }
+
+            viewerPinchCloseReturning = false
+            viewerPinchCloseFinishingCommit = false
+            viewerPinchCloseProgressAnimation.stop()
+            viewerPinchCloseFinalizeTimer.stop()
+            viewerPinchCloseProgress = Math.max(0, Math.min(1, progress))
+        }
+
+        function applyViewerPinchCloseProgress() {
+            if (!viewerPinchCloseActive ||
+                    !validGeometry(viewerPinchCloseStartGeometry) ||
+                    !validGeometry(viewerPinchCloseTargetGeometry)) {
+                return
+            }
+
+            let progress = easeViewerPinchCloseProgress(viewerPinchCloseProgress)
+            viewerMode.imageContainer.setImageRect(Qt.rect(
+                    lerp(viewerPinchCloseStartGeometry.x, viewerPinchCloseTargetGeometry.x, progress),
+                    lerp(viewerPinchCloseStartGeometry.y, viewerPinchCloseTargetGeometry.y, progress),
+                    lerp(viewerPinchCloseStartGeometry.width, viewerPinchCloseTargetGeometry.width, progress),
+                    lerp(viewerPinchCloseStartGeometry.height, viewerPinchCloseTargetGeometry.height, progress)))
+        }
+
+        function enterThumbnailsAfterViewerPinchClose() {
+            masonryLayout.focusProxy.forceActiveFocus()
+            if (root.state !== "thumbnails") {
+                root.state = "thumbnails"
+            }
+
+            toolbarLayout.visible = true
+            if (thumbnailsDirty) {
+                thumbnailsDirty = false
+                masonryLayout.view.reReadAndDecodeThumbnails()
+            }
+            fileListModel.cancelAllDecodeViewerRunners()
+            viewerMode.panelsVisible = false
+            topLevelWindow.title = "ZoinGallery"
+            thumbnailsView.opacity = 1
+            thumbnailsViewBackground.opacity = 1
+            viewerBackground.opacity = 0
+            titleBar.opacity = 1
+        }
+
+        function completeViewerPinchClose() {
+            viewerPinchCloseProgressAnimation.stop()
+            viewerPinchCloseFinalizeTimer.stop()
+            enterThumbnailsAfterViewerPinchClose()
+            viewerMode.visible = false
+            viewerPinchCloseActive = false
+            viewerPinchCloseReturning = false
+            viewerPinchCloseFinishingCommit = false
+            viewerPinchCloseProgress = 0
+            viewerMode.imageContainer.x = 0
+            viewerMode.imageContainer.y = 0
+            viewerMode.imageContainer.width = Qt.binding(() => viewerMode.width)
+            viewerMode.imageContainer.height = Qt.binding(() => viewerMode.height)
+            viewerMode.imageContainer.zoomToFit(true)
+            viewerMode.zoomFitView = true
+        }
+
+        function finishViewerPinchClose(commit) {
+            if (!viewerPinchCloseActive) {
+                return
+            }
+
+            let targetGeometry = currentThumbnailImageGeometry()
+            if (commit && validGeometry(targetGeometry)) {
+                viewerPinchCloseReturning = false
+                viewerPinchCloseFinishingCommit = true
+                viewerPinchCloseTargetGeometry = targetGeometry
+                viewerPinchCloseProgressAnimation.stop()
+                viewerPinchCloseFinalizeTimer.stop()
+                if (viewerPinchCloseProgress >= 0.999) {
+                    viewerPinchCloseProgress = 1
+                    Qt.callLater(() => {
+                        if (viewerPinchCloseFinishingCommit) {
+                            completeViewerPinchClose()
+                        }
+                    })
+                    return
                 }
-                fileListModel.cancelAllDecodeViewerRunners()
+
+                viewerPinchCloseProgressAnimation.to = 1
+                viewerPinchCloseProgressAnimation.restart()
+                viewerPinchCloseFinalizeTimer.restart()
+                return
+            }
+
+            viewerPinchCloseReturning = true
+            viewerPinchCloseFinishingCommit = false
+            viewerPinchCloseProgressAnimation.stop()
+            viewerPinchCloseFinalizeTimer.stop()
+            viewerPinchCloseProgressAnimation.to = 0
+            viewerPinchCloseProgressAnimation.restart()
+        }
+
+        NumberAnimation {
+            id: viewerPinchCloseProgressAnimation
+            target: root
+            property: "viewerPinchCloseProgress"
+            duration: viewerMode.animationDuration
+            easing.type: viewerMode.easingType
+
+            onFinished: {
+                if (viewerPinchCloseFinishingCommit) {
+                    completeViewerPinchClose()
+                }
+                else if (root.state === "viewer" && viewerPinchCloseProgress <= 0.001) {
+                    viewerPinchCloseActive = false
+                    viewerPinchCloseReturning = false
+                    viewerPinchCloseFinishingCommit = false
+                    toolbarLayout.visible = false
+                    viewerMode.imageContainer.zoomToFit()
+                }
+            }
+        }
+
+        Timer {
+            id: viewerPinchCloseFinalizeTimer
+            interval: viewerMode.animationDuration + 50
+            repeat: false
+            onTriggered: {
+                if (viewerPinchCloseFinishingCommit) {
+                    completeViewerPinchClose()
+                }
             }
         }
 
@@ -158,8 +377,15 @@ MainWindow {
         }
 
         function switchToViewer(animated = true) {
+            viewerPinchCloseProgressAnimation.stop()
+            viewerPinchCloseFinalizeTimer.stop()
+            viewerPinchCloseActive = false
+            viewerPinchCloseReturning = false
+            viewerPinchCloseFinishingCommit = false
+            viewerPinchCloseProgress = 0
             viewerMode.forceActiveFocus()
             root.state = "viewer"
+            viewerMode.zoomFitView = true
 
             if (animated) {
                 if (!viewerMode.animation.running) {
@@ -195,14 +421,32 @@ MainWindow {
             }
         }
 
-        function switchToThumbnails() {
+        function currentViewerImageGeometry() {
+            let image = viewerMode.imageContainer.image
+            if (image.width <= 1 || image.height <= 1) {
+                return undefined
+            }
+
+            return root.mapFromItem(viewerMode.imageContainer,
+                                    Qt.rect(image.x, image.y, image.width, image.height))
+        }
+
+        function switchToThumbnails(startGeometry) {
             masonryLayout.focusProxy.forceActiveFocus()
             root.state = "thumbnails"
 
             if (masonryLayout.view.currentItem) {
                 let mappedGeometry = root.mapFromItem(masonryLayout.view, masonryLayout.currentItemImageGeometry())
 
-                if (!viewerMode.zoomFitView) {
+                if (startGeometry !== undefined && startGeometry.width > 1 && startGeometry.height > 1) {
+                    viewerMode.animation.stop()
+                    viewerMode.imageContainer.x = startGeometry.x
+                    viewerMode.imageContainer.y = startGeometry.y
+                    viewerMode.imageContainer.width = startGeometry.width
+                    viewerMode.imageContainer.height = startGeometry.height
+                    viewerMode.imageContainer.zoomToFit(true)
+                }
+                else if (!viewerMode.zoomFitView) {
                     viewerMode.imageContainer.zoomToFit(true) // TODO: Smooth animation
                 }
 
@@ -851,6 +1095,9 @@ MainWindow {
         ViewerMode {
             id: viewerMode
             anchors.fill: parent
+
+            onPinchZoomOutToThumbnailsProgressed: (progress) => root.updateViewerPinchClose(progress)
+            onPinchZoomOutToThumbnailsFinished: (commit) => root.finishViewerPinchClose(commit)
         }
 
         SettingsDialog {
@@ -1097,19 +1344,19 @@ MainWindow {
                 name: "viewer"
                 PropertyChanges {
                     target: thumbnailsView
-                    opacity: 0
+                    opacity: root.viewerPinchCloseActive ? root.viewerPinchCloseProgress : 0
                 }
                 PropertyChanges {
                     target: thumbnailsViewBackground
-                    opacity: 0
+                    opacity: root.viewerPinchCloseActive ? root.viewerPinchCloseProgress : 0
                 }
                 PropertyChanges {
                     target: viewerBackground
-                    opacity: 1
+                    opacity: root.viewerPinchCloseActive ? 1 - root.viewerPinchCloseProgress : 1
                 }
                 PropertyChanges {
                     target: titleBar
-                    opacity: 0
+                    opacity: root.viewerPinchCloseActive ? root.viewerPinchCloseProgress : 0
                 }
             }
         ]

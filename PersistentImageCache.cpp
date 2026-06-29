@@ -9,7 +9,7 @@
 #include <QColorSpace>
 
 namespace {
-constexpr int CacheFormatVersion = 2;
+constexpr int CacheFormatVersion = 3;
 
 QString cacheDbPath() {
     return QString("C:/tmp/zg_v%1.db").arg(CacheFormatVersion);

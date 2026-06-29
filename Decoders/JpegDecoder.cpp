@@ -123,7 +123,6 @@ bool JpegDecoder::readMetadata(ImageInfo &result) {
         if (!result.imageSize.isValid()) {
             result.imageSize = readResolutionFromExif(exifInfo);
         }
-        result.imageSize = rotateToOrientation(result.imageSize, result.orientation);
     }
 
     result.exif["Size"] = f.size();

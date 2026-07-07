@@ -10,6 +10,17 @@ $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $QwkSource = Join-Path $RepoRoot "build\qwindowkit-src"
 $QwkBuild = Join-Path $RepoRoot "build\qwindowkit-build"
 $QwkInstall = Join-Path $RepoRoot "build\qwindowkit-install"
+$QtVersion = Split-Path (Split-Path $QtRoot -Parent) -Leaf
+$QwkCxxFlags = @()
+
+foreach ($includeDir in @(
+    (Join-Path $QtRoot "include\QtQml\$QtVersion"),
+    (Join-Path $QtRoot "include\QtQml\$QtVersion\QtQml")
+)) {
+    if (Test-Path $includeDir) {
+        $QwkCxxFlags += "/I$includeDir"
+    }
+}
 
 Remove-Item -Recurse -Force $QwkSource, $QwkBuild, $QwkInstall -ErrorAction SilentlyContinue
 git clone --recursive --branch main https://github.com/stdware/qwindowkit.git $QwkSource
@@ -17,6 +28,7 @@ git clone --recursive --branch main https://github.com/stdware/qwindowkit.git $Q
 cmake -S $QwkSource -B $QwkBuild -G Ninja `
     -DCMAKE_BUILD_TYPE=$BuildType `
     -DCMAKE_PREFIX_PATH="$QtRoot" `
+    -DCMAKE_CXX_FLAGS="$($QwkCxxFlags -join ' ')" `
     -DCMAKE_INSTALL_PREFIX="$QwkInstall" `
     -DQWINDOWKIT_BUILD_QUICK=TRUE `
     -DQWINDOWKIT_BUILD_WIDGETS=FALSE `

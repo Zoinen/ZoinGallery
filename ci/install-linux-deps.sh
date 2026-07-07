@@ -17,6 +17,7 @@ case "${distro}" in
             libegl-dev \
             libfontconfig1 \
             libfreetype6 \
+            libglib2.0-0 \
             libgl1 \
             libgl-dev \
             libglx-mesa0 \
@@ -54,6 +55,7 @@ case "${distro}" in
             gcc \
             gcc-c++ \
             git \
+            glib2 \
             libX11-xcb \
             libxcb \
             libxkbcommon-x11 \
@@ -85,6 +87,7 @@ case "${distro}" in
             fontconfig \
             freetype2 \
             git \
+            glib2 \
             libx11 \
             libxcb \
             libxkbcommon-x11 \

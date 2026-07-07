@@ -8,6 +8,17 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 qwk_source="${repo_root}/build/qwindowkit-src"
 qwk_build="${repo_root}/build/qwindowkit-build"
 qwk_install="${repo_root}/build/qwindowkit-install"
+qt_version="$(basename "$(dirname "${qt_root}")")"
+qwk_cxx_flags=""
+
+for include_dir in \
+    "${qt_root}/include/QtQml/${qt_version}" \
+    "${qt_root}/include/QtQml/${qt_version}/QtQml"
+do
+    if [ -d "${include_dir}" ]; then
+        qwk_cxx_flags="${qwk_cxx_flags} -isystem ${include_dir}"
+    fi
+done
 
 rm -rf "${qwk_source}" "${qwk_build}" "${qwk_install}"
 git clone --recursive --branch main https://github.com/stdware/qwindowkit.git "${qwk_source}"
@@ -15,6 +26,7 @@ git clone --recursive --branch main https://github.com/stdware/qwindowkit.git "$
 cmake -S "${qwk_source}" -B "${qwk_build}" -G Ninja \
     -DCMAKE_BUILD_TYPE="${build_type}" \
     -DCMAKE_PREFIX_PATH="${qt_root}" \
+    -DCMAKE_CXX_FLAGS="${qwk_cxx_flags}" \
     -DCMAKE_INSTALL_PREFIX="${qwk_install}" \
     -DQWINDOWKIT_BUILD_QUICK=TRUE \
     -DQWINDOWKIT_BUILD_WIDGETS=FALSE \

@@ -1,0 +1,368 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BUILD_TYPE: RelWithDebInfo
+  QT_VERSION: 6.11.1
+  AQT_MODULES: qtshadertools
+
+jobs:
+  linux-ubuntu:
+    name: Linux / Ubuntu 24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo bash ci/install-linux-deps.sh ubuntu
+
+      - name: Restore caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .qt
+            ~/.cache/pip
+            ~/.conan2/p
+          key: ci-linux-ubuntu-24.04-qt-${{ env.QT_VERSION }}-${{ hashFiles('conanfile.py', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            ci-linux-ubuntu-24.04-qt-${{ env.QT_VERSION }}-
+            ci-linux-ubuntu-24.04-
+
+      - name: Install Python build tools
+        run: |
+          python3 -m pip install --user --break-system-packages conan aqtinstall cmake ninja
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Install Qt
+        run: |
+          qt_root="${GITHUB_WORKSPACE}/.qt/${QT_VERSION}/gcc_64"
+          if [ ! -d "${qt_root}" ]; then
+            python3 -m aqt install-qt linux desktop "${QT_VERSION}" linux_gcc_64 \
+              --modules ${AQT_MODULES} \
+              --outputdir "${GITHUB_WORKSPACE}/.qt"
+          fi
+          echo "QT_ROOT=${qt_root}" >> "${GITHUB_ENV}"
+
+      - name: Install Conan dependencies
+        run: |
+          conan profile detect --force
+          conan install . --build=missing \
+            -s build_type="${BUILD_TYPE}" \
+            -s compiler.cppstd=20 \
+            -o '&:with_qt=False' \
+            --output-folder=build
+
+      - name: Build QWindowKit
+        run: bash ci/build-qwindowkit.sh "${QT_ROOT}" "${BUILD_TYPE}"
+
+      - name: Configure ZoinGallery
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/conan_toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DUSE_QWK=ON \
+            -DCMAKE_PREFIX_PATH="${QT_ROOT};${GITHUB_WORKSPACE}/build;${GITHUB_WORKSPACE}/build/qwindowkit-install"
+
+      - name: Build ZoinGallery
+        run: cmake --build build --parallel
+
+      - name: Smoke test
+        run: bash ci/smoke-test.sh "${QT_ROOT}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZoinGallery-linux-ubuntu-24.04
+          path: |
+            build/bin
+            build/qwindowkit-install/lib
+          if-no-files-found: error
+
+  linux-containers:
+    name: Linux / ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.image }}
+      options: --user root
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian 12
+            distro: debian
+            image: debian:12
+            cache_key: debian-12
+          - name: Fedora latest
+            distro: fedora
+            image: fedora:latest
+            cache_key: fedora-latest
+          - name: Arch latest
+            distro: arch
+            image: archlinux:latest
+            cache_key: arch-latest
+
+    steps:
+      - name: Install base tools for checkout
+        run: |
+          case "${{ matrix.distro }}" in
+            debian)
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates git gzip tar zstd
+              ;;
+            fedora)
+              dnf install -y ca-certificates git gzip tar zstd
+              ;;
+            arch)
+              pacman -Syu --noconfirm --needed ca-certificates git gzip tar zstd
+              ;;
+          esac
+
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: bash ci/install-linux-deps.sh "${{ matrix.distro }}"
+
+      - name: Restore caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .qt
+            ~/.cache/pip
+            ~/.conan2/p
+          key: ci-linux-${{ matrix.cache_key }}-qt-${{ env.QT_VERSION }}-${{ hashFiles('conanfile.py', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            ci-linux-${{ matrix.cache_key }}-qt-${{ env.QT_VERSION }}-
+            ci-linux-${{ matrix.cache_key }}-
+
+      - name: Install Python build tools
+        run: |
+          python3 -m pip install --user --break-system-packages conan aqtinstall cmake ninja || \
+            python3 -m pip install --user conan aqtinstall cmake ninja
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Install Qt
+        run: |
+          qt_root="${GITHUB_WORKSPACE}/.qt/${QT_VERSION}/gcc_64"
+          if [ ! -d "${qt_root}" ]; then
+            python3 -m aqt install-qt linux desktop "${QT_VERSION}" linux_gcc_64 \
+              --modules ${AQT_MODULES} \
+              --outputdir "${GITHUB_WORKSPACE}/.qt"
+          fi
+          echo "QT_ROOT=${qt_root}" >> "${GITHUB_ENV}"
+
+      - name: Install Conan dependencies
+        run: |
+          conan profile detect --force
+          conan install . --build=missing \
+            -s build_type="${BUILD_TYPE}" \
+            -s compiler.cppstd=20 \
+            -o '&:with_qt=False' \
+            --output-folder=build
+
+      - name: Build QWindowKit
+        run: bash ci/build-qwindowkit.sh "${QT_ROOT}" "${BUILD_TYPE}"
+
+      - name: Configure ZoinGallery
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/conan_toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DUSE_QWK=ON \
+            -DCMAKE_PREFIX_PATH="${QT_ROOT};${GITHUB_WORKSPACE}/build;${GITHUB_WORKSPACE}/build/qwindowkit-install"
+
+      - name: Build ZoinGallery
+        run: cmake --build build --parallel
+
+      - name: Smoke test
+        run: bash ci/smoke-test.sh "${QT_ROOT}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZoinGallery-linux-${{ matrix.cache_key }}
+          path: |
+            build/bin
+            build/qwindowkit-install/lib
+          if-no-files-found: error
+
+  macos:
+    name: macOS 15
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Restore caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .qt
+            ~/Library/Caches/pip
+            ~/.conan2/p
+          key: ci-macos-15-qt-${{ env.QT_VERSION }}-${{ hashFiles('conanfile.py', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            ci-macos-15-qt-${{ env.QT_VERSION }}-
+            ci-macos-15-
+
+      - name: Install Python build tools
+        run: |
+          python3 -m pip install --user conan aqtinstall cmake ninja
+          echo "$(python3 -m site --user-base)/bin" >> "${GITHUB_PATH}"
+
+      - name: Install Qt
+        run: |
+          qt_root="${GITHUB_WORKSPACE}/.qt/${QT_VERSION}/macos"
+          if [ ! -d "${qt_root}" ]; then
+            python3 -m aqt install-qt mac desktop "${QT_VERSION}" clang_64 \
+              --modules ${AQT_MODULES} \
+              --outputdir "${GITHUB_WORKSPACE}/.qt"
+          fi
+          echo "QT_ROOT=${qt_root}" >> "${GITHUB_ENV}"
+
+      - name: Install Conan dependencies
+        run: |
+          conan profile detect --force
+          conan install . --build=missing \
+            -s build_type="${BUILD_TYPE}" \
+            -s compiler.cppstd=20 \
+            -o '&:with_qt=False' \
+            --output-folder=build
+
+      - name: Build QWindowKit
+        run: bash ci/build-qwindowkit.sh "${QT_ROOT}" "${BUILD_TYPE}"
+
+      - name: Configure ZoinGallery
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/conan_toolchain.cmake" \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DUSE_QWK=ON \
+            -DZOIN_MACOS_CODE_SIGN=OFF \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
+            -DCMAKE_PREFIX_PATH="${QT_ROOT};${GITHUB_WORKSPACE}/build;${GITHUB_WORKSPACE}/build/qwindowkit-install"
+
+      - name: Build ZoinGallery
+        run: cmake --build build --parallel
+
+      - name: Smoke test
+        run: bash ci/smoke-test.sh "${QT_ROOT}"
+
+      - name: Prepare app artifact
+        run: |
+          app="build/bin/RelWithDebInfo/ZoinGallery.app"
+          "${QT_ROOT}/bin/macdeployqt" "${app}" -verbose=1 || true
+          mkdir -p "${app}/Contents/Frameworks"
+          cp -f build/qwindowkit-install/lib/*.dylib "${app}/Contents/Frameworks/" || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZoinGallery-macos-15
+          path: build/bin/RelWithDebInfo/ZoinGallery.app
+          if-no-files-found: error
+
+  windows:
+    name: Windows Server 2022
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Initialize MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Restore caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .qt
+            ~\AppData\Local\pip\Cache
+            ~\.conan2\p
+          key: ci-windows-2022-qt-${{ env.QT_VERSION }}-${{ hashFiles('conanfile.py', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            ci-windows-2022-qt-${{ env.QT_VERSION }}-
+            ci-windows-2022-
+
+      - name: Install Python build tools
+        shell: pwsh
+        run: |
+          py -m pip install --user conan aqtinstall cmake ninja
+          $userScripts = "$(py -m site --user-base)\Scripts"
+          $userScripts | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Qt
+        shell: pwsh
+        run: |
+          $qtRoot = Join-Path $env:GITHUB_WORKSPACE ".qt\${env:QT_VERSION}\msvc2022_64"
+          if (!(Test-Path $qtRoot)) {
+            $modules = $env:AQT_MODULES -split ' '
+            py -m aqt install-qt windows desktop $env:QT_VERSION win64_msvc2022_64 `
+              --modules $modules `
+              --outputdir (Join-Path $env:GITHUB_WORKSPACE ".qt")
+          }
+          "QT_ROOT=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Conan dependencies
+        shell: pwsh
+        run: |
+          conan profile detect --force
+          conan install . --build=missing `
+            -s build_type="$env:BUILD_TYPE" `
+            -s compiler.cppstd=20 `
+            -o "&:with_qt=False" `
+            --output-folder=build
+
+      - name: Build QWindowKit
+        shell: pwsh
+        run: .\ci\build-qwindowkit.ps1 -QtRoot "$env:QT_ROOT" -BuildType "$env:BUILD_TYPE"
+
+      - name: Configure ZoinGallery
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE\build\conan_toolchain.cmake" `
+            -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
+            -DUSE_QWK=ON `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT;$env:GITHUB_WORKSPACE\build;$env:GITHUB_WORKSPACE\build\qwindowkit-install"
+
+      - name: Build ZoinGallery
+        shell: pwsh
+        run: cmake --build build --parallel
+
+      - name: Prepare app artifact
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path build\bin -Recurse -Filter ZoinGallery.exe | Select-Object -First 1
+          if (!$exe) { throw "Could not find ZoinGallery.exe" }
+          & "$env:QT_ROOT\bin\windeployqt.exe" --no-translations --no-compiler-runtime $exe.FullName
+          $qwkBin = Join-Path $env:GITHUB_WORKSPACE "build\qwindowkit-install\bin"
+          if (Test-Path $qwkBin) {
+            Copy-Item "$qwkBin\*.dll" -Destination (Split-Path $exe.FullName -Parent) -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Smoke test
+        shell: pwsh
+        run: .\ci\smoke-test.ps1 -QtRoot "$env:QT_ROOT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZoinGallery-windows-2022
+          path: build/bin
+          if-no-files-found: error

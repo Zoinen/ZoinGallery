@@ -4,9 +4,11 @@ import os
 
 class ZoinGalleryConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
-    
+    options = {
+        "with_qt": [True, False],
+    }
+
     requires = [
-        "qt/6.11.1",
         "exiv2/0.28.3",
         "libtiff/4.7.0",
         "libraw/0.21.3",
@@ -17,6 +19,7 @@ class ZoinGalleryConan(ConanFile):
     generators = "CMakeToolchain", "CMakeDeps"
 
     default_options = {
+        "with_qt": True,
         "qt/*:shared": True,
         "qt/*:qtdeclarative": True,
         "qt/*:qtsvg": True,
@@ -30,6 +33,9 @@ class ZoinGalleryConan(ConanFile):
     }
 
     def requirements(self):
+        if self.options.with_qt:
+            self.requires("qt/6.11.1")
+
         # Override the version of libjpeg-turbo required by libraw explicitly
         self.requires("libjpeg-turbo/3.0.2", override=True)
         self.requires("jasper/4.2.0", override=True)
@@ -47,6 +53,6 @@ class ZoinGalleryConan(ConanFile):
                 for libdir in dep.cpp_info.libdirs:
                     copy(self, "*.so", src=libdir, dst=os.path.join(self.cpp.build.libdirs, str(self.settings.build_type)), keep_path=False)
             elif self.settings.compiler == "msvc":
-                # copy(self, "*.lib", src=dep.cpp_info.libdirs[0], dst=os.path.join(self.cpp.build.libdirs, ""), keep_path=False)  
+                # copy(self, "*.lib", src=dep.cpp_info.libdirs[0], dst=os.path.join(self.cpp.build.libdirs, ""), keep_path=False)
                 for bindir in dep.cpp_info.bindirs:
                     copy(self, "*.dll", src=bindir, dst=os.path.join(self.cpp.build.bindirs, str(self.settings.build_type)),keep_path=False)

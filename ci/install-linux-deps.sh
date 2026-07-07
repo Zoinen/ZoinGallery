@@ -14,10 +14,13 @@ case "${distro}" in
             git \
             libdbus-1-3 \
             libegl1 \
+            libegl-dev \
             libfontconfig1 \
             libfreetype6 \
             libgl1 \
+            libgl-dev \
             libglx-mesa0 \
+            libglx-dev \
             libx11-xcb1 \
             libxkbcommon-x11-0 \
             libxcb-cursor0 \
@@ -56,7 +59,9 @@ case "${distro}" in
             libxkbcommon-x11 \
             make \
             mesa-libEGL \
+            mesa-libEGL-devel \
             mesa-libGL \
+            mesa-libGL-devel \
             ninja-build \
             patchelf \
             pkgconf-pkg-config \

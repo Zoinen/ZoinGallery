@@ -10,7 +10,7 @@ permissions:
 
 env:
   BUILD_TYPE: RelWithDebInfo
-  QT_VERSION: 6.11.1
+  QT_VERSION: 6.10.3
   AQT_MODULES: qtshadertools
 
 jobs:
@@ -220,7 +220,7 @@ jobs:
 
       - name: Install Python build tools
         run: |
-          python3 -m pip install --user conan aqtinstall cmake ninja
+          python3 -m pip install --user --break-system-packages conan aqtinstall cmake ninja
           echo "$(python3 -m site --user-base)/bin" >> "${GITHUB_PATH}"
 
       - name: Install Qt

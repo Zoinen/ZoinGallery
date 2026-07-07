@@ -323,8 +323,10 @@ jobs:
       - name: Install Conan dependencies
         shell: pwsh
         run: |
-          conan profile detect --force
-          conan install . --build=missing `
+          $userBase = py -c "import site; print(site.USER_BASE)"
+          $conan = Join-Path $userBase "Scripts\conan.exe"
+          & $conan profile detect --force
+          & $conan install . --build=missing `
             -s build_type="$env:BUILD_TYPE" `
             -s compiler.cppstd=20 `
             -o "&:with_qt=False" `

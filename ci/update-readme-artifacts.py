@@ -17,34 +17,52 @@ END_MARKER = "<!-- CI_ARTIFACTS_END -->"
 
 PLATFORMS = [
     {
-        "label": "Windows Server 2022",
+        "platform": "Windows",
+        "icon": "https://cdn.simpleicons.org/windows/0078D4",
+        "version": "Windows 10 or later (x64)",
         "job": "Windows Server 2022",
         "artifact_prefix": "ZoinGallery-windows-2022-b",
+        "download_label": "Download Windows build",
     },
     {
-        "label": "macOS 15",
+        "platform": "macOS",
+        "icon": "https://cdn.simpleicons.org/apple/000000",
+        "version": "macOS 10.15 or later",
         "job": "macOS 15",
         "artifact_prefix": "ZoinGallery-macos-15-b",
+        "download_label": "Download DMG",
     },
     {
-        "label": "Ubuntu 24.04",
+        "platform": "Linux",
+        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "version": "Ubuntu 24.04",
         "job": "Linux / Ubuntu 24.04",
         "artifact_prefix": "ZoinGallery-linux-ubuntu-24.04-b",
+        "download_label": "Download Ubuntu build",
     },
     {
-        "label": "Debian 12",
+        "platform": "Linux",
+        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "version": "Debian 12",
         "job": "Linux / Debian 12",
         "artifact_prefix": "ZoinGallery-linux-debian-12-b",
+        "download_label": "Download Debian build",
     },
     {
-        "label": "Fedora latest",
+        "platform": "Linux",
+        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "version": "Fedora latest",
         "job": "Linux / Fedora latest",
         "artifact_prefix": "ZoinGallery-linux-fedora-latest-b",
+        "download_label": "Download Fedora build",
     },
     {
-        "label": "Arch latest",
+        "platform": "Linux",
+        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "version": "Arch rolling",
         "job": "Linux / Arch latest",
         "artifact_prefix": "ZoinGallery-linux-arch-latest-b",
+        "download_label": "Download Arch build",
     },
 ]
 
@@ -104,6 +122,12 @@ def artifact_for_platform(artifacts: list[dict[str, Any]], artifact_prefix: str)
     return max(matches, key=lambda artifact: artifact.get("created_at") or "")
 
 
+def platform_cell(platform: dict[str, str]) -> str:
+    icon = platform["icon"]
+    name = platform["platform"]
+    return f'<img src="{icon}" width="16" alt="{name} logo"> {name}'
+
+
 def build_section() -> str:
     repo = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["GITHUB_RUN_ID"]
@@ -116,17 +140,12 @@ def build_section() -> str:
     jobs_by_name = {job["name"]: job for job in jobs}
     run_url = run.get("html_url") or f"{server_url}/{repo}/actions/runs/{run_id}"
     run_number = str(run.get("run_number") or os.environ.get("GITHUB_RUN_NUMBER", "unknown"))
-    sha = run.get("head_sha") or os.environ.get("GITHUB_SHA", "")
-    short_sha = sha[:7] if sha else "unknown"
-    commit_cell = (
-        f"[`{short_sha}`]({server_url}/{repo}/commit/{sha})" if sha else "`unknown`"
-    )
 
     lines = [
         f"Latest successful run: [{run.get('display_title') or 'CI'}]({run_url})",
         f"Build number: `{run_number}`",
         "",
-        "| Platform | CI Status | Download | Built | Commit |",
+        "| Platform | Version | Status | Built | Download |",
         "| --- | --- | --- | --- | --- |",
     ]
 
@@ -140,14 +159,14 @@ def build_section() -> str:
 
         if artifact:
             artifact_url = f"{server_url}/{repo}/actions/runs/{run_id}/artifacts/{artifact['id']}"
-            artifact_cell = f"[{artifact['name']}]({artifact_url})"
+            artifact_cell = f"[{platform['download_label']}]({artifact_url})"
             built_at = format_time(artifact.get("created_at"))
         else:
             artifact_cell = "Unavailable"
             built_at = format_time(job.get("completed_at") or run.get("updated_at"))
 
         lines.append(
-            f"| {platform['label']} | {status_cell} | {artifact_cell} | {built_at} | {commit_cell} |"
+            f"| {platform_cell(platform)} | {platform['version']} | {status_cell} | {built_at} | {artifact_cell} |"
         )
 
     lines.extend(

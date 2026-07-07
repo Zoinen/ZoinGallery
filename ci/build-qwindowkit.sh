@@ -36,5 +36,16 @@ cmake -S "${qwk_source}" -B "${qwk_build}" -G Ninja \
 cmake --build "${qwk_build}" --parallel
 cmake --install "${qwk_build}"
 
-test -f "${qwk_install}/lib/cmake/QWindowKit/QWindowKitConfig.cmake"
-grep -R "QWindowKit::Quick" "${qwk_install}/lib/cmake/QWindowKit"
+qwk_cmake_dir=""
+for candidate in \
+    "${qwk_install}/lib/cmake/QWindowKit" \
+    "${qwk_install}/lib64/cmake/QWindowKit"
+do
+    if [ -f "${candidate}/QWindowKitConfig.cmake" ]; then
+        qwk_cmake_dir="${candidate}"
+        break
+    fi
+done
+
+test -n "${qwk_cmake_dir}"
+grep -R "QWindowKit::Quick" "${qwk_cmake_dir}"

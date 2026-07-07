@@ -38,8 +38,13 @@ cmake -S $QwkSource -B $QwkBuild -G Ninja `
 cmake --build $QwkBuild --parallel
 cmake --install $QwkBuild
 
-if (!(Test-Path "$QwkInstall\lib\cmake\QWindowKit\QWindowKitConfig.cmake")) {
+$QwkCmakeDir = @(
+    (Join-Path $QwkInstall "lib\cmake\QWindowKit"),
+    (Join-Path $QwkInstall "lib64\cmake\QWindowKit")
+) | Where-Object { Test-Path (Join-Path $_ "QWindowKitConfig.cmake") } | Select-Object -First 1
+
+if (!$QwkCmakeDir) {
     throw "QWindowKit package config was not installed"
 }
 
-Select-String -Path "$QwkInstall\lib\cmake\QWindowKit\*.cmake" -Pattern "QWindowKit::Quick" | Out-Host
+Select-String -Path "$QwkCmakeDir\*.cmake" -Pattern "QWindowKit::Quick" | Out-Host

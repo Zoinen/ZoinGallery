@@ -60,6 +60,8 @@ jobs:
             -s build_type="${BUILD_TYPE}" \
             -s compiler.cppstd=20 \
             -o '&:with_qt=False' \
+            -c tools.files.download:retry=5 \
+            -c tools.files.download:retry_wait=10 \
             --output-folder=build
 
       - name: Build QWindowKit
@@ -169,6 +171,8 @@ jobs:
             -s build_type="${BUILD_TYPE}" \
             -s compiler.cppstd=20 \
             -o '&:with_qt=False' \
+            -c tools.files.download:retry=5 \
+            -c tools.files.download:retry_wait=10 \
             --output-folder=build
 
       - name: Build QWindowKit
@@ -240,6 +244,8 @@ jobs:
             -s build_type="${BUILD_TYPE}" \
             -s compiler.cppstd=20 \
             -o '&:with_qt=False' \
+            -c tools.files.download:retry=5 \
+            -c tools.files.download:retry_wait=10 \
             --output-folder=build
 
       - name: Build QWindowKit
@@ -328,6 +334,8 @@ jobs:
             -s build_type="$env:BUILD_TYPE" `
             -s compiler.cppstd=20 `
             -o "&:with_qt=False" `
+            -c tools.files.download:retry=5 `
+            -c tools.files.download:retry_wait=10 `
             --output-folder=build
 
       - name: Build QWindowKit

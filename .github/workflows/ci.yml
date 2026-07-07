@@ -334,6 +334,7 @@ jobs:
             -s build_type="$env:BUILD_TYPE" `
             -s compiler.cppstd=20 `
             -o "&:with_qt=False" `
+            -o "libtiff/*:lzma=False" `
             -c tools.files.download:retry=5 `
             -c tools.files.download:retry_wait=10 `
             -c tools.cmake.cmaketoolchain:generator=Ninja `

@@ -275,9 +275,7 @@ jobs:
       - name: Prepare app artifact
         run: |
           app="build/bin/RelWithDebInfo/ZoinGallery.app"
-          "${QT_ROOT}/bin/macdeployqt" "${app}" -verbose=1 || true
-          mkdir -p "${app}/Contents/Frameworks"
-          cp -f build/qwindowkit-install/lib/*.dylib "${app}/Contents/Frameworks/" || true
+          bash ci/deploy-macos.sh "${QT_ROOT}" "${app}"
           codesign --force --deep --timestamp=none --sign - "${app}"
           codesign --verify --deep --strict --verbose=2 "${app}"
           mkdir -p build/artifacts

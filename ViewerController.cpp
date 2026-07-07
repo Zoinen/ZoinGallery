@@ -6,11 +6,15 @@
 #include "QmlImageProvider.h"
 #include "QmlAsyncImageProvider.h"
 #include "QmlResourcesProvider.h"
+#include "GalleryViewModel.h"
 #include "ImageModel.h"
 #include "CacheViewer.h"
 #include "TrayController.h"
+#include "LaunchOptions.h"
+#include "MacApplication.h"
 
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -59,6 +63,7 @@ ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
     ThumbnailLoader::init();
     _fileListModel = nullptr;
+    _galleryViewModel = nullptr;
     _canUp = true;
     _canBack = false;
     _canForward = false;
@@ -69,16 +74,20 @@ ViewerController::ViewerController(QQmlEngine *engine)
     _backgroundInstance = nullptr;
     _backgroundMode = false;
     _pendingOpenInViewer = false;
+    _explicitQuitRequested = false;
 
     engine->rootContext()->setContextProperty("viewerController", this);
 
     _fileListModel = new FileListModel(this);
     engine->rootContext()->setContextProperty("fileListModel", _fileListModel);
     connect(_fileListModel, &FileListModel::directOpenReady, this, [this] (int index) {
-        emit setCurrentIndex(index);
+        emit setCurrentIndex(mapSourceRowToViewRow(index));
     });
 
-    _imageModel = new ImageModel(_fileListModel);
+    _galleryViewModel = new GalleryViewModel(_fileListModel, this);
+    engine->rootContext()->setContextProperty("galleryViewModel", _galleryViewModel);
+
+    _imageModel = new ImageModel(_galleryViewModel);
     engine->rootContext()->setContextProperty("imageModel", _imageModel);
 
     QmlImageProvider *imageProvider = new QmlImageProvider("thumbnails", _fileListModel);
@@ -118,7 +127,7 @@ void ViewerController::cd(const QString &folder, bool changeHistory) {
         else if (QFile::exists(newCurrentPath)) {
             setCurrentPath(QDir(QFileInfo(newCurrentPath).path()).absolutePath());
             QTimer::singleShot(10, this, [=] {
-                emit setCurrentIndex(_fileListModel->fileIndex(QFileInfo(newCurrentPath).fileName()));
+                emit setCurrentIndex(mapSourceRowToViewRow(_fileListModel->fileIndex(QFileInfo(newCurrentPath).fileName())));
             });
         }
     }
@@ -159,7 +168,8 @@ bool ViewerController::canUp() const {
 void ViewerController::saveCurrentState(qreal contentY, int currentIndex) {
     if (_indexInHistory >= 0 && _indexInHistory <= _history.size() - 1) {
         _history[_indexInHistory].contentY = contentY;
-        _history[_indexInHistory].currentIndex = currentIndex;
+        const int sourceIndex = mapViewRowToSourceRow(currentIndex);
+        _history[_indexInHistory].currentIndex = sourceIndex != -1 ? sourceIndex : currentIndex;
     }
 }
 
@@ -168,7 +178,7 @@ qreal ViewerController::savedContentY() const {
 }
 
 int ViewerController::savedCurrentIndex() const {
-    return _savedCurrentIndex;
+    return mapSourceRowToViewRow(_savedCurrentIndex);
 }
 
 void ViewerController::back() {
@@ -247,28 +257,61 @@ void ViewerController::jumpForward(int forwardIndex) {
 }
 
 void ViewerController::prepareToClose() {
+    qInfo() << "[Shutdown] ViewerController::prepareToClose scheduled";
     QTimer::singleShot(0, this, [&] () {
+        qInfo() << "[Shutdown] ViewerController::prepareToClose running scheduled close";
         _fileListModel->prepareToClose();
     });
 }
 
 void ViewerController::hideToTray() {
+    qInfo() << "[Shutdown] ViewerController::hideToTray"
+            << "hasTrayController" << (_trayController != nullptr)
+            << "trayAvailable" << (_trayController ? _trayController->isAvailable() : false);
     if (_trayController && _trayController->isAvailable()) {
         _trayController->showTray();
     }
     else {
+        qInfo() << "[Shutdown] ViewerController::hideToTray falling back to quitApplication";
         quitApplication();
     }
 }
 
 void ViewerController::quitApplication() {
+    qInfo() << "[Shutdown] ViewerController::quitApplication begin"
+            << "explicitQuitRequested" << _explicitQuitRequested
+            << "hasBackgroundInstance" << (_backgroundInstance != nullptr)
+            << "hasTrayController" << (_trayController != nullptr)
+            << "hasFileListModel" << (_fileListModel != nullptr);
+    if (!_explicitQuitRequested) {
+        _explicitQuitRequested = true;
+        emit explicitQuitRequestedChanged();
+        qInfo() << "[Shutdown] ViewerController::quitApplication marked explicit quit";
+    }
+    if (QCoreApplication *app = QCoreApplication::instance()) {
+        app->setProperty("explicitQuitRequested", true);
+        qInfo() << "[Shutdown] ViewerController::quitApplication set app explicitQuitRequested property";
+    }
     if (_backgroundInstance) {
+        qInfo() << "[Shutdown] ViewerController::quitApplication stopping background server";
         _backgroundInstance->stopServer();
+        qInfo() << "[Shutdown] ViewerController::quitApplication background server stop returned";
     }
     if (_trayController) {
-        _trayController->hideTray();
+        qInfo() << "[Shutdown] ViewerController::quitApplication hiding tray without restoring Dock";
+        _trayController->hideTray(false);
+        qInfo() << "[Shutdown] ViewerController::quitApplication tray hide returned";
     }
-    prepareToClose();
+    if (_fileListModel) {
+        qInfo() << "[Shutdown] ViewerController::quitApplication calling FileListModel::prepareToClose";
+        _fileListModel->prepareToClose();
+        qInfo() << "[Shutdown] ViewerController::quitApplication FileListModel::prepareToClose returned";
+    }
+    else {
+        qInfo() << "[Shutdown] ViewerController::quitApplication no file model, calling QCoreApplication::quit";
+        QCoreApplication::quit();
+    }
+    qInfo() << "[Shutdown] ViewerController::quitApplication end";
 }
 
 bool ViewerController::backgroundMode() const {
@@ -279,12 +322,20 @@ bool ViewerController::pendingOpenInViewer() const {
     return _pendingOpenInViewer;
 }
 
+bool ViewerController::explicitQuitRequested() const {
+    return _explicitQuitRequested;
+}
+
+void ViewerController::applyDockIconPreference(bool windowVisible) {
+    applyMacApplicationDockIconPolicy(windowVisible);
+}
+
 void ViewerController::setBackgroundMode(bool enabled) {
     _backgroundMode = enabled;
 }
 
 void ViewerController::setStartupFilePath(const QString &path) {
-    _startupFilePath = path;
+    _startupFilePath = normalizePathArgument(path);
 }
 
 void ViewerController::initializeBackgroundMode(QWindow *mainWindow) {
@@ -294,6 +345,7 @@ void ViewerController::initializeBackgroundMode(QWindow *mainWindow) {
     }
     else {
         connect(_trayController, &TrayController::quitRequested, this, &ViewerController::quitApplication);
+        _trayController->showTray(false);
         qDebug() << "Background mode: system tray ready";
     }
 
@@ -307,9 +359,10 @@ void ViewerController::initializeBackgroundMode(QWindow *mainWindow) {
 }
 
 void ViewerController::openExternalFile(const QString &path) {
-    QFileInfo fileInfo(path);
+    const QString normalizedPath = normalizePathArgument(path);
+    QFileInfo fileInfo(normalizedPath);
     if (fileInfo.isFile() && FileListModel::isImage(fileInfo.fileName())) {
-        _pendingExternalFilePath = path;
+        _pendingExternalFilePath = normalizedPath;
         _pendingOpenInViewer = true;
         emit pendingOpenInViewerChanged();
     }
@@ -317,7 +370,7 @@ void ViewerController::openExternalFile(const QString &path) {
         _pendingExternalFilePath.clear();
         _pendingOpenInViewer = false;
         emit pendingOpenInViewerChanged();
-        cd(path);
+        cd(normalizedPath);
     }
     emit externalFileOpened();
 }
@@ -344,16 +397,25 @@ void ViewerController::clearPendingOpenInViewer() {
 }
 
 void ViewerController::clipboardCopyIndexName(int index) {
+    index = mapViewRowToSourceRow(index);
+    if (index < 0 || index > _fileListModel->rowCount() - 1) {
+        return;
+    }
     QClipboard *clipboard = QGuiApplication::clipboard();
     clipboard->setText(_fileListModel->index(index).data().toString());
 }
 
 void ViewerController::clipboardCopyIndexFullPath(int index) {
+    index = mapViewRowToSourceRow(index);
+    if (index < 0 || index > _fileListModel->rowCount() - 1) {
+        return;
+    }
     QClipboard *clipboard = QGuiApplication::clipboard();
     clipboard->setText(QDir::toNativeSeparators(_fileListModel->itemFromIndex(_fileListModel->index(index))->fullPath()));
 }
 
 QUrl ViewerController::indexUrl(int index) {
+    index = mapViewRowToSourceRow(index);
     if (index < 0 || index > _fileListModel->rowCount() - 1) {
         return QUrl();
     }
@@ -418,18 +480,11 @@ void ViewerController::initialCd(int viewerWidth, int viewerHeight) {
 }
 
 void ViewerController::openFileInViewer(const QString &path, int viewerWidth, int viewerHeight, bool changeHistory) {
-    QString imagePath = path.trimmed();
-    if (imagePath.startsWith("\"")) {
-        imagePath = imagePath.right(imagePath.size() - 1);
-    }
-    if (imagePath.endsWith("\"")) {
-        imagePath = imagePath.left(imagePath.size() - 1);
-    }
-    imagePath = imagePath.trimmed();
+    QString imagePath = normalizePathArgument(path);
 
     QFileInfo fileInfo(imagePath);
     if (!fileInfo.isFile() || !FileListModel::isImage(fileInfo.fileName())) {
-        cd(path, changeHistory);
+        cd(imagePath, changeHistory);
         return;
     }
 
@@ -505,5 +560,23 @@ int ViewerController::setCurrentPath(const QString &newPath, const QString &item
     QSettings set;
     set.setValue("currentPath", _currentPath);
     emit currentPathChanged();
-    return indexToSelect;
+    return mapSourceRowToViewRow(indexToSelect);
+}
+
+int ViewerController::mapViewRowToSourceRow(int viewRow) const {
+    if (!_galleryViewModel) {
+        return viewRow;
+    }
+    return _galleryViewModel->mapToSourceRow(viewRow);
+}
+
+int ViewerController::mapSourceRowToViewRow(int sourceRow) const {
+    if (!_galleryViewModel || sourceRow < 0) {
+        return sourceRow;
+    }
+    const int viewRow = _galleryViewModel->mapFromSourceRow(sourceRow);
+    if (viewRow != -1) {
+        return viewRow;
+    }
+    return _galleryViewModel->nearestVisibleRow(sourceRow);
 }

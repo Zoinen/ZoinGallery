@@ -137,6 +137,7 @@ MouseArea {
     property bool shiftNavigationSelectionValue: true
     property string shiftSelectionDescription: "Range selection"
     readonly property int rubberBandModeAdd: 0
+    readonly property int rubberBandModeDeselect: 1
     readonly property int rubberBandModeReplace: 2
     readonly property int rubberBandModeToggle: 3
     readonly property real rubberBandThreshold: 4
@@ -261,6 +262,14 @@ MouseArea {
         setCurrentIndex(nextIndex, /*<defaults>*/ false, false, false /*</defaults>*/, true)
     }
 
+    function sourceIndexForViewIndex(viewIndex) {
+        return galleryViewModel.mapToSourceRow(viewIndex)
+    }
+
+    function currentSourceIndex() {
+        return sourceIndexForViewIndex(masonryLayout.currentIndex)
+    }
+
     function beginShiftSelection() {
         if (shiftSelectionActive) {
             return
@@ -275,14 +284,22 @@ MouseArea {
     function updateShiftNavigationSelection(targetIndex) {
         beginShiftSelection()
         shiftSelectionDescription = shiftNavigationSelectionValue ? "Range selection" : "Range deselection"
-        fileListModel.previewSelectionRange(shiftSelectionAnchorIndex, targetIndex, shiftNavigationSelectionValue, false)
+        fileListModel.previewSelectionIndexes(
+                    galleryViewModel.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, false),
+                    shiftNavigationSelectionValue ? rubberBandModeAdd : rubberBandModeDeselect)
     }
 
     function shiftClickSelection(targetIndex) {
         beginShiftSelection()
         shiftSelectionDescription = "Range selection"
-        fileListModel.previewSelectionRange(shiftSelectionAnchorIndex, targetIndex, true, true)
+        fileListModel.previewSelectionIndexes(galleryViewModel.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, true),
+                                              rubberBandModeAdd)
         setCurrentIndex(targetIndex)
+    }
+
+    function toggleCurrentSelection() {
+        setCurrentIndex(masonryLayout.currentIndex)
+        fileListModel.toggleSelection(currentSourceIndex())
     }
 
     function finishShiftSelection() {
@@ -355,7 +372,7 @@ MouseArea {
         let y2 = Math.max(rubberBandStartY, rubberBandCurrentY)
         let p = masonryLayout.mapFromItem(masonryView, x1, y1)
         let indexes = masonryLayout.indexesInViewportRect(p.x, p.y, x2 - x1, y2 - y1)
-        fileListModel.previewSelectionIndexes(indexes, rubberBandMode)
+        fileListModel.previewSelectionIndexes(galleryViewModel.mapToSourceRows(indexes), rubberBandMode)
     }
 
     function finishRubberBand() {
@@ -399,17 +416,26 @@ MouseArea {
                 masonryLayout.loadSavedState()
             }
             else if (event.key === Qt.Key_Insert && !(event.modifiers & Qt.ControlModifier)) {
-                fileListModel.toggleSelection(masonryLayout.currentIndex)
+                fileListModel.toggleSelection(currentSourceIndex())
                 setCurrentIndex(masonryLayout.currentIndex + 1)
+            }
+            else if (event.key === Qt.Key_Backslash && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
+                galleryViewModel.selectedOnly = !galleryViewModel.selectedOnly
+            }
+            else if (event.key === Qt.Key_Tab && !quickSearchMode) {
+                masonryView.alwaysShowFileNames = !masonryView.alwaysShowFileNames
+            }
+            else if (event.key === Qt.Key_Backslash && !quickSearchMode) {
+                toggleCurrentSelection()
             }
             else if (event.key === Qt.Key_Asterisk) {
                 fileListModel.invertSelection()
             }
             else if ((event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
-                fileListModel.setSameKindSelection(masonryLayout.currentIndex, true)
+                fileListModel.setSameKindSelection(currentSourceIndex(), true)
             }
             else if (event.key === Qt.Key_Minus && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
-                fileListModel.setSameKindSelection(masonryLayout.currentIndex, false)
+                fileListModel.setSameKindSelection(currentSourceIndex(), false)
             }
             else if ((event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) && (event.modifiers & Qt.ShiftModifier) && !quickSearchMode) {
                 fileListModel.setAllSelection(true)
@@ -548,11 +574,15 @@ MouseArea {
                      event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier) ||
                      event.key === Qt.Key_PageDown && (event.modifiers & Qt.ControlModifier)) {
                 hideQuickSearch()
-                if (masonryLayout.currentItem.model.isFolder) {
-                    viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
-                    viewerController.cd(masonryLayout.currentItem.model.text)
+                let currentItem = masonryLayout.currentItem
+                if (!currentItem || !currentItem.model) {
+                    return
                 }
-                else if (masonryLayout.currentItem.model.isImage) {
+                if (currentItem.model.isFolder) {
+                    viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
+                    viewerController.cd(currentItem.model.text)
+                }
+                else if (currentItem.model.isImage) {
                     masonryView.toggleViewer()
                 }
             }
@@ -561,9 +591,6 @@ MouseArea {
             }
             else if (event.key === Qt.Key_Minus && !quickSearchMode) {
                 masonryLayout.zoomOut()
-            }
-            else if (event.key === Qt.Key_Backslash && !quickSearchMode) {
-                masonryView.alwaysShowFileNames = !masonryView.alwaysShowFileNames
             }
             else if (event.key === Qt.Key_Escape) {
                 endScrolling()
@@ -609,7 +636,7 @@ MouseArea {
             right: masonryScroll.left
             rightMargin: masonryLayout.spacing / 2
         }
-        model: fileListModel
+        model: galleryViewModel
 
         paddingLeft: 1+5
         paddingRight: 1+5

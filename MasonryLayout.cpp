@@ -27,6 +27,10 @@ QRectF roundRect(const QRectF &rectF) {
     //return QRect(rectF.x(), rectF.y(), rectF.width(), rectF.height());
 }
 
+static ImageFile *imageFileFromModelIndex(const QModelIndex &index) {
+    return index.data(FileListModel::ImageFileRole).value<ImageFile *>();
+}
+
 MasonryLayout::MasonryLayout(QQuickItem *parent)
     : QQuickItem(parent) {
     QSettings set;
@@ -61,6 +65,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
 
     _preserveCurrentItemPositionOnNextModelReset = false;
     _preservedCurrentIndexOffset = -1;
+    _preservedCurrentFallbackIndex = -1;
 
     _quickSearch = new MasonryLayoutQuickSearch(this);
 }
@@ -224,6 +229,7 @@ void MasonryLayout::preserveCurrentItemPositionForNextModelReset() {
 
     _preservedCurrentItemFullPath = currentBrick.image->fullPath();
     _preservedCurrentIndexOffset = _contentY - currentBrick.y;
+    _preservedCurrentFallbackIndex = _currentIndex;
     _preserveCurrentItemPositionOnNextModelReset = !_preservedCurrentItemFullPath.isEmpty();
 }
 
@@ -586,6 +592,12 @@ void MasonryLayout::updateProperties(bool animate) {
                 }
                 _bricks[i].item = popBrickItem();
                 _bricks[i].item->setProperty("model", QVariant::fromValue(_bricks[i].image));
+                _bricks[i].item->setProperty("viewIndex", i);
+                _bricks[i].item->setProperty("sourceIndex", _bricks[i].image ? _bricks[i].image->index() : -1);
+            }
+            else {
+                _bricks[i].item->setProperty("viewIndex", i);
+                _bricks[i].item->setProperty("sourceIndex", _bricks[i].image ? _bricks[i].image->index() : -1);
             }
             _bricks[i].item->setRowColumn(_bricks[i].row, _bricks[i].column);
 
@@ -624,6 +636,8 @@ void MasonryLayout::updateProperties(bool animate) {
     for (BrickItem *item : itemsToHide) {
         item->setVisible(false);
         item->setProperty("model", QVariant());
+        item->setProperty("viewIndex", -1);
+        item->setProperty("sourceIndex", -1);
     }
 }
 
@@ -640,7 +654,7 @@ void MasonryLayout::setContentHeight(int newContentHeight) {
 }
 
 void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles) {
-    if (!isEmbedded() && FileListModel::itemFromIndex(topLeft.parent()) != dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()) {
+    if (!isEmbedded() && imageFileFromModelIndex(topLeft.parent()) != dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()) {
         return;
     }
     int index = topLeft.row();
@@ -810,6 +824,8 @@ void MasonryLayout::onModelAboutToBeReset() {
     for (auto it = _usedBrickItems.begin(); it != _usedBrickItems.end(); ++it) {
         (*it)->setVisible(false);
         (*it)->setProperty("model", QVariant());
+        (*it)->setProperty("viewIndex", -1);
+        (*it)->setProperty("sourceIndex", -1);
     }
     _freeBrickItems.unite(_usedBrickItems);
     _usedBrickItems.clear();
@@ -819,7 +835,10 @@ void MasonryLayout::onModelReset() {
     bool needToRender = false;
     if (_model) {
         for (int i = 0; i < _model->rowCount(); i++) {
-            ImageFile *imageFile = FileListModel::itemFromIndex(_model->index(i, 0));
+            ImageFile *imageFile = imageFileFromModelIndex(_model->index(i, 0));
+            if (!imageFile) {
+                continue;
+            }
             QSize imgSize = imageFile->fullSize();
             bool lineBreakAfter = false;
             if (imgSize.isEmpty()) {
@@ -842,6 +861,13 @@ void MasonryLayout::onModelReset() {
         }
     }
     restorePreservedCurrentItemPosition();
+    if (_bricks.isEmpty()) {
+        setCurrentIndex(-1);
+    }
+    else if (_currentIndex < 0 || _currentIndex >= _bricks.size()) {
+        setCurrentIndex(qBound(0, _currentIndex, _bricks.size() - 1));
+    }
+
     emit modelChanged();
     rewrap();
     if (_viewport) {
@@ -856,6 +882,7 @@ void MasonryLayout::onModelReset() {
     }
     emit imageCountChanged();
 
+    updateCurrentImageIndex();
     emit countChanged();
 
     emit currentIndexChanged();
@@ -871,16 +898,22 @@ void MasonryLayout::restorePreservedCurrentItemPosition() {
         return;
     }
 
+    bool restored = false;
     for (int i = 0; i < _bricks.size(); i++) {
         if (_bricks[i].image && _bricks[i].image->fullPath() == _preservedCurrentItemFullPath) {
             setCurrentIndex(i);
             _currentIndexOffsetOverride = _preservedCurrentIndexOffset;
+            restored = true;
             break;
         }
+    }
+    if (!restored && !_bricks.isEmpty()) {
+        setCurrentIndex(qBound(0, _preservedCurrentFallbackIndex, _bricks.size() - 1));
     }
 
     _preservedCurrentItemFullPath.clear();
     _preservedCurrentIndexOffset = -1;
+    _preservedCurrentFallbackIndex = -1;
 }
 
 void MasonryLayout::zoom(bool in) {
@@ -1205,12 +1238,7 @@ QAbstractItemModel *MasonryLayout::model() const {
 
 void MasonryLayout::setModel(QAbstractItemModel *newModel) {
     if (_model) {
-        disconnect(_model, &QAbstractItemModel::dataChanged,
-                   this, &MasonryLayout::onDataChanged);
-        disconnect(_model, &QAbstractItemModel::modelAboutToBeReset,
-                   this, &MasonryLayout::onModelAboutToBeReset);
-        disconnect(_model, &QAbstractItemModel::modelReset,
-                   this, &MasonryLayout::onModelReset);
+        disconnect(_model, nullptr, this, nullptr);
     }
     _model = newModel;
     if (_model) {
@@ -1220,6 +1248,41 @@ void MasonryLayout::setModel(QAbstractItemModel *newModel) {
                 this, &MasonryLayout::onModelAboutToBeReset);
         connect(_model, &QAbstractItemModel::modelReset,
                 this, &MasonryLayout::onModelReset);
+        connect(_model, &QAbstractItemModel::layoutAboutToBeChanged,
+                this, [this]() {
+            preserveCurrentItemPositionForNextModelReset();
+            onModelAboutToBeReset();
+        });
+        connect(_model, &QAbstractItemModel::layoutChanged,
+                this, [this]() { onModelReset(); });
+        connect(_model, &QAbstractItemModel::rowsAboutToBeInserted,
+                this, [this](const QModelIndex &parent) {
+            if (parent.isValid()) {
+                return;
+            }
+            preserveCurrentItemPositionForNextModelReset();
+            onModelAboutToBeReset();
+        });
+        connect(_model, &QAbstractItemModel::rowsInserted,
+                this, [this](const QModelIndex &parent) {
+            if (!parent.isValid()) {
+                onModelReset();
+            }
+        });
+        connect(_model, &QAbstractItemModel::rowsAboutToBeRemoved,
+                this, [this](const QModelIndex &parent) {
+            if (parent.isValid()) {
+                return;
+            }
+            preserveCurrentItemPositionForNextModelReset();
+            onModelAboutToBeReset();
+        });
+        connect(_model, &QAbstractItemModel::rowsRemoved,
+                this, [this](const QModelIndex &parent) {
+            if (!parent.isValid()) {
+                onModelReset();
+            }
+        });
     }
 
     onModelAboutToBeReset();
@@ -1230,6 +1293,16 @@ int MasonryLayout::currentIndex() const {
     return _currentIndex;
 }
 
+void MasonryLayout::updateCurrentImageIndex() {
+    _currentImageIndex = 0;
+    for (int i = 0; i < _currentIndex && i < _bricks.size(); i++) {
+        if (_bricks[i].image && _bricks[i].image->isImage()) {
+            _currentImageIndex++;
+        }
+    }
+    emit currentImageIndexChanged();
+}
+
 void MasonryLayout::setCurrentIndex(int newCurrentIndex) {
     newCurrentIndex = qMin(qMax(0, newCurrentIndex), _model->rowCount() - 1);
     if (_currentIndex == newCurrentIndex) {
@@ -1238,13 +1311,7 @@ void MasonryLayout::setCurrentIndex(int newCurrentIndex) {
     _currentIndex = newCurrentIndex;
     emit currentIndexChanged();
 
-    _currentImageIndex = 0;
-    for (int i = 0; i < _currentIndex; i++) {
-        if (_bricks[i].image->isImage()) {
-            _currentImageIndex++;
-        }
-    }
-    emit currentImageIndexChanged();
+    updateCurrentImageIndex();
 
     if (!_quickSearch->mask().isEmpty()) {
         _quickSearch->updateItemsText();

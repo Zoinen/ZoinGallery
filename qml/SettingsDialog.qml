@@ -66,6 +66,7 @@ Window {
         id: generalSettings
         category: "General"
         property bool singleInstanceByDefault: true
+        property string dockIconMode: "windowVisible"
     }
 
     component PageButton: T.Button {
@@ -431,6 +432,40 @@ Window {
                     Divider {}
 
                     SectionHeader { text: "Appearance" }
+
+                    SettingRow {
+                        label: "Dock icon"
+                        detail: "Controls when ZoinGallery appears in the macOS Dock."
+                        visible: Qt.platform.os === "osx"
+                        control: StyledComboBox {
+                            id: dockIconModeComboBox
+                            width: parent.width
+                            model: ListModel {
+                                ListElement { text: "When window is open"; value: "windowVisible" }
+                                ListElement { text: "Always"; value: "always" }
+                                ListElement { text: "Never"; value: "never" }
+                            }
+
+                            function syncFromSettings() {
+                                let index = indexOfValue(generalSettings.dockIconMode)
+                                currentIndex = index >= 0 ? index : indexOfValue("windowVisible")
+                            }
+
+                            Component.onCompleted: syncFromSettings()
+
+                            onActivated: {
+                                generalSettings.dockIconMode = currentValue
+                                viewerController.applyDockIconPreference(true)
+                            }
+
+                            Connections {
+                                target: generalSettings
+                                function onDockIconModeChanged() {
+                                    dockIconModeComboBox.syncFromSettings()
+                                }
+                            }
+                        }
+                    }
 
                     SettingRow {
                         label: "Target color space"

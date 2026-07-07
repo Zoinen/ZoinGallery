@@ -37,6 +37,7 @@ private:
 class QmlAsyncImageProvider : public QQuickAsyncImageProvider {
 public:
     QmlAsyncImageProvider(const QString &prefix, FileListModel *model);
+    static void prepareToClose();
     QQuickImageResponse *requestImageResponse(const QString &id, const QSize &requestedSize) override;
 };
 

@@ -3,21 +3,18 @@
 
 #include <QSortFilterProxyModel>
 
-class FileListModel;
-
 class ImageModel : public QSortFilterProxyModel {
     Q_OBJECT
 public:
-    ImageModel(FileListModel *sourceModel);
+    ImageModel(QAbstractItemModel *sourceModel);
 
     Q_INVOKABLE int mapToSourceRow(int proxyRow) const;
     Q_INVOKABLE int mapFromSourceRow(int sourceRow) const;
+    Q_INVOKABLE int mapToViewRow(int imageRow) const;
+    Q_INVOKABLE int mapFromViewRow(int viewRow) const;
 
 protected:
     bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
-
-private:
-    FileListModel *_sourceModel;
 };
 
 #endif // IMAGEMODEL_H

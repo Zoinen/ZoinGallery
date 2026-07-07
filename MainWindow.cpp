@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "DisplayColorSpace.h"
+#include "MacApplication.h"
 #include "SvgCursor.h"
 
 #include <QDebug>
@@ -98,6 +99,8 @@ MainWindow::MainWindow(QWindow *parent)
     _leftButtonPressed = false;
     _ignoreNormalGeometryChange = true;
     _enableNormalGeometryChangeOnNextExpose = true;
+    _suppressShowRestoreGeometryEvents = false;
+    _windowReadyEmitted = false;
     _delayedNormalGeometryChangeEnabler = new QTimer(this);
     _delayedNormalGeometryChangeEnabler->setInterval(150);
     _delayedNormalGeometryChangeEnabler->setSingleShot(true);
@@ -216,7 +219,11 @@ void MainWindow::setConvertToDisplayColorSpace(bool enabled) {
 void MainWindow::showEvent(QShowEvent *event) {
     QQuickWindow::showEvent(event);
     _lastSize = size();
-    qDebug() << "SHOW" << geometry();
+    qDebug() << "SHOW" << geometry() << "windowReadyEmitted" << _windowReadyEmitted;
+
+    if (_windowReadyEmitted || _suppressShowRestoreGeometryEvents) {
+        return;
+    }
 
 // #if defined(__USE_QWK)
     // Temporary workaround for transparent window BG bug
@@ -231,13 +238,18 @@ void MainWindow::showEvent(QShowEvent *event) {
     }
     _lastVisibleVisibility = windowVisibility;
     QRect geom = geometry();
+    _suppressShowRestoreGeometryEvents = true;
     setGeometry(QRect(0, 0, 0, 0));
-    QTimer::singleShot(0, this, [=] () {
+    QTimer::singleShot(0, this, [this, geom, windowVisibility] () {
         setGeometry(geom.adjusted(1, 0, 0, 0));
         setGeometry(geom);
         setVisibility(windowVisibility);
 
-        QTimer::singleShot(0, this, [=] () {
+        QTimer::singleShot(0, this, [this] () {
+            _lastSize = size();
+            _suppressShowRestoreGeometryEvents = false;
+            qDebug() << "Initial window show restore complete" << geometry();
+            _windowReadyEmitted = true;
             qDebug() << "Window is ready";
             emit windowIsReady();
         });
@@ -279,25 +291,35 @@ bool MainWindow::event(QEvent *event) {
         emit isResizingChanged();
         if (_lastSize != size() && _lastSize.height() > 15 * _dpr && size().height() > 15 * _dpr && !_ignoreNormalGeometryChange) {
             qDebug() << "ZZ CHANGED 1" << _lastSize << "->" << size();
-            bool changedWidth = _lastSize.width() != size().width();
-            QTimer::singleShot(0, this, [=, this] () {
-                emit mainWindowResized(changedWidth);
-            });
+            if (_suppressShowRestoreGeometryEvents) {
+                qDebug() << "Suppressing mainWindowResized during show restore";
+            }
+            else {
+                bool changedWidth = _lastSize.width() != size().width();
+                QTimer::singleShot(0, this, [=, this] () {
+                    emit mainWindowResized(changedWidth);
+                });
+            }
         }
     }
     else if (event->type() == QEvent::Resize && !_leftButtonPressed) {
         if (_lastSize != size() && _lastSize.height() > 15 * _dpr && size().height() > 15 * _dpr && !_ignoreNormalGeometryChange) {
             qDebug() << "ZZ CHANGED 2" << _lastSize << "->" << size();
-            bool changedWidth = _lastSize.width() != size().width();
-            QTimer::singleShot(0, this, [=, this] () {
-                emit mainWindowResized(changedWidth);
-            });
+            if (_suppressShowRestoreGeometryEvents) {
+                qDebug() << "Suppressing mainWindowResized during show restore";
+            }
+            else {
+                bool changedWidth = _lastSize.width() != size().width();
+                QTimer::singleShot(0, this, [=, this] () {
+                    emit mainWindowResized(changedWidth);
+                });
+            }
         }
         _lastSize = size();
     }
 
 
-    if (event->type() == QEvent::Resize && !_ignoreNormalGeometryChange) {
+    if (event->type() == QEvent::Resize && !_ignoreNormalGeometryChange && !_suppressShowRestoreGeometryEvents) {
         updateDpr();
         if (visibility() == QWindow::Windowed) {
             if (static_cast<QResizeEvent *>(event)->size() != _normalGeometry.size()) {
@@ -305,7 +327,7 @@ bool MainWindow::event(QEvent *event) {
             }
         }
     }
-    else if (event->type() == QEvent::Move && !_ignoreNormalGeometryChange) {
+    else if (event->type() == QEvent::Move && !_ignoreNormalGeometryChange && !_suppressShowRestoreGeometryEvents) {
         updateDpr();
         if (visibility() == QWindow::Windowed) {
             if (static_cast<QMoveEvent *>(event)->pos() != _normalGeometry.topLeft()) {
@@ -314,6 +336,12 @@ bool MainWindow::event(QEvent *event) {
         }
     }
     else if (event->type() == QEvent::Close) {
+        qInfo() << "[Shutdown] MainWindow::event Close"
+                << "visibility" << static_cast<int>(visibility())
+                << "isVisible" << isVisible()
+                << "ignoreNormalGeometryChange" << _ignoreNormalGeometryChange
+                << "geometry" << geometry()
+                << "normalGeometry" << _normalGeometry;
         if (visibility() == QWindow::Windowed && !_ignoreNormalGeometryChange) {
             _normalGeometry = geometry();
         }
@@ -339,6 +367,8 @@ int MainWindow::availableScreenHeight() const {
 }
 
 void MainWindow::showAndActivate() {
+    applyMacApplicationDockIconPolicy(true);
+
     const QWindow::Visibility currentVisibility = visibility();
     if (currentVisibility == QWindow::Hidden) {
         QSettings set;
@@ -375,7 +405,7 @@ void MainWindow::showAndActivate() {
 
     activate();
 
-    // showEvent restores geometry/visibility asynchronously, so activate once more
-    // after Qt has processed that queued work.
+    // The first show may restore geometry/visibility asynchronously, so activate
+    // once more after Qt has processed that queued work.
     QTimer::singleShot(0, this, activate);
 }

@@ -187,10 +187,26 @@ ImageInfo ImageFile::info() const {
 
 void ImageFile::setInfo(const ImageInfo &info) {
     bool oldIsPanorama = isPanorama();
+    const QDateTime oldLastModified = lastModified();
+    const qint64 oldFileSize = fileSize();
     _info = info;
     if (oldIsPanorama != isPanorama()) {
         emit isPanoramaChanged();
     }
+    if (oldLastModified != lastModified()) {
+        emit lastModifiedChanged();
+    }
+    if (oldFileSize != fileSize()) {
+        emit fileSizeChanged();
+    }
+}
+
+QDateTime ImageFile::lastModified() const {
+    return _info.lastModified;
+}
+
+qint64 ImageFile::fileSize() const {
+    return _info.fileSize;
 }
 
 QList<ImageFile *> ImageFile::subfiles() const {

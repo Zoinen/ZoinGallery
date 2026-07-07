@@ -56,6 +56,8 @@ private:
     QWindow::Visibility _lastVisibleVisibility;
     bool _ignoreNormalGeometryChange;
     bool _enableNormalGeometryChangeOnNextExpose;
+    bool _suppressShowRestoreGeometryEvents;
+    bool _windowReadyEmitted;
     QTimer *_delayedNormalGeometryChangeEnabler;
 };
 

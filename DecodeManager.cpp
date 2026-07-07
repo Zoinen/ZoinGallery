@@ -10,6 +10,7 @@
 #include "PersistentFolderCache.h"
 #include "PersistentImageCache.h"
 
+#include <QDebug>
 #include <QThread>
 
 #include <chrono>
@@ -287,40 +288,64 @@ void DecodeManager::cancelAllDecodeViewerRunners() {
 }
 
 void DecodeManager::prepareToClose() {
+    qInfo() << "[Shutdown] DecodeManager::prepareToClose begin"
+            << "alreadyClosing" << _isClosing
+            << "workers" << _workers.size()
+            << "queuedTasks" << _taskQueue.size();
     if (_isClosing) {
+        qInfo() << "[Shutdown] DecodeManager::prepareToClose already closing";
         return;
     }
     _isClosing = true;
     _runningTasksUpdateTimer.stop();
 
+    int runningWorkers = 0;
     for (int i = 0; i < _workers.size(); i++) {
         if (Runner *runner = _workers[i].runner) {
+            runningWorkers++;
             runner->cancel();
         }
     }
+    qInfo() << "[Shutdown] DecodeManager::prepareToClose canceled running workers"
+            << runningWorkers;
 
+    int queuedTasks = 0;
     while (!_taskQueue.isEmpty()) {
         Runner *runner = _taskQueue.dequeue();
         runner->cancel();
         delete runner;
+        queuedTasks++;
     }
+    qInfo() << "[Shutdown] DecodeManager::prepareToClose deleted queued tasks"
+            << queuedTasks;
 
     for (int i = 0; i < _workers.size(); i++) {
         _workers[i].thread->quit();
     }
+    qInfo() << "[Shutdown] DecodeManager::prepareToClose requested worker thread quit";
 
     for (int i = 0; i < _workers.size(); i++) {
+        qInfo() << "[Shutdown] DecodeManager::prepareToClose waiting for worker"
+                << i
+                << "hasRunner" << (_workers[i].runner != nullptr);
         if (!_workers[i].thread->wait(QDeadlineTimer(10s))) {
             qWarning() << "Decode worker did not stop in time; forcing shutdown" << i;
             _workers[i].thread->terminate();
             _workers[i].thread->wait();
+            qInfo() << "[Shutdown] DecodeManager::prepareToClose terminated worker" << i;
+        }
+        else {
+            qInfo() << "[Shutdown] DecodeManager::prepareToClose worker stopped" << i;
         }
     }
 
     if (!_disableCache) {
+        qInfo() << "[Shutdown] DecodeManager::prepareToClose dumping persistent caches";
         PersistentFolderCache::dumpDb();
         PersistentImageCache::dumpDb();
+        qInfo() << "[Shutdown] DecodeManager::prepareToClose persistent caches dumped";
     }
+    qInfo() << "[Shutdown] DecodeManager::prepareToClose end";
 }
 
 bool DecodeManager::runningTasksDebug() const {

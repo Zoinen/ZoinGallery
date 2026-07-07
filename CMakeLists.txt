@@ -85,6 +85,7 @@ set(PROJECT_SOURCES
     DisplayColorSpace.cpp
     ThumbnailLoader.h
     ThumbnailLoader.cpp
+    MacApplication.h
     NaturalSort.h
     FileListModel.h
     FileListModel.cpp
@@ -110,6 +111,8 @@ set(PROJECT_SOURCES
     ViewerWheelAreaNative.cpp
     ImageModel.h
     ImageModel.cpp
+    GalleryViewModel.h
+    GalleryViewModel.cpp
     DummyQWK.h
     SvgCursor.h
     SvgCursor.cpp
@@ -191,6 +194,7 @@ if(APPLE)
     set(RESOURCE_FILES ${ICON_PATH})
     list(APPEND PROJECT_SOURCES
         DisplayColorSpace_mac.mm
+        MacApplication_mac.mm
         ViewerWheelAreaNative_mac.mm
     )
     option(ZOIN_MACOS_CODE_SIGN "Code sign the macOS app bundle after building" ON)
@@ -260,6 +264,7 @@ qt_add_resources(ZoinGallery
         resources/ExifLocation.svg
         resources/ExifShooting.svg
         resources/RecursiveView.svg
+        resources/Sort.svg
         resources/SphereScroll.svg
         resources/SphereScrollIdle.svg
         resources/Sphere.svg

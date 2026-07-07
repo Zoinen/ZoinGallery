@@ -15,8 +15,10 @@ public:
     ~TrayController() override;
 
     bool isAvailable() const;
-    void showTray();
-    void hideTray();
+    void showTray(bool windowHidden = true);
+    void hideTray(bool restoreDock = true);
+
+public slots:
     void showFromTray();
 
 signals:
@@ -24,11 +26,16 @@ signals:
 
 private:
     void createTrayIcon();
+    void scheduleTrayMenu();
+    void showTrayMenuAfterMouseRelease();
+    void showTrayMenu();
+    void toggleFromTray();
 
     QWindow *_mainWindow;
     QSystemTrayIcon *_trayIcon;
     QMenu *_trayMenu;
     bool _available;
+    bool _trayMenuPending;
 };
 
 #endif // TRAYCONTROLLER_H

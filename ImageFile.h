@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QMetaType>
 #include <QDir>
+#include <QDateTime>
 #include <QSharedPointer>
 
 #include <memory>
@@ -35,6 +36,7 @@ inline QSize rotateToOrientation(QSize size, ExifOrientation orientation) {
 struct ImageInfo {
     QString path;
     QDateTime lastModified;
+    qint64 fileSize = -1;
 
     QSize imageSize;
     ExifOrientation orientation = ExifOrientation::Horizontal;
@@ -92,6 +94,8 @@ class ImageFile : public QObject {
     Q_PROPERTY(bool isPanorama READ isPanorama NOTIFY isPanoramaChanged)
     Q_PROPERTY(bool isFilteredOut READ isFilteredOut NOTIFY isFilteredOutChanged)
     Q_PROPERTY(QSize fullSize READ fullSize NOTIFY fullSizeChanged)
+    Q_PROPERTY(QDateTime lastModified READ lastModified NOTIFY lastModifiedChanged)
+    Q_PROPERTY(qint64 fileSize READ fileSize NOTIFY fileSizeChanged)
     Q_PROPERTY(bool isSelected READ isSelected WRITE setIsSelected NOTIFY isSelectedChanged)
 
 public:
@@ -135,6 +139,8 @@ public:
 
     ImageInfo info() const;
     void setInfo(const ImageInfo &info);
+    QDateTime lastModified() const;
+    qint64 fileSize() const;
 
     QList<ImageFile *> subfiles() const;
     void setSubfiles(const QList<ImageFile *> &subfiles);
@@ -174,6 +180,8 @@ signals:
     void textChanged();
     void indexChanged();
     void fullSizeChanged();
+    void lastModifiedChanged();
+    void fileSizeChanged();
 
     void isFilteredOutChanged();
     void isSelectedChanged();

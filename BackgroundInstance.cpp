@@ -4,6 +4,7 @@
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QDebug>
 #include <QDir>
 #include <QFile>
 #include <QLocalServer>
@@ -115,9 +116,12 @@ bool BackgroundInstance::startServer() {
 }
 
 void BackgroundInstance::stopServer() {
+    qInfo() << "[Shutdown] BackgroundInstance::stopServer begin"
+            << "hasServer" << (_server != nullptr);
     removeInstanceMetadata();
 
     if (!_server) {
+        qInfo() << "[Shutdown] BackgroundInstance::stopServer end: no server";
         return;
     }
 
@@ -125,6 +129,7 @@ void BackgroundInstance::stopServer() {
     QLocalServer::removeServer(serverName());
     _server->deleteLater();
     _server = nullptr;
+    qInfo() << "[Shutdown] BackgroundInstance::stopServer end";
 }
 
 void BackgroundInstance::handleConnection() {

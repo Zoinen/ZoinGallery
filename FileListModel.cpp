@@ -1,8 +1,11 @@
 #include "FileListModel.h"
 #include "DecodeManager.h"
+#include "LaunchOptions.h"
 #include "NaturalSort.h"
+#include "QmlAsyncImageProvider.h"
 #include "ThumbnailLoader.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QDebug>
 #include <QSet>
@@ -66,10 +69,17 @@ FileListModel::FileListModel(QObject *parent)
         // qDebug() << "INFO RECEIVED" << result.path << result.imageSize;
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
-            item->setFullSize(rotateToOrientation(result.imageSize, result.orientation));
-            item->setInfo(result);
+            ImageInfo itemInfo = result;
+            if (itemInfo.fileSize < 0) {
+                itemInfo.fileSize = item->fileSize();
+            }
+            if (!itemInfo.lastModified.isValid()) {
+                itemInfo.lastModified = item->lastModified();
+            }
+            item->setFullSize(rotateToOrientation(itemInfo.imageSize, itemInfo.orientation));
+            item->setInfo(itemInfo);
             if (!result.imageSize.isValid()) {
-                handleDirectOpenImageInfo(result);
+                handleDirectOpenImageInfo(itemInfo);
                 return;
             }
 
@@ -88,7 +98,7 @@ FileListModel::FileListModel(QObject *parent)
                 decodeImages({imageDecodeRequestFromEmbeddedImageInfo(result)});
             }
 
-            handleDirectOpenImageInfo(result);
+            handleDirectOpenImageInfo(itemInfo);
         }
         else {
             qDebug() << "ZZ NOT FOUND" << result.path << _fileToItem.keys();
@@ -124,8 +134,15 @@ FileListModel::FileListModel(QObject *parent)
             // qDebug() << "INFO RECEIVED" << result.path << result.imageSize << result.orientation;
             if (it != _fileToItem.end()) {
                 ImageFile *item = it.value();
-                item->setFullSize(rotateToOrientation(result.imageSize, result.orientation));
-                item->setInfo(result);
+                ImageInfo itemInfo = result;
+                if (itemInfo.fileSize < 0) {
+                    itemInfo.fileSize = item->fileSize();
+                }
+                if (!itemInfo.lastModified.isValid()) {
+                    itemInfo.lastModified = item->lastModified();
+                }
+                item->setFullSize(rotateToOrientation(itemInfo.imageSize, itemInfo.orientation));
+                item->setInfo(itemInfo);
 
                 minIndex = qMin(minIndex, item->index());
                 maxIndex = qMax(maxIndex, item->index());
@@ -139,7 +156,7 @@ FileListModel::FileListModel(QObject *parent)
                     requests.append(imageDecodeRequestFromEmbeddedImageInfo(result));
                 }
 
-                handleDirectOpenImageInfo(result);
+                handleDirectOpenImageInfo(itemInfo);
             }
             else {
                 qDebug() << "ZZ NOT FOUND" << result.path << _fileToItem.keys();
@@ -305,6 +322,11 @@ QHash<int, QByteArray> FileListModel::roleNames() const {
     // names[Qt::DisplayRole] = "displayRole";
     names[ImageIdUrlRole] = "imageIdUrlRole";
     names[SelectedRole] = "selectedRole";
+    names[ImageFileRole] = "imageFileRole";
+    names[FolderRole] = "folderRole";
+    names[IsImageRole] = "isImageRole";
+    names[LastModifiedRole] = "lastModifiedRole";
+    names[FileSizeRole] = "fileSizeRole";
     return names;
 }
 
@@ -343,6 +365,12 @@ QVariant FileListModel::data(const QModelIndex &index, int role) const {
         else if (role == SelectedRole) {
             return imageFile->isSelected();
         }
+        else if (role == LastModifiedRole) {
+            return imageFile->lastModified();
+        }
+        else if (role == FileSizeRole) {
+            return imageFile->fileSize();
+        }
     }
     return QVariant();
 }
@@ -378,9 +406,29 @@ int FileListModel::columnCount(const QModelIndex &parent) const {
 }
 
 void FileListModel::prepareToClose() {
+    qInfo() << "[Shutdown] FileListModel::prepareToClose begin"
+            << "alreadyClosing" << _isClosing
+            << "items" << _items.size()
+            << "viewerImages" << _viewerImages.size()
+            << "fullSizeViewerImages" << _fullSizeViewerImages.size();
+    if (_isClosing) {
+        qInfo() << "[Shutdown] FileListModel::prepareToClose already closing, calling QCoreApplication::exit(0)";
+        QCoreApplication::exit(0);
+        return;
+    }
+    _isClosing = true;
+
+    qInfo() << "[Shutdown] FileListModel::prepareToClose stopping async image provider";
+    QmlAsyncImageProvider::prepareToClose();
+    qInfo() << "[Shutdown] FileListModel::prepareToClose async image provider stopped";
+    qInfo() << "[Shutdown] FileListModel::prepareToClose dumping selection cache";
     PersistentSelectionCache::dumpDb();
+    qInfo() << "[Shutdown] FileListModel::prepareToClose stopping decode manager";
     _decodeManager->prepareToClose();
-    qApp->exit(0);
+    qInfo() << "[Shutdown] FileListModel::prepareToClose decode manager stopped";
+    qInfo() << "[Shutdown] FileListModel::prepareToClose calling QCoreApplication::exit(0)";
+    QCoreApplication::exit(0);
+    qInfo() << "[Shutdown] FileListModel::prepareToClose end";
 }
 
 int FileListModel::cd(const QString &path, const QString &itemToSelect) {
@@ -410,11 +458,17 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
             if (drivePath.endsWith("/") && !drivePath.startsWith("/")) {
                 drivePath = drivePath.left(drivePath.size() - 1);
             }
+            QFileInfo driveInfo(drivePath);
             ImageFile *item = new ImageFile(this);
             item->setFileName(drivePath);
             item->setIsFolder(true);
             item->setIsImage(false);
             item->setIconPath("qrc:/resources/DriveIcon.svg");
+            item->setInfo(ImageInfo{
+                .path = item->fullPath(),
+                .lastModified = driveInfo.lastModified(),
+                .fileSize = 0,
+            });
             item->setIndex(_items.size());
             _items.append(item);
 
@@ -425,15 +479,20 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
     }
     else {
         QDir dir(_root);
-        QStringList folders = dir.entryList(QDir::NoDotAndDotDot | QDir::Dirs | QDir::Hidden | QDir::System, QDir::NoSort);
-        sortNamesNaturally(folders);
+        auto folders = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::Dirs | QDir::Hidden | QDir::System, QDir::NoSort);
+        sortFileInfosNaturally(folders);
         for (const auto &folder : folders) {
             ImageFile *item = new ImageFile(this);
             item->setFolderPath(_root);
-            item->setFileName(folder);
+            item->setFileName(folder.fileName());
             item->setIsFolder(true);
             item->setIsImage(false);
             item->setIconPath("qrc:/resources/FolderIcon.svg");
+            item->setInfo(ImageInfo{
+                .path = item->fullPath(),
+                .lastModified = folder.lastModified(),
+                .fileSize = 0,
+            });
             item->setIndex(_items.size());
             _items.append(item);
 
@@ -450,7 +509,7 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
         auto files = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::Files | QDir::Hidden | QDir::System, QDir::NoSort);
         sortFileInfosNaturally(files);
         for (const auto &file : files) {
-            ImageFile *item = createFileItem(_root, file.fileName(), file.lastModified());
+            ImageFile *item = createFileItem(_root, file.fileName(), file.lastModified(), file.size());
             if (item->isImage()) {
                 _imagePaths.append(item->fullPath());
             }
@@ -498,7 +557,8 @@ void FileListModel::updateImageId(ImageFile *item) {
     emit dataChanged(modelIndex, modelIndex, {ImageIdUrlRole});
 }
 
-ImageFile *FileListModel::createFileItem(const QString &folderPath, const QString &fileName, const QDateTime &lastModified) {
+ImageFile *FileListModel::createFileItem(const QString &folderPath, const QString &fileName,
+                                         const QDateTime &lastModified, qint64 fileSize) {
     ImageFile *item = new ImageFile(this);
     item->setFolderPath(folderPath);
     item->setFileName(fileName);
@@ -506,6 +566,7 @@ ImageFile *FileListModel::createFileItem(const QString &folderPath, const QStrin
     ImageInfo info = {
         .path = item->fullPath(),
         .lastModified = lastModified,
+        .fileSize = fileSize,
     };
     item->setInfo(info);
 
@@ -676,6 +737,11 @@ void FileListModel::enterRecursiveView() {
             item->setIsFolder(true);
             item->setIsImage(false);
             item->setIconPath("qrc:/resources/FolderIcon.svg");
+            item->setInfo(ImageInfo{
+                .path = item->fullPath(),
+                .lastModified = info.lastModified(),
+                .fileSize = 0,
+            });
             item->setIndex(_items.size());
             item->setNestingInfo(folder.lastInGroup);
             _items.append(item);
@@ -708,14 +774,7 @@ bool FileListModel::isImage(const QString &fileName) {
 }
 
 void FileListModel::openImageDirectly(const QString &path, int width, int height) {
-    QString imagePath = path.trimmed();
-    if (imagePath.startsWith("\"")) {
-        imagePath = imagePath.right(imagePath.size() - 1);
-    }
-    if (imagePath.endsWith("\"")) {
-        imagePath = imagePath.left(imagePath.size() - 1);
-    }
-    imagePath = imagePath.trimmed();
+    QString imagePath = normalizePathArgument(path);
 
     QFileInfo fileInfo(imagePath);
     if (!fileInfo.isFile() || !isImage(fileInfo.fileName())) {
@@ -747,13 +806,14 @@ void FileListModel::openImageDirectly(const QString &path, int width, int height
     if (_directOpen.sameFolder) {
         _directOpen.currentIndex = existingIndex;
         _currentViewIndex = existingIndex;
+        emit viewerReset();
     }
     else {
         beginResetModel();
         clearModelData(true);
         _root = folderPath;
 
-        ImageFile *item = createFileItem(folderPath, fileName, fileInfo.lastModified());
+        ImageFile *item = createFileItem(folderPath, fileName, fileInfo.lastModified(), fileInfo.size());
         item->setIndex(0);
         _items.append(item);
         if (item->isImage()) {
@@ -802,7 +862,18 @@ void FileListModel::handleDirectOpenImageInfo(const ImageInfo &result) {
             return;
         }
 
-        _directOpen.info = result;
+        ImageInfo directOpenInfo = result;
+        auto itemIt = _fileToItem.find(result.path);
+        if (itemIt != _fileToItem.end()) {
+            if (directOpenInfo.fileSize < 0) {
+                directOpenInfo.fileSize = itemIt.value()->fileSize();
+            }
+            if (!directOpenInfo.lastModified.isValid()) {
+                directOpenInfo.lastModified = itemIt.value()->lastModified();
+            }
+        }
+
+        _directOpen.info = directOpenInfo;
         _directOpen.info.directOpenGeneration = _directOpen.generation;
         requestDirectOpenFitDecode();
         return;
@@ -1117,6 +1188,10 @@ void FileListModel::emitViewerImagesForCurrentIndex() {
 }
 
 void FileListModel::requestViewer(int index, int width, int height) {
+    if (index < 0 || index >= _items.size()) {
+        return;
+    }
+
     _currentViewIndex = index;
     QSize viewerSize(width, height);
 
@@ -1584,13 +1659,13 @@ void FileListModel::setSameKindSelection(int index_, bool selected) {
     }
 }
 
-QVariantList FileListModel::dragIndexesForIndex(int index_) const {
+QVariantList FileListModel::dragIndexesForIndex(int index_, bool singleItemOnly) const {
     QVariantList result;
     if (index_ < 0 || index_ >= _items.size()) {
         return result;
     }
 
-    if (_items[index_]->isSelected()) {
+    if (!singleItemOnly && _items[index_]->isSelected()) {
         for (int i = 0; i < _items.size(); i++) {
             if (_items[i]->isSelected()) {
                 result.append(i);
@@ -1603,9 +1678,9 @@ QVariantList FileListModel::dragIndexesForIndex(int index_) const {
     return result;
 }
 
-QVariantList FileListModel::dragUrlsForIndex(int index_) const {
+QVariantList FileListModel::dragUrlsForIndex(int index_, bool singleItemOnly) const {
     QVariantList result;
-    const QVariantList indexes = dragIndexesForIndex(index_);
+    const QVariantList indexes = dragIndexesForIndex(index_, singleItemOnly);
     for (const QVariant &indexValue : indexes) {
         bool ok = false;
         const int itemIndex = indexValue.toInt(&ok);
@@ -1622,10 +1697,10 @@ QVariantList FileListModel::dragUrlsForIndex(int index_) const {
     return result;
 }
 
-QVariantMap FileListModel::dragPreviewItemsForIndex(int index_, int limit) const {
+QVariantMap FileListModel::dragPreviewItemsForIndex(int index_, int limit, bool singleItemOnly) const {
     QVariantMap result;
     QVariantList items;
-    const QVariantList indexes = dragIndexesForIndex(index_);
+    const QVariantList indexes = dragIndexesForIndex(index_, singleItemOnly);
     const int totalCount = indexes.size();
     const int cappedCount = limit < 0 ? totalCount : qMin(limit, totalCount);
 

@@ -10,6 +10,8 @@ BrickItem {
     id: brickDelegate
 
     property var model
+    property int viewIndex: -1
+    property int sourceIndex: model !== undefined ? model.index : -1
 
     property int nestingLevel: model !== undefined ? model.nestingInfo.length : 0
     /// ZZZZZZZZZ TODO: GET RID OF THIS
@@ -17,7 +19,7 @@ BrickItem {
     property real folderGridDelegateTop: Math.round(width / 20)
     readonly property real selectionExtendsFor: 5
     readonly property real selectionExtendsForImage: 2
-    property bool isCurrent: model !== undefined ? (masonryLayout.currentIndex === model.index) : false
+    property bool isCurrent: model !== undefined ? (masonryLayout.currentIndex === viewIndex) : false
     property bool isItemSelected: model !== undefined ? model.isSelected : false
     readonly property real nestingShift: 29
 
@@ -703,9 +705,9 @@ BrickItem {
             "text/uri-list": dragUrls
         })
 
-        function updateDragPayload(sourceIndex) {
-            dragUrls = fileListModel.dragUrlsForIndex(sourceIndex)
-            let preview = fileListModel.dragPreviewItemsForIndex(sourceIndex, 5)
+        function updateDragPayload(sourceIndex, singleItemOnly) {
+            dragUrls = fileListModel.dragUrlsForIndex(sourceIndex, singleItemOnly)
+            let preview = fileListModel.dragPreviewItemsForIndex(sourceIndex, 5, singleItemOnly)
             dragPreviewItems = preview.items || []
             dragPreviewTotalCount = preview.totalCount || dragPreviewItems.length
             dragPreviewRemainingCount = preview.remainingCount || 0
@@ -796,7 +798,7 @@ BrickItem {
 
         onPressed:
             (mouse) => {
-                draggable.updateDragPayload(model.index)
+                draggable.updateDragPayload(sourceIndex, mouse.modifiers & Qt.AltModifier)
 
                 if (imageItem !== undefined) {
                     let mappedPos = imageItem.mapFromItem(brickMouseArea, mouse.x, mouse.y)
@@ -821,17 +823,17 @@ BrickItem {
                 }
 
                 if (mouse.modifiers & Qt.ShiftModifier) {
-                    masonryView.shiftClickSelection(model.index)
+                    masonryView.shiftClickSelection(viewIndex)
                     return
                 }
 
                 if (mouse.modifiers & Qt.ControlModifier) {
-                    setCurrentIndex(model.index)
-                    fileListModel.toggleSelection(model.index)
+                    setCurrentIndex(viewIndex)
+                    fileListModel.toggleSelection(sourceIndex)
                     return
                 }
 
-                setCurrentIndex(model.index)
+                setCurrentIndex(viewIndex)
         }
 
         onDoubleClicked: {
@@ -839,10 +841,8 @@ BrickItem {
                 viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                 viewerController.cd(model.fullPath)
             }
-            else {
-                if (masonryLayout.currentItem.model.isImage) {
-                    masonryView.toggleViewer()
-                }
+            else if (model.isImage) {
+                masonryView.toggleViewer()
             }
         }
     }

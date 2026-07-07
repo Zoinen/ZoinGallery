@@ -647,9 +647,15 @@ Item {
         target: fileListModel
         function onViewerReset() {
             console.log("VIEWER RESET-----------------------")
+            delayedIdSetter.stop()
+            originalSize = Qt.size(0, 0)
+            image.source = ""
             image.fromIndex = -1
             image.fromLevel = -1
+            viewerImage2.source = ""
             viewerImage2.fromIndex = -1
+            viewerImageCrop.source = ""
+            viewerImageCrop.fromIndex = -1
         }
     }
 

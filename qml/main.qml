@@ -3,6 +3,7 @@ import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls
 import QtQuick.Effects
+import Qt.labs.platform as Platform
 
 import ZoinGallery.MainWindow 1.0
 
@@ -27,12 +28,26 @@ MainWindow {
     property bool thumbnailsDirty: false
 
     onClosing: (closeEvent) => {
+        console.info("[Shutdown] QML onClosing explicitQuitRequested=" + viewerController.explicitQuitRequested
+                     + " backgroundMode=" + viewerController.backgroundMode
+                     + " visible=" + topLevelWindow.visible
+                     + " visibility=" + topLevelWindow.visibility)
+        if (viewerController.explicitQuitRequested) {
+            console.info("[Shutdown] QML onClosing accepting explicit quit")
+            return
+        }
+
         closeEvent.accepted = false
+        console.info("[Shutdown] QML onClosing hiding window and keeping close event unaccepted")
         topLevelWindow.hide()
-        if (viewerController.backgroundMode)
+        if (viewerController.backgroundMode) {
+            console.info("[Shutdown] QML onClosing calling hideToTray")
             viewerController.hideToTray()
-        else
+        }
+        else {
+            console.info("[Shutdown] QML onClosing calling prepareToClose")
             viewerController.prepareToClose()
+        }
     }
 
     // CacheViewer {
@@ -106,7 +121,8 @@ MainWindow {
                     // console.log("onMainWindowResized")
                     viewerMode.imageContainer.zoomToFit(true)
                     fileListModel.cancelAllDecodeViewerRunners()
-                    fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+                    fileListModel.requestViewer(galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex),
+                                                viewerMode.width * dpr, viewerMode.height * dpr)
                     viewerDirty = false
                 }
                 else {
@@ -133,12 +149,13 @@ MainWindow {
         function onZoomFitViewChanged() {
             if (viewerMode.zoomFitView && viewerDirty) {
                 fileListModel.cancelAllDecodeViewerRunners()
-                fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+                fileListModel.requestViewer(galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex),
+                                            viewerMode.width * dpr, viewerMode.height * dpr)
                 viewerDirty = false
             }
             else {
                 fileListModel.cancelAllDecodeViewerRunners()
-                fileListModel.requestViewer(masonryLayout.view.currentIndex)
+                fileListModel.requestViewer(galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex))
             }
         }
     }
@@ -161,7 +178,7 @@ MainWindow {
         function onSetCurrentIndex(index) {
             if (viewerController.pendingOpenInViewer) {
                 viewerController.clearPendingOpenInViewer()
-                Qt.callLater(() => root.tryOpenExternalInViewer())
+                Qt.callLater(() => root.tryOpenExternalInViewer(index))
             }
         }
     }
@@ -175,6 +192,10 @@ MainWindow {
         property bool viewerPinchCloseReturning: false
         property bool viewerPinchCloseFinishingCommit: false
         property real viewerPinchCloseProgress: 0
+
+        function currentSourceIndex() {
+            return galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex)
+        }
         property rect viewerPinchCloseStartGeometry: Qt.rect(0, 0, 0, 0)
         property rect viewerPinchCloseTargetGeometry: Qt.rect(0, 0, 0, 0)
         property bool viewerShowAnimationRunning: viewerMode.animation.running || viewerPinchCloseActive
@@ -437,19 +458,34 @@ MainWindow {
             }
         }
 
-        function tryOpenExternalInViewer(attempts) {
+        function tryOpenExternalInViewer(targetIndex, attempts) {
             if (attempts === undefined) {
                 attempts = 0
             }
+            if (masonryLayout.view.currentIndex !== targetIndex) {
+                if (attempts < 300) {
+                    Qt.callLater(() => root.tryOpenExternalInViewer(targetIndex, attempts + 1))
+                }
+                else {
+                    console.warn("External image open did not reach target index", targetIndex,
+                                 "current", masonryLayout.view.currentIndex)
+                }
+                return
+            }
             let size = masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex)
             if ((size.width <= 1 || size.height <= 1) && attempts < 300) {
-                Qt.callLater(() => root.tryOpenExternalInViewer(attempts + 1))
+                Qt.callLater(() => root.tryOpenExternalInViewer(targetIndex, attempts + 1))
                 return
             }
             root.switchToViewer(false)
         }
 
         function switchToViewer(animated = true) {
+            let currentItem = masonryLayout.view.currentItem
+            if (!currentItem || !currentItem.model) {
+                return
+            }
+
             viewerPinchCloseProgressAnimation.stop()
             viewerPinchCloseFinalizeTimer.stop()
             viewerPinchCloseActive = false
@@ -477,7 +513,7 @@ MainWindow {
                 viewerMode.imageContainer.height = viewerMode.height
             }
 
-            viewerMode.setImage(masonryLayout.view.currentItem.model.imageIdUrl,
+            viewerMode.setImage(currentItem.model.imageIdUrl,
                                 masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, 0)
             let exif = masonryLayout.view.indexExif(masonryLayout.view.currentIndex)
             viewerMode.show(exif["Panorama"])
@@ -1104,6 +1140,101 @@ MainWindow {
                     }
 
                     ToolbarButton {
+                        id: sortButton
+                        Layout.leftMargin: 8
+                        icon.source: "qrc:/resources/Sort.svg"
+                        ToolTip.text: "Sort: " + galleryViewModel.sortModeLabel +
+                                      (galleryViewModel.selectedOnly ? "\nShowing selected only" : "")
+
+                        onReleased: {
+                            sortMenu.open()
+                        }
+
+                        Platform.Menu {
+                            id: sortMenu
+
+                            Platform.MenuItemGroup {
+                                id: sortModeMenuGroup
+                                exclusive: true
+                            }
+
+                            Platform.MenuItem {
+                                text: "Show selected items only"
+                                checkable: true
+                                checked: galleryViewModel.selectedOnly
+                                shortcut: "Ctrl+\\"
+                                onTriggered: galleryViewModel.selectedOnly = !galleryViewModel.selectedOnly
+                            }
+
+                            Platform.MenuSeparator {}
+
+                            Platform.MenuItem {
+                                text: "Name A-Z"
+                                group: sortModeMenuGroup
+                                checkable: true
+                                checked: galleryViewModel.sortMode === 0
+                                onTriggered: galleryViewModel.sortMode = 0
+                            }
+
+                            Platform.MenuItem {
+                                text: "Name Z-A"
+                                group: sortModeMenuGroup
+                                checkable: true
+                                checked: galleryViewModel.sortMode === 1
+                                onTriggered: galleryViewModel.sortMode = 1
+                            }
+
+                            Platform.MenuItem {
+                                text: "Modified oldest first"
+                                group: sortModeMenuGroup
+                                checkable: true
+                                checked: galleryViewModel.sortMode === 2
+                                onTriggered: galleryViewModel.sortMode = 2
+                            }
+
+                            Platform.MenuItem {
+                                text: "Modified newest first"
+                                group: sortModeMenuGroup
+                                checkable: true
+                                checked: galleryViewModel.sortMode === 3
+                                onTriggered: galleryViewModel.sortMode = 3
+                            }
+
+                            Platform.MenuItem {
+                                text: "Extension A-Z"
+                                group: sortModeMenuGroup
+                                checkable: true
+                                checked: galleryViewModel.sortMode === 4
+                                onTriggered: galleryViewModel.sortMode = 4
+                            }
+
+                            Platform.MenuItem {
+                                text: "Extension Z-A"
+                                group: sortModeMenuGroup
+                                checkable: true
+                                checked: galleryViewModel.sortMode === 5
+                                onTriggered: galleryViewModel.sortMode = 5
+                            }
+
+                            Platform.MenuItem {
+                                text: "Size smallest first"
+                                group: sortModeMenuGroup
+                                checkable: true
+                                checked: galleryViewModel.sortMode === 6
+                                onTriggered: galleryViewModel.sortMode = 6
+                            }
+
+                            Platform.MenuItem {
+                                text: "Size largest first"
+                                group: sortModeMenuGroup
+                                checkable: true
+                                checked: galleryViewModel.sortMode === 7
+                                onTriggered: galleryViewModel.sortMode = 7
+                            }
+                        }
+                    }
+
+                    ToolbarButton {
                         Layout.leftMargin: 8
                         icon.source: "qrc:/resources/RecursiveView.svg"
                         ToolTip.text: "Recursive View\tF10"
@@ -1201,8 +1332,8 @@ MainWindow {
             property int historyIndex: -1
 
             function refresh(scrollToNewest = false) {
-                historyModel = fileListModel.selectionHistoryForIndex(masonryLayout.view.currentIndex)
-                historyIndex = fileListModel.selectionHistoryIndexForIndex(masonryLayout.view.currentIndex)
+                historyModel = fileListModel.selectionHistoryForIndex(root.currentSourceIndex())
+                historyIndex = fileListModel.selectionHistoryIndexForIndex(root.currentSourceIndex())
                 if (scrollToNewest) {
                     scrollHistoryToBottom()
                 }
@@ -1263,7 +1394,7 @@ MainWindow {
 
                         Text {
                             Layout.fillWidth: true
-                            text: fileListModel.selectionContainerForIndex(masonryLayout.view.currentIndex)
+                            text: fileListModel.selectionContainerForIndex(root.currentSourceIndex())
                             color: Style.text
                             elide: Text.ElideMiddle
                             maximumLineCount: 1
@@ -1283,7 +1414,7 @@ MainWindow {
                         inactive: selectionHistoryWindow.historyIndex <= 0
                         onClicked: {
                             if (!inactive) {
-                                fileListModel.selectionHistoryBack(masonryLayout.view.currentIndex)
+                                fileListModel.selectionHistoryBack(root.currentSourceIndex())
                             }
                         }
                     }
@@ -1296,7 +1427,7 @@ MainWindow {
                                   selectionHistoryWindow.historyIndex >= selectionHistoryWindow.historyModel.length - 1
                         onClicked: {
                             if (!inactive) {
-                                fileListModel.selectionHistoryForward(masonryLayout.view.currentIndex)
+                                fileListModel.selectionHistoryForward(root.currentSourceIndex())
                             }
                         }
                     }
@@ -1372,7 +1503,7 @@ MainWindow {
                             id: historyMouse
                             anchors.fill: parent
                             hoverEnabled: true
-                            onClicked: fileListModel.jumpSelectionHistory(masonryLayout.view.currentIndex, modelData.index)
+                            onClicked: fileListModel.jumpSelectionHistory(root.currentSourceIndex(), modelData.index)
                         }
                     }
                 }

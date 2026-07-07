@@ -69,7 +69,10 @@ bool MasonryLayoutQuickSearch::indexMatches(int index, const QString &search) {
 
 void MasonryLayoutQuickSearch::updateItemsText() {
     for (int i = 0; i < masonryLayout()->_model->rowCount(); i++) {
-        ImageFile *imageFile = FileListModel::itemFromIndex(masonryLayout()->_model->index(i, 0));
+        ImageFile *imageFile = masonryLayout()->_model->index(i, 0).data(FileListModel::ImageFileRole).value<ImageFile *>();
+        if (!imageFile) {
+            continue;
+        }
         if (!_mask.isEmpty()) {
             int matchStart = imageFile->fileName().indexOf(_mask, 0, Qt::CaseInsensitive);
             if (matchStart != -1) {

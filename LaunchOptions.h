@@ -5,10 +5,11 @@
 #include <QStringList>
 
 struct LaunchOptions {
-    bool backgroundMode = false;
+    bool separateInstance = false;
     QString filePath;
 };
 
+QString normalizePathArgument(const QString &path);
 LaunchOptions parseLaunchOptions(const QStringList &arguments);
 
 #endif // LAUNCHOPTIONS_H

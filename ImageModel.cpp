@@ -2,10 +2,9 @@
 
 #include "FileListModel.h"
 
-ImageModel::ImageModel(FileListModel *sourceModel)
+ImageModel::ImageModel(QAbstractItemModel *sourceModel)
     : QSortFilterProxyModel(sourceModel) {
     setSourceModel(sourceModel);
-    _sourceModel = sourceModel;
 }
 
 int ImageModel::mapToSourceRow(int proxyRow) const {
@@ -24,9 +23,16 @@ int ImageModel::mapFromSourceRow(int sourceRow) const {
     return -1;
 }
 
+int ImageModel::mapToViewRow(int imageRow) const {
+    return mapToSourceRow(imageRow);
+}
+
+int ImageModel::mapFromViewRow(int viewRow) const {
+    return mapFromSourceRow(viewRow);
+}
+
 bool ImageModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const {
     QModelIndex index = sourceModel()->index(sourceRow, 0, sourceParent);
 
     return index.data(FileListModel::IsImageRole).toBool();
 }
-

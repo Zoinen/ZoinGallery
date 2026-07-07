@@ -237,6 +237,7 @@ private:
     void restorePreservedCurrentItemPosition();
 
     void setContentHeight(int newContentHeight);
+    void updateCurrentImageIndex();
 
     void onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles = QVector<int>());
     void pushToCurrentRow(int index);
@@ -298,6 +299,7 @@ private:
     bool _preserveCurrentItemPositionOnNextModelReset;
     QString _preservedCurrentItemFullPath;
     int _preservedCurrentIndexOffset;
+    int _preservedCurrentFallbackIndex;
 };
 
 #endif // MASONRYLAYOUT_H

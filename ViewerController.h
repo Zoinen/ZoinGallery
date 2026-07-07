@@ -6,6 +6,7 @@
 
 class QQmlEngine;
 class FileListModel;
+class GalleryViewModel;
 class ImageModel;
 class TrayController;
 class BackgroundInstance;
@@ -20,6 +21,7 @@ class ViewerController : public QObject {
     Q_PROPERTY(QStringList forwardMenu READ forwardMenu NOTIFY historyChanged)
     Q_PROPERTY(bool backgroundMode READ backgroundMode CONSTANT)
     Q_PROPERTY(bool pendingOpenInViewer READ pendingOpenInViewer NOTIFY pendingOpenInViewerChanged)
+    Q_PROPERTY(bool explicitQuitRequested READ explicitQuitRequested NOTIFY explicitQuitRequestedChanged)
 
 public:
     ViewerController(QQmlEngine *engine);
@@ -58,9 +60,11 @@ public:
 
     Q_INVOKABLE QColor adjustHSL(const QColor &color, qreal h, qreal s, qreal l);
     Q_INVOKABLE QString makeDefaultImageViewer();
+    Q_INVOKABLE void applyDockIconPreference(bool windowVisible);
 
     bool backgroundMode() const;
     bool pendingOpenInViewer() const;
+    bool explicitQuitRequested() const;
 
     void setBackgroundMode(bool enabled);
     void setStartupFilePath(const QString &path);
@@ -83,14 +87,18 @@ signals:
     void externalActivateRequested();
     void externalFileOpened();
     void pendingOpenInViewerChanged();
+    void explicitQuitRequestedChanged();
 
 private:
     void updateHistory(bool changeHistory);
     void loadSavedState();
     int setCurrentPath(const QString &newPath, const QString &itemToSelect = QString());
     void openFileInViewer(const QString &path, int viewerWidth, int viewerHeight, bool changeHistory = true);
+    int mapViewRowToSourceRow(int viewRow) const;
+    int mapSourceRowToViewRow(int sourceRow) const;
 
     FileListModel *_fileListModel;
+    GalleryViewModel *_galleryViewModel;
     ImageModel *_imageModel;
     TrayController *_trayController;
     BackgroundInstance *_backgroundInstance;
@@ -118,6 +126,7 @@ private:
 
     bool _backgroundMode;
     bool _pendingOpenInViewer;
+    bool _explicitQuitRequested;
 };
 
 #endif // VIEWERCONTROLLER_H

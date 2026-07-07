@@ -19,7 +19,7 @@ Item {
     onSphericViewerModeChanged: {
         if (sphericViewerMode) {
             fileListModel.cancelAllDecodeViewerRunners()
-            fileListModel.requestViewer(masonryLayout.view.currentIndex)
+            fileListModel.requestViewer(currentSourceIndex())
             sphericViewerLoader.sourceComponent = sphericViewerComponent
         }
         else {
@@ -37,6 +37,28 @@ Item {
 
     signal pinchZoomOutToThumbnailsProgressed(real progress)
     signal pinchZoomOutToThumbnailsFinished(bool commit)
+
+    function sourceIndexForViewIndex(viewIndex) {
+        return galleryViewModel.mapToSourceRow(viewIndex)
+    }
+
+    function currentSourceIndex() {
+        return sourceIndexForViewIndex(masonryLayout.view.currentIndex)
+    }
+
+    readonly property bool currentItemSelected: fileListModel.selectedCount >= 0 &&
+            fileListModel.isIndexSelected(currentSourceIndex())
+    readonly property bool viewerNavigationTargetSelected: fileListModel.selectedCount >= 0 &&
+            viewerNavigationTargetIndex !== -1 && fileListModel.isIndexSelected(sourceIndexForViewIndex(viewerNavigationTargetIndex))
+    readonly property real viewerBackgroundOpacity: viewerBackground.opacity
+    readonly property real currentSelectionHighlightPresence: !viewerNavigationActive || viewerNavigationTargetIndex === -1 ? 1 :
+            (viewerNavigationDirection < 0 ? viewerNavigationCurrentOpacity : 1 - viewerNavigationProgress)
+    readonly property real targetSelectionHighlightPresence: viewerNavigationActive && viewerNavigationTargetIndex !== -1 ?
+            (viewerNavigationDirection < 0 ? viewerNavigationCoverProgress : viewerNavigationProgress) : 0
+    readonly property real selectionHighlightNavigationOpacity:
+            Math.min(1, (currentItemSelected ? currentSelectionHighlightPresence : 0) +
+                        (viewerNavigationTargetSelected ? targetSelectionHighlightPresence : 0))
+    property bool selectionHighlightAnimationSuppressed: false
 
     component BlurBackground : MultiEffect {
         id: blurItem
@@ -188,7 +210,7 @@ Item {
                 viewerMode.setImage(flickableArea.image.source, size, masonryLayout.view.currentIndex, level)
                 fitCurrentImageWhenReady()
                 fileListModel.cancelAllDecodeViewerRunners()
-                fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+                fileListModel.requestViewer(currentSourceIndex(), viewerMode.width * dpr, viewerMode.height * dpr)
             }
             else if (++attempts >= 600) {
                 stop()
@@ -220,11 +242,11 @@ Item {
 
         if (zoomFitView && !sphericViewerMode) {
             // console.log("onCIC FIT", viewerMode.width * dpr, viewerMode.height * dpr)
-            fileListModel.requestViewer(masonryLayout.view.currentIndex, viewerMode.width * dpr, viewerMode.height * dpr)
+            fileListModel.requestViewer(currentSourceIndex(), viewerMode.width * dpr, viewerMode.height * dpr)
         }
         else {
             // console.log("onCIC ORIG", flickableArea.originalSize.width * dpr, flickableArea.originalSize.height * dpr)
-            fileListModel.requestViewer(masonryLayout.view.currentIndex)
+            fileListModel.requestViewer(currentSourceIndex())
             flickableArea.forceShowScrollBars = true
             flickableArea.forceShowScrollBars = false
         }
@@ -235,6 +257,10 @@ Item {
     function updateTitle() {
         topLevelWindow.title = masonryLayout.view.indexText(masonryLayout.view.currentIndex) + " [" +
                 (masonryLayout.view.currentImageIndex + 1) + "/" + masonryLayout.view.imageCount + "] - ZoinGallery"
+    }
+
+    function toggleCurrentSelection() {
+        fileListModel.toggleSelection(currentSourceIndex())
     }
 
     property bool leftPressed: false
@@ -473,7 +499,7 @@ Item {
 
     function updateViewerNavigationTargetSource() {
         if (viewerNavigationTargetIndex !== -1) {
-            viewerNavigationTargetSource = fileListModel.bestViewerImageUrlForIndex(viewerNavigationTargetIndex)
+            viewerNavigationTargetSource = fileListModel.bestViewerImageUrlForIndex(sourceIndexForViewIndex(viewerNavigationTargetIndex))
         }
     }
 
@@ -592,8 +618,10 @@ Item {
         logViewerGesture("commit target=" + targetIndex)
         viewerNavigationGestureCommitted = true
         startViewerNavigationResidualSuppression("commit")
+        selectionHighlightAnimationSuppressed = true
         resetViewerNavigation("commit")
         if (targetIndex === -1 || targetIndex === masonryLayout.view.currentIndex) {
+            Qt.callLater(() => selectionHighlightAnimationSuppressed = false)
             return
         }
 
@@ -603,6 +631,7 @@ Item {
         }
         masonryLayout.setCurrentIndex(targetIndex)
         onCurrentIndexChanged()
+        Qt.callLater(() => selectionHighlightAnimationSuppressed = false)
     }
 
     function finishViewerNavigationAnimationNow(reason) {
@@ -874,13 +903,15 @@ Item {
         }
         shiftSelectionActive = true
         shiftSelectionAnchorIndex = masonryLayout.view.currentIndex
-        shiftNavigationSelectionValue = !fileListModel.isIndexSelected(shiftSelectionAnchorIndex)
+        shiftNavigationSelectionValue = !fileListModel.isIndexSelected(sourceIndexForViewIndex(shiftSelectionAnchorIndex))
         fileListModel.beginSelectionPreview()
     }
 
     function updateShiftNavigationSelection(targetIndex) {
         beginShiftSelection()
-        fileListModel.previewSelectionRange(shiftSelectionAnchorIndex, targetIndex, shiftNavigationSelectionValue, false)
+        fileListModel.previewSelectionIndexes(
+                    galleryViewModel.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, false),
+                    shiftNavigationSelectionValue ? 0 : 1)
     }
 
     function finishShiftSelection() {
@@ -967,11 +998,14 @@ Item {
                 beginShiftSelection()
                 return
             }
-            if (event.key === Qt.Key_Insert) {
-                fileListModel.setSelection(currentIndex, true)
+            if (event.key === Qt.Key_Backslash) {
+                toggleCurrentSelection()
+            }
+            else if (event.key === Qt.Key_Insert) {
+                fileListModel.setSelection(sourceIndexForViewIndex(currentIndex), true)
             }
             else if (event.key === Qt.Key_Delete) {
-                fileListModel.setSelection(currentIndex, false)
+                fileListModel.setSelection(sourceIndexForViewIndex(currentIndex), false)
             }
             else if (!zoomFitView && (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Up ||
                                  event.key === Qt.Key_Down) ||
@@ -1196,8 +1230,27 @@ Item {
         }
 
         function onViewerImageCacheChanged(index) {
-            if (index === viewerNavigationTargetIndex) {
+            if (index === sourceIndexForViewIndex(viewerNavigationTargetIndex)) {
                 updateViewerNavigationTargetSource()
+            }
+        }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        color: "#ffd23a"
+        opacity: 0.16 * viewerMode.viewerBackgroundOpacity * viewerMode.selectionHighlightNavigationOpacity
+        visible: opacity > 0
+        z: -2
+
+        Behavior on opacity {
+            enabled: !viewerMode.selectionHighlightAnimationSuppressed &&
+                     !viewerNavigationActive &&
+                     root.state === "viewer" &&
+                     viewerMode.viewerBackgroundOpacity >= 0.999
+            NumberAnimation {
+                duration: 150
+                easing.type: Easing.OutSine
             }
         }
     }
@@ -1657,7 +1710,6 @@ Item {
                     Layout.maximumWidth: implicitWidth
 
                     text: (sphericViewerMode ? (sphericViewerLoader.item ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : "") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))) +
-                          "  " + (fileListModel.isIndexSelected(masonryLayout.view.currentIndex) ? "Selected" : "Not selected") +
                           " " + fileListModel.selectedCount
                     font.pixelSize: 14
                     color: Style.viewerMainText

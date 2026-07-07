@@ -22,6 +22,7 @@
 #include "MainWindow.h"
 #include "LaunchOptions.h"
 #include "BackgroundInstance.h"
+#include "MacApplication.h"
 
 #if defined(__USE_QWK)
 #include <QWKQuick/qwkquickglobal.h>
@@ -251,11 +252,16 @@ public:
     ZoinApplication(int &argc, char **argv)
         : QApplication(argc, argv)
         , _controller(nullptr)
+        , _mainWindow(nullptr)
         , _startupFileOpenMode(true) {
     }
 
     void setViewerController(ViewerController *controller) {
         _controller = controller;
+    }
+
+    void setMainWindow(MainWindow *mainWindow) {
+        _mainWindow = mainWindow;
     }
 
     void finishStartupFileOpenMode() {
@@ -271,6 +277,32 @@ public:
 protected:
     bool event(QEvent *event) override {
 #if defined(Q_OS_MACOS)
+        if (event->type() == QEvent::Quit) {
+            qInfo() << "[Shutdown] ZoinApplication::event Quit"
+                    << "hasController" << (_controller != nullptr)
+                    << "backgroundMode" << (_controller ? _controller->backgroundMode() : false)
+                    << "explicitQuitRequestedProperty" << property("explicitQuitRequested").toBool()
+                    << "hasMainWindow" << (_mainWindow != nullptr)
+                    << "mainWindowVisible" << (_mainWindow ? _mainWindow->isVisible() : false)
+                    << "mainWindowVisibility" << (_mainWindow ? static_cast<int>(_mainWindow->visibility()) : -1);
+        }
+        if (event->type() == QEvent::Quit
+            && _controller
+            && _controller->backgroundMode()
+            && !property("explicitQuitRequested").toBool()) {
+            if (_mainWindow && _mainWindow->isVisible()) {
+                qInfo() << "[Shutdown] ZoinApplication::event intercepting Quit by closing visible window";
+                _mainWindow->close();
+            }
+            else {
+                qInfo() << "[Shutdown] ZoinApplication::event intercepting Quit by hiding to tray";
+                _controller->hideToTray();
+            }
+            return true;
+        }
+        else if (event->type() == QEvent::Quit) {
+            qInfo() << "[Shutdown] ZoinApplication::event passing Quit to QApplication";
+        }
         if (event->type() == QEvent::FileOpen) {
             auto *fileOpenEvent = static_cast<QFileOpenEvent *>(event);
             const QString path = fileOpenEvent->file();
@@ -294,6 +326,7 @@ private:
     }
 
     ViewerController *_controller;
+    MainWindow *_mainWindow;
     QString _queuedFilePath;
     bool _startupFileOpenMode;
 };
@@ -309,6 +342,13 @@ void installMacSettingsMenu(MainWindow *mainWindow)
     });
 }
 #endif
+
+bool singleInstanceByDefault()
+{
+    QSettings settings;
+    settings.beginGroup(QStringLiteral("General"));
+    return settings.value(QStringLiteral("singleInstanceByDefault"), true).toBool();
+}
 }
 
 int main(int argc, char *argv[])
@@ -332,15 +372,21 @@ int main(int argc, char *argv[])
     app.setOrganizationDomain("zoingallery.com");
     app.setApplicationName("ZoinGallery");
     installDailyLogRedirection(&app);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, []() {
+        qInfo() << "[Shutdown] QCoreApplication::aboutToQuit emitted";
+    });
 
     const LaunchOptions launchOptions = parseLaunchOptions(app.arguments());
+    const bool useSingleInstance = singleInstanceByDefault() && !launchOptions.separateInstance;
 
-    if (launchOptions.backgroundMode) {
+    if (useSingleInstance) {
         if (BackgroundInstance::tryForwardToRunningInstance(launchOptions.filePath)) {
             return 0;
         }
         app.setQuitOnLastWindowClosed(false);
     }
+
+    applyMacApplicationDockIconPolicy(true);
 
     QQuickStyle::setStyle("ZGStyle");
 #if defined(__USE_QWK)
@@ -382,7 +428,7 @@ int main(int argc, char *argv[])
         controller->setStartupFilePath(queuedFilePath);
     }
 
-    if (launchOptions.backgroundMode) {
+    if (useSingleInstance) {
         controller->setBackgroundMode(true);
     }
 
@@ -396,13 +442,14 @@ int main(int argc, char *argv[])
 
     if (const QList<QObject *> roots = engine.rootObjects(); !roots.isEmpty()) {
         if (auto *mainWindow = qobject_cast<MainWindow *>(roots.first())) {
+            app.setMainWindow(mainWindow);
 #if defined(Q_OS_MACOS)
             installMacSettingsMenu(mainWindow);
 #endif
         }
     }
 
-    if (launchOptions.backgroundMode) {
+    if (useSingleInstance) {
         const QList<QObject *> roots = engine.rootObjects();
         if (!roots.isEmpty()) {
             if (auto *mainWindow = qobject_cast<MainWindow *>(roots.first())) {
@@ -411,5 +458,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    return app.exec();
+    const int exitCode = app.exec();
+    qInfo() << "[Shutdown] app.exec returned" << exitCode;
+    return exitCode;
 }

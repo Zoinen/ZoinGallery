@@ -69,7 +69,9 @@ public:
         FolderViewRole,
         ExifRole,
         TimeToFlushRole,
-        SelectedRole
+        SelectedRole,
+        LastModifiedRole,
+        FileSizeRole
     };
 
     FileListModel(QObject *parent = nullptr);
@@ -128,9 +130,9 @@ public:
     Q_INVOKABLE void invertSelection();
     Q_INVOKABLE void setAllSelection(bool selected);
     Q_INVOKABLE void setSameKindSelection(int index, bool selected);
-    Q_INVOKABLE QVariantList dragIndexesForIndex(int index) const;
-    Q_INVOKABLE QVariantList dragUrlsForIndex(int index) const;
-    Q_INVOKABLE QVariantMap dragPreviewItemsForIndex(int index, int limit) const;
+    Q_INVOKABLE QVariantList dragIndexesForIndex(int index, bool singleItemOnly = false) const;
+    Q_INVOKABLE QVariantList dragUrlsForIndex(int index, bool singleItemOnly = false) const;
+    Q_INVOKABLE QVariantMap dragPreviewItemsForIndex(int index, int limit, bool singleItemOnly = false) const;
     Q_INVOKABLE void beginSelectionPreview();
     Q_INVOKABLE void previewSelectionRange(int anchorIndex, int targetIndex, bool selected, bool includeTarget);
     Q_INVOKABLE void previewSelectionIndexes(const QVariantList &indexes, int mode);
@@ -190,7 +192,8 @@ private:
 
     QString generateNewId();
     void updateImageId(ImageFile *item);
-    ImageFile *createFileItem(const QString &folderPath, const QString &fileName, const QDateTime &lastModified = QDateTime());
+    ImageFile *createFileItem(const QString &folderPath, const QString &fileName,
+                              const QDateTime &lastModified = QDateTime(), qint64 fileSize = -1);
     void cleanupModelBeforeCd();
     void clearModelData(bool clearViewerData);
     int populateFolderItems(const QString &path, const QString &itemToSelect = QString());
@@ -255,6 +258,7 @@ private:
     QHash<QString, PersistentSelectionCache::ContainerState> _selectionStates;
     bool _selectionPreviewActive = false;
     QHash<QString, QSet<QString>> _selectionPreviewSnapshot;
+    bool _isClosing = false;
 };
 
 #endif // FILELISTMODEL_H

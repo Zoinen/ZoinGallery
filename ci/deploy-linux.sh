@@ -93,6 +93,24 @@ collect_deps() {
     '
 }
 
+should_bundle_system_dep() {
+    local dependency_name
+    dependency_name="$(basename "$1")"
+
+    case "${dependency_name}" in
+        libX11*.so*|libXau*.so*|libXdmcp*.so*|libXext*.so*|libXi*.so*|libXrender*.so*|libXtst*.so*|\
+        libbsd*.so*|libbrotli*.so*|libbz2*.so*|libdbus-1.so*|libdouble-conversion.so*|\
+        libexpat*.so*|libffi*.so*|libfontconfig.so*|libfreetype.so*|libglib-2.0.so*|\
+        libgraphite2.so*|libharfbuzz*.so*|libmd*.so*|libpcre2-*.so*|libpng*.so*|\
+        libuuid.so*|libxcb*.so*|libxkbcommon*.so*|libz.so*|libzstd.so*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 queue_file="${package_root}/.deps.queue"
 seen_file="${package_root}/.deps.seen"
 pending_file="${package_root}/.deps.pending"
@@ -119,12 +137,17 @@ while true; do
         case "${dependency}" in
             "${qt_root}/"*|*"/.conan2/"*|*"${repo_root}/build/qwindowkit-install/"*)
                 cp -Lf "${dependency}" "${package_root}/lib/" || true
-                copied="${package_root}/lib/$(basename "${dependency}")"
-                if [[ -f "${copied}" ]]; then
-                    printf '%s\n' "${copied}" >>"${queue_file}"
+                ;;
+            *)
+                if should_bundle_system_dep "${dependency}"; then
+                    cp -Lf "${dependency}" "${package_root}/lib/" || true
                 fi
                 ;;
         esac
+        copied="${package_root}/lib/$(basename "${dependency}")"
+        if [[ -f "${copied}" ]]; then
+            printf '%s\n' "${copied}" >>"${queue_file}"
+        fi
     done < <(collect_deps "${next_candidate}")
 done
 

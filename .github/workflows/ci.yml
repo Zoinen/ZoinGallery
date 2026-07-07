@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   BUILD_TYPE: RelWithDebInfo
@@ -378,3 +379,39 @@ jobs:
           name: ZoinGallery-windows-2022
           path: build/bin
           if-no-files-found: error
+
+  update-readme:
+    name: Update README artifact table
+    runs-on: ubuntu-24.04
+    needs:
+      - linux-ubuntu
+      - linux-containers
+      - macos
+      - windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
+      actions: read
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Update README artifact table
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 ci/update-readme-artifacts.py
+
+      - name: Commit README update
+        run: |
+          if git diff --quiet README.md; then
+            echo "README artifact table already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "Update CI artifact table [skip ci]"
+          git push

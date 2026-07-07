@@ -40,6 +40,26 @@ copy_libs_from_dir() {
 copy_libs_from_dir "${repo_root}/build/qwindowkit-install/lib"
 copy_libs_from_dir "${repo_root}/build/qwindowkit-install/lib64"
 
+copy_system_runtime_libs() {
+    local search_root
+    for search_root in /lib /lib64 /usr/lib /usr/lib64; do
+        [[ -d "${search_root}" ]] || continue
+        find "${search_root}" -maxdepth 3 \( -type f -o -type l \) \( \
+            -name 'libX11*.so*' -o \
+            -name 'libXau*.so*' -o \
+            -name 'libXdmcp*.so*' -o \
+            -name 'libXext*.so*' -o \
+            -name 'libXi*.so*' -o \
+            -name 'libXrender*.so*' -o \
+            -name 'libXtst*.so*' -o \
+            -name 'libxcb*.so*' -o \
+            -name 'libxkbcommon*.so*' \
+        \) -exec cp -Lf {} "${package_root}/lib/" \; 2>/dev/null || true
+    done
+}
+
+copy_system_runtime_libs
+
 copy_if_exists "${qt_root}/plugins/platforms" "${package_root}/plugins"
 copy_if_exists "${qt_root}/plugins/imageformats" "${package_root}/plugins"
 copy_if_exists "${qt_root}/plugins/iconengines" "${package_root}/plugins"

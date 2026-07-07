@@ -110,7 +110,7 @@ EOF
 
 collect_deps() {
     local file="$1"
-    ldd "${file}" 2>/dev/null | awk '
+    LD_LIBRARY_PATH="${package_root}/lib:${qt_root}/lib:${LD_LIBRARY_PATH:-}" ldd "${file}" 2>/dev/null | awk '
         /=>/ && $3 ~ /^\// { print $3 }
         /^[[:space:]]*\// { print $1 }
     '

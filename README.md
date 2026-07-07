@@ -7,16 +7,16 @@ ZoinGallery is a Qt-based desktop image gallery.
 ## Latest CI Builds
 
 <!-- CI_ARTIFACTS_START -->
-Latest successful run: [Package macOS app artifact as zip](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427)
+Latest successful run: [Preserve macOS app bundle in CI artifact](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792)
 
 | Platform | CI Status | Download | Built | Commit |
 | --- | --- | --- | --- | --- |
-| Windows Server 2022 | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/job/85689844032) | [ZoinGallery-windows-2022](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/artifacts/8146769580) | 2026-07-07 17:57 UTC | [`b401b41`](https://github.com/Zoinen/ZoinGallery/commit/b401b41058e49555881c1bcdc667fbd1f2713e50) |
-| macOS 15 | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/job/85689844003) | [ZoinGallery-macos-15](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/artifacts/8146635121) | 2026-07-07 17:52 UTC | [`b401b41`](https://github.com/Zoinen/ZoinGallery/commit/b401b41058e49555881c1bcdc667fbd1f2713e50) |
-| Ubuntu 24.04 | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/job/85689843978) | [ZoinGallery-linux-ubuntu-24.04](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/artifacts/8146720935) | 2026-07-07 17:55 UTC | [`b401b41`](https://github.com/Zoinen/ZoinGallery/commit/b401b41058e49555881c1bcdc667fbd1f2713e50) |
-| Debian 12 | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/job/85689844129) | [ZoinGallery-linux-debian-12](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/artifacts/8146724579) | 2026-07-07 17:55 UTC | [`b401b41`](https://github.com/Zoinen/ZoinGallery/commit/b401b41058e49555881c1bcdc667fbd1f2713e50) |
-| Fedora latest | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/job/85689844035) | [ZoinGallery-linux-fedora-latest](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/artifacts/8146754387) | 2026-07-07 17:57 UTC | [`b401b41`](https://github.com/Zoinen/ZoinGallery/commit/b401b41058e49555881c1bcdc667fbd1f2713e50) |
-| Arch latest | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/job/85689844185) | [ZoinGallery-linux-arch-latest](https://github.com/Zoinen/ZoinGallery/actions/runs/28887058427/artifacts/8146752754) | 2026-07-07 17:57 UTC | [`b401b41`](https://github.com/Zoinen/ZoinGallery/commit/b401b41058e49555881c1bcdc667fbd1f2713e50) |
+| Windows Server 2022 | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/job/85690118487) | [ZoinGallery-windows-2022](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/artifacts/8146809096) | 2026-07-07 17:59 UTC | [`82d1eec`](https://github.com/Zoinen/ZoinGallery/commit/82d1eec13d20e7e3c972e08017e6876bbf943b9b) |
+| macOS 15 | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/job/85690118506) | [ZoinGallery-macos-15](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/artifacts/8146693419) | 2026-07-07 17:54 UTC | [`82d1eec`](https://github.com/Zoinen/ZoinGallery/commit/82d1eec13d20e7e3c972e08017e6876bbf943b9b) |
+| Ubuntu 24.04 | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/job/85690118453) | [ZoinGallery-linux-ubuntu-24.04](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/artifacts/8146754808) | 2026-07-07 17:57 UTC | [`82d1eec`](https://github.com/Zoinen/ZoinGallery/commit/82d1eec13d20e7e3c972e08017e6876bbf943b9b) |
+| Debian 12 | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/job/85690118432) | [ZoinGallery-linux-debian-12](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/artifacts/8146760046) | 2026-07-07 17:57 UTC | [`82d1eec`](https://github.com/Zoinen/ZoinGallery/commit/82d1eec13d20e7e3c972e08017e6876bbf943b9b) |
+| Fedora latest | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/job/85690118495) | [ZoinGallery-linux-fedora-latest](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/artifacts/8146751253) | 2026-07-07 17:57 UTC | [`82d1eec`](https://github.com/Zoinen/ZoinGallery/commit/82d1eec13d20e7e3c972e08017e6876bbf943b9b) |
+| Arch latest | [Pass](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/job/85690118519) | [ZoinGallery-linux-arch-latest](https://github.com/Zoinen/ZoinGallery/actions/runs/28887138792/artifacts/8146761840) | 2026-07-07 17:57 UTC | [`82d1eec`](https://github.com/Zoinen/ZoinGallery/commit/82d1eec13d20e7e3c972e08017e6876bbf943b9b) |
 
 _These are unsigned CI validation builds. GitHub may require sign-in to download artifacts._
 <!-- CI_ARTIFACTS_END -->

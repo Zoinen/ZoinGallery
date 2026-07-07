@@ -186,4 +186,10 @@ if [[ ! -f "${required_qml_plugin}" ]]; then
     exit 1
 fi
 
+required_xcb_cursor="${package_root}/lib/libxcb-cursor.so.0"
+if [[ ! -f "${required_xcb_cursor}" ]]; then
+    echo "Missing xcb cursor runtime library in Linux package: ${required_xcb_cursor}" >&2
+    exit 1
+fi
+
 (cd "${repo_root}/build/artifacts" && tar --zstd -cf "${package_name}.tar.zst" "${package_name}")

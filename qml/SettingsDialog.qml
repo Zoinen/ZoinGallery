@@ -490,6 +490,19 @@ Window {
 
                     SectionHeader { text: "System" }
 
+                    SettingRow {
+                        label: "Version"
+                        detail: "Installed application build."
+                        control: Text {
+                            width: parent.width
+                            text: zoinVersion
+                            color: Style.accentColor
+                            font.pixelSize: 13
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+                    }
+
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12

@@ -7,7 +7,13 @@ endif()
 
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS deployment target")
 
-project(ZoinGallery LANGUAGES C CXX)
+project(ZoinGallery VERSION 0.1.0 LANGUAGES C CXX)
+
+set(ZOIN_BUILD_NUMBER "$ENV{GITHUB_RUN_NUMBER}" CACHE STRING "CI build number embedded into the app.")
+if(ZOIN_BUILD_NUMBER STREQUAL "")
+    set(ZOIN_BUILD_NUMBER "0")
+endif()
+set(ZOIN_VERSION_DISPLAY "${PROJECT_VERSION} (build ${ZOIN_BUILD_NUMBER})")
 
 if(APPLE)
     enable_language(OBJCXX)
@@ -32,6 +38,11 @@ endif()
 # Set C++ standard after including toolchain
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/BuildInfo.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
+    @ONLY)
+include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 # Bringing back removed std::auto_ptr for msvc and clang
 add_compile_definitions(_HAS_AUTO_PTR_ETC=1)
@@ -203,6 +214,10 @@ if(APPLE)
 endif()
 
 add_executable(ZoinGallery WIN32 MACOSX_BUNDLE ${PROJECT_SOURCES} ${RESOURCE_FILES})
+target_compile_definitions(ZoinGallery PRIVATE
+    ZOIN_APP_VERSION="${PROJECT_VERSION}"
+    ZOIN_BUILD_NUMBER="${ZOIN_BUILD_NUMBER}"
+    ZOIN_VERSION_DISPLAY="${ZOIN_VERSION_DISPLAY}")
 
 set_target_properties(${PROJECT_NAME}
     PROPERTIES

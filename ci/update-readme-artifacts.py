@@ -19,32 +19,32 @@ PLATFORMS = [
     {
         "label": "Windows Server 2022",
         "job": "Windows Server 2022",
-        "artifact": "ZoinGallery-windows-2022",
+        "artifact_prefix": "ZoinGallery-windows-2022-b",
     },
     {
         "label": "macOS 15",
         "job": "macOS 15",
-        "artifact": "ZoinGallery-macos-15",
+        "artifact_prefix": "ZoinGallery-macos-15-b",
     },
     {
         "label": "Ubuntu 24.04",
         "job": "Linux / Ubuntu 24.04",
-        "artifact": "ZoinGallery-linux-ubuntu-24.04",
+        "artifact_prefix": "ZoinGallery-linux-ubuntu-24.04-b",
     },
     {
         "label": "Debian 12",
         "job": "Linux / Debian 12",
-        "artifact": "ZoinGallery-linux-debian-12",
+        "artifact_prefix": "ZoinGallery-linux-debian-12-b",
     },
     {
         "label": "Fedora latest",
         "job": "Linux / Fedora latest",
-        "artifact": "ZoinGallery-linux-fedora-latest",
+        "artifact_prefix": "ZoinGallery-linux-fedora-latest-b",
     },
     {
         "label": "Arch latest",
         "job": "Linux / Arch latest",
-        "artifact": "ZoinGallery-linux-arch-latest",
+        "artifact_prefix": "ZoinGallery-linux-arch-latest-b",
     },
 ]
 
@@ -93,6 +93,17 @@ def status_text(conclusion: str | None) -> str:
     return "Unknown"
 
 
+def artifact_for_platform(artifacts: list[dict[str, Any]], artifact_prefix: str) -> dict[str, Any]:
+    matches = [
+        artifact
+        for artifact in artifacts
+        if str(artifact.get("name", "")).startswith(artifact_prefix)
+    ]
+    if not matches:
+        return {}
+    return max(matches, key=lambda artifact: artifact.get("created_at") or "")
+
+
 def build_section() -> str:
     repo = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["GITHUB_RUN_ID"]
@@ -103,9 +114,8 @@ def build_section() -> str:
     artifacts = paged_api(f"/actions/runs/{run_id}/artifacts", "artifacts")
 
     jobs_by_name = {job["name"]: job for job in jobs}
-    artifacts_by_name = {artifact["name"]: artifact for artifact in artifacts}
-
     run_url = run.get("html_url") or f"{server_url}/{repo}/actions/runs/{run_id}"
+    run_number = str(run.get("run_number") or os.environ.get("GITHUB_RUN_NUMBER", "unknown"))
     sha = run.get("head_sha") or os.environ.get("GITHUB_SHA", "")
     short_sha = sha[:7] if sha else "unknown"
     commit_cell = (
@@ -114,6 +124,7 @@ def build_section() -> str:
 
     lines = [
         f"Latest successful run: [{run.get('display_title') or 'CI'}]({run_url})",
+        f"Build number: `{run_number}`",
         "",
         "| Platform | CI Status | Download | Built | Commit |",
         "| --- | --- | --- | --- | --- |",
@@ -121,7 +132,7 @@ def build_section() -> str:
 
     for platform in PLATFORMS:
         job = jobs_by_name.get(platform["job"], {})
-        artifact = artifacts_by_name.get(platform["artifact"], {})
+        artifact = artifact_for_platform(artifacts, platform["artifact_prefix"])
 
         status = status_text(job.get("conclusion"))
         status_url = job.get("html_url") or run_url
@@ -164,4 +175,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

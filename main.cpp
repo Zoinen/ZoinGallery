@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QElapsedTimer>
 #include <QQuickStyle>
 #include <QSettings>
@@ -23,6 +24,7 @@
 #include "LaunchOptions.h"
 #include "BackgroundInstance.h"
 #include "MacApplication.h"
+#include "BuildInfo.h"
 
 #if defined(__USE_QWK)
 #include <QWKQuick/qwkquickglobal.h>
@@ -371,6 +373,7 @@ int main(int argc, char *argv[])
     app.setOrganizationName("Zoin");
     app.setOrganizationDomain("zoingallery.com");
     app.setApplicationName("ZoinGallery");
+    app.setApplicationVersion(QStringLiteral(ZOIN_VERSION_DISPLAY));
     installDailyLogRedirection(&app);
     QObject::connect(&app, &QCoreApplication::aboutToQuit, []() {
         qInfo() << "[Shutdown] QCoreApplication::aboutToQuit emitted";
@@ -400,6 +403,8 @@ int main(int argc, char *argv[])
     QImageReader::setAllocationLimit(0);
 
     QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("zoinVersion"), QStringLiteral(ZOIN_VERSION_DISPLAY));
+    engine.rootContext()->setContextProperty(QStringLiteral("zoinBuildNumber"), QStringLiteral(ZOIN_BUILD_NUMBER));
     engine.addImportPath(":/");
     engine.addImportPath(":/ZoinGallery");
     const QUrl url(QStringLiteral("qrc:/ZoinGallery/qml/main.qml"));

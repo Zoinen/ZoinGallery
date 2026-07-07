@@ -19,9 +19,9 @@
 	<key>CFBundleIdentifier</key>
 	<string>gallery.zoin</string>
 	<key>CFBundleShortVersionString</key>
-	<string>@PROJECT_VERSION@.@BUILD_NUMBER@</string>
+	<string>@PROJECT_VERSION@</string>
 	<key>CFBundleVersion</key>
-	<string>@PROJECT_VERSION@.@BUILD_NUMBER@</string>
+	<string>@ZOIN_BUILD_NUMBER@</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

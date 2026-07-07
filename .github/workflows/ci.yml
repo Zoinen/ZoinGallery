@@ -11,6 +11,7 @@ permissions:
 
 env:
   BUILD_TYPE: RelWithDebInfo
+  BUILD_NUMBER: ${{ github.run_number }}
   QT_VERSION: 6.10.3
   AQT_MODULES: qtshadertools
 
@@ -73,6 +74,7 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/conan_toolchain.cmake" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DZOIN_BUILD_NUMBER="${BUILD_NUMBER}" \
             -DUSE_QWK=ON \
             -DCMAKE_PREFIX_PATH="${QT_ROOT};${GITHUB_WORKSPACE}/build;${GITHUB_WORKSPACE}/build/qwindowkit-install"
 
@@ -85,7 +87,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ZoinGallery-linux-ubuntu-24.04
+          name: ZoinGallery-linux-ubuntu-24.04-b${{ github.run_number }}
           path: |
             build/bin
             build/qwindowkit-install/lib
@@ -184,6 +186,7 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/conan_toolchain.cmake" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DZOIN_BUILD_NUMBER="${BUILD_NUMBER}" \
             -DUSE_QWK=ON \
             -DCMAKE_PREFIX_PATH="${QT_ROOT};${GITHUB_WORKSPACE}/build;${GITHUB_WORKSPACE}/build/qwindowkit-install"
 
@@ -196,7 +199,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ZoinGallery-linux-${{ matrix.cache_key }}
+          name: ZoinGallery-linux-${{ matrix.cache_key }}-b${{ github.run_number }}
           path: |
             build/bin
             build/qwindowkit-install/lib
@@ -257,6 +260,7 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/conan_toolchain.cmake" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DZOIN_BUILD_NUMBER="${BUILD_NUMBER}" \
             -DUSE_QWK=ON \
             -DZOIN_MACOS_CODE_SIGN=OFF \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
@@ -274,16 +278,21 @@ jobs:
           "${QT_ROOT}/bin/macdeployqt" "${app}" -verbose=1 || true
           mkdir -p "${app}/Contents/Frameworks"
           cp -f build/qwindowkit-install/lib/*.dylib "${app}/Contents/Frameworks/" || true
-          artifact_root="build/artifacts/macos"
-          rm -rf "${artifact_root}"
-          mkdir -p "${artifact_root}"
-          ditto "${app}" "${artifact_root}/ZoinGallery.app"
+          codesign --force --deep --timestamp=none --sign - "${app}"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          mkdir -p build/artifacts
+          hdiutil create \
+            -volname "ZoinGallery b${BUILD_NUMBER}" \
+            -srcfolder "${app}" \
+            -ov \
+            -format UDZO \
+            "build/artifacts/ZoinGallery-macos-15-b${BUILD_NUMBER}.dmg"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ZoinGallery-macos-15
-          path: build/artifacts/macos
+          name: ZoinGallery-macos-15-b${{ github.run_number }}
+          path: build/artifacts/ZoinGallery-macos-15-b${{ github.run_number }}.dmg
           if-no-files-found: error
 
   windows:
@@ -360,6 +369,7 @@ jobs:
           cmake -S . -B build -G Ninja `
             -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE\build\conan_toolchain.cmake" `
             -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
+            -DZOIN_BUILD_NUMBER="$env:BUILD_NUMBER" `
             -DUSE_QWK=ON `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT;$env:GITHUB_WORKSPACE\build;$env:GITHUB_WORKSPACE\build\qwindowkit-install"
 
@@ -385,7 +395,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ZoinGallery-windows-2022
+          name: ZoinGallery-windows-2022-b${{ github.run_number }}
           path: build/bin
           if-no-files-found: error
 

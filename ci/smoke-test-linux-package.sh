@@ -8,6 +8,7 @@ test -x "${launcher}"
 
 run_briefly() {
     env -u LD_LIBRARY_PATH -u QT_PLUGIN_PATH -u QML2_IMPORT_PATH -u QT_QPA_PLATFORM_PLUGIN_PATH \
+        QT_DEBUG_PLUGINS=1 \
         "${launcher}" >"${RUNNER_TEMP:-/tmp}/zoingallery-package-smoke.out" 2>"${RUNNER_TEMP:-/tmp}/zoingallery-package-smoke.err" &
     local pid=$!
     sleep 8

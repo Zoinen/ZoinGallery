@@ -47,9 +47,12 @@ copy_system_runtime_libs() {
         find "${search_root}" -maxdepth 3 \( -type f -o -type l \) \( \
             -name 'libX11*.so*' -o \
             -name 'libXau*.so*' -o \
+            -name 'libXcursor*.so*' -o \
             -name 'libXdmcp*.so*' -o \
             -name 'libXext*.so*' -o \
+            -name 'libXfixes*.so*' -o \
             -name 'libXi*.so*' -o \
+            -name 'libXrandr*.so*' -o \
             -name 'libXrender*.so*' -o \
             -name 'libXtst*.so*' -o \
             -name 'libxcb*.so*' -o \
@@ -118,7 +121,8 @@ should_bundle_system_dep() {
     dependency_name="$(basename "$1")"
 
     case "${dependency_name}" in
-        libX11*.so*|libXau*.so*|libXdmcp*.so*|libXext*.so*|libXi*.so*|libXrender*.so*|libXtst*.so*|\
+        libX11*.so*|libXau*.so*|libXcursor*.so*|libXdmcp*.so*|libXext*.so*|libXfixes*.so*|\
+        libXi*.so*|libXrandr*.so*|libXrender*.so*|libXtst*.so*|\
         libbsd*.so*|libbrotli*.so*|libbz2*.so*|libdbus-1.so*|libdouble-conversion.so*|\
         libexpat*.so*|libffi*.so*|libfontconfig.so*|libfreetype.so*|libglib-2.0.so*|\
         libgraphite2.so*|libharfbuzz*.so*|libmd*.so*|libpcre2-*.so*|libpng*.so*|\
@@ -190,6 +194,16 @@ required_xcb_cursor="${package_root}/lib/libxcb-cursor.so.0"
 if [[ ! -f "${required_xcb_cursor}" ]]; then
     echo "Missing xcb cursor runtime library in Linux package: ${required_xcb_cursor}" >&2
     exit 1
+fi
+
+xcb_plugin="${package_root}/plugins/platforms/libqxcb.so"
+if [[ -f "${xcb_plugin}" ]]; then
+    missing_xcb_deps="$(LD_LIBRARY_PATH="${package_root}/lib:${LD_LIBRARY_PATH:-}" ldd "${xcb_plugin}" 2>/dev/null | awk '/not found/ { print }')"
+    if [[ -n "${missing_xcb_deps}" ]]; then
+        echo "Missing runtime dependencies for Qt xcb platform plugin:" >&2
+        echo "${missing_xcb_deps}" >&2
+        exit 1
+    fi
 fi
 
 (cd "${repo_root}/build/artifacts" && tar --zstd -cf "${package_name}.tar.zst" "${package_name}")

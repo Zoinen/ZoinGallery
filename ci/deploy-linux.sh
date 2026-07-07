@@ -95,6 +95,7 @@ collect_deps() {
 
 queue_file="${package_root}/.deps.queue"
 seen_file="${package_root}/.deps.seen"
+pending_file="${package_root}/.deps.pending"
 : >"${queue_file}"
 : >"${seen_file}"
 
@@ -104,7 +105,8 @@ seen_file="${package_root}/.deps.seen"
 } | sort -u >"${queue_file}"
 
 while true; do
-    next_candidate="$(comm -23 <(sort -u "${queue_file}") <(sort -u "${seen_file}") | head -n 1)"
+    comm -23 <(sort -u "${queue_file}") <(sort -u "${seen_file}") >"${pending_file}"
+    next_candidate="$(sed -n '1p' "${pending_file}")"
     [[ -n "${next_candidate}" ]] || break
     [[ -f "${next_candidate}" ]] || {
         printf '%s\n' "${next_candidate}" >>"${seen_file}"
@@ -126,7 +128,7 @@ while true; do
     done < <(collect_deps "${next_candidate}")
 done
 
-rm -f "${queue_file}" "${seen_file}"
+rm -f "${queue_file}" "${seen_file}" "${pending_file}"
 find "${package_root}/lib" -type f -name '*.so*' -exec chmod u+w {} +
 
 if command -v patchelf >/dev/null 2>&1; then

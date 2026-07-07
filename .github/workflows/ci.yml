@@ -274,13 +274,16 @@ jobs:
           "${QT_ROOT}/bin/macdeployqt" "${app}" -verbose=1 || true
           mkdir -p "${app}/Contents/Frameworks"
           cp -f build/qwindowkit-install/lib/*.dylib "${app}/Contents/Frameworks/" || true
-          ditto -c -k --keepParent "${app}" "build/bin/RelWithDebInfo/ZoinGallery-macos-15.zip"
+          artifact_root="build/artifacts/macos"
+          rm -rf "${artifact_root}"
+          mkdir -p "${artifact_root}"
+          ditto "${app}" "${artifact_root}/ZoinGallery.app"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ZoinGallery-macos-15
-          path: build/bin/RelWithDebInfo/ZoinGallery-macos-15.zip
+          path: build/artifacts/macos
           if-no-files-found: error
 
   windows:

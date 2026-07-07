@@ -336,6 +336,7 @@ jobs:
             -o "&:with_qt=False" `
             -c tools.files.download:retry=5 `
             -c tools.files.download:retry_wait=10 `
+            -c tools.cmake.cmaketoolchain:generator=Ninja `
             --output-folder=build
 
       - name: Build QWindowKit

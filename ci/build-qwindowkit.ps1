@@ -5,6 +5,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    $PSNativeCommandUseErrorActionPreference = $true
+}
 
 $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $QwkSource = Join-Path $RepoRoot "build\qwindowkit-src"
@@ -26,7 +29,7 @@ Remove-Item -Recurse -Force $QwkSource, $QwkBuild, $QwkInstall -ErrorAction Sile
 git clone --recursive --branch main https://github.com/stdware/qwindowkit.git $QwkSource
 
 cmake -S $QwkSource -B $QwkBuild -G Ninja `
-    -DCMAKE_BUILD_TYPE=$BuildType `
+    "-DCMAKE_BUILD_TYPE=$BuildType" `
     -DCMAKE_PREFIX_PATH="$QtRoot" `
     -DCMAKE_CXX_FLAGS="$($QwkCxxFlags -join ' ')" `
     -DCMAKE_INSTALL_PREFIX="$QwkInstall" `

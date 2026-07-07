@@ -84,13 +84,17 @@ jobs:
       - name: Smoke test
         run: bash ci/smoke-test.sh "${QT_ROOT}"
 
+      - name: Prepare app artifact
+        run: bash ci/deploy-linux.sh "${QT_ROOT}" "ZoinGallery-linux-ubuntu-24.04-b${BUILD_NUMBER}"
+
+      - name: Smoke test app artifact
+        run: bash ci/smoke-test-linux-package.sh "build/artifacts/ZoinGallery-linux-ubuntu-24.04-b${BUILD_NUMBER}"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ZoinGallery-linux-ubuntu-24.04-b${{ github.run_number }}
-          path: |
-            build/bin
-            build/qwindowkit-install/lib
+          path: build/artifacts/ZoinGallery-linux-ubuntu-24.04-b${{ github.run_number }}.tar.zst
           if-no-files-found: error
 
   linux-containers:
@@ -196,13 +200,17 @@ jobs:
       - name: Smoke test
         run: bash ci/smoke-test.sh "${QT_ROOT}"
 
+      - name: Prepare app artifact
+        run: bash ci/deploy-linux.sh "${QT_ROOT}" "ZoinGallery-linux-${{ matrix.cache_key }}-b${BUILD_NUMBER}"
+
+      - name: Smoke test app artifact
+        run: bash ci/smoke-test-linux-package.sh "build/artifacts/ZoinGallery-linux-${{ matrix.cache_key }}-b${BUILD_NUMBER}"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ZoinGallery-linux-${{ matrix.cache_key }}-b${{ github.run_number }}
-          path: |
-            build/bin
-            build/qwindowkit-install/lib
+          path: build/artifacts/ZoinGallery-linux-${{ matrix.cache_key }}-b${{ github.run_number }}.tar.zst
           if-no-files-found: error
 
   macos:

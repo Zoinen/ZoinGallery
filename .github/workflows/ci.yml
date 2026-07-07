@@ -303,7 +303,9 @@ jobs:
         shell: pwsh
         run: |
           py -m pip install --user conan aqtinstall cmake ninja
-          $userScripts = "$(py -m site --user-base)\Scripts"
+          $userBase = py -c "import site; print(site.USER_BASE)"
+          $userScripts = Join-Path $userBase "Scripts"
+          $env:PATH = "$userScripts;$env:PATH"
           $userScripts | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Qt
@@ -321,8 +323,8 @@ jobs:
       - name: Install Conan dependencies
         shell: pwsh
         run: |
-          py -m conan profile detect --force
-          py -m conan install . --build=missing `
+          conan profile detect --force
+          conan install . --build=missing `
             -s build_type="$env:BUILD_TYPE" `
             -s compiler.cppstd=20 `
             -o "&:with_qt=False" `

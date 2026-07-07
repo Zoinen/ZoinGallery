@@ -278,10 +278,13 @@ jobs:
           bash ci/deploy-macos.sh "${QT_ROOT}" "${app}"
           codesign --force --deep --timestamp=none --sign - "${app}"
           codesign --verify --deep --strict --verbose=2 "${app}"
-          mkdir -p build/artifacts
+          rm -rf build/dmg-root
+          mkdir -p build/artifacts build/dmg-root
+          ditto "${app}" "build/dmg-root/ZoinGallery.app"
+          codesign --verify --deep --strict --verbose=2 "build/dmg-root/ZoinGallery.app"
           hdiutil create \
             -volname "ZoinGallery b${BUILD_NUMBER}" \
-            -srcfolder "${app}" \
+            -srcfolder "build/dmg-root" \
             -ov \
             -format UDZO \
             "build/artifacts/ZoinGallery-macos-15-b${BUILD_NUMBER}.dmg"

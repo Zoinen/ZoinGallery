@@ -323,8 +323,8 @@ jobs:
       - name: Install Conan dependencies
         shell: pwsh
         run: |
-          py -c "from conan.cli.cli import main; main()" profile detect --force
-          py -c "from conan.cli.cli import main; main()" install . --build=missing `
+          py -c "import sys; from conan.cli.cli import main; main(sys.argv[1:])" profile detect --force
+          py -c "import sys; from conan.cli.cli import main; main(sys.argv[1:])" install . --build=missing `
             -s build_type="$env:BUILD_TYPE" `
             -s compiler.cppstd=20 `
             -o "&:with_qt=False" `

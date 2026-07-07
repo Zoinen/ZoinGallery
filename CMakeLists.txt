@@ -81,6 +81,8 @@ set(PROJECT_SOURCES
     BackgroundInstance.cpp
     TrayController.h
     TrayController.cpp
+    DisplayColorSpace.h
+    DisplayColorSpace.cpp
     ThumbnailLoader.h
     ThumbnailLoader.cpp
     NaturalSort.h
@@ -187,7 +189,10 @@ if(APPLE)
     set(ICON_FILENAME ZoinGallery.icns)
     set(ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/resources/${ICON_FILENAME})
     set(RESOURCE_FILES ${ICON_PATH})
-    list(APPEND PROJECT_SOURCES ViewerWheelAreaNative_mac.mm)
+    list(APPEND PROJECT_SOURCES
+        DisplayColorSpace_mac.mm
+        ViewerWheelAreaNative_mac.mm
+    )
     option(ZOIN_MACOS_CODE_SIGN "Code sign the macOS app bundle after building" ON)
     set(ZOIN_MACOS_CODE_SIGN_IDENTITY "ZoinGallery Local Code Signing" CACHE STRING "Code signing identity for macOS builds. Set empty to skip signing.")
     mark_as_advanced(ZOIN_MACOS_CODE_SIGN_IDENTITY)
@@ -353,7 +358,7 @@ if(APPLE)
     target_link_options(${PROJECT_NAME} PRIVATE
         "-Wl,-rpath,${_qt_bin_dir}/../lib/,-rpath,@loader_path/../Frameworks,-rpath,@executable_path/../,-rpath,@executable_path/../Frameworks"
         )
-    target_link_libraries(ZoinGallery PRIVATE "-framework CoreServices")
+    target_link_libraries(ZoinGallery PRIVATE "-framework AppKit" "-framework CoreServices")
 
     if(ZOIN_MACOS_CODE_SIGN)
         find_program(CODESIGN_EXECUTABLE codesign)

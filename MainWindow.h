@@ -8,6 +8,8 @@ class MainWindow : public QQuickWindow {
     Q_PROPERTY(bool isResizing READ isResizing NOTIFY isResizingChanged)
     Q_PROPERTY(qreal dpr MEMBER _dpr NOTIFY dprChanged)
     Q_PROPERTY(bool isQWK READ isQWK CONSTANT)
+    Q_PROPERTY(QString targetColorSpaceDescription READ targetColorSpaceDescription NOTIFY targetColorSpaceChanged)
+    Q_PROPERTY(bool convertToDisplayColorSpace READ convertToDisplayColorSpace WRITE setConvertToDisplayColorSpace NOTIFY convertToDisplayColorSpaceChanged)
 
 public:
     MainWindow(QWindow *parent = nullptr);
@@ -25,6 +27,9 @@ public:
     bool isResizing() const;
 
     bool isQWK() const;
+    QString targetColorSpaceDescription() const;
+    bool convertToDisplayColorSpace() const;
+    void setConvertToDisplayColorSpace(bool enabled);
 
 signals:
     void mainWindowResized(bool widthChanged);
@@ -33,12 +38,15 @@ signals:
     void dprChanged();
     void windowIsReady();
     void openSettingsRequested();
+    void targetColorSpaceChanged();
+    void convertToDisplayColorSpaceChanged();
 
 protected:
     void showEvent(QShowEvent *event) override;
 
 private:
     void updateDpr();
+    void updateDisplayColorSpace();
     void enableWindowAnimations(bool enable);
 
     bool _leftButtonPressed;

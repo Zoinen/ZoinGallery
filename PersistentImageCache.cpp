@@ -1,4 +1,5 @@
 #include "PersistentImageCache.h"
+#include "DisplayColorSpace.h"
 
 #include <QImage>
 #include <QFile>
@@ -6,10 +7,9 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QBuffer>
-#include <QColorSpace>
 
 namespace {
-constexpr int CacheFormatVersion = 3;
+constexpr int CacheFormatVersion = 4;
 
 QString cacheDbPath() {
     return QString("C:/tmp/zg_v%1.db").arg(CacheFormatVersion);
@@ -66,7 +66,6 @@ void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QLi
 
 QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request) {
     QImage result;
-    const QColorSpace srgb(QColorSpace::SRgb);
     _dbAccess.lockForRead();
     auto it = _db.find(request.info.path);
     _dbAccess.unlock();
@@ -80,13 +79,14 @@ QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request) {
 
                     result = QImage::fromData(thumbnailData, "webp");
                     if (!result.isNull()) {
-                        result.setColorSpace(srgb);
+                        result.setColorSpace(DisplayColorSpace::cacheColorSpace());
                     }
                     if (request.targetSize.isValid() && (request.targetSize.width() < result.width() ||
                                                          request.targetSize.height() < result.height())) { // Never upscale
                         result = result.scaled(request.targetSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-                        result.setColorSpace(srgb);
+                        result.setColorSpace(DisplayColorSpace::cacheColorSpace());
                     }
+                    result = DisplayColorSpace::convertImage(result);
                 }
                 currentChunkFile.close();
             }
@@ -141,14 +141,12 @@ QByteArray PersistentImageCache::createImageForCache(const QImage &image) {
     QByteArray imageData;
     QBuffer buffer(&imageData);
     buffer.open(QIODevice::WriteOnly);
-    const QColorSpace srgb(QColorSpace::SRgb);
 
-    QImage scaled = image;
-    scaled.setColorSpace(srgb);
+    QImage scaled = DisplayColorSpace::convertImageToColorSpace(image, DisplayColorSpace::cacheColorSpace());
     if (CACHE_IMAGE_RESOLUTION.width() < image.width() ||
         CACHE_IMAGE_RESOLUTION.height() < image.height()) { // Never upscale
         scaled = image.scaled(CACHE_IMAGE_RESOLUTION, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        scaled.setColorSpace(srgb);
+        scaled = DisplayColorSpace::convertImageToColorSpace(scaled, DisplayColorSpace::cacheColorSpace());
     }
     // scaled.invertPixels();
     scaled.save(&buffer, "webp", 50);

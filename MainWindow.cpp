@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "DisplayColorSpace.h"
 #include "SvgCursor.h"
 
 #include <QDebug>
@@ -108,6 +109,11 @@ MainWindow::MainWindow(QWindow *parent)
     _dpr = -1;
     _lastVisibleVisibility = QWindow::Windowed;
     updateDpr();
+    updateDisplayColorSpace();
+
+    connect(this, &QWindow::screenChanged, this, [this] () {
+        updateDisplayColorSpace();
+    });
 
     QSettings set;
     _normalGeometry = initialNormalGeometry(set.value("normalGeometry"));
@@ -191,6 +197,22 @@ bool MainWindow::isQWK() const {
 #endif
 }
 
+QString MainWindow::targetColorSpaceDescription() const {
+    return DisplayColorSpace::currentDescription();
+}
+
+bool MainWindow::convertToDisplayColorSpace() const {
+    return DisplayColorSpace::conversionEnabled();
+}
+
+void MainWindow::setConvertToDisplayColorSpace(bool enabled) {
+    if (DisplayColorSpace::conversionEnabled() == enabled) {
+        return;
+    }
+    DisplayColorSpace::setConversionEnabled(enabled);
+    emit convertToDisplayColorSpaceChanged();
+}
+
 void MainWindow::showEvent(QShowEvent *event) {
     QQuickWindow::showEvent(event);
     _lastSize = size();
@@ -228,6 +250,14 @@ void MainWindow::updateDpr() {
         qDebug() << "DPR changed" << _dpr << "->" << devicePixelRatio();
         _dpr = devicePixelRatio();
         emit dprChanged();
+    }
+}
+
+void MainWindow::updateDisplayColorSpace() {
+    const QString previousDescription = targetColorSpaceDescription();
+    DisplayColorSpace::setCurrent(DisplayColorSpace::colorSpaceForScreen(screen()));
+    if (targetColorSpaceDescription() != previousDescription) {
+        emit targetColorSpaceChanged();
     }
 }
 

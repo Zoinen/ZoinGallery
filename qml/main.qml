@@ -12,16 +12,17 @@ import QWindowKit 1.0
 MainWindow {
     id: topLevelWindow
     // visible: true
-    color: isQWK ? (isQWKLegacy ? Style.windowBackgroundQWKLegacy : "transparent") : Style.windowBackgroundNoQWK
     property bool isQWKLegacy: false
     property bool windowAgentReady: false
     property int macWindowEffectApplyAttempts: 0
+    readonly property bool useTransparentWindowBackground: isQWK && Qt.platform.os !== "linux" && !isQWKLegacy
     readonly property bool useMacNativeTitleBar: isQWK && Qt.platform.os === "osx"
     readonly property string macWindowGlassEffect: useMacNativeTitleBar ? "regular" : "none"
     readonly property string macWindowFallbackBlurEffect: useMacNativeTitleBar ? (Style.isDarkTheme ? "dark" : "light") : "none"
     readonly property int macTitleBarLeftPadding: useMacNativeTitleBar && visibility !== Window.FullScreen ? 86 : 0
     readonly property int macSystemButtonAreaLeftMargin: 12
     readonly property int thumbnailsTitleBarSidePadding: 8
+    color: useTransparentWindowBackground ? "transparent" : (isQWKLegacy ? Style.windowBackgroundQWKLegacy : Style.windowBackgroundNoQWK)
     title: "Zoin Gallery"
 
     property bool viewerDirty: false

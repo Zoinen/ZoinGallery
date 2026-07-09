@@ -69,7 +69,7 @@ modules:
         path: ${repo_root}/resources/Logo.svg
 EOF
 
-flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-flatpak install -y flathub "org.freedesktop.Platform//${runtime_version}" "org.freedesktop.Sdk//${runtime_version}"
-flatpak-builder --force-clean --repo="${repo_dir}" "${build_dir}" "${manifest}"
+flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+flatpak --user install -y flathub "org.freedesktop.Platform//${runtime_version}" "org.freedesktop.Sdk//${runtime_version}"
+flatpak-builder --user --force-clean --repo="${repo_dir}" "${build_dir}" "${manifest}"
 flatpak build-bundle "${repo_dir}" "${bundle}" "${app_id}"

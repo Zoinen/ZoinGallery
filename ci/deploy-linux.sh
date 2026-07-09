@@ -124,9 +124,10 @@ should_bundle_system_dep() {
         libX11*.so*|libXau*.so*|libXcursor*.so*|libXdmcp*.so*|libXext*.so*|libXfixes*.so*|\
         libXi*.so*|libXrandr*.so*|libXrender*.so*|libXtst*.so*|\
         libbsd*.so*|libbrotli*.so*|libbz2*.so*|libdbus-1.so*|libdouble-conversion.so*|\
-        libexpat*.so*|libffi*.so*|libfontconfig.so*|libfreetype.so*|libglib-2.0.so*|\
+        libcom_err.so*|libcrypto.so*|libexpat*.so*|libffi*.so*|libfontconfig.so*|libfreetype.so*|libglib-2.0.so*|\
+        libgssapi_krb5.so*|libk5crypto.so*|libkeyutils.so*|libkrb5.so*|libkrb5support.so*|\
         libgraphite2.so*|libharfbuzz*.so*|libmd*.so*|libpcre2-*.so*|libpng*.so*|\
-        libuuid.so*|libxcb*.so*|libxkbcommon*.so*|libz.so*|libzstd.so*)
+        libssl.so*|libuuid.so*|libxcb*.so*|libxkbcommon*.so*|libz.so*|libzstd.so*)
             return 0
             ;;
         *)

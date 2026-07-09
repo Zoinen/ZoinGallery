@@ -57,7 +57,7 @@ modules:
         cat > /app/bin/ZoinGallery <<'WRAPPER'
         #!/usr/bin/env bash
         set -euo pipefail
-        exec /app/opt/ZoinGallery/run-zoingallery.sh "$@"
+        exec /app/opt/ZoinGallery/run-zoingallery.sh "\$@"
         WRAPPER
       - chmod +x /app/bin/ZoinGallery
     sources:

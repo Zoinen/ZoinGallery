@@ -22,6 +22,10 @@ fi
 rm -rf "${work_dir}" "${bundle}"
 mkdir -p "${work_dir}" "${artifacts_dir}"
 
+rsvg-convert -w 64 -h 64 "${repo_root}/resources/Logo.svg" -o "${work_dir}/io.github.Zoinen.ZoinGallery-64.png"
+rsvg-convert -w 128 -h 128 "${repo_root}/resources/Logo.svg" -o "${work_dir}/io.github.Zoinen.ZoinGallery-128.png"
+rsvg-convert -w 256 -h 256 "${repo_root}/resources/Logo.svg" -o "${work_dir}/io.github.Zoinen.ZoinGallery-256.png"
+
 cat >"${work_dir}/ZoinGallery.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -49,10 +53,12 @@ modules:
   - name: zoingallery
     buildsystem: simple
     build-commands:
-      - mkdir -p /app/bin /app/opt/ZoinGallery /app/share/applications /app/share/icons/hicolor/scalable/apps
+      - mkdir -p /app/bin /app/opt/ZoinGallery /app/share/applications /app/share/icons/hicolor/64x64/apps /app/share/icons/hicolor/128x128/apps /app/share/icons/hicolor/256x256/apps
       - cp -a package/. /app/opt/ZoinGallery/
       - install -Dm644 ZoinGallery.desktop /app/share/applications/${app_id}.desktop
-      - install -Dm644 Logo.svg /app/share/icons/hicolor/scalable/apps/${app_id}.svg
+      - install -Dm644 ${app_id}-64.png /app/share/icons/hicolor/64x64/apps/${app_id}.png
+      - install -Dm644 ${app_id}-128.png /app/share/icons/hicolor/128x128/apps/${app_id}.png
+      - install -Dm644 ${app_id}-256.png /app/share/icons/hicolor/256x256/apps/${app_id}.png
       - |
         cat > /app/bin/ZoinGallery <<'WRAPPER'
         #!/usr/bin/env bash
@@ -67,7 +73,11 @@ modules:
       - type: file
         path: ${work_dir}/ZoinGallery.desktop
       - type: file
-        path: ${repo_root}/resources/Logo.svg
+        path: ${work_dir}/${app_id}-64.png
+      - type: file
+        path: ${work_dir}/${app_id}-128.png
+      - type: file
+        path: ${work_dir}/${app_id}-256.png
 EOF
 
 flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo

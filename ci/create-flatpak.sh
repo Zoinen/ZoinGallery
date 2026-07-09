@@ -4,6 +4,7 @@ set -euo pipefail
 package_root="${1:?usage: create-flatpak.sh <linux-package-root> <bundle-name-without-extension>}"
 bundle_name="${2:?usage: create-flatpak.sh <linux-package-root> <bundle-name-without-extension>}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+package_root="$(realpath "${package_root}")"
 app_id="io.github.Zoinen.ZoinGallery"
 runtime_version="24.08"
 work_dir="${repo_root}/build/flatpak"

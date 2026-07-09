@@ -11,6 +11,9 @@ on:
         default: ubuntu
         options:
           - ubuntu
+          - appimage
+          - flatpak
+          - linux-packages
           - linux
           - macos
           - windows
@@ -29,7 +32,7 @@ env:
 jobs:
   linux-ubuntu:
     name: Linux / Ubuntu 24.04
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'ubuntu' || inputs.target == 'linux' || inputs.target == 'all' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'ubuntu' || inputs.target == 'appimage' || inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'linux' || inputs.target == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -107,6 +110,44 @@ jobs:
         with:
           name: ZoinGallery-linux-ubuntu-24.04-b${{ github.run_number }}
           path: build/artifacts/ZoinGallery-linux-ubuntu-24.04-b${{ github.run_number }}.tar.zst
+          if-no-files-found: error
+
+      - name: Prepare AppImage
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'appimage' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        run: bash ci/create-appimage.sh "build/artifacts/ZoinGallery-linux-ubuntu-24.04-b${BUILD_NUMBER}" "ZoinGallery-x86_64-b${BUILD_NUMBER}"
+
+      - name: Smoke test AppImage
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'appimage' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        run: bash ci/smoke-test-appimage.sh "build/artifacts/ZoinGallery-x86_64-b${BUILD_NUMBER}.AppImage"
+
+      - name: Upload AppImage
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'appimage' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZoinGallery-appimage-x86_64-b${{ github.run_number }}
+          path: build/artifacts/ZoinGallery-x86_64-b${{ github.run_number }}.AppImage
+          if-no-files-found: error
+
+      - name: Install Flatpak tools
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dbus-x11 flatpak flatpak-builder
+
+      - name: Prepare Flatpak
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        run: bash ci/create-flatpak.sh "build/artifacts/ZoinGallery-linux-ubuntu-24.04-b${BUILD_NUMBER}" "ZoinGallery-flatpak-x86_64-b${BUILD_NUMBER}"
+
+      - name: Smoke test Flatpak
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        run: bash ci/smoke-test-flatpak.sh "build/artifacts/ZoinGallery-flatpak-x86_64-b${BUILD_NUMBER}.flatpak"
+
+      - name: Upload Flatpak
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZoinGallery-flatpak-x86_64-b${{ github.run_number }}
+          path: build/artifacts/ZoinGallery-flatpak-x86_64-b${{ github.run_number }}.flatpak
           if-no-files-found: error
 
   linux-containers:

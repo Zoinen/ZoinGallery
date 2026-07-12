@@ -35,6 +35,22 @@ PLATFORMS = [
     {
         "platform": "Linux",
         "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "version": "AppImage x86_64",
+        "job": "Linux / Ubuntu 24.04",
+        "artifact_prefix": "ZoinGallery-appimage-x86_64-b",
+        "download_label": "Download AppImage",
+    },
+    {
+        "platform": "Linux",
+        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "version": "Flatpak x86_64",
+        "job": "Linux / Ubuntu 24.04",
+        "artifact_prefix": "ZoinGallery-flatpak-x86_64-b",
+        "download_label": "Download Flatpak",
+    },
+    {
+        "platform": "Linux",
+        "icon": "https://cdn.simpleicons.org/linux/FCC624",
         "version": "Ubuntu 24.04",
         "job": "Linux / Ubuntu 24.04",
         "artifact_prefix": "ZoinGallery-linux-ubuntu-24.04-b",

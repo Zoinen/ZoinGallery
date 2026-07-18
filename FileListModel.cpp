@@ -95,7 +95,7 @@ FileListModel::FileListModel(QObject *parent)
             emit dataChanged(modelIndex, modelIndex, roles);
 
             if (result.isFromEmbeddedView) {
-                decodeImages({imageDecodeRequestFromEmbeddedImageInfo(result)});
+                decodeImages({imageDecodeRequestFromEmbeddedImageInfo(itemInfo)});
             }
 
             handleDirectOpenImageInfo(itemInfo);
@@ -153,7 +153,7 @@ FileListModel::FileListModel(QObject *parent)
                 }
 
                 if (result.isFromEmbeddedView) {
-                    requests.append(imageDecodeRequestFromEmbeddedImageInfo(result));
+                    requests.append(imageDecodeRequestFromEmbeddedImageInfo(itemInfo));
                 }
 
                 handleDirectOpenImageInfo(itemInfo);
@@ -280,7 +280,8 @@ FileListModel::FileListModel(QObject *parent)
         }
     });
 
-    connect(_decodeManager, &DecodeManager::folderListReady, this, [&] (const QString &path, const QList<FileInfo> &subfiles) {
+    connect(_decodeManager, &DecodeManager::folderListReady, this,
+            [&] (const QString &path, const QList<FileInfo> &subfiles, bool isFromCache) {
         if (!subfiles.size()) {
             return;
         }
@@ -289,6 +290,9 @@ FileListModel::FileListModel(QObject *parent)
         auto it = _fileToItem.find(path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
+            ImageInfo folderInfo = item->info();
+            folderInfo.isCached = isFromCache;
+            item->setInfo(folderInfo);
 
             QList<ImageFile *> subImages;
             subImages.reserve(subfiles.size());
@@ -432,10 +436,15 @@ void FileListModel::prepareToClose() {
 }
 
 int FileListModel::cd(const QString &path, const QString &itemToSelect) {
+    const bool hadDirectOpenPath = !_directOpen.path.isEmpty();
     _directOpen.generation++;
     _directOpen.stage = DirectOpenStage::None;
+    _directOpen.path.clear();
     _directOpen.pendingNeighborInfoPaths.clear();
     _directOpen.pendingNeighborDecodePaths.clear();
+    if (hadDirectOpenPath) {
+        emit directOpenPathChanged();
+    }
 
     _root = path;
 
@@ -793,6 +802,7 @@ void FileListModel::openImageDirectly(const QString &path, int width, int height
     _directOpen.folderPath = folderPath;
     _directOpen.fileName = fileName;
     _directOpen.viewerSize = QSize(width, height);
+    emit directOpenPathChanged();
 
     _decodeManager->cancelAllRunners();
 
@@ -836,6 +846,10 @@ void FileListModel::openImageDirectly(const QString &path, int width, int height
     else {
         _decodeManager->readImagesInfo({fullPath}, false, generation);
     }
+}
+
+QString FileListModel::directOpenPath() const {
+    return _directOpen.path;
 }
 
 bool FileListModel::isActiveDirectOpenInfo(const ImageInfo &info) const {
@@ -1334,10 +1348,15 @@ QImage FileListModel::fullSizeViewerForImageId(const QString &imageId) {
 }
 
 void FileListModel::cancelAllRunners() {
+    const bool hadDirectOpenPath = !_directOpen.path.isEmpty();
     _directOpen.generation++;
     _directOpen.stage = DirectOpenStage::None;
+    _directOpen.path.clear();
     _directOpen.pendingNeighborInfoPaths.clear();
     _directOpen.pendingNeighborDecodePaths.clear();
+    if (hadDirectOpenPath) {
+        emit directOpenPathChanged();
+    }
     _decodeManager->cancelAllRunners();
 }
 

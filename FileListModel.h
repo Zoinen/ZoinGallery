@@ -102,6 +102,7 @@ public:
     static bool isImage(const QString &fileName);
 
     Q_INVOKABLE void openImageDirectly(const QString &path, int width = -1, int height = -1);
+    QString directOpenPath() const;
     Q_INVOKABLE void requestViewer(int index, int width = -1, int height = -1); // -1 means full size
     Q_INVOKABLE QString bestViewerImageUrlForIndex(int index) const;
     QImage viewerForImageId(const QString &imageId);
@@ -153,6 +154,7 @@ signals:
     void viewerImageCacheChanged(int index);
     void viewerReset();
     void directOpenReady(int index);
+    void directOpenPathChanged();
 
     void runningTasksChanged(const QString &tasks, const QStringList &tasksInfo);
     void runningTasksDebugChanged();

@@ -228,6 +228,30 @@ Item {
         yAnimation.to = targetRect.y
     }
 
+    function setViewport(targetScale, targetX, targetY) {
+        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
+            return
+        }
+
+        viewportAnimation.stop()
+        frameAnimation.running = false
+
+        targetScale = clampZoomScale(targetScale)
+        targetX = fitViewerImageInViewportBoundsX(targetX, targetScale)
+        targetY = fitViewerImageInViewportBoundsY(targetY, targetScale)
+
+        zoomFitView = false
+        zoomScale = targetScale
+        viewerImage.x = targetX
+        viewerImage.y = targetY
+        zoomAnimation.to = targetScale
+        xAnimation.to = targetX
+        yAnimation.to = targetY
+
+        forceShowScrollBars = true
+        forceShowScrollBars = false
+    }
+
     function setZoomScaleAt(targetScale, centerX, centerY) {
         if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
             return

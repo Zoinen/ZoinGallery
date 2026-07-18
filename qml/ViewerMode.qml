@@ -278,8 +278,13 @@ Item {
     property int lastKnownIndex: -1
     property bool previousImageLocked: false
     property int lockedPreviousReturnIndex: -1
+    property string lockedPreviousImagePath: ""
+    property string lockedPreviousReturnPath: ""
     property string lockedPreviousImageIdUrl: previousImageLocked && previousImageIndex !== -1 ? masonryLayout.view.indexImageIdUrl(previousImageIndex) : ""
-    property string lockedPreviousPath: previousImageLocked && previousImageIndex !== -1 ? masonryLayout.view.indexFullPath(previousImageIndex) : ""
+    property string lockedPreviousPath: previousImageLocked ?
+                                            (lockedPreviousImagePath !== "" ? lockedPreviousImagePath :
+                                                                            (previousImageIndex !== -1 ? masonryLayout.view.indexFullPath(previousImageIndex) : "")) : ""
+    property var pendingPreviousImageViewport: null
 
     property real viewerNavigationOffsetX: 0
     property real viewerNavigationOverdrag: 0
@@ -927,30 +932,139 @@ Item {
         previousImageIndex = -1
         previousImageLocked = false
         lockedPreviousReturnIndex = -1
+        lockedPreviousImagePath = ""
+        lockedPreviousReturnPath = ""
+    }
+
+    function pathForIndex(index) {
+        return index !== -1 ? masonryLayout.view.indexFullPath(index) : ""
+    }
+
+    function effectiveSizeFromOriginalSize(originalSize) {
+        if (originalSize.width <= 1 || originalSize.height <= 1) {
+            return Qt.size(0, 0)
+        }
+        let displaySize = Qt.size(originalSize.width / dpr, originalSize.height / dpr)
+        return flickableArea.rotationMode % 2 === 1 ? Qt.size(displaySize.height, displaySize.width) : displaySize
+    }
+
+    function fitScaleForEffectiveSize(size) {
+        if (size.width <= 1 || size.height <= 1 || viewerMode.width <= 1 || viewerMode.height <= 1) {
+            return 1
+        }
+        return size.width / size.height <= viewerMode.width / viewerMode.height ?
+                    viewerMode.height / size.height :
+                    viewerMode.width / size.width
+    }
+
+    function indexForPath(path) {
+        if (path === "") {
+            return -1
+        }
+        for (let i = 0; i < masonryLayout.view.count; i++) {
+            if (masonryLayout.view.indexFullPath(i) === path) {
+                return i
+            }
+        }
+        return -1
+    }
+
+    function restorePreviousImageLockIndexes() {
+        if (!previousImageLocked) {
+            return
+        }
+        if (lockedPreviousImagePath !== "") {
+            previousImageIndex = indexForPath(lockedPreviousImagePath)
+        }
+        if (lockedPreviousReturnPath !== "") {
+            lockedPreviousReturnIndex = indexForPath(lockedPreviousReturnPath)
+        }
+    }
+
+    function rememberViewportForPreviousImageSwitch(targetIndex) {
+        pendingPreviousImageViewport = null
+        if (targetIndex === -1 || flickableArea.zoomFitView ||
+                flickableArea.effectiveOriginalSize.width <= 1 ||
+                flickableArea.effectiveOriginalSize.height <= 1) {
+            return
+        }
+
+        let targetSize = effectiveSizeFromOriginalSize(masonryLayout.view.indexOriginalSize(targetIndex))
+        if (targetSize.width <= 1 || targetSize.height <= 1) {
+            return
+        }
+
+        let sourceSize = flickableArea.effectiveOriginalSize
+        let sourceFitScale = fitScaleForEffectiveSize(sourceSize)
+        pendingPreviousImageViewport = {
+            targetPath: pathForIndex(targetIndex),
+            centerRatioX: ((viewerMode.width / 2 - flickableArea.image.x) / flickableArea.zoomScale) / sourceSize.width,
+            centerRatioY: ((viewerMode.height / 2 - flickableArea.image.y) / flickableArea.zoomScale) / sourceSize.height,
+            zoomToFitRatio: flickableArea.zoomScale / sourceFitScale
+        }
+    }
+
+    function applyPendingPreviousImageViewport() {
+        if (!pendingPreviousImageViewport) {
+            return false
+        }
+        if (pendingPreviousImageViewport.targetPath !== "" &&
+                pendingPreviousImageViewport.targetPath !== pathForIndex(masonryLayout.view.currentIndex)) {
+            pendingPreviousImageViewport = null
+            return false
+        }
+        if (flickableArea.effectiveOriginalSize.width <= 1 || flickableArea.effectiveOriginalSize.height <= 1) {
+            return false
+        }
+
+        let targetSize = flickableArea.effectiveOriginalSize
+        let targetZoom = flickableArea.clampZoomScale(
+                    fitScaleForEffectiveSize(targetSize) * pendingPreviousImageViewport.zoomToFitRatio)
+        let targetX = viewerMode.width / 2 -
+                targetSize.width * pendingPreviousImageViewport.centerRatioX * targetZoom
+        let targetY = viewerMode.height / 2 -
+                targetSize.height * pendingPreviousImageViewport.centerRatioY * targetZoom
+
+        flickableArea.setViewport(targetZoom, targetX, targetY)
+        pendingPreviousImageViewport = null
+        return true
     }
 
     function togglePreviousImageLock(index) {
+        restorePreviousImageLockIndexes()
         if (previousImageLocked) {
             if (previousImageIndex === index) {
                 previousImageLocked = false
                 previousImageIndex = lockedPreviousReturnIndex
                 lockedPreviousReturnIndex = -1
+                lockedPreviousImagePath = ""
+                lockedPreviousReturnPath = ""
             } else {
                 lockedPreviousReturnIndex = previousImageIndex
+                lockedPreviousReturnPath = lockedPreviousImagePath
                 previousImageIndex = index
+                lockedPreviousImagePath = pathForIndex(index)
             }
             return
         }
 
         lockedPreviousReturnIndex = previousImageIndex !== index ? previousImageIndex : -1
+        lockedPreviousReturnPath = pathForIndex(lockedPreviousReturnIndex)
         previousImageIndex = index
+        lockedPreviousImagePath = pathForIndex(index)
         previousImageLocked = true
     }
 
     function switchToPreviousImage(currentIndex) {
         if (previousImageLocked) {
+            restorePreviousImageLockIndexes()
+            if (previousImageIndex === -1) {
+                return -1
+            }
             if (currentIndex === previousImageIndex) {
+                restorePreviousImageLockIndexes()
                 if (lockedPreviousReturnIndex !== -1) {
+                    rememberViewportForPreviousImageSwitch(lockedPreviousReturnIndex)
                     masonryLayout.setCurrentIndex(lockedPreviousReturnIndex)
                     return lockedPreviousReturnIndex
                 }
@@ -958,11 +1072,13 @@ Item {
             }
 
             lockedPreviousReturnIndex = currentIndex
+            lockedPreviousReturnPath = pathForIndex(currentIndex)
         }
 
         // Capture the target before setCurrentIndex(), since changing the index
         // synchronously reassigns previousImageIndex via the view's onCurrentIndexChanged handler.
         let targetIndex = previousImageIndex
+        rememberViewportForPreviousImageSwitch(targetIndex)
         masonryLayout.setCurrentIndex(targetIndex)
         return targetIndex
     }
@@ -1178,6 +1294,10 @@ Item {
 
     Connections {
         target: masonryLayout.view
+        function onCountChanged() {
+            restorePreviousImageLockIndexes()
+        }
+
         function onImageCountChanged() {
             if (root.state === "viewer") {
                 viewerMode.updateTitle()
@@ -1194,8 +1314,10 @@ Item {
             if (root.state === "viewer") {
                 if (lastKnownIndex !== -1 && lastKnownIndex !== masonryLayout.view.currentIndex) {
                     if (previousImageLocked) {
+                        restorePreviousImageLockIndexes()
                         if (masonryLayout.view.currentIndex !== previousImageIndex) {
                             lockedPreviousReturnIndex = masonryLayout.view.currentIndex
+                            lockedPreviousReturnPath = pathForIndex(masonryLayout.view.currentIndex)
                         }
                     } else {
                         previousImageIndex = lastKnownIndex
@@ -1207,11 +1329,12 @@ Item {
                 // console.log("ZZ INDEX CHANGE 2", masonryLayout.view.currentIndex, imageIdUrl)
                 if (imageIdUrl) {
                     setImage(imageIdUrl, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, 0)
-                    if (zoomFitView) {
+                    let viewportRestored = applyPendingPreviousImageViewport()
+                    if (!viewportRestored && zoomFitView) {
                         flickableArea.zoomToFit(true)
                         // console.log("ZZ FIT ON CHANGE")
                     }
-                    else {
+                    else if (!viewportRestored && !zoomFitView) {
                         flickableArea.fitViewerImageInViewportBounds()
                         // console.log("ZZ ELSE")
                     }
@@ -1227,6 +1350,7 @@ Item {
         target: fileListModel
         function onViewerImageIdUrlChanged(newImageIdUrl, level) {
             viewerMode.setImage(newImageIdUrl, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, level)
+            applyPendingPreviousImageViewport()
         }
 
         function onViewerImageCacheChanged(index) {

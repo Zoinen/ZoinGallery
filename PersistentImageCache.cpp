@@ -1,53 +1,82 @@
 #include "PersistentImageCache.h"
 #include "DisplayColorSpace.h"
+#include "Decoders/WebpCodec.h"
 
 #include <QImage>
 #include <QFile>
 #include <QFileInfo>
 #include <QDebug>
-#include <QElapsedTimer>
-#include <QBuffer>
+#include <QDir>
+#include <QMutexLocker>
+#include <QStandardPaths>
+
+#include <utility>
 
 namespace {
-constexpr int CacheFormatVersion = 4;
+constexpr int CacheFormatVersion = 7;
+constexpr float CacheWebpQuality = 75.0F;
+
+QString cacheBasePath() {
+    const QString tempPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    return tempPath.isEmpty() ? QDir::tempPath() : tempPath;
+}
 
 QString cacheDbPath() {
-    return QString("C:/tmp/zg_v%1.db").arg(CacheFormatVersion);
+    return QDir(cacheBasePath()).filePath(QString("zg_v%1.db").arg(CacheFormatVersion));
 }
 
 QString cacheChunkPath(uint16_t chunkFileIndex) {
-    return QString("C:/tmp/zg_v%1_%2").arg(CacheFormatVersion).arg(chunkFileIndex);
+    return QDir(cacheBasePath()).filePath(QString("zg_v%1_%2").arg(CacheFormatVersion).arg(chunkFileIndex));
 }
+
+bool hasUsableThumbnail(const PersistentImageCache::ThumbnailInfo &info) {
+    if (!info.location.thumbnailSize) {
+        return false;
+    }
+
+    const QFileInfo chunkInfo(cacheChunkPath(info.location.chunkFileIndex));
+    return chunkInfo.isFile()
+        && info.location.offsetInChunk <= static_cast<quint64>(chunkInfo.size())
+        && info.location.thumbnailSize <= static_cast<quint64>(chunkInfo.size()) - info.location.offsetInChunk;
+}
+
 }
 
 QHash<QString, PersistentImageCache::ThumbnailInfo> PersistentImageCache::_db;
 QReadWriteLock PersistentImageCache::_dbAccess;
 QReadWriteLock PersistentImageCache::_currentChunkFileAccess;
+QMutex PersistentImageCache::_dbLoadAccess;
 uint16_t PersistentImageCache::_currentChunkFileIndex = 0;
+bool PersistentImageCache::_dbLoaded = false;
 
 
 bool PersistentImageCache::hasImage(const QString &path) {
-    // TODO: Check date here somewhere
-    _dbAccess.lockForRead();
-    auto it = _db.find(path);
-    _dbAccess.unlock();
-    return it != _db.end();
+    loadDb();
+
+    const QFileInfo fileInfo(path);
+    QReadLocker locker(&_dbAccess);
+    const auto it = _db.constFind(path);
+    return it != _db.cend()
+        && fileInfo.isFile()
+        && it->lastModified.isValid()
+        && it->lastModified == fileInfo.lastModified()
+        && it->imageSize.width() > 1
+        && it->imageSize.height() > 1
+        && hasUsableThumbnail(*it);
 }
 
 void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList, QStringList &outNotFound) {
-    static bool cacheDbLoaded = false;
-    if (!cacheDbLoaded) {
-        cacheDbLoaded = true;
-        loadDb();
-    }
+    loadDb();
 
-    _dbAccess.lockForRead();
+    QReadLocker locker(&_dbAccess);
     for (const QString &path : imagePaths) {
-        auto it = _db.find(path);
+        const auto it = _db.constFind(path);
         const QFileInfo fileInfo(path);
-        const bool cacheIsCurrent = it != _db.end() && fileInfo.exists() && it->lastModified == fileInfo.lastModified();
-        const bool cacheHasUsableSize = it != _db.end() && it->imageSize.width() > 1 && it->imageSize.height() > 1;
-        if (cacheIsCurrent && cacheHasUsableSize) {
+        const bool cacheIsCurrent = it != _db.cend() && fileInfo.isFile()
+            && it->lastModified.isValid() && it->lastModified == fileInfo.lastModified();
+        const bool cacheHasUsableSize = it != _db.cend()
+            && it->imageSize.width() > 1 && it->imageSize.height() > 1;
+        if (cacheIsCurrent && cacheHasUsableSize && hasUsableThumbnail(*it)) {
             outInfoList.append(ImageInfo {
                 .path = path,
                 .lastModified = it->lastModified,
@@ -61,86 +90,102 @@ void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QLi
             outNotFound.append(path);
         }
     }
-    _dbAccess.unlock();
 }
 
 QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request) {
-    QImage result;
-    _dbAccess.lockForRead();
-    auto it = _db.find(request.info.path);
-    _dbAccess.unlock();
-    if (it != _db.end()) {
-        if (!request.info.lastModified.isValid() || request.info.lastModified == it.value().lastModified) {
-            QFile currentChunkFile(cacheChunkPath(it.value().location.chunkFileIndex));
-            _currentChunkFileAccess.lockForRead();
-            if (currentChunkFile.open(QFile::ReadOnly)) {
-                if (currentChunkFile.seek(it.value().location.offsetInChunk)) {
-                    QByteArray thumbnailData = currentChunkFile.read(it.value().location.thumbnailSize);
+    loadDb();
 
-                    result = QImage::fromData(thumbnailData, "webp");
-                    if (!result.isNull()) {
-                        result.setColorSpace(DisplayColorSpace::cacheColorSpace());
-                    }
-                    if (request.targetSize.isValid() && (request.targetSize.width() < result.width() ||
-                                                         request.targetSize.height() < result.height())) { // Never upscale
-                        result = result.scaled(request.targetSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-                        result.setColorSpace(DisplayColorSpace::cacheColorSpace());
-                    }
-                    result = DisplayColorSpace::convertImage(result);
-                }
-                currentChunkFile.close();
-            }
-            _currentChunkFileAccess.unlock();
+    ThumbnailInfo info;
+    {
+        QReadLocker locker(&_dbAccess);
+        const auto it = _db.constFind(request.info.path);
+        if (it == _db.cend() || !hasUsableThumbnail(*it)) {
+            return {};
         }
+        info = *it;
     }
-    return result;
+
+    if (request.info.lastModified.isValid() && request.info.lastModified != info.lastModified) {
+        return {};
+    }
+
+    QByteArray thumbnailData;
+    {
+        QReadLocker locker(&_currentChunkFileAccess);
+        QFile currentChunkFile(cacheChunkPath(info.location.chunkFileIndex));
+        if (!currentChunkFile.open(QFile::ReadOnly)
+            || !currentChunkFile.seek(info.location.offsetInChunk)) {
+            return {};
+        }
+        thumbnailData = currentChunkFile.read(info.location.thumbnailSize);
+    }
+    if (thumbnailData.size() != static_cast<qsizetype>(info.location.thumbnailSize)) {
+        return {};
+    }
+
+    QImage result = WebpCodec::decode(thumbnailData);
+    if (result.isNull()) {
+        return {};
+    }
+    result.setColorSpace(DisplayColorSpace::cacheColorSpace());
+    if (request.targetSize.isValid() && (request.targetSize.width() < result.width() ||
+                                         request.targetSize.height() < result.height())) { // Never upscale
+        result = result.scaled(request.targetSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        result.setColorSpace(DisplayColorSpace::cacheColorSpace());
+    }
+    return DisplayColorSpace::convertImage(result);
 }
 
 void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArray &imageData) {
-    // return;
-    _dbAccess.lockForRead();
-    auto it = _db.find(imageInfo.path);
-    const bool shouldStore = it == _db.end()
-        || it->lastModified != imageInfo.lastModified
-        || it->imageSize.width() <= 1
-        || it->imageSize.height() <= 1;
-    _dbAccess.unlock();
-
-    if (shouldStore) {
-        uint64_t thumbnailSize = imageData.size();
-
-        QFile currentChunkFile(cacheChunkPath(_currentChunkFileIndex));
-        _currentChunkFileAccess.lockForWrite();
-        uint64_t currentChunkFileSize = 0;
-        if (currentChunkFile.open(QFile::WriteOnly | QFile::Append)) {
-            currentChunkFileSize = currentChunkFile.size();
-            currentChunkFile.write(imageData);
-            currentChunkFile.close();
-        }
-        _currentChunkFileAccess.unlock();
-
-        ThumbnailInfo info {
-            .lastModified = imageInfo.lastModified,
-            .location = ThumbnailLocation {
-                .chunkFileIndex = _currentChunkFileIndex,
-                .offsetInChunk = currentChunkFileSize,
-                .thumbnailSize = thumbnailSize
-            },
-            .exif = imageInfo.exif,
-            .imageSize = imageInfo.imageSize,
-            .orientation = imageInfo.orientation
-        };
-
-        _dbAccess.lockForWrite();
-        _db.insert(imageInfo.path, info);
-        _dbAccess.unlock();
+    if (imageData.isEmpty() || !imageInfo.lastModified.isValid()
+        || imageInfo.imageSize.width() <= 1 || imageInfo.imageSize.height() <= 1) {
+        return;
     }
+
+    loadDb();
+    {
+        QReadLocker locker(&_dbAccess);
+        const auto it = _db.constFind(imageInfo.path);
+        if (it != _db.cend() && it->lastModified == imageInfo.lastModified
+            && it->imageSize == imageInfo.imageSize && hasUsableThumbnail(*it)) {
+            return;
+        }
+    }
+
+    quint64 offset = 0;
+    {
+        QWriteLocker locker(&_currentChunkFileAccess);
+        QFile currentChunkFile(cacheChunkPath(_currentChunkFileIndex));
+        if (!currentChunkFile.open(QFile::WriteOnly | QFile::Append)) {
+            return;
+        }
+        offset = currentChunkFile.size();
+        if (currentChunkFile.write(imageData) != imageData.size()) {
+            currentChunkFile.resize(offset);
+            return;
+        }
+    }
+
+    const ThumbnailInfo info {
+        .lastModified = imageInfo.lastModified,
+        .location = ThumbnailLocation {
+            .chunkFileIndex = _currentChunkFileIndex,
+            .offsetInChunk = offset,
+            .thumbnailSize = static_cast<quint64>(imageData.size())
+        },
+        .exif = imageInfo.exif,
+        .imageSize = imageInfo.imageSize,
+        .orientation = imageInfo.orientation
+    };
+
+    QWriteLocker locker(&_dbAccess);
+    _db.insert(imageInfo.path, info);
 }
 
 QByteArray PersistentImageCache::createImageForCache(const QImage &image) {
-    QByteArray imageData;
-    QBuffer buffer(&imageData);
-    buffer.open(QIODevice::WriteOnly);
+    if (image.isNull()) {
+        return {};
+    }
 
     QImage scaled = DisplayColorSpace::convertImageToColorSpace(image, DisplayColorSpace::cacheColorSpace());
     if (CACHE_IMAGE_RESOLUTION.width() < image.width() ||
@@ -148,9 +193,10 @@ QByteArray PersistentImageCache::createImageForCache(const QImage &image) {
         scaled = image.scaled(CACHE_IMAGE_RESOLUTION, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         scaled = DisplayColorSpace::convertImageToColorSpace(scaled, DisplayColorSpace::cacheColorSpace());
     }
-    // scaled.invertPixels();
-    scaled.save(&buffer, "webp", 50);
-    return imageData;
+    if (scaled.isNull()) {
+        return {};
+    }
+    return WebpCodec::encode(scaled, CacheWebpQuality);
 }
 
 QDataStream& operator<<(QDataStream& out, const PersistentImageCache::ThumbnailLocation& obj) {
@@ -177,42 +223,55 @@ QDataStream& operator>>(QDataStream& in, PersistentImageCache::ThumbnailInfo& ob
 }
 
 void PersistentImageCache::loadDb() {
-    _dbAccess.lockForWrite();
+    QMutexLocker loadLocker(&_dbLoadAccess);
+    if (_dbLoaded) {
+        return;
+    }
 
+    QWriteLocker dbLocker(&_dbAccess);
     QFile dbFile(cacheDbPath());
     if (dbFile.open(QIODevice::ReadOnly)) {
         QDataStream stream(&dbFile);
         stream >> _db;
-
-        dbFile.close();
-
-        qDebug() << "Loaded DB with" << _db.size() << "entities";
+        if (stream.status() == QDataStream::Ok) {
+            for (const ThumbnailInfo &info : std::as_const(_db)) {
+                _currentChunkFileIndex = qMax(_currentChunkFileIndex, info.location.chunkFileIndex);
+            }
+            qDebug() << "Loaded DB with" << _db.size() << "entities";
+        }
+        else {
+            _db.clear();
+            qWarning() << "Ignoring unreadable image cache DB" << cacheDbPath();
+        }
     }
-
-    _dbAccess.unlock();
+    _dbLoaded = true;
 }
 
 void PersistentImageCache::dumpDb() {
-    _dbAccess.lockForWrite();
+    loadDb();
 
+    QReadLocker locker(&_dbAccess);
     QFile dbFile(cacheDbPath());
     if (dbFile.open(QIODevice::WriteOnly)) {
         QDataStream stream(&dbFile);
         stream << _db;
-        dbFile.close();
-
-        qDebug() << "Saved DB with" << _db.size() << "entities";
+        if (stream.status() == QDataStream::Ok) {
+            qDebug() << "Saved DB with" << _db.size() << "entities";
+        }
+        else {
+            qWarning() << "Failed to save image cache DB" << cacheDbPath();
+        }
     }
-
-    _dbAccess.unlock();
 }
 
 QStringList PersistentImageCache::getAllImagePaths() const {
+    loadDb();
     QReadLocker locker(&_dbAccess);
     return _db.keys();
 }
 
 PersistentImageCache::ThumbnailInfo PersistentImageCache::getThumbnailInfo(const QString &path) const {
+    loadDb();
     QReadLocker locker(&_dbAccess);
     return _db.value(path);
 }

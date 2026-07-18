@@ -555,11 +555,14 @@ void ViewerController::loadSavedState() {
 }
 
 int ViewerController::setCurrentPath(const QString &newPath, const QString &itemToSelect) {
+    const bool pathChanged = _currentPath != newPath;
     _currentPath = newPath;
     int indexToSelect = _fileListModel->cd(_currentPath, itemToSelect);
     QSettings set;
     set.setValue("currentPath", _currentPath);
-    emit currentPathChanged();
+    if (pathChanged) {
+        emit currentPathChanged();
+    }
     return mapSourceRowToViewRow(indexToSelect);
 }
 

@@ -232,17 +232,20 @@ void TrayController::toggleFromTray() {
     const bool windowIsShown = _mainWindow->isVisible()
                                && visibility != QWindow::Hidden
                                && visibility != QWindow::Minimized;
+    const bool windowIsActive = _mainWindow->isActive()
+                                || QGuiApplication::focusWindow() == _mainWindow;
     qInfo() << "[Shutdown] TrayController::toggleFromTray"
             << "windowIsShown" << windowIsShown
+            << "windowIsActive" << windowIsActive
             << "isVisible" << _mainWindow->isVisible()
             << "visibility" << static_cast<int>(visibility);
-    if (windowIsShown) {
+    if (windowIsShown && windowIsActive) {
         qInfo() << "[Shutdown] TrayController::toggleFromTray closing main window";
         _mainWindow->close();
         return;
     }
 
-    qInfo() << "[Shutdown] TrayController::toggleFromTray showing main window";
+    qInfo() << "[Shutdown] TrayController::toggleFromTray showing or activating main window";
     showFromTray();
 }
 

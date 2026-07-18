@@ -175,7 +175,7 @@ void DecodeManager::readFolderList(const QStringList &paths, int totalImages) {
         notFound = paths;
     }
     for (FolderInfo &result : results) {
-        emit folderListReady(result.path, result.subfiles);
+        emit folderListReady(result.path, result.subfiles, true);
     }
 
     for (const QString &path : notFound) {
@@ -519,7 +519,7 @@ void DecodeManager::onFolderListReady(const QString &path, const QList<FileInfo>
         return;
     }
 
-    emit folderListReady(path, subfiles);
+    emit folderListReady(path, subfiles, false);
 }
 
 void DecodeManager::onScannerInfoReady(const ImageInfo &result) {

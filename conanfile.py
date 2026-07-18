@@ -13,6 +13,7 @@ class ZoinGalleryConan(ConanFile):
         "libtiff/4.7.0",
         "libraw/0.21.3",
         "libpng/1.6.45",
+        "libwebp/1.6.0",
         "libheif/1.20.1",
     ]
 
@@ -29,6 +30,7 @@ class ZoinGalleryConan(ConanFile):
         "libtiff/*:jpeg": "libjpeg-turbo",
         "libraw/*:shared": True,
         "libraw/*:with_jpeg": "libjpeg-turbo",
+        "libwebp/*:shared": False,
         "jasper/*:with_libjpeg": "libjpeg-turbo"
     }
 

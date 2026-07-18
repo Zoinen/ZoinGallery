@@ -64,6 +64,7 @@ find_package(PNG REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(libjpeg-turbo REQUIRED)
 find_package(libheif REQUIRED)
+find_package(WebP REQUIRED)
 
 # Explicitly add the libjpeg-turbo include path (fix for missing turbojpeg.h)
 find_path(TURBOJPEG_INCLUDE_DIR "turbojpeg.h")
@@ -163,6 +164,10 @@ set(PROJECT_SOURCES
     Decoders/RawDecoder.h
     Decoders/PngDecoder.cpp
     Decoders/PngDecoder.h
+    Decoders/WebpCodec.cpp
+    Decoders/WebpCodec.h
+    Decoders/WebpDecoder.cpp
+    Decoders/WebpDecoder.h
     Decoders/DdsDecoder.cpp
     Decoders/DdsDecoder.h
     Decoders/HeicDecoder.cpp
@@ -351,11 +356,14 @@ target_link_libraries(ZoinGallery PRIVATE
     JPEG::JPEG
     libjpeg-turbo::libjpeg-turbo
     libheif::heif
+    WebP::webp
+    WebP::webpdemux
 )
 
 # Remove the hardcoded library paths
 # Add specific library paths if the targets don't work
-if(NOT TARGET TIFF::TIFF OR NOT TARGET libraw::libraw OR NOT TARGET PNG::PNG OR NOT TARGET libjpeg-turbo::libjpeg-turbo)
+if(NOT TARGET TIFF::TIFF OR NOT TARGET libraw::libraw OR NOT TARGET PNG::PNG
+   OR NOT TARGET libjpeg-turbo::libjpeg-turbo OR NOT TARGET WebP::webp OR NOT TARGET WebP::webpdemux)
     message(WARNING "Some Conan targets are missing. Please check your Conan installation.")
 endif()
 

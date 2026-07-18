@@ -72,7 +72,7 @@ signals:
     void imageInfoReady(const ImageInfo &result);
     void imagesInfoReady(const QList<ImageInfo> &result);
     void imageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
-    void folderListReady(const QString &path, const QList<FileInfo> &subfiles);
+    void folderListReady(const QString &path, const QList<FileInfo> &subfiles, bool isFromCache);
 
     void runningTasksChanged(const QString &runningTasks, const QStringList &tasksInfo);
     void viewerRunnerCanceled(const QString &path);
@@ -116,7 +116,7 @@ private:
 
     int _runningTasks = 0;
 
-    bool _disableCache = true;
+    bool _disableCache = false;
     bool _runningTasksDebug = false;
     bool _isClosing = false;
 };

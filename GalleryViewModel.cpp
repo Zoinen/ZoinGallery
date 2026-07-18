@@ -30,6 +30,12 @@ void GalleryViewModel::setSourceModel(QAbstractItemModel *sourceModel) {
                 endFilterChange(QSortFilterProxyModel::Direction::Rows);
             }
         });
+        connect(fileListModel(), &FileListModel::directOpenPathChanged, this, [this]() {
+            if (_selectedOnly) {
+                beginFilterChange();
+                endFilterChange(QSortFilterProxyModel::Direction::Rows);
+            }
+        });
     }
 }
 
@@ -209,6 +215,11 @@ bool GalleryViewModel::filterAcceptsRow(int sourceRow, const QModelIndex &source
     const QModelIndex sourceIndex = sourceModel()->index(sourceRow, 0, sourceParent);
     if (!sourceIndex.isValid()) {
         return false;
+    }
+
+    const ImageFile *item = sourceIndex.data(FileListModel::ImageFileRole).value<ImageFile *>();
+    if (item && !fileListModel()->directOpenPath().isEmpty() && item->fullPath() == fileListModel()->directOpenPath()) {
+        return true;
     }
 
     return sourceIndex.data(FileListModel::FolderRole).toBool() ||

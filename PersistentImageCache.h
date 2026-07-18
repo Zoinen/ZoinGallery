@@ -6,6 +6,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QDataStream>
+#include <QMutex>
 #include <QReadWriteLock>
 
 #include "ImageFile.h"
@@ -44,6 +45,8 @@ private:
     static QHash<QString, ThumbnailInfo> _db;
     static QReadWriteLock _dbAccess;
     static QReadWriteLock _currentChunkFileAccess;
+    static QMutex _dbLoadAccess;
+    static bool _dbLoaded;
 
     friend QDataStream& operator<<(QDataStream& out, const ThumbnailLocation& obj);
     friend QDataStream& operator>>(QDataStream& in, ThumbnailLocation& obj);

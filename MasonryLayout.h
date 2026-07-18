@@ -194,7 +194,7 @@ signals:
 
 private slots:
     // ZZ: This should be done in embedded view every time
-    void onThumbnailReadFinished();
+    void onThumbnailReadFinished(bool animate = true);
 
 private:
     friend class MasonryLayoutQuickSearch;
@@ -220,7 +220,7 @@ private:
     BrickItem *createComponent();
 
     bool isEmbedded() const;
-    void rewrap();
+    void rewrap(bool animate = true);
     static qreal scaleRow(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing, int lastRowIndex, qreal rowHeight = 0);
     enum CalcLayoutMode {
         CalcLayoutMasonry,
@@ -240,7 +240,7 @@ private:
     void updateCurrentImageIndex();
 
     void onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles = QVector<int>());
-    void pushToCurrentRow(int index);
+    void pushToCurrentRow(int index, bool animate = true);
     void onModelAboutToBeReset();
     void onModelReset();
     void zoom(bool in);

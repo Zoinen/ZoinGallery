@@ -6,7 +6,17 @@
 #include <QImage>
 #include <QFile>
 #include <QDebug>
+#include <QDir>
 #include <QElapsedTimer>
+#include <QStandardPaths>
+
+namespace {
+QString folderCacheDbPath() {
+    const QString tempPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    const QString basePath = tempPath.isEmpty() ? QDir::tempPath() : tempPath;
+    return QDir(basePath).filePath("zg_folders.db");
+}
+}
 
 QHash<QString, QList<FileInfo>> PersistentFolderCache::_db;
 QReadWriteLock PersistentFolderCache::_dbAccess;
@@ -78,7 +88,7 @@ QDataStream& operator>>(QDataStream& in, FolderInfo& obj) {
 void PersistentFolderCache::loadDb() {
     _dbAccess.lockForWrite();
 
-    QFile dbFile("C:/tmp/zg_folders.db");
+    QFile dbFile(folderCacheDbPath());
     if (dbFile.open(QIODevice::ReadOnly)) {
         QDataStream stream(&dbFile);
         stream >> _db;
@@ -94,7 +104,7 @@ void PersistentFolderCache::loadDb() {
 void PersistentFolderCache::dumpDb() {
     _dbAccess.lockForWrite();
 
-    QFile dbFile("C:/tmp/zg_folders.db");
+    QFile dbFile(folderCacheDbPath());
     if (dbFile.open(QIODevice::WriteOnly)) {
         QDataStream stream(&dbFile);
         stream << _db;

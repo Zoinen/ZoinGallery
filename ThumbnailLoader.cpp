@@ -26,16 +26,24 @@ void ThumbnailLoader::init() {
 }
 
 void ThumbnailLoader::readMetadata(ImageInfo &result) {
+    const QFileInfo fileInfo(result.path);
+    if (!result.lastModified.isValid()) {
+        result.lastModified = fileInfo.lastModified();
+    }
+    if (result.fileSize < 0) {
+        result.fileSize = fileInfo.size();
+    }
+
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
         if (ImageDecoderFactory::createDecoder(i)->readMetadata(result)) {
             break;
         }
     }
     if (!result.exif.contains("Size")) {
-        result.exif["Size"] = QFileInfo(result.path).size();
+        result.exif["Size"] = fileInfo.size();
     }
     if (!result.exif.contains("DateTime")) {
-        result.exif["DateTimeCreated"] = QFileInfo(result.path).birthTime();
+        result.exif["DateTimeCreated"] = fileInfo.birthTime();
     }
 }
 
@@ -53,6 +61,8 @@ bool ThumbnailLoader::readImage(ImageData &result) {
             result.mimeType = "psd";
         } else if (isExtensionMatch(result.request.info.path, {"dds"})) {
             result.mimeType = "image/vnd.ms-dds";
+        } else if (isExtensionMatch(result.request.info.path, {"webp"})) {
+            result.mimeType = "image/webp";
         }
     }
 

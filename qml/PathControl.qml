@@ -15,17 +15,25 @@ Item {
         return str.replace(new RegExp(find, 'g'), replace);
     }
 
+    function updatePathField() {
+        if (Qt.platform.os === "windows") {
+            pathField.text = replaceAll(pathRoot.text, "/", "\\")
+        }
+        else {
+            pathField.text = pathRoot.text
+        }
+    }
+
+    onTextChanged: {
+        if (editMode) {
+            updatePathField()
+        }
+    }
 
     property bool editMode: false
     onEditModeChanged: {
         if (editMode) {
-            if (Qt.platform.os === "windows") {
-                pathField.text = replaceAll(pathRoot.text, "/", "\\")
-            }
-            else {
-                pathField.text = pathRoot.text
-            }
-
+            updatePathField()
             pathField.selectAll()
             pathField.forceActiveFocus()
         }

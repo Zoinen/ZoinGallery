@@ -74,7 +74,7 @@ void MasonryLayout::componentComplete() {
     QQuickItem::componentComplete();
 
     connect(this, &MasonryLayout::widthChanged,
-            this, &MasonryLayout::rewrap);
+            this, [this]() { rewrap(); });
 
     connect(this, &MasonryLayout::heightChanged, this, [&] () {
         int newContentY = qMin<qreal>(_contentY, qMax<qreal>(0, contentHeight() - height()));
@@ -304,7 +304,7 @@ bool MasonryLayout::isEmbedded() const {
     return _model && dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem() != nullptr;
 }
 
-void MasonryLayout::rewrap() {
+void MasonryLayout::rewrap(bool animate) {
    // qDebug() << "rewrap" << width() << _bricks.size();
    //  if (width() <= 0) {
    //     qDebug() << "no rewrap, zero width";
@@ -344,7 +344,7 @@ void MasonryLayout::rewrap() {
         setContentYInternal(newContentY);
     }
     else {
-        updateProperties(true);
+        updateProperties(animate);
     }
 }
 
@@ -662,20 +662,27 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
     int changedIndexes = indexTo - index;
     if (index >= 0 && index < _bricks.size() && indexTo >= 0 && indexTo <= _bricks.size()) {
         if (roles.contains(FileListModel::ImageFullSizeRole)) {
+            bool animateLayoutChange = false;
+            for (int i = index; i <= indexTo; i++) {
+                if (_bricks[i].image && _bricks[i].image->fullSize().isValid()
+                    && !_bricks[i].image->info().isCached) {
+                    animateLayoutChange = true;
+                    break;
+                }
+            }
             if (isEmbedded() || (changedIndexes > 1 && !_currentLoadingRow.size())) {
                 for (int i = index; i <= indexTo; i++) {
                     if (_bricks[i].image && _bricks[i].image->fullSize().isValid()) {
                         _bricks[i].originalSize = _bricks[i].image->fullSize();
                     }
                 }
-                rewrap();
+                rewrap(animateLayoutChange);
 
                 if (!isEmbedded()) {
                     QList<ImageDecodeRequest> requests;
                     qDebug() << "-------------";
                     for (int i = index; i <= indexTo; i++) {
                         if (_bricks[i].image && _bricks[i].image->fullSize().isValid()) {
-                            qDebug() << "decode" << requests.last().info.path << requests.last().targetSize;
                             requests.append(ImageDecodeRequest{
                                 .info = _bricks[i].image->info(),
                                 .targetSize = dp(_bricks[i].thumbnailSize(spacing())),
@@ -691,7 +698,7 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
                 // qDebug() << "ZZ LOADING ROW" << _currentLoadingRow.size();
                 for (int i = index; i <= indexTo; i++) {
                     // TODO: this all comes too early when size is 3x2, fix somehow
-                    pushToCurrentRow(i);
+                    pushToCurrentRow(i, animateLayoutChange);
                 }
             }
         }
@@ -699,16 +706,17 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             QSize folderViewSize = _listView ? QSize(0, 0) : GridView_Folder.toSize();
             if (_bricks[index].originalSize != folderViewSize) {
                 _bricks[index].originalSize = folderViewSize;
-                rewrap();
+                rewrap(!_bricks[index].image->info().isCached);
             }
         }
         if (roles.contains(FileListModel::TimeToFlushRole)) {
-            onThumbnailReadFinished();
+            const bool animateLayoutChange = !_bricks[index].image || !_bricks[index].image->info().isCached;
+            onThumbnailReadFinished(animateLayoutChange);
         }
     }
 }
 #include <QThread>
-void MasonryLayout::pushToCurrentRow(int index) {
+void MasonryLayout::pushToCurrentRow(int index, bool animate) {
     bool flushMode = index >= _bricks.count();
     if (!_currentLoadingRow.count() || index - _currentLoadingRow.last().globalIndex > 1) {
         int lastIndex = -1;
@@ -788,7 +796,7 @@ void MasonryLayout::pushToCurrentRow(int index) {
         if (flushMode) {
             _currentLoadingRow.clear();
         }
-        rewrap();
+        rewrap(animate);
 
         QList<ImageDecodeRequest> requests;
         // qDebug() << "-------------- 2" << _currentLoadingRow.last().row << flushMode;
@@ -806,9 +814,9 @@ void MasonryLayout::pushToCurrentRow(int index) {
     }
 }
 
-void MasonryLayout::onThumbnailReadFinished() {
+void MasonryLayout::onThumbnailReadFinished(bool animate) {
     if (_bricks.count() && _currentLoadingRow.size()) {
-        pushToCurrentRow(_bricks.count());
+        pushToCurrentRow(_bricks.count(), animate);
     }
 }
 

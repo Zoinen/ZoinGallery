@@ -17,6 +17,7 @@ on:
           - linux
           - macos
           - windows
+          - windows-arm64
           - all
 
 permissions:
@@ -464,6 +465,115 @@ jobs:
           path: build/bin
           if-no-files-found: error
 
+  windows-arm64:
+    name: Windows / ARM64
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'windows-arm64' || inputs.target == 'windows' || inputs.target == 'all') }}
+    runs-on: windows-11-arm
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@v4
+
+      - name: Initialize MSVC for ARM64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: arm64
+
+      - name: Restore caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .qt
+            ~\AppData\Local\pip\Cache
+            ~\.conan2\p
+          key: ci-windows-11-arm64-qt-${{ env.QT_VERSION }}-${{ hashFiles('conanfile.py', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            ci-windows-11-arm64-qt-${{ env.QT_VERSION }}-
+            ci-windows-11-arm64-
+
+      - name: Install Python build tools
+        shell: pwsh
+        run: |
+          python -m pip install --user conan aqtinstall cmake ninja
+          $userBase = python -c "import site; print(site.USER_BASE)"
+          $userScripts = Join-Path $userBase "Scripts"
+          $env:PATH = "$userScripts;$env:PATH"
+          $userScripts | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Qt for Windows on ARM
+        shell: pwsh
+        run: |
+          $qtRoot = Join-Path $env:GITHUB_WORKSPACE ".qt\${env:QT_VERSION}\msvc2022_arm64"
+          if (!(Test-Path $qtRoot)) {
+            $modules = $env:AQT_MODULES -split ' '
+            python -m aqt install-qt windows_arm64 desktop $env:QT_VERSION win64_msvc2022_arm64 `
+              --modules $modules `
+              --outputdir (Join-Path $env:GITHUB_WORKSPACE ".qt")
+          }
+          "QT_ROOT=$qtRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Conan dependencies
+        shell: pwsh
+        run: |
+          python -c "import sys; from conan.cli.cli import main; main(sys.argv[1:])" profile detect --force
+          python -c "import sys; from conan.cli.cli import main; main(sys.argv[1:])" install . --build=missing `
+            -s arch=armv8 `
+            -s build_type="$env:BUILD_TYPE" `
+            -s compiler.cppstd=20 `
+            -o "&:with_qt=False" `
+            -o "libtiff/*:lzma=False" `
+            -c tools.files.download:retry=5 `
+            -c tools.files.download:retry_wait=10 `
+            -c tools.cmake.cmaketoolchain:generator=Ninja `
+            --output-folder=build
+
+      - name: Build QWindowKit
+        shell: pwsh
+        run: .\ci\build-qwindowkit.ps1 -QtRoot "$env:QT_ROOT" -BuildType "$env:BUILD_TYPE"
+
+      - name: Configure ZoinGallery
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE\build\conan_toolchain.cmake" `
+            -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
+            -DZOIN_BUILD_NUMBER="$env:BUILD_NUMBER" `
+            -DUSE_QWK=ON `
+            -DCMAKE_PREFIX_PATH="$env:QT_ROOT;$env:GITHUB_WORKSPACE\build;$env:GITHUB_WORKSPACE\build\qwindowkit-install"
+
+      - name: Build ZoinGallery
+        shell: pwsh
+        run: cmake --build build --parallel
+
+      - name: Prepare app artifact
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path build\bin -Recurse -Filter ZoinGallery.exe | Select-Object -First 1
+          if (!$exe) { throw "Could not find ZoinGallery.exe" }
+          & "$env:QT_ROOT\bin\windeployqt.exe" --no-translations --no-compiler-runtime $exe.FullName
+          $qwkBin = Join-Path $env:GITHUB_WORKSPACE "build\qwindowkit-install\bin"
+          if (Test-Path $qwkBin) {
+            Copy-Item "$qwkBin\*.dll" -Destination (Split-Path $exe.FullName -Parent) -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Smoke test
+        shell: pwsh
+        run: .\ci\smoke-test.ps1 -QtRoot "$env:QT_ROOT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZoinGallery-windows-arm64-b${{ github.run_number }}
+          path: build/bin
+          if-no-files-found: error
+
   update-readme:
     name: Update README artifact table
     runs-on: ubuntu-24.04
@@ -472,6 +582,7 @@ jobs:
       - linux-containers
       - macos
       - windows
+      - windows-arm64
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'all' && github.ref == 'refs/heads/master' }}
     permissions:
       contents: write

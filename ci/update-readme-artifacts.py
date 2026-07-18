@@ -25,6 +25,14 @@ PLATFORMS = [
         "download_label": "Download Windows build",
     },
     {
+        "platform": "Windows",
+        "icon": "https://cdn.simpleicons.org/windows/0078D4",
+        "version": "Windows 11 or later (ARM64)",
+        "job": "Windows / ARM64",
+        "artifact_prefix": "ZoinGallery-windows-arm64-b",
+        "download_label": "Download Windows ARM64 build",
+    },
+    {
         "platform": "macOS",
         "icon": "https://cdn.simpleicons.org/apple/000000",
         "version": "macOS 10.15 or later",

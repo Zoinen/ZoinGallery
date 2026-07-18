@@ -45,6 +45,9 @@ $RequiredDeployFiles = @(
     "Qt6Svg.dll",
     "QWKCore.dll",
     "QWKQuick.dll",
+    "msvcp140.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
     "platforms\qwindows.dll"
 )
 

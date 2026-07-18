@@ -445,14 +445,7 @@ jobs:
 
       - name: Prepare app artifact
         shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Path build\bin -Recurse -Filter ZoinGallery.exe | Select-Object -First 1
-          if (!$exe) { throw "Could not find ZoinGallery.exe" }
-          & "$env:QT_ROOT\bin\windeployqt.exe" --no-translations --no-compiler-runtime $exe.FullName
-          $qwkBin = Join-Path $env:GITHUB_WORKSPACE "build\qwindowkit-install\bin"
-          if (Test-Path $qwkBin) {
-            Copy-Item "$qwkBin\*.dll" -Destination (Split-Path $exe.FullName -Parent) -Force -ErrorAction SilentlyContinue
-          }
+        run: .\ci\deploy-windows.ps1 -QtRoot "$env:QT_ROOT" -TargetArch x64
 
       - name: Smoke test
         shell: pwsh
@@ -554,14 +547,7 @@ jobs:
 
       - name: Prepare app artifact
         shell: pwsh
-        run: |
-          $exe = Get-ChildItem -Path build\bin -Recurse -Filter ZoinGallery.exe | Select-Object -First 1
-          if (!$exe) { throw "Could not find ZoinGallery.exe" }
-          & "$env:QT_ROOT\bin\windeployqt.exe" --no-translations --no-compiler-runtime $exe.FullName
-          $qwkBin = Join-Path $env:GITHUB_WORKSPACE "build\qwindowkit-install\bin"
-          if (Test-Path $qwkBin) {
-            Copy-Item "$qwkBin\*.dll" -Destination (Split-Path $exe.FullName -Parent) -Force -ErrorAction SilentlyContinue
-          }
+        run: .\ci\deploy-windows.ps1 -QtRoot "$env:QT_ROOT" -TargetArch arm64
 
       - name: Smoke test
         shell: pwsh

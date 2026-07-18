@@ -20,7 +20,11 @@ if (!$Exe) {
 }
 
 $AppDir = Split-Path $Exe.FullName -Parent
-& "$QtRoot\bin\windeployqt.exe" --no-translations --no-compiler-runtime $Exe.FullName
+& "$QtRoot\bin\windeployqt.exe" `
+    --no-translations `
+    --no-compiler-runtime `
+    --qmldir (Join-Path $RepoRoot "qml") `
+    $Exe.FullName
 
 $QwkBin = Join-Path $RepoRoot "build\qwindowkit-install\bin"
 if (Test-Path $QwkBin) {

@@ -48,32 +48,43 @@ QReadWriteLock PersistentImageCache::_currentChunkFileAccess;
 QMutex PersistentImageCache::_dbLoadAccess;
 uint16_t PersistentImageCache::_currentChunkFileIndex = 0;
 bool PersistentImageCache::_dbLoaded = false;
+std::atomic<quint64> PersistentImageCache::_generation = 0;
 
 
-bool PersistentImageCache::hasImage(const QString &path) {
+bool PersistentImageCache::hasImage(const QString &path, bool validateSource) {
     loadDb();
 
-    const QFileInfo fileInfo(path);
     QReadLocker locker(&_dbAccess);
     const auto it = _db.constFind(path);
-    return it != _db.cend()
-        && fileInfo.isFile()
-        && it->lastModified.isValid()
+    if (it == _db.cend() || !it->lastModified.isValid()
+        || it->imageSize.width() <= 1
+        || it->imageSize.height() <= 1
+        || !hasUsableThumbnail(*it)) {
+        return false;
+    }
+    if (!validateSource) {
+        return true;
+    }
+    const QFileInfo fileInfo(path);
+    return fileInfo.isFile()
         && it->lastModified == fileInfo.lastModified()
         && it->imageSize.width() > 1
         && it->imageSize.height() > 1
         && hasUsableThumbnail(*it);
 }
 
-void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList, QStringList &outNotFound) {
+void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList,
+                                              QStringList &outNotFound, bool validateSource) {
     loadDb();
 
     QReadLocker locker(&_dbAccess);
     for (const QString &path : imagePaths) {
         const auto it = _db.constFind(path);
-        const QFileInfo fileInfo(path);
-        const bool cacheIsCurrent = it != _db.cend() && fileInfo.isFile()
-            && it->lastModified.isValid() && it->lastModified == fileInfo.lastModified();
+        bool cacheIsCurrent = it != _db.cend() && it->lastModified.isValid();
+        if (cacheIsCurrent && validateSource) {
+            const QFileInfo fileInfo(path);
+            cacheIsCurrent = fileInfo.isFile() && it->lastModified == fileInfo.lastModified();
+        }
         const bool cacheHasUsableSize = it != _db.cend()
             && it->imageSize.width() > 1 && it->imageSize.height() > 1;
         if (cacheIsCurrent && cacheHasUsableSize && hasUsableThumbnail(*it)) {
@@ -92,7 +103,7 @@ void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QLi
     }
 }
 
-QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request) {
+QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request, bool validateRequestVersion) {
     loadDb();
 
     ThumbnailInfo info;
@@ -105,7 +116,8 @@ QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request) {
         info = *it;
     }
 
-    if (request.info.lastModified.isValid() && request.info.lastModified != info.lastModified) {
+    if (validateRequestVersion && request.info.lastModified.isValid()
+        && request.info.lastModified != info.lastModified) {
         return {};
     }
 
@@ -142,6 +154,7 @@ void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArr
         return;
     }
 
+    const quint64 generation = _generation.load();
     loadDb();
     {
         QReadLocker locker(&_dbAccess);
@@ -155,6 +168,9 @@ void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArr
     quint64 offset = 0;
     {
         QWriteLocker locker(&_currentChunkFileAccess);
+        if (generation != _generation.load()) {
+            return;
+        }
         QFile currentChunkFile(cacheChunkPath(_currentChunkFileIndex));
         if (!currentChunkFile.open(QFile::WriteOnly | QFile::Append)) {
             return;
@@ -179,6 +195,9 @@ void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArr
     };
 
     QWriteLocker locker(&_dbAccess);
+    if (generation != _generation.load()) {
+        return;
+    }
     _db.insert(imageInfo.path, info);
 }
 
@@ -251,6 +270,10 @@ void PersistentImageCache::dumpDb() {
     loadDb();
 
     QReadLocker locker(&_dbAccess);
+    if (_db.isEmpty()) {
+        QFile::remove(cacheDbPath());
+        return;
+    }
     QFile dbFile(cacheDbPath());
     if (dbFile.open(QIODevice::WriteOnly)) {
         QDataStream stream(&dbFile);
@@ -261,6 +284,57 @@ void PersistentImageCache::dumpDb() {
         else {
             qWarning() << "Failed to save image cache DB" << cacheDbPath();
         }
+    }
+}
+
+qint64 PersistentImageCache::cacheSize() {
+    loadDb();
+
+    qint64 size = 0;
+    {
+        QReadLocker locker(&_currentChunkFileAccess);
+        const QDir cacheDir(cacheBasePath());
+        const QString chunkPattern = QString("zg_v%1_*").arg(CacheFormatVersion);
+        const auto chunks = cacheDir.entryInfoList({chunkPattern}, QDir::Files, QDir::Name);
+        for (const QFileInfo &chunk : chunks) {
+            size += chunk.size();
+        }
+    }
+
+    qint64 serializedDbSize = 0;
+    {
+        QReadLocker locker(&_dbAccess);
+        if (!_db.isEmpty()) {
+            QByteArray serializedDb;
+            QDataStream stream(&serializedDb, QIODevice::WriteOnly);
+            stream << _db;
+            if (stream.status() == QDataStream::Ok) {
+                serializedDbSize = serializedDb.size();
+            }
+        }
+    }
+    return size + qMax(serializedDbSize, QFileInfo(cacheDbPath()).size());
+}
+
+QString PersistentImageCache::cacheLocation() {
+    return QDir::toNativeSeparators(cacheBasePath());
+}
+
+void PersistentImageCache::clear() {
+    loadDb();
+    _generation.fetch_add(1);
+
+    QWriteLocker chunkLocker(&_currentChunkFileAccess);
+    QWriteLocker dbLocker(&_dbAccess);
+    _db.clear();
+    _currentChunkFileIndex = 0;
+
+    QDir cacheDir(cacheBasePath());
+    QFile::remove(cacheDbPath());
+    const QString chunkPattern = QString("zg_v%1_*").arg(CacheFormatVersion);
+    const auto chunks = cacheDir.entryInfoList({chunkPattern}, QDir::Files, QDir::Name);
+    for (const QFileInfo &chunk : chunks) {
+        QFile::remove(chunk.absoluteFilePath());
     }
 }
 

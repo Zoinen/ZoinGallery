@@ -7,7 +7,8 @@ class CachedImageInfoRunner : public Runner {
     Q_OBJECT
 
 public:
-    CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView, int directOpenGeneration = 0);
+    CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView,
+                          bool validateSource, int directOpenGeneration = 0);
 
     RunnerType type() override { return RunnerType::CachedImageInfo; }
     void run() override;
@@ -21,6 +22,7 @@ private:
 
     QStringList _imagePaths;
     bool _isFromEmbeddedView;
+    bool _validateSource;
     int _directOpenGeneration;
 };
 
@@ -29,7 +31,7 @@ class CachedImageRetrieveRunner : public Runner {
     Q_OBJECT
 
 public:
-    CachedImageRetrieveRunner(const ImageDecodeRequest &request);
+    CachedImageRetrieveRunner(const ImageDecodeRequest &request, bool validateRequestVersion);
 
     RunnerType type() override { return RunnerType::CachedImageRetrieve; }
     void run() override;
@@ -41,6 +43,7 @@ private:
     friend class DecodeManager;
 
     ImageDecodeRequest _request;
+    bool _validateRequestVersion;
 };
 
 

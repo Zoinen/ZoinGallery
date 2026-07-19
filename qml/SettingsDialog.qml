@@ -58,8 +58,26 @@ Window {
             positionedOnce = true
         }
         visible = true
+        fileListModel.refreshCacheInfo()
         raise()
         requestActivate()
+    }
+
+    function formatCacheSize(bytes) {
+        if (bytes < 1024)
+            return bytes + " B"
+        if (bytes < 1024 * 1024)
+            return (bytes / 1024).toFixed(1) + " KB"
+        if (bytes < 1024 * 1024 * 1024)
+            return (bytes / (1024 * 1024)).toFixed(1) + " MB"
+        return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB"
+    }
+
+    Timer {
+        interval: 2000
+        repeat: true
+        running: settingsDialog.visible
+        onTriggered: fileListModel.refreshCacheInfo()
     }
 
     Settings {
@@ -427,6 +445,118 @@ Window {
                         text: "Use single instance by default"
                         checked: generalSettings.singleInstanceByDefault
                         onToggled: generalSettings.singleInstanceByDefault = checked
+                    }
+
+                    Divider {}
+
+                    SectionHeader { text: "Cache" }
+
+                    SettingRow {
+                        label: "Image cache"
+                        detail: "Controls cached image metadata and previews."
+                        control: StyledComboBox {
+                            id: imageCacheModeComboBox
+                            width: parent.width
+                            model: ListModel {
+                                ListElement { text: "Off"; value: 0 }
+                                ListElement { text: "On"; value: 1 }
+                                ListElement { text: "Only cache"; value: 2 }
+                            }
+
+                            function syncFromModel() {
+                                let index = indexOfValue(fileListModel.imageCacheMode)
+                                currentIndex = index >= 0 ? index : indexOfValue(1)
+                            }
+
+                            Component.onCompleted: syncFromModel()
+                            onActivated: fileListModel.imageCacheMode = currentValue
+
+                            Connections {
+                                target: fileListModel
+                                function onImageCacheModeChanged() {
+                                    imageCacheModeComboBox.syncFromModel()
+                                }
+                            }
+                        }
+                    }
+
+                    SettingRow {
+                        label: "Image cache data"
+                        detail: fileListModel.imageCacheLocation
+                        control: RowLayout {
+                            width: parent.width
+                            spacing: 10
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: settingsDialog.formatCacheSize(fileListModel.imageCacheSize)
+                                color: Style.accentColor
+                                font.pixelSize: 13
+                                horizontalAlignment: Text.AlignRight
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            StyledButton {
+                                text: "Clear"
+                                enabled: fileListModel.imageCacheSize > 0
+                                Layout.preferredWidth: 82
+                                onClicked: fileListModel.clearImageCache()
+                            }
+                        }
+                    }
+
+                    SettingRow {
+                        label: "File list cache"
+                        detail: "Controls cached directory contents and folder previews."
+                        control: StyledComboBox {
+                            id: fileListCacheModeComboBox
+                            width: parent.width
+                            model: ListModel {
+                                ListElement { text: "Off"; value: 0 }
+                                ListElement { text: "On"; value: 1 }
+                                ListElement { text: "Only cache"; value: 2 }
+                            }
+
+                            function syncFromModel() {
+                                let index = indexOfValue(fileListModel.fileListCacheMode)
+                                currentIndex = index >= 0 ? index : indexOfValue(1)
+                            }
+
+                            Component.onCompleted: syncFromModel()
+                            onActivated: fileListModel.fileListCacheMode = currentValue
+
+                            Connections {
+                                target: fileListModel
+                                function onFileListCacheModeChanged() {
+                                    fileListCacheModeComboBox.syncFromModel()
+                                }
+                            }
+                        }
+                    }
+
+                    SettingRow {
+                        label: "File list cache data"
+                        detail: fileListModel.fileListCacheLocation
+                        control: RowLayout {
+                            width: parent.width
+                            spacing: 10
+
+                            Text {
+                                Layout.fillWidth: true
+                                text: settingsDialog.formatCacheSize(fileListModel.fileListCacheSize)
+                                color: Style.accentColor
+                                font.pixelSize: 13
+                                horizontalAlignment: Text.AlignRight
+                                verticalAlignment: Text.AlignVCenter
+                            }
+
+                            StyledButton {
+                                text: "Clear"
+                                enabled: fileListModel.fileListCacheSize > 0
+                                Layout.preferredWidth: 82
+                                onClicked: fileListModel.clearFileListCache()
+                            }
+                        }
                     }
 
                     Divider {}

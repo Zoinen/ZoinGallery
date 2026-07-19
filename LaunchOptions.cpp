@@ -54,6 +54,10 @@ QString normalizePathArgument(const QString &path) {
     return trimmedPath;
 }
 
+QString normalizePathArgumentWithoutFileAccess(const QString &path) {
+    return trimWrappingQuotes(path);
+}
+
 LaunchOptions parseLaunchOptions(const QStringList &arguments) {
     LaunchOptions options;
     for (int i = 1; i < arguments.size(); ++i) {

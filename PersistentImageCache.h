@@ -9,6 +9,8 @@
 #include <QMutex>
 #include <QReadWriteLock>
 
+#include <atomic>
+
 #include "ImageFile.h"
 
 class PersistentImageCache {
@@ -27,14 +29,18 @@ public:
         ExifOrientation orientation = ExifOrientation::Horizontal;
     };
 
-    static bool hasImage(const QString &path);
-    static void retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList, QStringList &outNotFound);
-    static QImage retrieveImage(ImageDecodeRequest &request);
+    static bool hasImage(const QString &path, bool validateSource = true);
+    static void retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList,
+                                   QStringList &outNotFound, bool validateSource = true);
+    static QImage retrieveImage(ImageDecodeRequest &request, bool validateRequestVersion = true);
     static void storeImage(const ImageInfo &imageInfo, const QByteArray &imageData);
     static QByteArray createImageForCache(const QImage &image);
 
     static void loadDb();
     static void dumpDb();
+    static qint64 cacheSize();
+    static QString cacheLocation();
+    static void clear();
 
     QStringList getAllImagePaths() const;
 
@@ -47,6 +53,7 @@ private:
     static QReadWriteLock _currentChunkFileAccess;
     static QMutex _dbLoadAccess;
     static bool _dbLoaded;
+    static std::atomic<quint64> _generation;
 
     friend QDataStream& operator<<(QDataStream& out, const ThumbnailLocation& obj);
     friend QDataStream& operator>>(QDataStream& in, ThumbnailLocation& obj);

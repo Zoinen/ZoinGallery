@@ -9,6 +9,8 @@
 
 #include "PersistentFolderCache.h"
 #include "PersistentImageCache.h"
+#include "NaturalSort.h"
+#include "ThumbnailLoader.h"
 
 #include <QDebug>
 #include <QThread>
@@ -16,6 +18,31 @@
 #include <chrono>
 
 using namespace std::chrono_literals;
+
+namespace {
+QList<FileInfo> previewImages(const QList<FileInfo> &entries, int totalImages) {
+    QList<FileInfo> images;
+    for (const FileInfo &entry : entries) {
+        if (!entry.isDirectory && ThumbnailLoader::isFormatSupported(entry.name)) {
+            images.append(entry);
+        }
+    }
+    sortFileInfosNaturally(images);
+    if (totalImages < 0 || images.size() <= totalImages) {
+        return images;
+    }
+    if (totalImages == 0) {
+        return {};
+    }
+
+    QList<FileInfo> sampled;
+    const float step = qMax(1.0f, float(images.size()) / totalImages);
+    for (float index = 0; index < images.size() && sampled.size() < totalImages; index += step) {
+        sampled.append(images.at(static_cast<int>(index)));
+    }
+    return sampled;
+}
+}
 
 bool isRunnerDecode(Runner *runner) {
     return runner->type() == RunnerType::ImageRead || runner->type() == RunnerType::ImageDecode || runner->type() == RunnerType::CachedImageRetrieve;
@@ -61,8 +88,9 @@ DecodeManager::~DecodeManager() {
 }
 
 void DecodeManager::readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView, int directOpenGeneration) {
-    if (!_disableCache) {
-        CachedImageInfoRunner *runner = new CachedImageInfoRunner(paths, isFromEmbeddedView, directOpenGeneration);
+    if (cacheReadsEnabled(_imageCacheMode)) {
+        CachedImageInfoRunner *runner = new CachedImageInfoRunner(
+            paths, isFromEmbeddedView, sourceReadsEnabled(_imageCacheMode), directOpenGeneration);
         runner->connections.append(
             connect(runner, &CachedImageInfoRunner::cachedImageInfoRetrieved,
                     this, &DecodeManager::onCachedImageInfoRetrieved)
@@ -70,7 +98,7 @@ void DecodeManager::readImagesInfo(const QList<QString> &paths, bool isFromEmbed
         _taskQueue.prepend(runner);
         processQueue();
     }
-    else {
+    else if (sourceReadsEnabled(_imageCacheMode)) {
         onInfoNotFoundInCache(paths, isFromEmbeddedView, directOpenGeneration);
     }
 }
@@ -119,11 +147,12 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
         }
 
         // qDebug() << "ZZ DECODE" << requests.size() << (requests.size() ? requests.first().info.path : "");
-        if (!_disableCache) {
+        if (cacheReadsEnabled(_imageCacheMode)) {
             for (const auto &request : requests) {
-                if (request.checkCache) {
+                if (request.checkCache || _imageCacheMode == CacheUsageMode::OnlyCache) {
                     // qDebug() << "ZZ TO RUN CACHE LOOKUP";
-                    CachedImageRetrieveRunner *runner = new CachedImageRetrieveRunner(request);
+                    CachedImageRetrieveRunner *runner = new CachedImageRetrieveRunner(
+                        request, sourceReadsEnabled(_imageCacheMode));
                     runner->connections.append(
                         connect(runner, &CachedImageRetrieveRunner::cachedThumbnailRetrieved,
                                 this, &DecodeManager::onImageReady)
@@ -134,6 +163,11 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
             }
         }
     }/**/
+
+    if (!sourceReadsEnabled(_imageCacheMode)) {
+        processQueue();
+        return;
+    }
 
     /**/int insertIndex = 0;
     // Read requests from viewer are first
@@ -168,28 +202,34 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
 void DecodeManager::readFolderList(const QStringList &paths, int totalImages) {
     QList<FolderInfo> results;
     QStringList notFound;
-    if (!_disableCache) {
+    if (cacheReadsEnabled(_fileListCacheMode)) {
         PersistentFolderCache::retrieveFolders(paths, results, notFound);
     }
-    else {
+    else if (sourceReadsEnabled(_fileListCacheMode)) {
         notFound = paths;
     }
     for (FolderInfo &result : results) {
-        emit folderListReady(result.path, result.subfiles, true);
+        emit folderListReady(result.path, previewImages(result.subfiles, totalImages), true);
     }
 
-    for (const QString &path : notFound) {
-        FolderListReadRunner *runner = new FolderListReadRunner(path, totalImages);
-        runner->connections.append(
-            connect(runner, &FolderListReadRunner::folderListReady,
-                    this, &DecodeManager::onFolderListReady)
-            );
-        _taskQueue.enqueue(runner);
+    if (sourceReadsEnabled(_fileListCacheMode)) {
+        for (const QString &path : notFound) {
+            FolderListReadRunner *runner = new FolderListReadRunner(
+                path, totalImages, cacheWritesEnabled(_fileListCacheMode));
+            runner->connections.append(
+                connect(runner, &FolderListReadRunner::folderListReady,
+                        this, &DecodeManager::onFolderListReady)
+                );
+            _taskQueue.enqueue(runner);
+        }
     }
     processQueue();
 }
 
 void DecodeManager::scan(const QString &root) {
+    if (!sourceReadsEnabled(_imageCacheMode) || !sourceReadsEnabled(_fileListCacheMode)) {
+        return;
+    }
     RecursiveFolderScanner *runner = new RecursiveFolderScanner(root);
     runner->connections.append(
         connect(runner, &RecursiveFolderScanner::scanImages,
@@ -339,10 +379,14 @@ void DecodeManager::prepareToClose() {
         }
     }
 
-    if (!_disableCache) {
+    if (_imageCacheNeedsDump || _fileListCacheNeedsDump) {
         qInfo() << "[Shutdown] DecodeManager::prepareToClose dumping persistent caches";
-        PersistentFolderCache::dumpDb();
-        PersistentImageCache::dumpDb();
+        if (_fileListCacheNeedsDump) {
+            PersistentFolderCache::dumpDb();
+        }
+        if (_imageCacheNeedsDump) {
+            PersistentImageCache::dumpDb();
+        }
         qInfo() << "[Shutdown] DecodeManager::prepareToClose persistent caches dumped";
     }
     qInfo() << "[Shutdown] DecodeManager::prepareToClose end";
@@ -354,6 +398,24 @@ bool DecodeManager::runningTasksDebug() const {
 
 void DecodeManager::setRunningTasksDebug(bool isRunningTasksDebug) {
     _runningTasksDebug = isRunningTasksDebug;
+}
+
+CacheUsageMode DecodeManager::imageCacheMode() const {
+    return _imageCacheMode;
+}
+
+void DecodeManager::setImageCacheMode(CacheUsageMode mode) {
+    _imageCacheMode = mode;
+    _imageCacheNeedsDump = _imageCacheNeedsDump || cacheWritesEnabled(mode);
+}
+
+CacheUsageMode DecodeManager::fileListCacheMode() const {
+    return _fileListCacheMode;
+}
+
+void DecodeManager::setFileListCacheMode(CacheUsageMode mode) {
+    _fileListCacheMode = mode;
+    _fileListCacheNeedsDump = _fileListCacheNeedsDump || cacheWritesEnabled(mode);
 }
 
 QString DecodeManager::runnerToString(Runner *task) {
@@ -477,7 +539,7 @@ void DecodeManager::onImageReadReady(const ImageData &result) {
     }
 
     ImageDecodeRunner *runner = new ImageDecodeRunner(result);
-    if (!_disableCache) {
+    if (cacheWritesEnabled(_imageCacheMode)) {
         runner->connections.append({
             connect(runner, &ImageDecodeRunner::imageReady,
                     this, &DecodeManager::onImageReady),
@@ -549,6 +611,10 @@ void DecodeManager::onStoreInCache(const ImageDecodeRequest &request, const QByt
         return;
     }
 
+    if (!cacheWritesEnabled(_imageCacheMode)) {
+        return;
+    }
+
     CachedImageStoreRunner *runner = new CachedImageStoreRunner(request.info, imageData);
     _taskQueue.enqueue(runner);
     processQueue();
@@ -563,7 +629,9 @@ void DecodeManager::onCachedImageInfoRetrieved(const QList<ImageInfo> &results, 
 
     emit imagesInfoReady(results);
 
-    onInfoNotFoundInCache(notFound, isFromEmbeddedView, directOpenGeneration);
+    if (sourceReadsEnabled(_imageCacheMode)) {
+        onInfoNotFoundInCache(notFound, isFromEmbeddedView, directOpenGeneration);
+    }
 }
 
 bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType) {

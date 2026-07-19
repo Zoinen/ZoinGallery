@@ -2,6 +2,8 @@
 #include "DecodeManager.h"
 #include "LaunchOptions.h"
 #include "NaturalSort.h"
+#include "PersistentFolderCache.h"
+#include "PersistentImageCache.h"
 #include "QmlAsyncImageProvider.h"
 #include "ThumbnailLoader.h"
 
@@ -14,11 +16,17 @@
 #include <QGuiApplication>
 #include <QStack>
 #include <QStandardPaths>
+#include <QSettings>
 #include <QDateTime>
 #include <QUrl>
 
 #include <chrono>
 using namespace std::chrono_literals;
+
+namespace {
+constexpr const char *ImageCacheModeSettingsKey = "Cache/imageUsageMode";
+constexpr const char *FileListCacheModeSettingsKey = "Cache/fileListUsageMode";
+}
 
 FileListModel::FileListModel(QObject *parent)
     : QAbstractItemModel(parent) {
@@ -26,6 +34,13 @@ FileListModel::FileListModel(QObject *parent)
     _currentViewIndex = -1;
 
     _decodeManager = new DecodeManager(this);
+    QSettings settings;
+    _imageCacheMode = cacheUsageModeFromInt(
+        settings.value(ImageCacheModeSettingsKey, static_cast<int>(CacheUsageMode::On)).toInt());
+    _fileListCacheMode = cacheUsageModeFromInt(
+        settings.value(FileListCacheModeSettingsKey, static_cast<int>(CacheUsageMode::On)).toInt());
+    _decodeManager->setImageCacheMode(_imageCacheMode);
+    _decodeManager->setFileListCacheMode(_fileListCacheMode);
 
     connect(_decodeManager, &DecodeManager::viewerRunnerCanceled, this, [&] (const QString &path) {
         qDebug() << "REMOVE CANCELLED RUNNER???" << path;
@@ -299,7 +314,8 @@ FileListModel::FileListModel(QObject *parent)
             QStringList imagePaths;
             imagePaths.reserve(subfiles.size());
             for (int i = 0; i < subfiles.size(); i++) {
-                ImageFile *subItem = createFileItem(path, subfiles.at(i).name, subfiles.at(i).lastModified);
+                ImageFile *subItem = createFileItem(path, subfiles.at(i).name,
+                                                    subfiles.at(i).lastModified, subfiles.at(i).fileSize);
                 subItem->setImageFileParent(item);
                 subItem->setIndex(subImages.size());
                 subImages.append(subItem);
@@ -461,21 +477,21 @@ int FileListModel::cd(const QString &path, const QString &itemToSelect) {
 
 int FileListModel::populateFolderItems(const QString &path, const QString &itemToSelect) {
     int indexToSelect = 0;
+    QList<FileInfo> entries;
+    if (!folderEntries(path, entries)) {
+        return indexToSelect;
+    }
+
     if (path == "Computer") {
-        for (const auto &drive : QDir::drives()) {
-            QString drivePath = drive.path();
-            if (drivePath.endsWith("/") && !drivePath.startsWith("/")) {
-                drivePath = drivePath.left(drivePath.size() - 1);
-            }
-            QFileInfo driveInfo(drivePath);
+        for (const FileInfo &drive : entries) {
             ImageFile *item = new ImageFile(this);
-            item->setFileName(drivePath);
+            item->setFileName(drive.name);
             item->setIsFolder(true);
             item->setIsImage(false);
             item->setIconPath("qrc:/resources/DriveIcon.svg");
             item->setInfo(ImageInfo{
                 .path = item->fullPath(),
-                .lastModified = driveInfo.lastModified(),
+                .lastModified = drive.lastModified,
                 .fileSize = 0,
             });
             item->setIndex(_items.size());
@@ -487,19 +503,24 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
         }
     }
     else {
-        QDir dir(_root);
-        auto folders = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::Dirs | QDir::Hidden | QDir::System, QDir::NoSort);
+        QList<FileInfo> folders;
+        QList<FileInfo> files;
+        for (const FileInfo &entry : entries) {
+            (entry.isDirectory ? folders : files).append(entry);
+        }
         sortFileInfosNaturally(folders);
-        for (const auto &folder : folders) {
+        sortFileInfosNaturally(files);
+
+        for (const FileInfo &folder : folders) {
             ImageFile *item = new ImageFile(this);
             item->setFolderPath(_root);
-            item->setFileName(folder.fileName());
+            item->setFileName(folder.name);
             item->setIsFolder(true);
             item->setIsImage(false);
             item->setIconPath("qrc:/resources/FolderIcon.svg");
             item->setInfo(ImageInfo{
                 .path = item->fullPath(),
-                .lastModified = folder.lastModified(),
+                .lastModified = folder.lastModified,
                 .fileSize = 0,
             });
             item->setIndex(_items.size());
@@ -515,10 +536,8 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
             }
         }
 
-        auto files = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::Files | QDir::Hidden | QDir::System, QDir::NoSort);
-        sortFileInfosNaturally(files);
-        for (const auto &file : files) {
-            ImageFile *item = createFileItem(_root, file.fileName(), file.lastModified(), file.size());
+        for (const FileInfo &file : files) {
+            ImageFile *item = createFileItem(_root, file.name, file.lastModified, file.fileSize);
             if (item->isImage()) {
                 _imagePaths.append(item->fullPath());
             }
@@ -528,6 +547,61 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
     }
 
     return indexToSelect;
+}
+
+bool FileListModel::folderEntries(const QString &path, QList<FileInfo> &entries) {
+    if (cacheReadsEnabled(_fileListCacheMode)) {
+        FolderInfo cachedFolder;
+        if (PersistentFolderCache::retrieveFolder(path, cachedFolder)) {
+            entries = cachedFolder.subfiles;
+            return true;
+        }
+    }
+
+    if (!sourceReadsEnabled(_fileListCacheMode)) {
+        return false;
+    }
+
+    entries = readFolderEntries(path);
+    if (cacheWritesEnabled(_fileListCacheMode)) {
+        PersistentFolderCache::storeFolder(FolderInfo{path, entries});
+    }
+    return true;
+}
+
+QList<FileInfo> FileListModel::readFolderEntries(const QString &path) const {
+    QList<FileInfo> entries;
+    if (path == "Computer") {
+        const auto drives = QDir::drives();
+        entries.reserve(drives.size());
+        for (const QFileInfo &drive : drives) {
+            QString drivePath = drive.path();
+            if (drivePath.endsWith("/") && !drivePath.startsWith("/")) {
+                drivePath.chop(1);
+            }
+            entries.append(FileInfo{
+                .name = drivePath,
+                .lastModified = drive.lastModified(),
+                .fileSize = 0,
+                .isDirectory = true,
+            });
+        }
+        return entries;
+    }
+
+    QDir dir(path);
+    const auto sourceEntries = dir.entryInfoList(
+        QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden | QDir::System, QDir::NoSort);
+    entries.reserve(sourceEntries.size());
+    for (const QFileInfo &entry : sourceEntries) {
+        entries.append(FileInfo{
+            .name = entry.fileName(),
+            .lastModified = entry.lastModified(),
+            .fileSize = entry.isDir() ? 0 : entry.size(),
+            .isDirectory = entry.isDir(),
+        });
+    }
+    return entries;
 }
 
 void FileListModel::startRegularFolderWork() {
@@ -711,6 +785,10 @@ QList<RecursiveFolderInfo> getAllSubfoldersWithNestingLevel(const QString &start
 
 
 void FileListModel::enterRecursiveView() {
+    if (!fileListSourceAccessEnabled()) {
+        return;
+    }
+
     _directOpen.generation++;
     _directOpen.stage = DirectOpenStage::None;
     _directOpen.pendingNeighborInfoPaths.clear();
@@ -783,10 +861,12 @@ bool FileListModel::isImage(const QString &fileName) {
 }
 
 void FileListModel::openImageDirectly(const QString &path, int width, int height) {
-    QString imagePath = normalizePathArgument(path);
+    const QString imagePath = imageSourceAccessEnabled()
+        ? normalizePathArgument(path)
+        : normalizePathArgumentWithoutFileAccess(path);
 
     QFileInfo fileInfo(imagePath);
-    if (!fileInfo.isFile() || !isImage(fileInfo.fileName())) {
+    if ((imageSourceAccessEnabled() && !fileInfo.isFile()) || !isImage(fileInfo.fileName())) {
         return;
     }
 
@@ -823,7 +903,9 @@ void FileListModel::openImageDirectly(const QString &path, int width, int height
         clearModelData(true);
         _root = folderPath;
 
-        ImageFile *item = createFileItem(folderPath, fileName, fileInfo.lastModified(), fileInfo.size());
+        ImageFile *item = createFileItem(folderPath, fileName,
+                                         imageSourceAccessEnabled() ? fileInfo.lastModified() : QDateTime(),
+                                         imageSourceAccessEnabled() ? fileInfo.size() : -1);
         item->setIndex(0);
         _items.append(item);
         if (item->isImage()) {
@@ -1504,6 +1586,107 @@ void FileListModel::setRunningTasksDebug(bool isRunningTasksDebug) {
     }
     _decodeManager->setRunningTasksDebug(isRunningTasksDebug);
     emit runningTasksDebugChanged();
+}
+
+int FileListModel::imageCacheMode() const {
+    return static_cast<int>(_imageCacheMode);
+}
+
+void FileListModel::setImageCacheMode(int mode) {
+    const CacheUsageMode newMode = cacheUsageModeFromInt(mode);
+    if (_imageCacheMode == newMode) {
+        return;
+    }
+
+    _decodeManager->cancelAllRunners();
+    _imageCacheMode = newMode;
+    _decodeManager->setImageCacheMode(newMode);
+    QSettings().setValue(ImageCacheModeSettingsKey, static_cast<int>(newMode));
+    emit imageCacheModeChanged();
+    reloadPanelForCacheModeChange();
+}
+
+int FileListModel::fileListCacheMode() const {
+    return static_cast<int>(_fileListCacheMode);
+}
+
+void FileListModel::setFileListCacheMode(int mode) {
+    const CacheUsageMode newMode = cacheUsageModeFromInt(mode);
+    if (_fileListCacheMode == newMode) {
+        return;
+    }
+
+    _decodeManager->cancelAllRunners();
+    _fileListCacheMode = newMode;
+    _decodeManager->setFileListCacheMode(newMode);
+    QSettings().setValue(FileListCacheModeSettingsKey, static_cast<int>(newMode));
+    emit fileListCacheModeChanged();
+    reloadPanelForCacheModeChange();
+}
+
+bool FileListModel::imageSourceAccessEnabled() const {
+    return sourceReadsEnabled(_imageCacheMode);
+}
+
+bool FileListModel::fileListSourceAccessEnabled() const {
+    return sourceReadsEnabled(_fileListCacheMode);
+}
+
+qint64 FileListModel::imageCacheSize() const {
+    return _imageCacheSize;
+}
+
+QString FileListModel::imageCacheLocation() const {
+    return PersistentImageCache::cacheLocation();
+}
+
+qint64 FileListModel::fileListCacheSize() const {
+    return _fileListCacheSize;
+}
+
+QString FileListModel::fileListCacheLocation() const {
+    return PersistentFolderCache::cacheLocation();
+}
+
+void FileListModel::clearImageCache() {
+    cancelAllRunners();
+    PersistentImageCache::clear();
+    reloadPanelForCacheModeChange();
+    refreshCacheInfo();
+}
+
+void FileListModel::clearFileListCache() {
+    cancelAllRunners();
+    PersistentFolderCache::clear();
+    reloadPanelForCacheModeChange();
+    refreshCacheInfo();
+}
+
+void FileListModel::refreshCacheInfo() {
+    const qint64 imageSize = PersistentImageCache::cacheSize();
+    const qint64 fileListSize = PersistentFolderCache::cacheSize();
+    if (_imageCacheSize == imageSize && _fileListCacheSize == fileListSize) {
+        return;
+    }
+    _imageCacheSize = imageSize;
+    _fileListCacheSize = fileListSize;
+    emit cacheInfoChanged();
+}
+
+QString FileListModel::itemNameToPreserve() const {
+    if (_currentViewIndex >= 0 && _currentViewIndex < _items.size()) {
+        return _items.at(_currentViewIndex)->fileName();
+    }
+    return _items.isEmpty() ? QString() : _items.first()->fileName();
+}
+
+void FileListModel::reloadPanelForCacheModeChange() {
+    if (_root.isEmpty() || _isClosing) {
+        return;
+    }
+    const QString itemToSelect = itemNameToPreserve();
+    const int sourceIndex = cd(_root, itemToSelect);
+    emit panelReloaded(sourceIndex);
 }
 
 void FileListModel::dumpCurrentImage() {

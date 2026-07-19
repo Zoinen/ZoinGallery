@@ -83,6 +83,9 @@ ViewerController::ViewerController(QQmlEngine *engine)
     connect(_fileListModel, &FileListModel::directOpenReady, this, [this] (int index) {
         emit setCurrentIndex(mapSourceRowToViewRow(index));
     });
+    connect(_fileListModel, &FileListModel::panelReloaded, this, [this] (int index) {
+        emit setCurrentIndex(mapSourceRowToViewRow(index));
+    });
 
     _galleryViewModel = new GalleryViewModel(_fileListModel, this);
     engine->rootContext()->setContextProperty("galleryViewModel", _galleryViewModel);
@@ -114,6 +117,24 @@ void ViewerController::cd(const QString &folder, bool changeHistory) {
     currentFolder = currentFolder.trimmed();
     if (currentFolder.endsWith(":") && !currentFolder.contains("/") && !currentFolder.contains("\\")) {
         currentFolder.append("/");
+    }
+
+    if (!_fileListModel->fileListSourceAccessEnabled()) {
+        if (currentFolder == "Computer\\" || currentFolder == "Computer/" || currentFolder == "Computer") {
+            setCurrentPath("Computer");
+        }
+        else if (currentFolder.contains("\\") || currentFolder.contains("/")) {
+            setCurrentPath(QDir(currentFolder).absolutePath());
+        }
+        else if (_currentPath == "Computer") {
+            setCurrentPath(QDir(currentFolder).absolutePath());
+        }
+        else {
+            setCurrentPath(QDir::cleanPath(QDir(_currentPath).absoluteFilePath(currentFolder)));
+        }
+        loadSavedState();
+        updateHistory(changeHistory);
+        return;
     }
 
     if (currentFolder == "Computer\\" || currentFolder == "Computer/" || currentFolder == "Computer") {
@@ -148,12 +169,24 @@ int ViewerController::up() {
     int indexToSelect = 0;
     if (_currentPath != "Computer") {
         QString previousFolder = QFileInfo(_currentPath).fileName();
-        QDir dir(_currentPath);
-        if (dir.cdUp()) {
-            indexToSelect = setCurrentPath(dir.absolutePath(), previousFolder);
+        if (!_fileListModel->fileListSourceAccessEnabled()) {
+            const QString currentPath = QDir::cleanPath(_currentPath);
+            const QString parentPath = QDir::cleanPath(QDir(currentPath).absoluteFilePath(".."));
+            if (parentPath != currentPath) {
+                indexToSelect = setCurrentPath(parentPath, previousFolder);
+            }
+            else {
+                indexToSelect = setCurrentPath("Computer", _currentPath);
+            }
         }
         else {
-            indexToSelect = setCurrentPath("Computer", _currentPath);
+            QDir dir(_currentPath);
+            if (dir.cdUp()) {
+                indexToSelect = setCurrentPath(dir.absolutePath(), previousFolder);
+            }
+            else {
+                indexToSelect = setCurrentPath("Computer", _currentPath);
+            }
         }
     }
     loadSavedState();
@@ -460,7 +493,8 @@ void ViewerController::initialCd(int viewerWidth, int viewerHeight) {
 
     if (!_startupFilePath.isEmpty()) {
         QFileInfo startupFileInfo(_startupFilePath);
-        if (startupFileInfo.isFile() && FileListModel::isImage(startupFileInfo.fileName())) {
+        if ((!_fileListModel->imageSourceAccessEnabled() || startupFileInfo.isFile())
+            && FileListModel::isImage(startupFileInfo.fileName())) {
             _pendingOpenInViewer = true;
             emit pendingOpenInViewerChanged();
             openFileInViewer(_startupFilePath, viewerWidth, viewerHeight);
@@ -480,10 +514,13 @@ void ViewerController::initialCd(int viewerWidth, int viewerHeight) {
 }
 
 void ViewerController::openFileInViewer(const QString &path, int viewerWidth, int viewerHeight, bool changeHistory) {
-    QString imagePath = normalizePathArgument(path);
+    const QString imagePath = _fileListModel->imageSourceAccessEnabled()
+        ? normalizePathArgument(path)
+        : normalizePathArgumentWithoutFileAccess(path);
 
     QFileInfo fileInfo(imagePath);
-    if (!fileInfo.isFile() || !FileListModel::isImage(fileInfo.fileName())) {
+    if ((_fileListModel->imageSourceAccessEnabled() && !fileInfo.isFile())
+        || !FileListModel::isImage(fileInfo.fileName())) {
         cd(imagePath, changeHistory);
         return;
     }

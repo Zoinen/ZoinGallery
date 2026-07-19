@@ -98,6 +98,7 @@ set(PROJECT_SOURCES
     ThumbnailLoader.h
     ThumbnailLoader.cpp
     MacApplication.h
+    CacheUsageMode.h
     NaturalSort.h
     FileListModel.h
     FileListModel.cpp

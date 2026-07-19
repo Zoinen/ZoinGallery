@@ -7,7 +7,7 @@ class FolderListReadRunner : public Runner {
     Q_OBJECT
 
 public:
-    FolderListReadRunner(const QString &path, int totalImages);
+    FolderListReadRunner(const QString &path, int totalImages, bool storeInCache);
 
     RunnerType type() override { return RunnerType::FolderListRead; }
     void run() override;
@@ -20,6 +20,8 @@ private:
 
     QString _path;
     int _totalImages;
+    bool _storeInCache;
+    quint64 _cacheGeneration;
 };
 
 #endif // FOLDERLISTREADRUNNER_H

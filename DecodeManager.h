@@ -6,6 +6,7 @@
 #include <QQueue>
 #include <QTimer>
 
+#include "CacheUsageMode.h"
 #include "ImageFile.h"
 
 enum class RunnerType {
@@ -65,6 +66,11 @@ public:
 
     void prepareToClose();
 
+    CacheUsageMode imageCacheMode() const;
+    void setImageCacheMode(CacheUsageMode mode);
+    CacheUsageMode fileListCacheMode() const;
+    void setFileListCacheMode(CacheUsageMode mode);
+
     bool runningTasksDebug() const;
     void setRunningTasksDebug(bool isRunningTasksDebug);
 
@@ -116,7 +122,10 @@ private:
 
     int _runningTasks = 0;
 
-    bool _disableCache = false;
+    CacheUsageMode _imageCacheMode = CacheUsageMode::On;
+    CacheUsageMode _fileListCacheMode = CacheUsageMode::On;
+    bool _imageCacheNeedsDump = false;
+    bool _fileListCacheNeedsDump = false;
     bool _runningTasksDebug = false;
     bool _isClosing = false;
 };

@@ -6,6 +6,7 @@
 #include <QAbstractProxyModel>
 #include <QSet>
 
+#include "CacheUsageMode.h"
 #include "ImageFile.h"
 #include "PersistentSelectionCache.h"
 
@@ -58,6 +59,12 @@ class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterfa
     Q_OBJECT
     Q_PROPERTY(bool runningTasksDebug READ runningTasksDebug WRITE setRunningTasksDebug NOTIFY runningTasksDebugChanged)
     Q_PROPERTY(int selectedCount READ selectedCount NOTIFY selectionChanged)
+    Q_PROPERTY(int imageCacheMode READ imageCacheMode WRITE setImageCacheMode NOTIFY imageCacheModeChanged)
+    Q_PROPERTY(int fileListCacheMode READ fileListCacheMode WRITE setFileListCacheMode NOTIFY fileListCacheModeChanged)
+    Q_PROPERTY(qint64 imageCacheSize READ imageCacheSize NOTIFY cacheInfoChanged)
+    Q_PROPERTY(QString imageCacheLocation READ imageCacheLocation CONSTANT)
+    Q_PROPERTY(qint64 fileListCacheSize READ fileListCacheSize NOTIFY cacheInfoChanged)
+    Q_PROPERTY(QString fileListCacheLocation READ fileListCacheLocation CONSTANT)
 
 public:
     enum ItemUserRoles {
@@ -149,6 +156,20 @@ public:
     bool runningTasksDebug() const;
     void setRunningTasksDebug(bool isRunningTasksDebug);
 
+    int imageCacheMode() const;
+    void setImageCacheMode(int mode);
+    int fileListCacheMode() const;
+    void setFileListCacheMode(int mode);
+    bool imageSourceAccessEnabled() const;
+    bool fileListSourceAccessEnabled() const;
+    qint64 imageCacheSize() const;
+    QString imageCacheLocation() const;
+    qint64 fileListCacheSize() const;
+    QString fileListCacheLocation() const;
+    Q_INVOKABLE void clearImageCache();
+    Q_INVOKABLE void clearFileListCache();
+    Q_INVOKABLE void refreshCacheInfo();
+
 signals:
     void viewerImageIdUrlChanged(const QString &imageId, int level); // 0 is thumbnail, 1 is viewer, 2 is full resolution
     void viewerImageCacheChanged(int index);
@@ -160,6 +181,10 @@ signals:
     void runningTasksDebugChanged();
     void selectionChanged();
     void selectionHistoryChanged();
+    void imageCacheModeChanged();
+    void fileListCacheModeChanged();
+    void cacheInfoChanged();
+    void panelReloaded(int sourceIndex);
 
 private:
     enum SelectionPreviewMode {
@@ -199,6 +224,10 @@ private:
     void cleanupModelBeforeCd();
     void clearModelData(bool clearViewerData);
     int populateFolderItems(const QString &path, const QString &itemToSelect = QString());
+    bool folderEntries(const QString &path, QList<FileInfo> &entries);
+    QList<FileInfo> readFolderEntries(const QString &path) const;
+    QString itemNameToPreserve() const;
+    void reloadPanelForCacheModeChange();
     void startRegularFolderWork();
     ImageDecodeRequest imageDecodeRequestFromEmbeddedImageInfo(const ImageInfo &info) const;
     void handleDirectOpenImageInfo(const ImageInfo &result);
@@ -260,6 +289,10 @@ private:
     QHash<QString, PersistentSelectionCache::ContainerState> _selectionStates;
     bool _selectionPreviewActive = false;
     QHash<QString, QSet<QString>> _selectionPreviewSnapshot;
+    CacheUsageMode _imageCacheMode = CacheUsageMode::On;
+    CacheUsageMode _fileListCacheMode = CacheUsageMode::On;
+    qint64 _imageCacheSize = 0;
+    qint64 _fileListCacheSize = 0;
     bool _isClosing = false;
 };
 

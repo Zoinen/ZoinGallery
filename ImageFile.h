@@ -214,6 +214,8 @@ using ImageFilePtr = std::shared_ptr<ImageFile>;
 struct FileInfo {
     QString name;
     QDateTime lastModified;
+    qint64 fileSize = -1;
+    bool isDirectory = false;
 };
 
 struct FolderInfo {

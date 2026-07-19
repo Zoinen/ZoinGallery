@@ -2,13 +2,13 @@
 
 #include "PersistentImageCache.h"
 
-CachedImageRetrieveRunner::CachedImageRetrieveRunner(const ImageDecodeRequest &request)
-    : _request(request) {
+CachedImageRetrieveRunner::CachedImageRetrieveRunner(const ImageDecodeRequest &request, bool validateRequestVersion)
+    : _request(request), _validateRequestVersion(validateRequestVersion) {
 }
 
 void CachedImageRetrieveRunner::run() {
     // QImage img(1, 1, QImage::Format_ARGB32);
-    QImage img = PersistentImageCache::retrieveImage(_request);
+    QImage img = PersistentImageCache::retrieveImage(_request, _validateRequestVersion);
     // qDebug() << "XX REQ" << _request.info.path << img << _request.targetSize;
     if (!img.isNull()) {
         emit cachedThumbnailRetrieved(_request, img, DecodedImageInfo {.isFromCache = true});
@@ -22,15 +22,19 @@ CachedImageStoreRunner::CachedImageStoreRunner(const ImageInfo &imageInfo, const
 }
 
 void CachedImageStoreRunner::run() {
-    PersistentImageCache::storeImage(_imageInfo, _imageData);
+    if (!isCanceled()) {
+        PersistentImageCache::storeImage(_imageInfo, _imageData);
+    }
     emit finished(this);
 }
 
 
 
 
-CachedImageInfoRunner::CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView, int directOpenGeneration)
-    : _imagePaths(imagePaths), _isFromEmbeddedView(isFromEmbeddedView), _directOpenGeneration(directOpenGeneration) {
+CachedImageInfoRunner::CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView,
+                                             bool validateSource, int directOpenGeneration)
+    : _imagePaths(imagePaths), _isFromEmbeddedView(isFromEmbeddedView),
+      _validateSource(validateSource), _directOpenGeneration(directOpenGeneration) {
 }
 
 void CachedImageInfoRunner::run() {
@@ -43,7 +47,7 @@ void CachedImageInfoRunner::run() {
     QStringList notFound;
     QList<ImageInfo> results;
 
-    PersistentImageCache::retrieveImagesInfo(_imagePaths, results, notFound);
+    PersistentImageCache::retrieveImagesInfo(_imagePaths, results, notFound, _validateSource);
 
     for (ImageInfo &info : results) {
         if (info.path == _imagePaths.last()) {

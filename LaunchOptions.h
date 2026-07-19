@@ -10,6 +10,7 @@ struct LaunchOptions {
 };
 
 QString normalizePathArgument(const QString &path);
+QString normalizePathArgumentWithoutFileAccess(const QString &path);
 LaunchOptions parseLaunchOptions(const QStringList &arguments);
 
 #endif // LAUNCHOPTIONS_H

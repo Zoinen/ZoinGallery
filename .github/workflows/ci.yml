@@ -569,7 +569,7 @@ jobs:
       - macos
       - windows
       - windows-arm64
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.target == 'all' && github.ref == 'refs/heads/master' }}
+    if: ${{ always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/master' }}
     permissions:
       contents: write
       actions: read

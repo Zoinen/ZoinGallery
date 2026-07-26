@@ -20,7 +20,6 @@ PLATFORMS = [
         "platform": "Windows",
         "icon": ".github/readme/platforms/windows.svg",
         "version": "Windows 10 or later (x64)",
-        "job": "Windows Server 2022",
         "artifact_prefix": "ZoinGallery-windows-2022-b",
         "download_label": "Download Windows x64",
     },
@@ -28,7 +27,6 @@ PLATFORMS = [
         "platform": "Windows",
         "icon": ".github/readme/platforms/windows.svg",
         "version": "Windows 11 or later (ARM64)",
-        "job": "Windows / ARM64",
         "artifact_prefix": "ZoinGallery-windows-arm64-b",
         "download_label": "Download Windows ARM64",
     },
@@ -36,7 +34,6 @@ PLATFORMS = [
         "platform": "macOS",
         "icon": ".github/readme/platforms/macos.svg",
         "version": "macOS 10.15 or later",
-        "job": "macOS 15",
         "artifact_prefix": "ZoinGallery-macos-15-b",
         "download_label": "Download DMG",
     },
@@ -44,7 +41,6 @@ PLATFORMS = [
         "platform": "Linux",
         "icon": ".github/readme/platforms/linux.svg",
         "version": "AppImage x86_64",
-        "job": "Linux / Ubuntu 24.04",
         "artifact_prefix": "ZoinGallery-appimage-x86_64-b",
         "download_label": "Download AppImage",
     },
@@ -52,7 +48,6 @@ PLATFORMS = [
         "platform": "Linux",
         "icon": ".github/readme/platforms/linux.svg",
         "version": "Flatpak x86_64",
-        "job": "Linux / Ubuntu 24.04",
         "artifact_prefix": "ZoinGallery-flatpak-x86_64-b",
         "download_label": "Download Flatpak",
     },
@@ -60,7 +55,6 @@ PLATFORMS = [
         "platform": "Linux",
         "icon": ".github/readme/platforms/linux.svg",
         "version": "Ubuntu 24.04",
-        "job": "Linux / Ubuntu 24.04",
         "artifact_prefix": "ZoinGallery-linux-ubuntu-24.04-b",
         "download_label": "Download Ubuntu",
     },
@@ -68,7 +62,6 @@ PLATFORMS = [
         "platform": "Linux",
         "icon": ".github/readme/platforms/linux.svg",
         "version": "Debian 12",
-        "job": "Linux / Debian 12",
         "artifact_prefix": "ZoinGallery-linux-debian-12-b",
         "download_label": "Download Debian",
     },
@@ -76,7 +69,6 @@ PLATFORMS = [
         "platform": "Linux",
         "icon": ".github/readme/platforms/linux.svg",
         "version": "Fedora latest",
-        "job": "Linux / Fedora latest",
         "artifact_prefix": "ZoinGallery-linux-fedora-latest-b",
         "download_label": "Download Fedora",
     },
@@ -84,7 +76,6 @@ PLATFORMS = [
         "platform": "Linux",
         "icon": ".github/readme/platforms/linux.svg",
         "version": "Arch rolling",
-        "job": "Linux / Arch latest",
         "artifact_prefix": "ZoinGallery-linux-arch-latest-b",
         "download_label": "Download Arch",
     },
@@ -131,7 +122,8 @@ def artifact_for_platform(artifacts: list[dict[str, Any]], artifact_prefix: str)
     matches = [
         artifact
         for artifact in artifacts
-        if str(artifact.get("name", "")).startswith(artifact_prefix)
+        if not artifact.get("expired")
+        and str(artifact.get("name", "")).startswith(artifact_prefix)
     ]
     if not matches:
         return {}
@@ -152,14 +144,9 @@ def platform_cell(platform: dict[str, str]) -> str:
 
 def build_section() -> str:
     repo = os.environ["GITHUB_REPOSITORY"]
-    run_id = os.environ["GITHUB_RUN_ID"]
     server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
 
-    run = api_json(f"/actions/runs/{run_id}")
-    jobs = paged_api(f"/actions/runs/{run_id}/jobs", "jobs")
-    artifacts = paged_api(f"/actions/runs/{run_id}/artifacts", "artifacts")
-
-    jobs_by_name = {job["name"]: job for job in jobs}
+    artifacts = paged_api("/actions/artifacts", "artifacts")
 
     lines = [
         "| Platform | Version | Built | Download |",
@@ -167,17 +154,19 @@ def build_section() -> str:
     ]
 
     for platform in PLATFORMS:
-        job = jobs_by_name.get(platform["job"], {})
         artifact = artifact_for_platform(artifacts, platform["artifact_prefix"])
 
         if artifact:
-            artifact_url = f"{server_url}/{repo}/actions/runs/{run_id}/artifacts/{artifact['id']}"
+            artifact_run_id = artifact.get("workflow_run", {}).get("id")
+            artifact_url = (
+                f"{server_url}/{repo}/actions/runs/{artifact_run_id}/artifacts/{artifact['id']}"
+            )
             build_number = artifact_build_number(artifact, platform["artifact_prefix"])
             artifact_cell = f"[{platform['download_label']} (build {build_number})]({artifact_url})"
             built_at = format_time(artifact.get("created_at"))
         else:
             artifact_cell = "Unavailable"
-            built_at = format_time(job.get("completed_at") or run.get("updated_at"))
+            built_at = "Unknown"
 
         lines.append(
             f"| {platform_cell(platform)} | {platform['version']} | {built_at} | {artifact_cell} |"

@@ -18,23 +18,23 @@ END_MARKER = "<!-- CI_ARTIFACTS_END -->"
 PLATFORMS = [
     {
         "platform": "Windows",
-        "icon": "https://cdn.simpleicons.org/windows/0078D4",
+        "icon": ".github/readme/platforms/windows.svg",
         "version": "Windows 10 or later (x64)",
         "job": "Windows Server 2022",
         "artifact_prefix": "ZoinGallery-windows-2022-b",
-        "download_label": "Download Windows build",
+        "download_label": "Download Windows x64",
     },
     {
         "platform": "Windows",
-        "icon": "https://cdn.simpleicons.org/windows/0078D4",
+        "icon": ".github/readme/platforms/windows.svg",
         "version": "Windows 11 or later (ARM64)",
         "job": "Windows / ARM64",
         "artifact_prefix": "ZoinGallery-windows-arm64-b",
-        "download_label": "Download Windows ARM64 build",
+        "download_label": "Download Windows ARM64",
     },
     {
         "platform": "macOS",
-        "icon": "https://cdn.simpleicons.org/apple/000000",
+        "icon": ".github/readme/platforms/macos.svg",
         "version": "macOS 10.15 or later",
         "job": "macOS 15",
         "artifact_prefix": "ZoinGallery-macos-15-b",
@@ -42,7 +42,7 @@ PLATFORMS = [
     },
     {
         "platform": "Linux",
-        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "icon": ".github/readme/platforms/linux.svg",
         "version": "AppImage x86_64",
         "job": "Linux / Ubuntu 24.04",
         "artifact_prefix": "ZoinGallery-appimage-x86_64-b",
@@ -50,7 +50,7 @@ PLATFORMS = [
     },
     {
         "platform": "Linux",
-        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "icon": ".github/readme/platforms/linux.svg",
         "version": "Flatpak x86_64",
         "job": "Linux / Ubuntu 24.04",
         "artifact_prefix": "ZoinGallery-flatpak-x86_64-b",
@@ -58,35 +58,35 @@ PLATFORMS = [
     },
     {
         "platform": "Linux",
-        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "icon": ".github/readme/platforms/linux.svg",
         "version": "Ubuntu 24.04",
         "job": "Linux / Ubuntu 24.04",
         "artifact_prefix": "ZoinGallery-linux-ubuntu-24.04-b",
-        "download_label": "Download Ubuntu build",
+        "download_label": "Download Ubuntu",
     },
     {
         "platform": "Linux",
-        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "icon": ".github/readme/platforms/linux.svg",
         "version": "Debian 12",
         "job": "Linux / Debian 12",
         "artifact_prefix": "ZoinGallery-linux-debian-12-b",
-        "download_label": "Download Debian build",
+        "download_label": "Download Debian",
     },
     {
         "platform": "Linux",
-        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "icon": ".github/readme/platforms/linux.svg",
         "version": "Fedora latest",
         "job": "Linux / Fedora latest",
         "artifact_prefix": "ZoinGallery-linux-fedora-latest-b",
-        "download_label": "Download Fedora build",
+        "download_label": "Download Fedora",
     },
     {
         "platform": "Linux",
-        "icon": "https://cdn.simpleicons.org/linux/FCC624",
+        "icon": ".github/readme/platforms/linux.svg",
         "version": "Arch rolling",
         "job": "Linux / Arch latest",
         "artifact_prefix": "ZoinGallery-linux-arch-latest-b",
-        "download_label": "Download Arch build",
+        "download_label": "Download Arch",
     },
 ]
 
@@ -127,14 +127,6 @@ def format_time(value: str | None) -> str:
     return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def status_text(conclusion: str | None) -> str:
-    if conclusion == "success":
-        return "Pass"
-    if conclusion:
-        return conclusion.replace("_", " ").title()
-    return "Unknown"
-
-
 def artifact_for_platform(artifacts: list[dict[str, Any]], artifact_prefix: str) -> dict[str, Any]:
     matches = [
         artifact
@@ -146,10 +138,16 @@ def artifact_for_platform(artifacts: list[dict[str, Any]], artifact_prefix: str)
     return max(matches, key=lambda artifact: artifact.get("created_at") or "")
 
 
+def artifact_build_number(artifact: dict[str, Any], artifact_prefix: str) -> str:
+    name = str(artifact.get("name", ""))
+    suffix = name.removeprefix(artifact_prefix)
+    return suffix if name.startswith(artifact_prefix) and suffix.isdigit() else "unknown"
+
+
 def platform_cell(platform: dict[str, str]) -> str:
     icon = platform["icon"]
     name = platform["platform"]
-    return f'<img src="{icon}" width="16" alt="{name} logo"> {name}'
+    return f'<img src="{icon}" width="22" alt="{name} logo"> {name}'
 
 
 def build_section() -> str:
@@ -162,35 +160,27 @@ def build_section() -> str:
     artifacts = paged_api(f"/actions/runs/{run_id}/artifacts", "artifacts")
 
     jobs_by_name = {job["name"]: job for job in jobs}
-    run_url = run.get("html_url") or f"{server_url}/{repo}/actions/runs/{run_id}"
-    run_number = str(run.get("run_number") or os.environ.get("GITHUB_RUN_NUMBER", "unknown"))
 
     lines = [
-        f"Latest successful run: [{run.get('display_title') or 'CI'}]({run_url})",
-        f"Build number: `{run_number}`",
-        "",
-        "| Platform | Version | Status | Built | Download |",
-        "| --- | --- | --- | --- | --- |",
+        "| Platform | Version | Built | Download |",
+        "| --- | --- | --- | --- |",
     ]
 
     for platform in PLATFORMS:
         job = jobs_by_name.get(platform["job"], {})
         artifact = artifact_for_platform(artifacts, platform["artifact_prefix"])
 
-        status = status_text(job.get("conclusion"))
-        status_url = job.get("html_url") or run_url
-        status_cell = f"[{status}]({status_url})"
-
         if artifact:
             artifact_url = f"{server_url}/{repo}/actions/runs/{run_id}/artifacts/{artifact['id']}"
-            artifact_cell = f"[{platform['download_label']}]({artifact_url})"
+            build_number = artifact_build_number(artifact, platform["artifact_prefix"])
+            artifact_cell = f"[{platform['download_label']} (build {build_number})]({artifact_url})"
             built_at = format_time(artifact.get("created_at"))
         else:
             artifact_cell = "Unavailable"
             built_at = format_time(job.get("completed_at") or run.get("updated_at"))
 
         lines.append(
-            f"| {platform_cell(platform)} | {platform['version']} | {status_cell} | {built_at} | {artifact_cell} |"
+            f"| {platform_cell(platform)} | {platform['version']} | {built_at} | {artifact_cell} |"
         )
 
     lines.extend(

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <title>Windows</title>
+  <rect width="128" height="128" rx="24" fill="#0078d4"/>
+  <path fill="#fff" d="M23 25.5 59.5 20v40.5H23V25.5Zm42.5-6.3L105 13v47.5H65.5V19.2ZM23 67.5h36.5V108L23 102.5v-35Zm42.5 0H105V115l-39.5-6.2V67.5Z"/>
+</svg>

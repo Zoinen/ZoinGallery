@@ -13,7 +13,9 @@ on:
           - ubuntu
           - appimage
           - flatpak
-          - linux-packages
+          - debian
+          - fedora
+          - arch
           - linux
           - macos
           - windows
@@ -33,7 +35,7 @@ env:
 jobs:
   linux-ubuntu:
     name: Linux / Ubuntu 24.04
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'ubuntu' || inputs.target == 'appimage' || inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'linux' || inputs.target == 'all' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'ubuntu' || inputs.target == 'appimage' || inputs.target == 'flatpak' || inputs.target == 'linux' || inputs.target == 'all' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -107,6 +109,7 @@ jobs:
         run: bash ci/smoke-test-linux-package.sh "build/artifacts/ZoinGallery-linux-ubuntu-24.04-b${BUILD_NUMBER}"
 
       - name: Upload artifact
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target == 'ubuntu' || inputs.target == 'linux' || inputs.target == 'all' }}
         uses: actions/upload-artifact@v4
         with:
           name: ZoinGallery-linux-ubuntu-24.04-b${{ github.run_number }}
@@ -114,15 +117,15 @@ jobs:
           if-no-files-found: error
 
       - name: Prepare AppImage
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'appimage' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'appimage' || inputs.target == 'linux' || inputs.target == 'all') }}
         run: bash ci/create-appimage.sh "build/artifacts/ZoinGallery-linux-ubuntu-24.04-b${BUILD_NUMBER}" "ZoinGallery-x86_64-b${BUILD_NUMBER}"
 
       - name: Smoke test AppImage
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'appimage' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'appimage' || inputs.target == 'linux' || inputs.target == 'all') }}
         run: bash ci/smoke-test-appimage.sh "build/artifacts/ZoinGallery-x86_64-b${BUILD_NUMBER}.AppImage"
 
       - name: Upload AppImage
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'appimage' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'appimage' || inputs.target == 'linux' || inputs.target == 'all') }}
         uses: actions/upload-artifact@v4
         with:
           name: ZoinGallery-appimage-x86_64-b${{ github.run_number }}
@@ -130,30 +133,61 @@ jobs:
           if-no-files-found: error
 
       - name: Install Flatpak tools
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux' || inputs.target == 'all') }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends dbus-x11 elfutils flatpak flatpak-builder librsvg2-bin
 
       - name: Prepare Flatpak
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux' || inputs.target == 'all') }}
         run: bash ci/create-flatpak.sh "build/artifacts/ZoinGallery-linux-ubuntu-24.04-b${BUILD_NUMBER}" "ZoinGallery-flatpak-x86_64-b${BUILD_NUMBER}"
 
       - name: Smoke test Flatpak
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux' || inputs.target == 'all') }}
         run: bash ci/smoke-test-flatpak.sh "build/artifacts/ZoinGallery-flatpak-x86_64-b${BUILD_NUMBER}.flatpak"
 
       - name: Upload Flatpak
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux-packages' || inputs.target == 'all') }}
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'flatpak' || inputs.target == 'linux' || inputs.target == 'all') }}
         uses: actions/upload-artifact@v4
         with:
           name: ZoinGallery-flatpak-x86_64-b${{ github.run_number }}
           path: build/artifacts/ZoinGallery-flatpak-x86_64-b${{ github.run_number }}.flatpak
           if-no-files-found: error
 
+  linux-matrix:
+    name: Select Linux distributions
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'debian' || inputs.target == 'fedora' || inputs.target == 'arch' || inputs.target == 'linux' || inputs.target == 'all') }}
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+
+    steps:
+      - name: Select distribution matrix
+        id: select
+        env:
+          TARGET: ${{ inputs.target }}
+        shell: bash
+        run: |
+          case "${TARGET}" in
+            debian)
+              matrix='{"include":[{"name":"Debian 12","distro":"debian","image":"debian:12","cache_key":"debian-12"}]}'
+              ;;
+            fedora)
+              matrix='{"include":[{"name":"Fedora latest","distro":"fedora","image":"fedora:latest","cache_key":"fedora-latest"}]}'
+              ;;
+            arch)
+              matrix='{"include":[{"name":"Arch latest","distro":"arch","image":"archlinux:latest","cache_key":"arch-latest"}]}'
+              ;;
+            linux|all)
+              matrix='{"include":[{"name":"Debian 12","distro":"debian","image":"debian:12","cache_key":"debian-12"},{"name":"Fedora latest","distro":"fedora","image":"fedora:latest","cache_key":"fedora-latest"},{"name":"Arch latest","distro":"arch","image":"archlinux:latest","cache_key":"arch-latest"}]}'
+              ;;
+          esac
+          echo "matrix=${matrix}" >> "${GITHUB_OUTPUT}"
+
   linux-containers:
     name: Linux / ${{ matrix.name }}
-    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.target == 'linux' || inputs.target == 'all') }}
+    needs: linux-matrix
+    if: ${{ needs.linux-matrix.result == 'success' }}
     runs-on: ubuntu-24.04
     container:
       image: ${{ matrix.image }}
@@ -161,20 +195,7 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Debian 12
-            distro: debian
-            image: debian:12
-            cache_key: debian-12
-          - name: Fedora latest
-            distro: fedora
-            image: fedora:latest
-            cache_key: fedora-latest
-          - name: Arch latest
-            distro: arch
-            image: archlinux:latest
-            cache_key: arch-latest
+      matrix: ${{ fromJSON(needs.linux-matrix.outputs.matrix) }}
 
     steps:
       - name: Install base tools for checkout

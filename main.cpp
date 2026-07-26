@@ -392,8 +392,10 @@ int main(int argc, char *argv[])
     applyMacApplicationDockIconPolicy(true);
 
     QQuickStyle::setStyle("ZGStyle");
-#if defined(__USE_QWK)
+#if defined(__USE_QWK) && (defined(Q_OS_WIN) || defined(Q_OS_MACOS))
     QQuickWindow::setDefaultAlphaBuffer(true);
+#else
+    QQuickWindow::setDefaultAlphaBuffer(false);
 #endif
 
     qmlRegisterType<MainWindow>("ZoinGallery.MainWindow", 1, 0, "MainWindow");

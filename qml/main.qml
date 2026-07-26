@@ -15,7 +15,8 @@ MainWindow {
     property bool isQWKLegacy: false
     property bool windowAgentReady: false
     property int macWindowEffectApplyAttempts: 0
-    readonly property bool useTransparentWindowBackground: isQWK && Qt.platform.os !== "linux" && !isQWKLegacy
+    readonly property bool supportsTransparentWindowBackground: isQWK && (Qt.platform.os === "windows" || Qt.platform.os === "osx")
+    readonly property bool useTransparentWindowBackground: supportsTransparentWindowBackground && !isQWKLegacy
     readonly property bool useMacNativeTitleBar: isQWK && Qt.platform.os === "osx"
     readonly property string macWindowGlassEffect: useMacNativeTitleBar ? "regular" : "none"
     readonly property string macWindowFallbackBlurEffect: useMacNativeTitleBar ? (Style.isDarkTheme ? "dark" : "light") : "none"

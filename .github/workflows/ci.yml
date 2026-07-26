@@ -82,6 +82,7 @@ jobs:
             -o '&:with_qt=False' \
             -c tools.files.download:retry=5 \
             -c tools.files.download:retry_wait=10 \
+            -c 'tools.cmake.cmaketoolchain:extra_variables={"CMAKE_INSTALL_LIBDIR":"lib"}' \
             --output-folder=build
 
       - name: Build QWindowKit
@@ -256,6 +257,7 @@ jobs:
             -o '&:with_qt=False' \
             -c tools.files.download:retry=5 \
             -c tools.files.download:retry_wait=10 \
+            -c 'tools.cmake.cmaketoolchain:extra_variables={"CMAKE_INSTALL_LIBDIR":"lib"}' \
             --output-folder=build
 
       - name: Build QWindowKit

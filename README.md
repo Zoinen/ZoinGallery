@@ -17,7 +17,7 @@ ZoinGallery is a Qt-based desktop image gallery.
 | <img src=".github/readme/platforms/linux.svg" width="22" alt="Linux logo"> Linux | Ubuntu 24.04 | 2026-07-26 21:45 UTC | [Download Ubuntu (build 57)](https://github.com/Zoinen/ZoinGallery/actions/runs/30221259304/artifacts/8637397429) |
 | <img src=".github/readme/platforms/linux.svg" width="22" alt="Linux logo"> Linux | Debian 12 | 2026-07-19 00:35 UTC | [Download Debian (build 56)](https://github.com/Zoinen/ZoinGallery/actions/runs/29666768385/artifacts/8436084521) |
 | <img src=".github/readme/platforms/linux.svg" width="22" alt="Linux logo"> Linux | Fedora latest | 2026-07-19 00:35 UTC | [Download Fedora (build 56)](https://github.com/Zoinen/ZoinGallery/actions/runs/29666768385/artifacts/8436081867) |
-| <img src=".github/readme/platforms/linux.svg" width="22" alt="Linux logo"> Linux | Arch rolling | 2026-07-09 00:03 UTC | [Download Arch (build 30)](https://github.com/Zoinen/ZoinGallery/actions/runs/28983989368/artifacts/8185246320) |
+| <img src=".github/readme/platforms/linux.svg" width="22" alt="Linux logo"> Linux | Arch rolling | 2026-07-26 22:43 UTC | [Download Arch (build 61)](https://github.com/Zoinen/ZoinGallery/actions/runs/30223157527/artifacts/8637964953) |
 
 _These are unsigned CI validation builds. GitHub may require sign-in to download artifacts._
 <!-- CI_ARTIFACTS_END -->

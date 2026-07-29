@@ -23,11 +23,25 @@ Item {
     readonly property var filmstripModel:
         sourceContext ? sourceContext.filmstripModel : null
 
+    // sourceContext is a short-lived wrapper recreated whenever the viewer is
+    // opened. The masonry instance identifies the actual persistent source.
+    property var previousSourceMasonry: null
+
     onSourceContextChanged: {
+        let nextSourceMasonry =
+                sourceContext ? sourceContext.masonry : null
+        let actualSourceChanged =
+                previousSourceMasonry !== nextSourceMasonry
+
         flickableArea.resetViewerImages()
-        clearPreviousImage()
+        if (actualSourceChanged) {
+            clearPreviousImage()
+        } else {
+            restorePreviousImageLockIndexes()
+        }
         resetViewerNavigation()
         lastKnownIndex = sourceMasonry ? sourceMasonry.view.currentIndex : -1
+        previousSourceMasonry = nextSourceMasonry
     }
 
     property int animationDuration: 150

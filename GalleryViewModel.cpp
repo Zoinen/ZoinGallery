@@ -26,14 +26,12 @@ void GalleryViewModel::setSourceModel(QAbstractItemModel *sourceModel) {
     if (fileListModel()) {
         connect(fileListModel(), &FileListModel::selectionChanged, this, [this]() {
             if (_selectedOnly) {
-                beginFilterChange();
-                endFilterChange(QSortFilterProxyModel::Direction::Rows);
+                refreshRowsFilter();
             }
         });
         connect(fileListModel(), &FileListModel::directOpenPathChanged, this, [this]() {
             if (_selectedOnly) {
-                beginFilterChange();
-                endFilterChange(QSortFilterProxyModel::Direction::Rows);
+                refreshRowsFilter();
             }
         });
     }
@@ -49,8 +47,7 @@ void GalleryViewModel::setSelectedOnly(bool selectedOnly) {
     }
 
     _selectedOnly = selectedOnly;
-    beginFilterChange();
-    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+    refreshRowsFilter();
     emit selectedOnlyChanged();
 }
 
@@ -296,6 +293,15 @@ QString GalleryViewModel::labelForSortMode(SortMode sortMode) {
     }
 
     return QStringLiteral("Name A-Z");
+}
+
+void GalleryViewModel::refreshRowsFilter() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+    beginFilterChange();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+    invalidateFilter();
+#endif
 }
 
 int GalleryViewModel::compareItems(const ImageFile *leftItem, const ImageFile *rightItem) const {

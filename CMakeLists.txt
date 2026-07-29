@@ -66,6 +66,23 @@ find_package(libjpeg-turbo REQUIRED)
 find_package(libheif REQUIRED)
 find_package(WebP REQUIRED)
 
+if (NOT DEFINED WEBP_INCLUDE_DIR)
+    find_path(WEBP_INCLUDE_DIR "webp/decode.h"
+        PATHS
+            "${libwebp_PACKAGE_FOLDER_RELWITHDEBINFO}/include"
+            "${libwebp_PACKAGE_FOLDER_RELEASE}/include"
+            "${libwebp_PACKAGE_FOLDER_DEBUG}/include"
+        NO_DEFAULT_PATH
+    )
+endif()
+
+if (WEBP_INCLUDE_DIR)
+    include_directories(${WEBP_INCLUDE_DIR})
+    message(STATUS "Found webp/decode.h in: ${WEBP_INCLUDE_DIR}")
+else()
+    message(FATAL_ERROR "Could not find webp/decode.h header. Make sure libwebp is properly installed.")
+endif()
+
 # Explicitly add the libjpeg-turbo include path (fix for missing turbojpeg.h)
 find_path(TURBOJPEG_INCLUDE_DIR "turbojpeg.h")
 if(TURBOJPEG_INCLUDE_DIR)

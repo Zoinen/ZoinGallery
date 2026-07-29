@@ -63,6 +63,7 @@ private:
     static SortMode normalizeSortMode(int sortMode);
     static bool isReverse(SortMode sortMode);
     static QString labelForSortMode(SortMode sortMode);
+    void refreshRowsFilter();
     int compareItems(const ImageFile *leftItem, const ImageFile *rightItem) const;
     int compareNatural(const QString &left, const QString &right) const;
     int compareDateTime(const QDateTime &left, const QDateTime &right) const;

@@ -8,6 +8,7 @@
 #include "ThumbnailLoader.h"
 
 #include <QCoreApplication>
+#include <QClipboard>
 #include <QDir>
 #include <QDebug>
 #include <QSet>
@@ -21,15 +22,34 @@
 #include <QUrl>
 
 #include <chrono>
+#include <utility>
 using namespace std::chrono_literals;
 
 namespace {
 constexpr const char *ImageCacheModeSettingsKey = "Cache/imageUsageMode";
 constexpr const char *FileListCacheModeSettingsKey = "Cache/fileListUsageMode";
+
+QHash<QString, int> availableSelectedImageCounts() {
+    QHash<QString, int> counts;
+    const auto selectedFiles =
+        PersistentSelectionCache::selectedFilesByAdditionDate();
+    for (const auto &selectedFile : selectedFiles) {
+        const QFileInfo fileInfo(selectedFile.path);
+        if (fileInfo.isFile() &&
+            ThumbnailLoader::isFormatSupported(fileInfo.fileName())) {
+            counts[selectedFile.groupId]++;
+        }
+    }
+    return counts;
+}
 }
 
-FileListModel::FileListModel(QObject *parent)
-    : QAbstractItemModel(parent) {
+FileListModel::FileListModel(
+    QSharedPointer<ProviderImageStore> providerImageStore, QObject *parent)
+    : QAbstractItemModel(parent),
+      _providerImageStore(std::move(providerImageStore)),
+      _viewerImageCache(QStringLiteral("main-viewer-"),
+                        _providerImageStore) {
     _lastId = 0;
     _currentViewIndex = -1;
 
@@ -44,20 +64,7 @@ FileListModel::FileListModel(QObject *parent)
 
     connect(_decodeManager, &DecodeManager::viewerRunnerCanceled, this, [&] (const QString &path) {
         qDebug() << "REMOVE CANCELLED RUNNER???" << path;
-        auto it = _viewerImages.find(path);
-        if (it != _viewerImages.end()) {
-            if (it.value().image.isNull()) {
-                qDebug() << "REMOVE CANCELLED RUNNER" << path;
-                _viewerImages.remove(path);
-            }
-        }
-        auto fullSizeIt = _fullSizeViewerImages.find(path);
-        if (fullSizeIt != _fullSizeViewerImages.end()) {
-            if (fullSizeIt.value().image.isNull()) {
-                qDebug() << "REMOVE CANCELLED FULL SIZE RUNNER" << path;
-                _fullSizeViewerImages.remove(path);
-            }
-        }
+        _viewerImageCache.removeIncomplete(path);
     });
 
     connect(_decodeManager, &DecodeManager::runningTasksChanged, [&] (const QString &runningTasks, const QStringList &tasksInfo) {
@@ -79,7 +86,6 @@ FileListModel::FileListModel(QObject *parent)
         if (result.directOpenGeneration && result.directOpenGeneration != _directOpen.generation) {
             return;
         }
-
         auto it = _fileToItem.find(result.path);
         // qDebug() << "INFO RECEIVED" << result.path << result.imageSize;
         if (it != _fileToItem.end()) {
@@ -141,6 +147,7 @@ FileListModel::FileListModel(QObject *parent)
         int flushIndex = -1;
         int minIndex = 1000000;
         int maxIndex = -1;
+        bool foundCurrentItem = false;
         // TODO: If differents parent come in one signal here it will mess everything up
         QModelIndex parent;
 
@@ -148,6 +155,7 @@ FileListModel::FileListModel(QObject *parent)
             auto it = _fileToItem.find(result.path);
             // qDebug() << "INFO RECEIVED" << result.path << result.imageSize << result.orientation;
             if (it != _fileToItem.end()) {
+                foundCurrentItem = true;
                 ImageFile *item = it.value();
                 ImageInfo itemInfo = result;
                 if (itemInfo.fileSize < 0) {
@@ -178,6 +186,10 @@ FileListModel::FileListModel(QObject *parent)
             }
         }
 
+        if (!foundCurrentItem) {
+            return;
+        }
+
         QModelIndex minModelIndex = index(minIndex, 0, parent);
         QModelIndex maxModelIndex = index(maxIndex, 0, parent);
         if (!minModelIndex.isValid() || !maxModelIndex.isValid()) {
@@ -201,7 +213,6 @@ FileListModel::FileListModel(QObject *parent)
         if (request.info.directOpenGeneration && request.info.directOpenGeneration != _directOpen.generation) {
             return;
         }
-
         // image.save(QString("c:/tmp/zg/%1.png").arg(QFileInfo(request.info.path).fileName()));
         // qDebug() << "ZZ IMAGE READEY" << request.info.path << request.info.imageSize << request.targetSize << image.size();
         auto it = _fileToItem.find(request.info.path);
@@ -210,75 +221,21 @@ FileListModel::FileListModel(QObject *parent)
             if (request.viewerRequest) {
                 // qDebug() << "ZZ Viewer image came" << request.info.path << isFromCache << image.size() << item->image.size();
             }
-            if (decodedInfo.isFromCache && (image.width() <= item->image().width() ||
-                                            image.height() <= item->image().height())) {
+            if (!request.viewerRequest && decodedInfo.isFromCache &&
+                (image.width() <= item->image().width() ||
+                 image.height() <= item->image().height())) {
                 handleDirectOpenImageReady(request, image, decodedInfo);
                 return;
             }
             if (request.viewerRequest) {
-                // qDebug() << "ZZ Viewer image SET";
-                QString imageId = generateNewId();
-                if (request.targetSize == request.info.imageSize ||
-                    request.targetSize == rotateToOrientation(request.info.imageSize, request.info.orientation)) {
-                    auto it = _fullSizeViewerImages.find(request.info.path);
-                    if (it != _fullSizeViewerImages.end()) {
-                        if (it->image.width() > image.width() && it->image.height() > image.height()) {
-                            handleDirectOpenImageReady(request, image, decodedInfo);
-                            return;
-                        }
-                    }
-
-                    if (it != _fullSizeViewerImages.end() && decodedInfo.isFromCache) {
-                        _fullSizeViewerImages[request.info.path] = ViewerImage{
-                            .image = image,
-                            .imageId = imageId,
-                            .requestedSize = it->requestedSize, // not updating this
-                            .decodedInfo = decodedInfo
-                        };
-                    }
-                    else {
-                        _fullSizeViewerImages[request.info.path] = ViewerImage{
-                            .image = image,
-                            .imageId = imageId,
-                            .requestedSize = image.size(),
-                            .decodedInfo = decodedInfo
-                        };
-                    }
-                    _imageIdToFullSizeViewer[imageId] = request.info.path;
+                const ViewerImageCache::StoredImage storedImage =
+                    _viewerImageCache.storeDecodedImage(request, image,
+                                                        decodedInfo);
+                if (storedImage.accepted) {
                     emit viewerImageCacheChanged(item->index());
                     if (item->index() == _currentViewIndex) {
-                        emit viewerImageIdUrlChanged(QString("image://async/") + imageId, 2);
-                    }
-                }
-                else {
-                    auto it = _viewerImages.find(request.info.path);
-                    if (it != _viewerImages.end()) {
-                        if (it->image.width() > image.width() && it->image.height() > image.height()) {
-                            handleDirectOpenImageReady(request, image, decodedInfo);
-                            return;
-                        }
-                    }
-
-                    if (it != _viewerImages.end() && decodedInfo.isFromCache) {
-                        _viewerImages[request.info.path] = ViewerImage{
-                            .image = image,
-                            .imageId = imageId,
-                            .requestedSize = it->requestedSize, // not updating this
-                            .decodedInfo = decodedInfo
-                        };
-                    }
-                    else {
-                        _viewerImages[request.info.path] = ViewerImage{
-                            .image = image,
-                            .imageId = imageId,
-                            .requestedSize = image.size(),
-                            .decodedInfo = decodedInfo
-                        };
-                    }
-                    _imageIdToViewer[imageId] = request.info.path;
-                    emit viewerImageCacheChanged(item->index());
-                    if (item->index() == _currentViewIndex) {
-                        emit viewerImageIdUrlChanged(QString("image://thumbnails/") + imageId, 1);
+                        emit viewerImageIdUrlChanged(storedImage.url,
+                                                     storedImage.level);
                     }
                 }
             }
@@ -342,6 +299,8 @@ QHash<int, QByteArray> FileListModel::roleNames() const {
     // names[Qt::DisplayRole] = "displayRole";
     names[ImageIdUrlRole] = "imageIdUrlRole";
     names[SelectedRole] = "selectedRole";
+    names[SelectionGroupIdRole] = "selectionGroupIdRole";
+    names[SelectionGroupColorRole] = "selectionGroupColorRole";
     names[ImageFileRole] = "imageFileRole";
     names[FolderRole] = "folderRole";
     names[IsImageRole] = "isImageRole";
@@ -384,6 +343,12 @@ QVariant FileListModel::data(const QModelIndex &index, int role) const {
         }
         else if (role == SelectedRole) {
             return imageFile->isSelected();
+        }
+        else if (role == SelectionGroupIdRole) {
+            return imageFile->selectionGroupId();
+        }
+        else if (role == SelectionGroupColorRole) {
+            return imageFile->selectionGroupColor();
         }
         else if (role == LastModifiedRole) {
             return imageFile->lastModified();
@@ -429,8 +394,9 @@ void FileListModel::prepareToClose() {
     qInfo() << "[Shutdown] FileListModel::prepareToClose begin"
             << "alreadyClosing" << _isClosing
             << "items" << _items.size()
-            << "viewerImages" << _viewerImages.size()
-            << "fullSizeViewerImages" << _fullSizeViewerImages.size();
+            << "viewerImages" << _viewerImageCache.viewerImageCount()
+            << "fullSizeViewerImages"
+            << _viewerImageCache.fullSizeImageCount();
     if (_isClosing) {
         qInfo() << "[Shutdown] FileListModel::prepareToClose already closing, calling QCoreApplication::exit(0)";
         QCoreApplication::exit(0);
@@ -628,12 +594,14 @@ QString FileListModel::generateNewId() {
 }
 
 void FileListModel::updateImageId(ImageFile *item) {
-    QString imageId = item->imageIdUrl();
+    const QString imageId = item->imageIdUrl().section('/', -1);
     if (!imageId.isEmpty()) {
         _imageIdToItem.remove(imageId);
+        _providerImageStore->remove(imageId);
     }
-    QString newImageId = generateNewId();
+    const QString newImageId = generateNewId();
     _imageIdToItem.insert(newImageId, item);
+    _providerImageStore->publish(newImageId, item->image());
     item->setImageId(newImageId);
 
     QModelIndex modelIndex = index(item->index(), 0, indexFromItem(item->imageFileParent()));
@@ -676,10 +644,7 @@ void FileListModel::cleanupModelBeforeCd() {
 void FileListModel::clearModelData(bool clearViewerData) {
     if (clearViewerData) {
         // Viewer
-        _viewerImages.clear();
-        _fullSizeViewerImages.clear();
-        _imageIdToViewer.clear();
-        _imageIdToFullSizeViewer.clear();
+        _viewerImageCache.clear();
         emit viewerReset();
     }
     _currentViewIndex = -1;
@@ -692,6 +657,7 @@ void FileListModel::clearModelData(bool clearViewerData) {
     _folderModels.clear();
 
     _fileToItem.clear();
+    _providerImageStore->remove(_imageIdToItem.keys());
     _imageIdToItem.clear();
     _folderImagePaths.clear();
     _imagePaths.clear();
@@ -995,31 +961,16 @@ void FileListModel::requestDirectOpenFitDecode() {
     if (!targetSize.isValid()) {
         targetSize = rotateToOrientation(_directOpen.info.imageSize, _directOpen.info.orientation);
     }
-    if (_directOpen.viewerSize.isValid()) {
-        targetSize = targetSize.scaled(_directOpen.viewerSize, Qt::KeepAspectRatio);
-    }
-    if (!targetSize.isValid()) {
+    ImageInfo info = _directOpen.info;
+    info.directOpenGeneration = _directOpen.generation;
+    const ImageDecodeRequest request = ViewerImageCache::makeRequest(
+        info, targetSize, _directOpen.viewerSize);
+    if (!request.targetSize.isValid()) {
         return;
     }
 
-    auto viewerIt = _viewerImages.find(_directOpen.path);
-    if (viewerIt == _viewerImages.end()) {
-        _viewerImages[_directOpen.path] = ViewerImage{.requestedSize = targetSize};
-    }
-    else if (viewerIt->requestedSize.width() < targetSize.width() ||
-             viewerIt->requestedSize.height() < targetSize.height()) {
-        viewerIt->requestedSize = targetSize;
-    }
-
-    ImageInfo info = _directOpen.info;
-    info.directOpenGeneration = _directOpen.generation;
     _directOpen.stage = DirectOpenStage::WaitingFitDecode;
-    _decodeManager->decodeImages({ImageDecodeRequest{
-        .info = info,
-        .targetSize = targetSize,
-        .viewerRequest = true,
-        .checkCache = info.isCached
-    }});
+    _decodeManager->decodeImages({request});
 }
 
 void FileListModel::requestDirectOpenFullSizeDecode() {
@@ -1037,24 +988,12 @@ void FileListModel::requestDirectOpenFullSizeDecode() {
         return;
     }
 
-    auto fullSizeIt = _fullSizeViewerImages.find(_directOpen.path);
-    if (fullSizeIt == _fullSizeViewerImages.end()) {
-        _fullSizeViewerImages[_directOpen.path] = ViewerImage{.requestedSize = targetSize};
-    }
-    else if (fullSizeIt->requestedSize.width() < targetSize.width() ||
-             fullSizeIt->requestedSize.height() < targetSize.height()) {
-        fullSizeIt->requestedSize = targetSize;
-    }
-
     ImageInfo info = _directOpen.info;
     info.directOpenGeneration = _directOpen.generation;
+    const ImageDecodeRequest request =
+        ViewerImageCache::makeRequest(info, targetSize);
     _directOpen.stage = DirectOpenStage::WaitingFullDecode;
-    _decodeManager->decodeImages({ImageDecodeRequest{
-        .info = info,
-        .targetSize = targetSize,
-        .viewerRequest = true,
-        .checkCache = info.isCached
-    }});
+    _decodeManager->decodeImages({request});
 }
 
 bool FileListModel::handleDirectOpenImageReady(const ImageDecodeRequest &request, const QImage &image,
@@ -1071,17 +1010,22 @@ bool FileListModel::handleDirectOpenImageReady(const ImageDecodeRequest &request
             updateImageId(itemIt.value());
         }
 
-        if (_directOpen.currentIndex >= 0) {
-            emit directOpenReady(_directOpen.currentIndex);
+        if (ViewerImageCache::isFullSizeRequest(request)) {
+            _directOpen.stage = DirectOpenStage::WaitingFullDecode;
+            populateFolderAfterDirectOpenFullDecode();
+            requestDirectOpenNeighbors();
         }
-        requestDirectOpenFullSizeDecode();
+        else {
+            if (_directOpen.currentIndex >= 0) {
+                emit directOpenReady(_directOpen.currentIndex);
+            }
+            requestDirectOpenFullSizeDecode();
+        }
         return true;
     }
 
-    const bool fullSizeRequest = request.targetSize == request.info.imageSize ||
-                                 request.targetSize == rotateToOrientation(request.info.imageSize, request.info.orientation);
     if (request.info.path == _directOpen.path && _directOpen.stage == DirectOpenStage::WaitingFullDecode &&
-        fullSizeRequest) {
+        ViewerImageCache::isFullSizeRequest(request)) {
         populateFolderAfterDirectOpenFullDecode();
         requestDirectOpenNeighbors();
         return true;
@@ -1130,10 +1074,12 @@ void FileListModel::populateFolderAfterDirectOpenFullDecode() {
         item->setFullSize(rotateToOrientation(_directOpen.info.imageSize, _directOpen.info.orientation));
         item->setInfo(_directOpen.info);
 
-        auto viewerIt = _viewerImages.find(_directOpen.path);
-        if (viewerIt != _viewerImages.end() && !viewerIt->image.isNull() && item->imageIdUrl().isEmpty()) {
-            item->setImage(viewerIt->image);
-            item->setIsCachedThumbnail(viewerIt->decodedInfo.isFromCache);
+        const ViewerImageCache::Entry viewerEntry =
+            _viewerImageCache.entryForPath(_directOpen.path, false);
+        if (!viewerEntry.image.isNull() && item->imageIdUrl().isEmpty()) {
+            item->setImage(viewerEntry.image);
+            item->setIsCachedThumbnail(
+                viewerEntry.decodedInfo.isFromCache);
             updateImageId(item);
         }
 
@@ -1201,36 +1147,18 @@ QList<ImageDecodeRequest> FileListModel::directOpenViewerRequestsForIndexes(cons
         }
 
         ImageFile *item = _items[index];
-        QSize targetSize = item->fullSize();
-        if (_directOpen.viewerSize.isValid()) {
-            targetSize = targetSize.scaled(_directOpen.viewerSize, Qt::KeepAspectRatio);
-        }
-        if (!targetSize.isValid()) {
-            continue;
-        }
-
         const QString requestedPath = item->fullPath();
-        auto viewerIt = _viewerImages.find(requestedPath);
-        if (viewerIt != _viewerImages.end() && !viewerIt->image.isNull() &&
-            viewerIt->requestedSize.width() >= targetSize.width() &&
-            viewerIt->requestedSize.height() >= targetSize.height()) {
-            continue;
-        }
-        if (viewerIt == _viewerImages.end()) {
-            _viewerImages[requestedPath] = ViewerImage{.requestedSize = targetSize};
-        }
-        else {
-            viewerIt->requestedSize = targetSize;
-        }
-
         ImageInfo info = item->info();
         info.directOpenGeneration = _directOpen.generation;
-        requests.append(ImageDecodeRequest{
-            .info = info,
-            .targetSize = targetSize,
-            .viewerRequest = true,
-            .checkCache = info.isCached
-        });
+        const ImageDecodeRequest request =
+            ViewerImageCache::makeRequest(
+                info, item->fullSize(), _directOpen.viewerSize);
+        if (!request.targetSize.isValid() ||
+            !_viewerImageCache.needsDecode(request)) {
+            continue;
+        }
+
+        requests.append(request);
         if (queuedPaths) {
             queuedPaths->insert(requestedPath);
         }
@@ -1267,19 +1195,13 @@ void FileListModel::emitViewerImagesForCurrentIndex() {
         return;
     }
 
-    const QString requestedPath = _items[_currentViewIndex]->fullPath();
     if (!_items[_currentViewIndex]->imageIdUrl().isEmpty()) {
         emit viewerImageIdUrlChanged(_items[_currentViewIndex]->imageIdUrl(), 0);
     }
-
-    auto viewerIt = _viewerImages.find(requestedPath);
-    if (viewerIt != _viewerImages.end() && !viewerIt->image.isNull()) {
-        emit viewerImageIdUrlChanged(QString("image://thumbnails/") + viewerIt->imageId, 1);
-    }
-
-    auto fullSizeIt = _fullSizeViewerImages.find(requestedPath);
-    if (fullSizeIt != _fullSizeViewerImages.end() && !fullSizeIt->image.isNull()) {
-        emit viewerImageIdUrlChanged(QString("image://async/") + fullSizeIt->imageId, 2);
+    const auto cachedImages = _viewerImageCache.cachedImagesForPath(
+        _items[_currentViewIndex]->fullPath(), true);
+    for (const auto &[url, level] : cachedImages) {
+        emit viewerImageIdUrlChanged(url, level);
     }
 }
 
@@ -1289,144 +1211,31 @@ void FileListModel::requestViewer(int index, int width, int height) {
     }
 
     _currentViewIndex = index;
-    QSize viewerSize(width, height);
-
-    QString requestedPath = _items[index]->fullPath();
-    // qDebug() << __FUNCTION__ << viewerSize << requestedPath;
-    auto fullSizeIt = _fullSizeViewerImages.find(requestedPath);
-    auto it = _viewerImages.find(requestedPath);
-    auto itThumbs = _fileToItem.find(requestedPath);
-    if (itThumbs != _fileToItem.end()) {
-        qDebug() << "Using thumbnail image" << itThumbs.value()->image().size();
-        emit viewerImageIdUrlChanged(itThumbs.value()->imageIdUrl(), 0);
-    }
-    if (it != _viewerImages.end() && !it->image.isNull()) {
-        qDebug() << "Using viewer image" << it->requestedSize << it->image.size();
-        emit viewerImageIdUrlChanged(QString("image://thumbnails/") + it.value().imageId, 1);
-    }
-    if (!viewerSize.isValid() && fullSizeIt != _fullSizeViewerImages.end() && !fullSizeIt->image.isNull()) {
-        qDebug() << "Using full size viewer image" << fullSizeIt->requestedSize << fullSizeIt->image.size();
-        emit viewerImageIdUrlChanged(QString("image://async/") + fullSizeIt.value().imageId, 2);
+    if (!_items[index]->imageIdUrl().isEmpty()) {
+        emit viewerImageIdUrlChanged(_items[index]->imageIdUrl(), 0);
     }
 
-    int queueSize = 16;
-    QList<ImageDecodeRequest> requests;
-    int imagesChecked = 0;
-    bool hitStart = false;
-    bool hitEnd = false;
-    for (int counter = 0; imagesChecked < queueSize && !(hitStart && hitEnd); counter++) {
-        int i;
-        if (!(counter % 2)) { // n, n+1, n+2, ...
-            i = index + counter / 2;
-        }
-        else { // n-1, n-2, n-3, ...
-            i = index - (counter + 1) / 2;
-        }
-        if (i < 0) {
-            hitStart = true;
-        }
-        if (i >= _items.size()) {
-            hitEnd = true;
-        }
-        if (i >= 0 && i < _items.size() && _items[i]->isImage()) {
-            imagesChecked++;
-
-            QString requestedPath = _items[i]->fullPath();
-            QSize targetSize = _items[i]->fullSize();
-
-            if (viewerSize.isValid()) {
-                targetSize = targetSize.scaled(viewerSize, Qt::KeepAspectRatio);
-
-                auto it = _viewerImages.find(requestedPath);
-                if (it != _viewerImages.end()) {
-                    if (it->requestedSize.width() >= targetSize.width() &&
-                        it->requestedSize.height() >= targetSize.height()) {
-                        continue;
-                    }
-                    else {
-                        // qDebug() << "ZZ DEC DUE TO SIZE" << targetSize << "from" << it->requestedSize << requestedPath;
-                        it->requestedSize = targetSize;
-                    }
-                }
-                else {
-                    _viewerImages[requestedPath] = ViewerImage{
-                        .requestedSize = targetSize
-                    };
-                }
-            }
-            else {
-                // qDebug() << "ZZ REQ FULL SIZE" << requestedPath;
-                auto it = _fullSizeViewerImages.find(requestedPath);
-                if (it != _fullSizeViewerImages.end()) {
-                    if (it->requestedSize.width() >= targetSize.width() &&
-                        it->requestedSize.height() >= targetSize.height()) {
-                        continue;
-                    }
-                    else {
-                        // qDebug() << "ZZ DEC DUE TO FULL SIZE" << targetSize << "from" << it->requestedSize << requestedPath;
-                        it->requestedSize = targetSize;
-                    }
-                }
-                else {
-                    _fullSizeViewerImages[requestedPath] = ViewerImage{
-                        .requestedSize = targetSize
-                    };
-                }
-
-            }
-
-            requests.append(ImageDecodeRequest{
-                .info = _items[i]->info(),
-                .targetSize = targetSize,
-                .viewerRequest = true,
-                .checkCache = _items[i]->info().isCached
-            });
-        }
+    const ViewerImageCache::RequestPlan requestPlan =
+        _viewerImageCache.planRequest(_items, index, QSize(width, height));
+    for (const auto &[url, level] : requestPlan.cachedImages) {
+        emit viewerImageIdUrlChanged(url, level);
     }
-    // qDebug() << __FUNCTION__ << "REQUEST FOR DECODE" << requests.size();
-
-    _decodeManager->decodeImages(requests);
+    _decodeManager->decodeImages(requestPlan.decodeRequests);
 }
 
 QString FileListModel::bestViewerImageUrlForIndex(int index) const {
     if (index < 0 || index >= _items.size()) {
         return QString();
     }
-
-    const ImageFile *item = _items[index];
-    const QString requestedPath = item->fullPath();
-
-    auto fullSizeIt = _fullSizeViewerImages.find(requestedPath);
-    if (fullSizeIt != _fullSizeViewerImages.end() && !fullSizeIt->image.isNull()) {
-        return QString("image://async/") + fullSizeIt->imageId;
-    }
-
-    auto viewerIt = _viewerImages.find(requestedPath);
-    if (viewerIt != _viewerImages.end() && !viewerIt->image.isNull()) {
-        return QString("image://thumbnails/") + viewerIt->imageId;
-    }
-
-    return item->imageIdUrl();
+    return _viewerImageCache.bestImageUrl(_items[index]);
 }
 
 QImage FileListModel::viewerForImageId(const QString &imageId) {
-    auto it = _imageIdToViewer.find(imageId);
-    if (it != _imageIdToViewer.end()) {
-        QString path = *it;
-        return _viewerImages[path].image;
-    }
-
-    return QImage();
+    return _viewerImageCache.viewerImageForId(imageId);
 }
 
 QImage FileListModel::fullSizeViewerForImageId(const QString &imageId) {
-    auto it = _imageIdToFullSizeViewer.find(imageId);
-    if (it != _imageIdToFullSizeViewer.end()) {
-        QString path = *it;
-        return _fullSizeViewerImages[path].image;
-    }
-
-    return QImage();
+    return _viewerImageCache.fullSizeImageForId(imageId);
 }
 
 void FileListModel::cancelAllRunners() {
@@ -1700,10 +1509,11 @@ void FileListModel::dumpCurrentImage() {
     
     // Try to get full size viewer image first, fall back to regular viewer image
     QImage imageToSave;
-    if (_fullSizeViewerImages.contains(imagePath)) {
-        imageToSave = _fullSizeViewerImages[imagePath].image;
-    } else if (_viewerImages.contains(imagePath)) {
-        imageToSave = _viewerImages[imagePath].image;
+    imageToSave =
+        _viewerImageCache.entryForPath(imagePath, true).image;
+    if (imageToSave.isNull()) {
+        imageToSave =
+            _viewerImageCache.entryForPath(imagePath, false).image;
     }
     
     if (imageToSave.isNull()) {
@@ -1748,6 +1558,13 @@ bool FileListModel::isIndexSelected(int index_) const {
     return _items[index_]->isSelected();
 }
 
+QColor FileListModel::selectionGroupColorForIndex(int index_) const {
+    if (index_ < 0 || index_ >= _items.size()) {
+        return QColor();
+    }
+    return _items[index_]->selectionGroupColor();
+}
+
 void FileListModel::toggleSelection(int index_) {
     if (index_ < 0 || index_ >= _items.size()) {
         return;
@@ -1762,7 +1579,8 @@ void FileListModel::setSelection(int index_, bool selected) {
 
     const QString containerKey = selectionContainerForItem(_items[index_]);
     ensureSelectionStateLoaded(containerKey);
-    const QSet<QString> previousSelection = _selectionStates[containerKey].selectedNames;
+    const QHash<QString, QString> previousSelection =
+        _selectionStates[containerKey].selectedGroups;
     if (!setSelectionInState(index_, selected)) {
         return;
     }
@@ -1773,15 +1591,41 @@ void FileListModel::setSelection(int index_, bool selected) {
     emitSelectionDataChanged(index_, index_);
 }
 
+void FileListModel::setPathSelection(const QString &path, bool selected) {
+    const QFileInfo fileInfo(path);
+    const QString containerKey = PersistentSelectionCache::normalizeContainerKey(fileInfo.absolutePath());
+    ensureSelectionStateLoaded(containerKey);
+    auto &state = _selectionStates[containerKey];
+    const QHash<QString, QString> previousSelection = state.selectedGroups;
+    const QString previousGroup = state.selectedGroups.value(fileInfo.fileName());
+    const QString nextGroup = selected ? activeSelectionGroupId() : QString();
+    if (previousGroup == nextGroup) {
+        return;
+    }
+
+    if (selected) {
+        state.selectedGroups.insert(fileInfo.fileName(), nextGroup);
+    }
+    else {
+        state.selectedGroups.remove(fileInfo.fileName());
+    }
+    pushSelectionHistory(containerKey,
+                         selected ? QString("Select %1").arg(fileInfo.fileName())
+                                  : QString("Deselect %1").arg(fileInfo.fileName()),
+                         previousSelection);
+    syncVisibleItemSelection();
+    emitSelectionDataChanged();
+}
+
 void FileListModel::invertSelection() {
-    QHash<QString, QSet<QString>> previousSelections;
+    QHash<QString, QHash<QString, QString>> previousSelections;
     QSet<QString> changedContainers;
 
     for (int i = 0; i < _items.size(); i++) {
         const QString containerKey = selectionContainerForItem(_items[i]);
         ensureSelectionStateLoaded(containerKey);
         if (!previousSelections.contains(containerKey)) {
-            previousSelections.insert(containerKey, _selectionStates[containerKey].selectedNames);
+            previousSelections.insert(containerKey, _selectionStates[containerKey].selectedGroups);
         }
 
         if (setSelectionInState(i, !_items[i]->isSelected())) {
@@ -1798,14 +1642,14 @@ void FileListModel::invertSelection() {
 }
 
 void FileListModel::setAllSelection(bool selected) {
-    QHash<QString, QSet<QString>> previousSelections;
+    QHash<QString, QHash<QString, QString>> previousSelections;
     QSet<QString> changedContainers;
 
     for (int i = 0; i < _items.size(); i++) {
         const QString containerKey = selectionContainerForItem(_items[i]);
         ensureSelectionStateLoaded(containerKey);
         if (!previousSelections.contains(containerKey)) {
-            previousSelections.insert(containerKey, _selectionStates[containerKey].selectedNames);
+            previousSelections.insert(containerKey, _selectionStates[containerKey].selectedGroups);
         }
 
         if (setSelectionInState(i, selected)) {
@@ -1829,7 +1673,8 @@ void FileListModel::setSameKindSelection(int index_, bool selected) {
     ImageFile *currentItem = _items[index_];
     const QString currentContainer = selectionContainerForItem(currentItem);
     ensureSelectionStateLoaded(currentContainer);
-    const QSet<QString> previousSelection = _selectionStates[currentContainer].selectedNames;
+    const QHash<QString, QString> previousSelection =
+        _selectionStates[currentContainer].selectedGroups;
     const QString currentSuffix = QFileInfo(currentItem->fileName()).suffix().toLower();
     bool changed = false;
 
@@ -1942,7 +1787,8 @@ void FileListModel::beginSelectionPreview() {
         const QString containerKey = selectionContainerForItem(item);
         ensureSelectionStateLoaded(containerKey);
         if (!_selectionPreviewSnapshot.contains(containerKey)) {
-            _selectionPreviewSnapshot.insert(containerKey, _selectionStates[containerKey].selectedNames);
+            _selectionPreviewSnapshot.insert(
+                containerKey, _selectionStates[containerKey].selectedGroups);
         }
     }
 }
@@ -1957,7 +1803,7 @@ void FileListModel::previewSelectionRange(int anchorIndex, int targetIndex, bool
 
     for (auto it = _selectionPreviewSnapshot.constBegin(); it != _selectionPreviewSnapshot.constEnd(); ++it) {
         ensureSelectionStateLoaded(it.key());
-        _selectionStates[it.key()].selectedNames = it.value();
+        _selectionStates[it.key()].selectedGroups = it.value();
     }
     syncVisibleItemSelection();
 
@@ -1991,7 +1837,7 @@ void FileListModel::previewSelectionIndexes(const QVariantList &indexes, int mod
 
     for (auto it = _selectionPreviewSnapshot.constBegin(); it != _selectionPreviewSnapshot.constEnd(); ++it) {
         ensureSelectionStateLoaded(it.key());
-        _selectionStates[it.key()].selectedNames = it.value();
+        _selectionStates[it.key()].selectedGroups = it.value();
     }
     syncVisibleItemSelection();
 
@@ -2038,7 +1884,7 @@ void FileListModel::commitSelectionPreview(const QString &description) {
     QSet<QString> changedContainers;
     for (auto it = _selectionPreviewSnapshot.constBegin(); it != _selectionPreviewSnapshot.constEnd(); ++it) {
         ensureSelectionStateLoaded(it.key());
-        if (_selectionStates[it.key()].selectedNames != it.value()) {
+        if (_selectionStates[it.key()].selectedGroups != it.value()) {
             changedContainers.insert(it.key());
         }
     }
@@ -2061,7 +1907,7 @@ void FileListModel::cancelSelectionPreview() {
 
     for (auto it = _selectionPreviewSnapshot.constBegin(); it != _selectionPreviewSnapshot.constEnd(); ++it) {
         ensureSelectionStateLoaded(it.key());
-        _selectionStates[it.key()].selectedNames = it.value();
+        _selectionStates[it.key()].selectedGroups = it.value();
     }
     _selectionPreviewActive = false;
     _selectionPreviewSnapshot.clear();
@@ -2083,7 +1929,7 @@ QVariantList FileListModel::selectionHistoryForIndex(int index_) const {
         row["index"] = i;
         row["description"] = history[i].description;
         row["timestamp"] = history[i].timestamp.toString("yyyy-MM-dd hh:mm:ss");
-        row["selectedCount"] = history[i].selectedNames.size();
+        row["selectedCount"] = history[i].selectedGroups.size();
         row["current"] = i == stateIt->historyIndex;
         result.append(row);
     }
@@ -2127,6 +1973,132 @@ void FileListModel::jumpSelectionHistory(int index_, int historyIndex) {
     applySelectionHistoryState(containerKey, historyIndex);
 }
 
+QVariantList FileListModel::selectionGroups() const {
+    QVariantList result;
+    const QString activeGroupId = PersistentSelectionCache::activeSelectionGroupId();
+    const QList<PersistentSelectionCache::SelectionGroup> groups =
+        PersistentSelectionCache::selectionGroups();
+    const QHash<QString, int> availableCounts =
+        availableSelectedImageCounts();
+    result.reserve(groups.size());
+    for (const auto &group : groups) {
+        const int storedCount =
+            PersistentSelectionCache::selectedCountForGroup(group.id);
+        const int availableCount = availableCounts.value(group.id);
+        result.append(QVariantMap{
+            {QStringLiteral("id"), group.id},
+            {QStringLiteral("name"), group.name},
+            {QStringLiteral("color"), QColor(group.color)},
+            {QStringLiteral("count"), availableCount},
+            {QStringLiteral("storedCount"), storedCount},
+            {QStringLiteral("unavailableCount"),
+             qMax(0, storedCount - availableCount)},
+            {QStringLiteral("active"), group.id == activeGroupId},
+            {QStringLiteral("isDefault"), group.isDefault},
+        });
+    }
+    return result;
+}
+
+QString FileListModel::activeSelectionGroupId() const {
+    return PersistentSelectionCache::activeSelectionGroupId();
+}
+
+QString FileListModel::activeSelectionGroupName() const {
+    const QString activeGroupId = activeSelectionGroupId();
+    for (const auto &group : PersistentSelectionCache::selectionGroups()) {
+        if (group.id == activeGroupId) {
+            return group.name;
+        }
+    }
+    return QStringLiteral("Yellow");
+}
+
+QColor FileListModel::activeSelectionGroupColor() const {
+    return QColor(PersistentSelectionCache::colorForGroup(activeSelectionGroupId()));
+}
+
+int FileListModel::totalSelectedCount() const {
+    int count = 0;
+    const QHash<QString, int> availableCounts =
+        availableSelectedImageCounts();
+    for (auto it = availableCounts.constBegin();
+         it != availableCounts.constEnd(); ++it) {
+        count += it.value();
+    }
+    return count;
+}
+
+bool FileListModel::canAddSelectionGroup() const {
+    return PersistentSelectionCache::selectionGroups().size() < 8;
+}
+
+QString FileListModel::addSelectionGroup() {
+    const QString groupId = PersistentSelectionCache::addSelectionGroup();
+    if (!groupId.isEmpty()) {
+        emit selectionGroupsChanged();
+        emit activeSelectionGroupChanged();
+    }
+    return groupId;
+}
+
+void FileListModel::activateSelectionGroup(const QString &groupId) {
+    if (PersistentSelectionCache::setActiveSelectionGroupId(groupId)) {
+        emit selectionGroupsChanged();
+        emit activeSelectionGroupChanged();
+    }
+}
+
+bool FileListModel::renameSelectionGroup(const QString &groupId, const QString &name) {
+    if (!PersistentSelectionCache::renameSelectionGroup(groupId, name)) {
+        return false;
+    }
+    emit selectionGroupsChanged();
+    if (groupId == activeSelectionGroupId()) {
+        emit activeSelectionGroupChanged();
+    }
+    return true;
+}
+
+bool FileListModel::removeSelectionGroup(const QString &groupId) {
+    const bool wasActive = groupId == activeSelectionGroupId();
+    if (!PersistentSelectionCache::removeSelectionGroup(groupId)) {
+        return false;
+    }
+
+    _selectionPreviewActive = false;
+    _selectionPreviewSnapshot.clear();
+    _selectionStates.clear();
+    loadSelectionStatesForVisibleItems();
+    emitSelectionDataChanged();
+    emit selectionHistoryChanged();
+    if (wasActive) {
+        emit activeSelectionGroupChanged();
+    }
+    return true;
+}
+
+int FileListModel::copyActiveSelectionGroupPaths() const {
+    const QString activeGroupId =
+        PersistentSelectionCache::activeSelectionGroupId();
+    QStringList paths;
+    const auto selectedFiles =
+        PersistentSelectionCache::selectedFilesByAdditionDate();
+    paths.reserve(selectedFiles.size());
+    for (const auto &selectedFile : selectedFiles) {
+        if (selectedFile.groupId == activeGroupId) {
+            paths.append(selectedFile.path);
+        }
+    }
+
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (!clipboard || paths.isEmpty()) {
+        return 0;
+    }
+    clipboard->setText(paths.join(QLatin1Char('\n')));
+    return paths.size();
+}
+
 QString FileListModel::selectionContainerForItem(const ImageFile *item) const {
     if (!item) {
         return PersistentSelectionCache::normalizeContainerKey(_root);
@@ -2139,6 +2111,17 @@ QString FileListModel::selectionContainerForItem(const ImageFile *item) const {
 
 QString FileListModel::selectionItemKey(const ImageFile *item) const {
     return item ? item->fileName() : QString();
+}
+
+QString FileListModel::selectionGroupForItem(const ImageFile *item) const {
+    if (!item) {
+        return QString();
+    }
+    const QString containerKey = selectionContainerForItem(item);
+    const auto stateIt = _selectionStates.constFind(containerKey);
+    return stateIt == _selectionStates.constEnd()
+        ? QString()
+        : stateIt->selectedGroups.value(selectionItemKey(item));
 }
 
 void FileListModel::ensureSelectionStateLoaded(const QString &containerKey) {
@@ -2159,7 +2142,13 @@ void FileListModel::syncVisibleItemSelection() {
     for (ImageFile *item : _items) {
         const QString containerKey = selectionContainerForItem(item);
         ensureSelectionStateLoaded(containerKey);
-        item->setIsSelected(_selectionStates[containerKey].selectedNames.contains(selectionItemKey(item)));
+        const QString groupId =
+            _selectionStates[containerKey].selectedGroups.value(selectionItemKey(item));
+        item->setIsSelected(!groupId.isEmpty());
+        item->setSelectionGroupId(groupId);
+        item->setSelectionGroupColor(groupId.isEmpty()
+            ? QColor()
+            : QColor(PersistentSelectionCache::colorForGroup(groupId)));
     }
 }
 
@@ -2174,13 +2163,15 @@ void FileListModel::emitSelectionDataChanged(int firstIndex, int lastIndex) {
         if (firstIndex > lastIndex) {
             std::swap(firstIndex, lastIndex);
         }
-        emit dataChanged(index(firstIndex, 0), index(lastIndex, 0), {SelectedRole});
+        emit dataChanged(index(firstIndex, 0), index(lastIndex, 0),
+                         {SelectedRole, SelectionGroupIdRole, SelectionGroupColorRole});
     }
     emit selectionChanged();
+    emit selectionGroupsChanged();
 }
 
 void FileListModel::pushSelectionHistory(const QString &containerKey, const QString &description,
-                                         const QSet<QString> &previousSelectedNames) {
+                                         const QHash<QString, QString> &previousSelectedGroups) {
     const QString normalizedKey = PersistentSelectionCache::normalizeContainerKey(containerKey);
     ensureSelectionStateLoaded(normalizedKey);
     auto &state = _selectionStates[normalizedKey];
@@ -2191,13 +2182,13 @@ void FileListModel::pushSelectionHistory(const QString &containerKey, const QStr
         state.history.append(PersistentSelectionCache::HistoryEntry{
             .description = "Initial state",
             .timestamp = QDateTime::currentDateTime(),
-            .selectedNames = previousSelectedNames
+            .selectedGroups = previousSelectedGroups
         });
     }
     state.history.append(PersistentSelectionCache::HistoryEntry{
         .description = description,
         .timestamp = QDateTime::currentDateTime(),
-        .selectedNames = state.selectedNames
+        .selectedGroups = state.selectedGroups
     });
     state.historyIndex = state.history.size() - 1;
     PersistentSelectionCache::storeContainer(normalizedKey, state);
@@ -2218,20 +2209,25 @@ bool FileListModel::setSelectionInState(int index_, bool selected) {
     ImageFile *item = _items[index_];
     const QString containerKey = selectionContainerForItem(item);
     ensureSelectionStateLoaded(containerKey);
-    auto &selectedNames = _selectionStates[containerKey].selectedNames;
+    auto &selectedGroups = _selectionStates[containerKey].selectedGroups;
     const QString itemKey = selectionItemKey(item);
-    const bool wasSelected = selectedNames.contains(itemKey);
-    if (wasSelected == selected) {
+    const QString previousGroup = selectedGroups.value(itemKey);
+    const QString nextGroup = selected ? activeSelectionGroupId() : QString();
+    if (previousGroup == nextGroup) {
         return false;
     }
 
     if (selected) {
-        selectedNames.insert(itemKey);
+        selectedGroups.insert(itemKey, nextGroup);
     }
     else {
-        selectedNames.remove(itemKey);
+        selectedGroups.remove(itemKey);
     }
-    item->setIsSelected(selected);
+    item->setIsSelected(!nextGroup.isEmpty());
+    item->setSelectionGroupId(nextGroup);
+    item->setSelectionGroupColor(nextGroup.isEmpty()
+        ? QColor()
+        : QColor(PersistentSelectionCache::colorForGroup(nextGroup)));
     return true;
 }
 
@@ -2244,7 +2240,7 @@ void FileListModel::applySelectionHistoryState(const QString &containerKey, int 
     }
 
     state.historyIndex = historyIndex;
-    state.selectedNames = state.history[historyIndex].selectedNames;
+    state.selectedGroups = state.history[historyIndex].selectedGroups;
     PersistentSelectionCache::storeContainer(normalizedKey, state);
     syncVisibleItemSelection();
     emitSelectionDataChanged();

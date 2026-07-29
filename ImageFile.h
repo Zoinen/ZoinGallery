@@ -7,6 +7,7 @@
 #include <QMetaType>
 #include <QDir>
 #include <QDateTime>
+#include <QColor>
 #include <QSharedPointer>
 
 #include <memory>
@@ -55,6 +56,8 @@ struct ImageDecodeRequest {
     QSize targetSize;
     bool viewerRequest = false;
     bool checkCache = false;
+    // Keeps Fit intent when a small image's target is already its native size.
+    bool fitToViewerRequest = false;
 };
 
 struct DecodedImageInfo {
@@ -97,6 +100,8 @@ class ImageFile : public QObject {
     Q_PROPERTY(QDateTime lastModified READ lastModified NOTIFY lastModifiedChanged)
     Q_PROPERTY(qint64 fileSize READ fileSize NOTIFY fileSizeChanged)
     Q_PROPERTY(bool isSelected READ isSelected WRITE setIsSelected NOTIFY isSelectedChanged)
+    Q_PROPERTY(QString selectionGroupId READ selectionGroupId WRITE setSelectionGroupId NOTIFY selectionGroupChanged)
+    Q_PROPERTY(QColor selectionGroupColor READ selectionGroupColor WRITE setSelectionGroupColor NOTIFY selectionGroupChanged)
 
 public:
     using QObject::QObject;
@@ -165,6 +170,10 @@ public:
 
     bool isSelected() const;
     void setIsSelected(bool isSelected);
+    QString selectionGroupId() const;
+    void setSelectionGroupId(const QString &selectionGroupId);
+    QColor selectionGroupColor() const;
+    void setSelectionGroupColor(const QColor &selectionGroupColor);
 
 signals:
     void fullPathChanged();
@@ -185,6 +194,7 @@ signals:
 
     void isFilteredOutChanged();
     void isSelectedChanged();
+    void selectionGroupChanged();
 
 private:
     QString _folderPath;
@@ -202,6 +212,8 @@ private:
     QString _nestingInfo;
     ImageInfo _info;
     bool _isSelected = false;
+    QString _selectionGroupId;
+    QColor _selectionGroupColor;
 
     QList<ImageFile *> _subfiles;
     ImageFile *_imageFileParent = nullptr;

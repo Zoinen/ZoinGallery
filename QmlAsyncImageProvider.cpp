@@ -1,19 +1,17 @@
 #include "QmlAsyncImageProvider.h"
 
-#include "FileListModel.h"
-
 #include <QDebug>
 #include <QMetaObject>
-#include <QPainter>
-#include <QThreadPool>
+#include <QMutexLocker>
 
 #include <atomic>
+#include <utility>
 
-// TODO: Not the cleanest way...
 namespace
 {
-FileListModel *model = nullptr;
 std::atomic_bool closing = false;
+QMutex activeProviderMutex;
+QmlAsyncImageProvider *activeProvider = nullptr;
 
 QImage emptyImage()
 {
@@ -21,47 +19,93 @@ QImage emptyImage()
     empty.fill(Qt::transparent);
     return empty;
 }
+
+QRect parseCrop(const QString &cropDescription)
+{
+    const QStringList values = cropDescription.split(',');
+    if (values.size() != 4) {
+        return QRect();
+    }
+
+    bool okX = false;
+    bool okY = false;
+    bool okWidth = false;
+    bool okHeight = false;
+    const int x = values[0].toInt(&okX);
+    const int y = values[1].toInt(&okY);
+    const int width = values[2].toInt(&okWidth);
+    const int height = values[3].toInt(&okHeight);
+    return okX && okY && okWidth && okHeight && width > 0 && height > 0
+        ? QRect(x, y, width, height)
+        : QRect();
+}
 }
 
-QmlAsyncImageProvider::QmlAsyncImageProvider(const QString &prefix, FileListModel *model) {
+QmlAsyncImageProvider::QmlAsyncImageProvider(
+    const QString &prefix,
+    QSharedPointer<ProviderImageStore> providerImageStore)
+    : _providerImageStore(std::move(providerImageStore)) {
     Q_UNUSED(prefix);
-    ::model = model;
+    QMutexLocker locker(&activeProviderMutex);
     closing.store(false);
+    activeProvider = this;
+}
+
+QmlAsyncImageProvider::~QmlAsyncImageProvider() {
+    {
+        QMutexLocker locker(&activeProviderMutex);
+        if (activeProvider == this) {
+            activeProvider = nullptr;
+        }
+    }
+    stopThreadPool();
 }
 
 void QmlAsyncImageProvider::prepareToClose() {
+    QMutexLocker locker(&activeProviderMutex);
     qInfo() << "[Shutdown] QmlAsyncImageProvider::prepareToClose begin"
             << "alreadyClosing" << closing.load()
-            << "hasModel" << (model != nullptr);
+            << "hasProvider" << (activeProvider != nullptr);
     closing.store(true);
 
-    QThreadPool *pool = QThreadPool::globalInstance();
-    qInfo() << "[Shutdown] QmlAsyncImageProvider::prepareToClose clearing global thread pool"
-            << "activeThreads" << pool->activeThreadCount()
-            << "maxThreads" << pool->maxThreadCount();
-    pool->clear();
-    const bool stopped = pool->waitForDone(3000);
-    qInfo() << "[Shutdown] QmlAsyncImageProvider::prepareToClose waitForDone returned"
-            << stopped
-            << "activeThreads" << pool->activeThreadCount();
-    if (!stopped) {
-        qWarning() << "Async image provider did not stop all tasks before shutdown";
+    if (activeProvider) {
+        activeProvider->stopThreadPool();
     }
 
-    model = nullptr;
     qInfo() << "[Shutdown] QmlAsyncImageProvider::prepareToClose end";
 }
 
 QQuickImageResponse *QmlAsyncImageProvider::requestImageResponse(const QString &id, const QSize &requestedSize) {
-    return new AsyncImageResponse(id, requestedSize);
+    QMutexLocker locker(&_requestMutex);
+    return new AsyncImageResponse(
+        id, requestedSize, _providerImageStore,
+        _acceptingRequests && !closing.load() ? &_threadPool : nullptr);
 }
 
-AsyncImageResponseRunnable::AsyncImageResponseRunnable(const QString &id, const QSize &requestedSize)
-    : _id(id), _requestedSize(requestedSize) {
+void QmlAsyncImageProvider::stopThreadPool() {
+    QMutexLocker locker(&_requestMutex);
+    _acceptingRequests = false;
+    qInfo() << "[Shutdown] QmlAsyncImageProvider stopping private thread pool"
+            << "activeThreads" << _threadPool.activeThreadCount()
+            << "maxThreads" << _threadPool.maxThreadCount();
+    const bool stopped = _threadPool.waitForDone(3000);
+    if (!stopped) {
+        qWarning() << "Async image provider did not stop all tasks before shutdown";
+    }
 }
 
-AsyncImageResponse::AsyncImageResponse(const QString &id, const QSize &requestedSize) {
-    if (closing.load()) {
+AsyncImageResponseRunnable::AsyncImageResponseRunnable(
+    QImage image, QRect crop)
+    : _image(std::move(image)),
+      _crop(crop) {
+}
+
+AsyncImageResponse::AsyncImageResponse(
+    const QString &id, const QSize &requestedSize,
+    const QSharedPointer<ProviderImageStore> &providerImageStore,
+    QThreadPool *threadPool) {
+    Q_UNUSED(requestedSize)
+    if (!threadPool) {
         qInfo() << "[Shutdown] AsyncImageResponse ignored request during shutdown"
                 << "id" << id
                 << "requestedSize" << requestedSize;
@@ -72,9 +116,15 @@ AsyncImageResponse::AsyncImageResponse(const QString &id, const QSize &requested
         return;
     }
 
-    auto runnable = new AsyncImageResponseRunnable(id, requestedSize);
+    const qsizetype separator = id.indexOf('/');
+    const QString imageId =
+        separator == -1 ? id : id.left(separator);
+    const QRect crop =
+        separator == -1 ? QRect() : parseCrop(id.mid(separator + 1));
+    auto runnable = new AsyncImageResponseRunnable(
+        providerImageStore->snapshot(imageId), crop);
     connect(runnable, &AsyncImageResponseRunnable::done, this, &AsyncImageResponse::handleDone);
-    QThreadPool::globalInstance()->start(runnable);
+    threadPool->start(runnable);
 }
 
 void AsyncImageResponse::handleDone(const QImage &image) {
@@ -88,47 +138,10 @@ QQuickTextureFactory *AsyncImageResponse::textureFactory() const {
 
 
 void AsyncImageResponseRunnable::run() {
-    if (!closing.load() && model) {
-        FileListModel *fileListModel = model;
-        const ImageFile *item = fileListModel->itemForImageId(_id);
-        if (item) {
-            QImage img = item->image();
-            if (!img.isNull()) {
-                emit done(img);
-                return;
-            }
-        }
-        else {
-            QImage img = fileListModel->viewerForImageId(_id);
-            if (!img.isNull()) {
-                emit done(img);
-                return;
-            }
-            else {
-                if (_id.contains("/")) {
-                    QStringList idAndSize = _id.split("/");
-                    qDebug() << "idAndSize" << idAndSize;
-                    QImage img = fileListModel->fullSizeViewerForImageId(idAndSize[0]);
-                    QStringList sizeStrings = idAndSize[1].split(",");
-                    if (sizeStrings.size() == 4) {
-                        if (!img.isNull()) {
-                            emit done(img.copy(sizeStrings[0].toInt(), sizeStrings[1].toInt(),
-                                               sizeStrings[2].toInt(), sizeStrings[3].toInt()));
-                            return;
-                        }
-                    }
-                }
-                else {
-                    QImage img = fileListModel->fullSizeViewerForImageId(_id);
-                    if (!img.isNull()) {
-                        emit done(img);
-                        return;
-                    }
-                }
-            }
-        }
+    if (!closing.load() && !_image.isNull()) {
+        emit done(_crop.isValid() ? _image.copy(_crop) : _image);
+        return;
     }
 
-    // *size = empty.size();
     emit done(emptyImage());
 }

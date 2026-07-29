@@ -9,6 +9,7 @@
 #include "CacheUsageMode.h"
 #include "ImageFile.h"
 #include "PersistentSelectionCache.h"
+#include "ViewerImageCache.h"
 
 class DecodeManager;
 class FileListModel;
@@ -65,6 +66,12 @@ class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterfa
     Q_PROPERTY(QString imageCacheLocation READ imageCacheLocation CONSTANT)
     Q_PROPERTY(qint64 fileListCacheSize READ fileListCacheSize NOTIFY cacheInfoChanged)
     Q_PROPERTY(QString fileListCacheLocation READ fileListCacheLocation CONSTANT)
+    Q_PROPERTY(QVariantList selectionGroups READ selectionGroups NOTIFY selectionGroupsChanged)
+    Q_PROPERTY(QString activeSelectionGroupId READ activeSelectionGroupId NOTIFY activeSelectionGroupChanged)
+    Q_PROPERTY(QString activeSelectionGroupName READ activeSelectionGroupName NOTIFY activeSelectionGroupChanged)
+    Q_PROPERTY(QColor activeSelectionGroupColor READ activeSelectionGroupColor NOTIFY activeSelectionGroupChanged)
+    Q_PROPERTY(int totalSelectedCount READ totalSelectedCount NOTIFY selectionGroupsChanged)
+    Q_PROPERTY(bool canAddSelectionGroup READ canAddSelectionGroup NOTIFY selectionGroupsChanged)
 
 public:
     enum ItemUserRoles {
@@ -77,11 +84,14 @@ public:
         ExifRole,
         TimeToFlushRole,
         SelectedRole,
+        SelectionGroupIdRole,
+        SelectionGroupColorRole,
         LastModifiedRole,
         FileSizeRole
     };
 
-    FileListModel(QObject *parent = nullptr);
+    FileListModel(QSharedPointer<ProviderImageStore> providerImageStore,
+                  QObject *parent = nullptr);
 
     QHash<int, QByteArray> roleNames() const override;
 
@@ -133,8 +143,10 @@ public:
 
     int selectedCount() const;
     Q_INVOKABLE bool isIndexSelected(int index) const;
+    Q_INVOKABLE QColor selectionGroupColorForIndex(int index) const;
     Q_INVOKABLE void toggleSelection(int index);
     Q_INVOKABLE void setSelection(int index, bool selected);
+    Q_INVOKABLE void setPathSelection(const QString &path, bool selected);
     Q_INVOKABLE void invertSelection();
     Q_INVOKABLE void setAllSelection(bool selected);
     Q_INVOKABLE void setSameKindSelection(int index, bool selected);
@@ -152,6 +164,18 @@ public:
     Q_INVOKABLE void selectionHistoryBack(int index);
     Q_INVOKABLE void selectionHistoryForward(int index);
     Q_INVOKABLE void jumpSelectionHistory(int index, int historyIndex);
+
+    QVariantList selectionGroups() const;
+    QString activeSelectionGroupId() const;
+    QString activeSelectionGroupName() const;
+    QColor activeSelectionGroupColor() const;
+    int totalSelectedCount() const;
+    bool canAddSelectionGroup() const;
+    Q_INVOKABLE QString addSelectionGroup();
+    Q_INVOKABLE void activateSelectionGroup(const QString &groupId);
+    Q_INVOKABLE bool renameSelectionGroup(const QString &groupId, const QString &name);
+    Q_INVOKABLE bool removeSelectionGroup(const QString &groupId);
+    Q_INVOKABLE int copyActiveSelectionGroupPaths() const;
 
     bool runningTasksDebug() const;
     void setRunningTasksDebug(bool isRunningTasksDebug);
@@ -181,6 +205,8 @@ signals:
     void runningTasksDebugChanged();
     void selectionChanged();
     void selectionHistoryChanged();
+    void selectionGroupsChanged();
+    void activeSelectionGroupChanged();
     void imageCacheModeChanged();
     void fileListCacheModeChanged();
     void cacheInfoChanged();
@@ -246,11 +272,13 @@ private:
     bool isActiveDirectOpenRequest(const ImageDecodeRequest &request) const;
     QString selectionContainerForItem(const ImageFile *item) const;
     QString selectionItemKey(const ImageFile *item) const;
+    QString selectionGroupForItem(const ImageFile *item) const;
     void ensureSelectionStateLoaded(const QString &containerKey);
     void loadSelectionStatesForVisibleItems();
     void syncVisibleItemSelection();
     void emitSelectionDataChanged(int firstIndex = -1, int lastIndex = -1);
-    void pushSelectionHistory(const QString &containerKey, const QString &description, const QSet<QString> &previousSelectedNames);
+    void pushSelectionHistory(const QString &containerKey, const QString &description,
+                              const QHash<QString, QString> &previousSelectedGroups);
     void mutateSelectionForIndexes(const QList<int> &indexes, bool selected);
     bool setSelectionInState(int index, bool selected);
     void applySelectionHistoryState(const QString &containerKey, int historyIndex);
@@ -268,16 +296,8 @@ private:
     DecodeManager *_decodeManager;
 
     // Viewer
-    struct ViewerImage {
-        QImage image;
-        QString imageId;
-        QSize requestedSize;
-        DecodedImageInfo decodedInfo;
-    };
-    QHash<QString, ViewerImage> _viewerImages;
-    QHash<QString, ViewerImage> _fullSizeViewerImages;
-    QHash<QString, QString> _imageIdToViewer;
-    QHash<QString, QString> _imageIdToFullSizeViewer;
+    QSharedPointer<ProviderImageStore> _providerImageStore;
+    ViewerImageCache _viewerImageCache;
     QSet<QString> _requestedViewerImages;
     int _currentViewIndex;
 
@@ -288,7 +308,7 @@ private:
     DirectOpenState _directOpen;
     QHash<QString, PersistentSelectionCache::ContainerState> _selectionStates;
     bool _selectionPreviewActive = false;
-    QHash<QString, QSet<QString>> _selectionPreviewSnapshot;
+    QHash<QString, QHash<QString, QString>> _selectionPreviewSnapshot;
     CacheUsageMode _imageCacheMode = CacheUsageMode::On;
     CacheUsageMode _fileListCacheMode = CacheUsageMode::On;
     qint64 _imageCacheSize = 0;

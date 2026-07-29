@@ -433,3 +433,25 @@ void ImageFile::setIsSelected(bool isSelected) {
         emit isSelectedChanged();
     }
 }
+
+QString ImageFile::selectionGroupId() const {
+    return _selectionGroupId;
+}
+
+void ImageFile::setSelectionGroupId(const QString &selectionGroupId) {
+    if (_selectionGroupId != selectionGroupId) {
+        _selectionGroupId = selectionGroupId;
+        emit selectionGroupChanged();
+    }
+}
+
+QColor ImageFile::selectionGroupColor() const {
+    return _selectionGroupColor;
+}
+
+void ImageFile::setSelectionGroupColor(const QColor &selectionGroupColor) {
+    if (_selectionGroupColor != selectionGroupColor) {
+        _selectionGroupColor = selectionGroupColor;
+        emit selectionGroupChanged();
+    }
+}

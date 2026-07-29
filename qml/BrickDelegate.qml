@@ -21,6 +21,11 @@ BrickItem {
     readonly property real selectionExtendsForImage: 2
     property bool isCurrent: model !== undefined ? (masonryLayout.currentIndex === viewIndex) : false
     property bool isItemSelected: model !== undefined ? model.isSelected : false
+    property color itemSelectionColor: model !== undefined &&
+                                       model.selectionGroupColor !== undefined &&
+                                       model.selectionGroupColor.toString() !== ""
+                                       ? model.selectionGroupColor
+                                       : Style.persistentSelectionBorder
     readonly property real nestingShift: 29
 
     property var imageItem: brickDelegate
@@ -130,7 +135,7 @@ BrickItem {
     component PersistentSelectionBorder : Rectangle {
         color: "transparent"
         border.width: 3
-        border.color: Style.persistentSelectionBorder
+        border.color: itemSelectionColor
         radius: 4
         visible: isItemSelected
         z: 20
@@ -289,7 +294,7 @@ BrickItem {
         id: imageDelegate
 
         Item {
-            visible: !(isCurrent && root.viewerShowAnimationRunning)
+            visible: !(isCurrent && masonryView.viewerTransitionActive)
             Rectangle {
                 id: delegateOutline
                 anchors {
@@ -775,7 +780,7 @@ BrickItem {
                     radius: 4
                     color: Style.lighter
                     border.width: 1
-                    border.color: Style.persistentSelectionBorder
+                    border.color: itemSelectionColor
                     visible: draggable.dragPreviewRemainingCount > 0
 
                     Text {
@@ -816,24 +821,7 @@ BrickItem {
                     }
                 }
 
-                focusProxy.forceActiveFocus()
-
-                if (scrollingMode) {
-                    endScrolling()
-                }
-
-                if (mouse.modifiers & Qt.ShiftModifier) {
-                    masonryView.shiftClickSelection(viewIndex)
-                    return
-                }
-
-                if (mouse.modifiers & Qt.ControlModifier) {
-                    setCurrentIndex(viewIndex)
-                    fileListModel.toggleSelection(sourceIndex)
-                    return
-                }
-
-                setCurrentIndex(viewIndex)
+                masonryView.handleItemPressed(viewIndex, mouse.modifiers)
         }
 
         onDoubleClicked: {

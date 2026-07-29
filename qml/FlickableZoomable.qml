@@ -6,6 +6,9 @@ import QtQuick.Controls
 Item {
     id: flickableArea
 
+    property var viewerModel: null
+    property var sourceMasonry: null
+
     property alias image: viewerImage
     property var textureSource: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImageBase
     property size originalSize
@@ -667,19 +670,23 @@ Item {
         viewportAnimation.restart();
     }
 
+    function resetViewerImages() {
+        delayedIdSetter.stop()
+        originalSize = Qt.size(0, 0)
+        image.source = ""
+        image.fromIndex = -1
+        image.fromLevel = -1
+        viewerImage2.source = ""
+        viewerImage2.fromIndex = -1
+        viewerImageCrop.source = ""
+        viewerImageCrop.fromIndex = -1
+    }
+
     Connections {
-        target: fileListModel
+        target: flickableArea.viewerModel
         function onViewerReset() {
             console.log("VIEWER RESET-----------------------")
-            delayedIdSetter.stop()
-            originalSize = Qt.size(0, 0)
-            image.source = ""
-            image.fromIndex = -1
-            image.fromLevel = -1
-            viewerImage2.source = ""
-            viewerImage2.fromIndex = -1
-            viewerImageCrop.source = ""
-            viewerImageCrop.fromIndex = -1
+            flickableArea.resetViewerImages()
         }
     }
 
@@ -926,7 +933,8 @@ Item {
                 property var source: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImageBase
                 property var viewportSize: Qt.size(width * dpr, height * dpr)
                 property real sharpenAmount: zoomScale < 1 ? 1.5 : 0
-                property bool showCheckerboard: masonryLayout.view.showTransparentGrid && flickableArea.imageTextureReady
+                property bool showCheckerboard: flickableArea.sourceMasonry.view.showTransparentGrid &&
+                                                flickableArea.imageTextureReady
                 property int checkerboardSize: 4 * dpr
                 property int borderRadius: 0
 

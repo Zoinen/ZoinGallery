@@ -1,31 +1,36 @@
 #ifndef QMLASYNCIMAGEPROVIDER_H
 #define QMLASYNCIMAGEPROVIDER_H
 
+#include "ProviderImageStore.h"
+
+#include <QMutex>
 #include <QQuickImageProvider>
+#include <QRect>
+#include <QSharedPointer>
 #include <QThreadPool>
-
-class FileListModel;
-
 
 class AsyncImageResponseRunnable : public QObject, public QRunnable {
     Q_OBJECT
 
 public:
-    AsyncImageResponseRunnable(const QString &id, const QSize &requestedSize);
+    AsyncImageResponseRunnable(QImage image, QRect crop);
     void run() override;
 
 signals:
     void done(const QImage &image);
 
 private:
-    QString _id;
-    QSize _requestedSize;
+    QImage _image;
+    QRect _crop;
 };
 
 
 class AsyncImageResponse : public QQuickImageResponse {
 public:
-    AsyncImageResponse(const QString &id, const QSize &requestedSize);
+    AsyncImageResponse(
+        const QString &id, const QSize &requestedSize,
+        const QSharedPointer<ProviderImageStore> &providerImageStore,
+        QThreadPool *threadPool);
     void handleDone(const QImage &image);
     QQuickTextureFactory *textureFactory() const override;
 
@@ -36,9 +41,20 @@ private:
 
 class QmlAsyncImageProvider : public QQuickAsyncImageProvider {
 public:
-    QmlAsyncImageProvider(const QString &prefix, FileListModel *model);
+    QmlAsyncImageProvider(
+        const QString &prefix,
+        QSharedPointer<ProviderImageStore> providerImageStore);
+    ~QmlAsyncImageProvider() override;
     static void prepareToClose();
     QQuickImageResponse *requestImageResponse(const QString &id, const QSize &requestedSize) override;
+
+private:
+    void stopThreadPool();
+
+    QSharedPointer<ProviderImageStore> _providerImageStore;
+    QMutex _requestMutex;
+    QThreadPool _threadPool;
+    bool _acceptingRequests = true;
 };
 
 #endif // QMLASYNCIMAGEPROVIDER_H

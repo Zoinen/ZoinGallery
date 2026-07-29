@@ -122,9 +122,11 @@ MainWindow {
                 if (viewerMode.zoomFitView && !viewerMode.sphericViewerMode) {
                     // console.log("onMainWindowResized")
                     viewerMode.imageContainer.zoomToFit(true)
-                    fileListModel.cancelAllDecodeViewerRunners()
-                    fileListModel.requestViewer(galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex),
-                                                viewerMode.width * dpr, viewerMode.height * dpr)
+                    root.viewerDecodeModel.cancelAllDecodeViewerRunners()
+                    root.viewerDecodeModel.requestViewer(
+                                root.viewerSourceIndex(),
+                                viewerMode.width * dpr,
+                                viewerMode.height * dpr)
                     viewerDirty = false
                 }
                 else {
@@ -150,14 +152,16 @@ MainWindow {
         target: viewerMode
         function onZoomFitViewChanged() {
             if (viewerMode.zoomFitView && viewerDirty) {
-                fileListModel.cancelAllDecodeViewerRunners()
-                fileListModel.requestViewer(galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex),
-                                            viewerMode.width * dpr, viewerMode.height * dpr)
+                root.viewerDecodeModel.cancelAllDecodeViewerRunners()
+                root.viewerDecodeModel.requestViewer(
+                            root.viewerSourceIndex(),
+                            viewerMode.width * dpr,
+                            viewerMode.height * dpr)
                 viewerDirty = false
             }
             else {
-                fileListModel.cancelAllDecodeViewerRunners()
-                fileListModel.requestViewer(galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex))
+                root.viewerDecodeModel.cancelAllDecodeViewerRunners()
+                root.viewerDecodeModel.requestViewer(root.viewerSourceIndex())
             }
         }
     }
@@ -180,6 +184,7 @@ MainWindow {
         function onSetCurrentIndex(index) {
             if (viewerController.pendingOpenInViewer) {
                 viewerController.clearPendingOpenInViewer()
+                root.useMainViewerSource()
                 Qt.callLater(() => root.tryOpenExternalInViewer(index))
             }
         }
@@ -191,12 +196,61 @@ MainWindow {
         color: topLevelWindow.useMacNativeTitleBar ? Style.macGlassWindowColor : Style.windowColor
 
         property bool viewerPinchCloseActive: false
+        property bool selectedImagesPanelOpen: false
+        property var viewerSourceContext: ({
+            "masonry": masonryLayout,
+            "mapper": galleryViewModel,
+            "decodeModel": fileListModel,
+            "selectionModel": fileListModel,
+            "filmstripModel": imageModel
+        })
+        readonly property var viewerSourceMasonry:
+            viewerSourceContext.masonry
+        readonly property var viewerSourceMapper:
+            viewerSourceContext.mapper
+        readonly property var viewerDecodeModel:
+            viewerSourceContext.decodeModel
+        readonly property var viewerSelectionModel:
+            viewerSourceContext.selectionModel
+        readonly property var viewerFilmstripModel:
+            viewerSourceContext.filmstripModel
         property bool viewerPinchCloseReturning: false
         property bool viewerPinchCloseFinishingCommit: false
         property real viewerPinchCloseProgress: 0
 
         function currentSourceIndex() {
             return galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex)
+        }
+
+        function viewerSourceIndex() {
+            return viewerSourceMapper.mapToSourceRow(
+                        viewerSourceMasonry.view.currentIndex)
+        }
+
+        function setViewerSource(masonry, mapper, decodeModel,
+                                 selectionModel, filmstripModel) {
+            viewerSourceContext = {
+                "masonry": masonry,
+                "mapper": mapper,
+                "decodeModel": decodeModel,
+                "selectionModel": selectionModel,
+                "filmstripModel": filmstripModel
+            }
+        }
+
+        function useMainViewerSource() {
+            setViewerSource(masonryLayout, galleryViewModel, fileListModel,
+                            fileListModel, imageModel)
+        }
+
+        function openViewerFrom(masonry, mapper, decodeModel,
+                                selectionModel, filmstripModel) {
+            if (root.state !== "thumbnails") {
+                return
+            }
+            setViewerSource(masonry, mapper, decodeModel,
+                            selectionModel, filmstripModel)
+            toggleViewer()
         }
         property rect viewerPinchCloseStartGeometry: Qt.rect(0, 0, 0, 0)
         property rect viewerPinchCloseTargetGeometry: Qt.rect(0, 0, 0, 0)
@@ -230,9 +284,9 @@ MainWindow {
             switchToThumbnails(startGeometry)
             if (thumbnailsDirty) {
                 thumbnailsDirty = false
-                masonryLayout.view.reReadAndDecodeThumbnails()
+                viewerSourceMasonry.view.reReadAndDecodeThumbnails()
             }
-            fileListModel.cancelAllDecodeViewerRunners()
+            viewerDecodeModel.cancelAllDecodeViewerRunners()
         }
 
         function validGeometry(geometry) {
@@ -240,11 +294,12 @@ MainWindow {
         }
 
         function currentThumbnailGeometry() {
-            if (!masonryLayout.view.currentItem) {
+            if (!viewerSourceMasonry.view.currentItem) {
                 return undefined
             }
 
-            return root.mapFromItem(masonryLayout.view, masonryLayout.currentItemImageGeometry())
+            return root.mapFromItem(viewerSourceMasonry.view,
+                                    viewerSourceMasonry.currentItemImageGeometry())
         }
 
         function currentThumbnailImageGeometry() {
@@ -362,7 +417,7 @@ MainWindow {
         }
 
         function enterThumbnailsAfterViewerPinchClose() {
-            masonryLayout.focusProxy.forceActiveFocus()
+            viewerSourceMasonry.focusView()
             if (root.state !== "thumbnails") {
                 root.state = "thumbnails"
             }
@@ -370,9 +425,9 @@ MainWindow {
             toolbarLayout.visible = true
             if (thumbnailsDirty) {
                 thumbnailsDirty = false
-                masonryLayout.view.reReadAndDecodeThumbnails()
+                viewerSourceMasonry.view.reReadAndDecodeThumbnails()
             }
-            fileListModel.cancelAllDecodeViewerRunners()
+            viewerDecodeModel.cancelAllDecodeViewerRunners()
             viewerMode.panelsVisible = false
             topLevelWindow.title = "ZoinGallery"
             thumbnailsView.opacity = 1
@@ -483,7 +538,7 @@ MainWindow {
         }
 
         function switchToViewer(animated = true) {
-            let currentItem = masonryLayout.view.currentItem
+            let currentItem = viewerSourceMasonry.view.currentItem
             if (!currentItem || !currentItem.model) {
                 return
             }
@@ -500,7 +555,9 @@ MainWindow {
 
             if (animated) {
                 if (!viewerMode.animation.running) {
-                    let mappedGeometry = root.mapFromItem(masonryLayout.view, masonryLayout.currentItemImageGeometry())
+                    let mappedGeometry = root.mapFromItem(
+                                viewerSourceMasonry.view,
+                                viewerSourceMasonry.currentItemImageGeometry())
 
                     viewerMode.imageContainer.x = mappedGeometry.x
                     viewerMode.imageContainer.y = mappedGeometry.y
@@ -516,8 +573,11 @@ MainWindow {
             }
 
             viewerMode.setImage(currentItem.model.imageIdUrl,
-                                masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, 0)
-            let exif = masonryLayout.view.indexExif(masonryLayout.view.currentIndex)
+                                viewerSourceMasonry.view.indexOriginalSize(
+                                    viewerSourceMasonry.view.currentIndex),
+                                viewerSourceMasonry.view.currentIndex, 0)
+            let exif = viewerSourceMasonry.view.indexExif(
+                        viewerSourceMasonry.view.currentIndex)
             viewerMode.show(exif["Panorama"])
 
             if (animated) {
@@ -543,11 +603,13 @@ MainWindow {
         }
 
         function switchToThumbnails(startGeometry) {
-            masonryLayout.focusProxy.forceActiveFocus()
+            viewerSourceMasonry.focusView()
             root.state = "thumbnails"
 
-            if (masonryLayout.view.currentItem) {
-                let mappedGeometry = root.mapFromItem(masonryLayout.view, masonryLayout.currentItemImageGeometry())
+            if (viewerSourceMasonry.view.currentItem) {
+                let mappedGeometry = root.mapFromItem(
+                            viewerSourceMasonry.view,
+                            viewerSourceMasonry.currentItemImageGeometry())
 
                 if (startGeometry !== undefined && startGeometry.width > 1 && startGeometry.height > 1) {
                     viewerMode.animation.stop()
@@ -566,6 +628,10 @@ MainWindow {
                 viewerMode.animation.width = mappedGeometry.width
                 viewerMode.animation.height = mappedGeometry.height
                 viewerMode.animation.restart()
+            }
+            else {
+                viewerMode.visible = false
+                viewerMode.completeInstantOpen()
             }
 
             topLevelWindow.title = "ZoinGallery"
@@ -1247,6 +1313,16 @@ MainWindow {
                     }
 
                     ToolbarButton {
+                        icon.source: "qrc:/resources/SelectionCheck.svg"
+                        ToolTip.text: (root.selectedImagesPanelOpen ? "Hide" : "Show") +
+                                      " selected images panel (" +
+                                      fileListModel.totalSelectedCount + ")"
+                        checked: root.selectedImagesPanelOpen
+
+                        onReleased: root.selectedImagesPanelOpen = !root.selectedImagesPanelOpen
+                    }
+
+                    ToolbarButton {
                         icon.source: "qrc:/resources/SelectionHistory.svg"
                         ToolTip.text: "Selection history\tCtrl+Shift+H"
                         Layout.rightMargin: isQWK ? 0 : 7
@@ -1289,18 +1365,182 @@ MainWindow {
                 // }
             }
 
-            MasonryMode {
-                id: masonryLayout
+            SplitView {
+                id: thumbnailsSplitView
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                orientation: Qt.Horizontal
 
-                onToggleViewer: root.toggleViewer()
+                handle: Rectangle {
+                    id: thumbnailsSplitHandle
+                    implicitWidth: Math.min(
+                                       8,
+                                       Math.max(
+                                           0,
+                                           Math.round(
+                                               selectedImagesPanelSlot.width /
+                                               10)))
+                    enabled: !selectedImagesPanelSlot.transitioning
+                    z: 10
+                    color: "transparent"
+                    readonly property bool handleHovered: SplitHandle.hovered
+                    readonly property bool handlePressed: SplitHandle.pressed
+
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: thumbnailsSplitHandle.handlePressed ? 3 : 1
+                        color: thumbnailsSplitHandle.handlePressed
+                               || thumbnailsSplitHandle.handleHovered
+                               ? Style.persistentSelectionBorder
+                               : Style.lighter2
+
+                        Behavior on width {
+                            NumberAnimation { duration: 80 }
+                        }
+                    }
+                }
+
+                onResizingChanged: {
+                    if (!resizing &&
+                            root.selectedImagesPanelOpen &&
+                            !selectedImagesPanelSlot.transitioning &&
+                            selectedImagesPanelSlot.width >= 240) {
+                        selectedImagesPanelSlot.contentWidth =
+                                selectedImagesPanelSlot.width
+                        AppSettings.selectedImagesPanelWidth =
+                                selectedImagesPanelSlot.width
+                    }
+                }
+
+                MasonryMode {
+                    id: masonryLayout
+                    SplitView.fillWidth: true
+                    SplitView.minimumWidth: 320
+                    viewerTransitionActive:
+                        root.viewerShowAnimationRunning &&
+                        root.viewerSourceMasonry === masonryLayout
+
+                    onToggleViewer: root.openViewerFrom(
+                                        masonryLayout, galleryViewModel,
+                                        fileListModel, fileListModel,
+                                        imageModel)
+                }
+
+                Item {
+                    id: selectedImagesPanelSlot
+
+                    property real contentWidth: Math.max(
+                                                    240,
+                                                    AppSettings.selectedImagesPanelWidth)
+                    property bool transitionVisible: false
+                    property bool transitioning: false
+                    readonly property real availableWidth: Math.max(
+                                                               0,
+                                                               thumbnailsSplitView.width -
+                                                               320 - 8)
+                    readonly property real minimumOpenWidth: Math.min(
+                                                                 240,
+                                                                 availableWidth)
+
+                    SplitView.preferredWidth: 0
+                    SplitView.minimumWidth: transitioning
+                                            ? 0
+                                            : (root.selectedImagesPanelOpen
+                                               ? minimumOpenWidth
+                                               : 0)
+                    SplitView.maximumWidth: availableWidth
+                    visible: transitionVisible
+                    clip: true
+
+                    function setOpen(open) {
+                        const currentWidth = Math.max(0, width)
+                        const wasTransitioning = transitioning
+
+                        panelWidthAnimation.stop()
+                        transitioning = true
+                        transitionVisible = true
+
+                        if (open) {
+                            contentWidth = Math.min(
+                                        Math.max(
+                                            minimumOpenWidth,
+                                            AppSettings.selectedImagesPanelWidth),
+                                        SplitView.maximumWidth)
+                            panelWidthAnimation.from = currentWidth
+                            panelWidthAnimation.to = contentWidth
+                        }
+                        else {
+                            if (!wasTransitioning) {
+                                contentWidth = currentWidth
+                            }
+                            panelWidthAnimation.from = currentWidth
+                            panelWidthAnimation.to = 0
+                        }
+
+                        SplitView.preferredWidth = currentWidth
+                        panelWidthAnimation.restart()
+                    }
+
+                    NumberAnimation {
+                        id: panelWidthAnimation
+                        target: selectedImagesPanelSlot.SplitView
+                        property: "preferredWidth"
+                        duration: 220
+                        easing.type: Easing.InOutCubic
+
+                        onStopped: {
+                            selectedImagesPanelSlot.transitioning = false
+                            if (!root.selectedImagesPanelOpen &&
+                                    selectedImagesPanelSlot.width < 1) {
+                                selectedImagesPanelSlot.transitionVisible = false
+                            }
+                        }
+                    }
+
+                    SelectedImagesPanel {
+                        id: selectedImagesPanel
+                        anchors {
+                            left: parent.left
+                            top: parent.top
+                            bottom: parent.bottom
+                        }
+                        width: selectedImagesPanelSlot.transitioning
+                               ? selectedImagesPanelSlot.contentWidth
+                               : selectedImagesPanelSlot.width
+                        transparentGrid: masonryLayout.view.showTransparentGrid
+                        viewerTransitionActive:
+                            root.viewerShowAnimationRunning &&
+                            root.viewerSourceMasonry ===
+                                selectedImagesPanel.masonryMode
+
+                        onCloseRequested: root.selectedImagesPanelOpen = false
+                        onImageActivated: root.openViewerFrom(
+                                              selectedImagesPanel.masonryMode,
+                                              selectedImagesModel,
+                                              selectedImagesModel,
+                                              selectedImagesModel,
+                                              selectedImagesModel)
+                    }
+                }
+
+                Connections {
+                    target: root
+
+                    function onSelectedImagesPanelOpenChanged() {
+                        selectedImagesPanelSlot.setOpen(
+                                    root.selectedImagesPanelOpen)
+                    }
+                }
             }
         }
 
         ViewerMode {
             id: viewerMode
             anchors.fill: parent
+
+            sourceContext: root.viewerSourceContext
 
             onPinchZoomOutToThumbnailsProgressed: (progress) => root.updateViewerPinchClose(progress)
             onPinchZoomOutToThumbnailsFinished: (commit) => root.finishViewerPinchClose(commit)

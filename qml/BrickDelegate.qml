@@ -30,6 +30,25 @@ BrickItem {
 
     property var imageItem: brickDelegate
 
+    function actionForDrop(drag) {
+        const supported = drag.supportedActions
+        if (drag.proposedAction === Qt.MoveAction &&
+                (supported & Qt.MoveAction)) {
+            return Qt.MoveAction
+        }
+        if (drag.proposedAction === Qt.CopyAction &&
+                (supported & Qt.CopyAction)) {
+            return Qt.CopyAction
+        }
+        if (supported & Qt.CopyAction) {
+            return Qt.CopyAction
+        }
+        if (supported & Qt.MoveAction) {
+            return Qt.MoveAction
+        }
+        return Qt.IgnoreAction
+    }
+
     component ImageView : Item {
         id: imageViewRoot
         property alias source: internalImage.source
@@ -706,9 +725,14 @@ BrickItem {
         anchors.fill: parent
         Drag.active: brickMouseArea.drag.active
         Drag.dragType: Drag.Automatic
+        Drag.supportedActions: Qt.CopyAction | Qt.MoveAction
         Drag.mimeData: ({
             "text/uri-list": dragUrls
         })
+        Drag.onDragStarted: fileListModel.configureNativeDragCursors(draggable)
+        Drag.onDragFinished: (dropAction) => {
+            fileListModel.finalizeExternalDrag(dragUrls, dropAction)
+        }
 
         function updateDragPayload(sourceIndex, singleItemOnly) {
             dragUrls = fileListModel.dragUrlsForIndex(sourceIndex, singleItemOnly)
@@ -794,6 +818,69 @@ BrickItem {
         }
     }
 
+    Rectangle {
+        id: folderDropHighlight
+        anchors.fill: parent
+        anchors.margins: 2
+        z: 90
+        radius: 7
+        color: Style.persistentSelectionBorder
+        opacity: folderDropArea.containsDrag ? 0.22 : 0
+        border.width: folderDropArea.containsDrag ? 2 : 0
+        border.color: Style.persistentSelectionBorder
+        visible: opacity > 0
+
+        Behavior on opacity {
+            NumberAnimation { duration: 120; easing.type: Easing.OutQuad }
+        }
+    }
+
+    DropArea {
+        id: folderDropArea
+        anchors.fill: parent
+        z: 91
+        enabled: model !== undefined && model.isFolder
+
+        onEntered: (drag) => {
+            if (!drag.hasUrls) {
+                drag.accepted = false
+                return
+            }
+            const action = brickDelegate.actionForDrop(drag)
+            if (action === Qt.IgnoreAction) {
+                drag.accepted = false
+            }
+            else {
+                drag.accept(action)
+            }
+        }
+        onPositionChanged: (drag) => {
+            const action = brickDelegate.actionForDrop(drag)
+            if (drag.hasUrls && action !== Qt.IgnoreAction) {
+                drag.accept(action)
+            }
+            else {
+                drag.accepted = false
+            }
+        }
+        onDropped: (drop) => {
+            const action = brickDelegate.actionForDrop(drop)
+            if (!drop.hasUrls || action === Qt.IgnoreAction) {
+                drop.accepted = false
+                return
+            }
+            const result = fileListModel.dropUrlsIntoFolder(
+                             drop.urls, model.fullPath, action)
+            if (result.success) {
+                drop.accept(result.action)
+            }
+            else {
+                drop.accepted = false
+                masonryView.fileDropFailed(result.title, result.message)
+            }
+        }
+    }
+
     MouseArea {
         id: brickMouseArea
         anchors.fill: parent
@@ -803,7 +890,9 @@ BrickItem {
 
         onPressed:
             (mouse) => {
-                draggable.updateDragPayload(sourceIndex, mouse.modifiers & Qt.AltModifier)
+                draggable.updateDragPayload(
+                            sourceIndex,
+                            masonryView.singleItemDragRequested(mouse.modifiers))
 
                 if (imageItem !== undefined) {
                     let mappedPos = imageItem.mapFromItem(brickMouseArea, mouse.x, mouse.y)

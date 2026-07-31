@@ -25,6 +25,7 @@ MouseArea {
     signal toggleViewer()
     signal currentIndexActivated(int index)
     signal currentSelectionToggleRequested(int index)
+    signal fileDropFailed(string title, string message)
 
     // <Scrolling>
     property bool scrollingStarted: false
@@ -84,14 +85,36 @@ MouseArea {
                 startRubberBand(mouse.x, mouse.y, mouse.modifiers)
             }
         }
-        else {
-            if (mouse.button === Qt.MiddleButton && !scrollingMode) {
+        else if (mouse.button === Qt.MiddleButton) {
+            if (!scrollingMode) {
                 startScrolling()
             }
             else {
                 endScrolling()
             }
         }
+        else if (mouse.button === Qt.RightButton) {
+            if (scrollingMode) {
+                endScrolling()
+            }
+            if (selectionInteractionEnabled) {
+                focusView()
+                let p = masonryLayout.mapFromItem(masonryView, mouse.x, mouse.y)
+                let viewIndex = masonryLayout.indexAtViewport(p.x, p.y)
+                if (viewIndex !== -1) {
+                    setCurrentIndex(viewIndex, false, false, false, true)
+                    selectionModel.toggleSelection(sourceIndexForViewIndex(viewIndex))
+                }
+            }
+        }
+    }
+
+    function singleItemDragRequested(modifiers) {
+        // Option is macOS's native "copy while dragging" modifier, so keep it
+        // free there. Physical Control is exposed as MetaModifier on macOS.
+        const modifier = Qt.platform.os === "osx"
+                ? Qt.MetaModifier : Qt.AltModifier
+        return Boolean(modifiers & modifier)
     }
 
     onReleased: (mouse) => {
@@ -319,11 +342,12 @@ MouseArea {
         selectionModel.previewSelectionIndexes(
                     selectionMapper.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, true),
                     rubberBandModeAdd)
-        setCurrentIndex(targetIndex)
+        setCurrentIndex(targetIndex, false, false, false, true)
     }
 
     function toggleCurrentSelection() {
-        setCurrentIndex(masonryLayout.currentIndex)
+        setCurrentIndex(masonryLayout.currentIndex,
+                        false, false, false, true)
         selectionModel.toggleSelection(currentSourceIndex())
     }
 
@@ -340,6 +364,11 @@ MouseArea {
         if (selectionInteractionEnabled && event.modifiers & Qt.ShiftModifier) {
             updateShiftNavigationSelection(masonryLayout.currentIndex)
         }
+    }
+
+    function keyboardNavigationChangesSelection(modifiers) {
+        return selectionInteractionEnabled &&
+               Boolean(modifiers & Qt.ShiftModifier)
     }
 
     function startRubberBand(mouseX, mouseY, modifiers) {
@@ -433,7 +462,8 @@ MouseArea {
             shiftClickSelection(viewIndex)
             return
         }
-        setCurrentIndex(viewIndex)
+        setCurrentIndex(viewIndex, false, false, false,
+                        Boolean(modifiers & Qt.ControlModifier))
         if (modifiers & Qt.ControlModifier) {
             selectionModel.toggleSelection(currentSourceIndex())
         }
@@ -458,7 +488,8 @@ MouseArea {
             }
             else if (primaryView && event.key === Qt.Key_Insert && !(event.modifiers & Qt.ControlModifier)) {
                 selectionModel.toggleSelection(currentSourceIndex())
-                setCurrentIndex(masonryLayout.currentIndex + 1)
+                setCurrentIndex(masonryLayout.currentIndex + 1,
+                                false, false, false, true)
             }
             else if (primaryView && event.key === Qt.Key_Backslash && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
                 galleryViewModel.selectedOnly = !galleryViewModel.selectedOnly
@@ -488,11 +519,17 @@ MouseArea {
                 selectionModel.setAllSelection(false)
             }
             else if (event.key === Qt.Key_Left) {
-                setCurrentIndex(masonryLayout.currentIndex - 1)
+                setCurrentIndex(
+                            masonryLayout.currentIndex - 1,
+                            false, false, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_Right) {
-                setCurrentIndex(masonryLayout.currentIndex + 1)
+                setCurrentIndex(
+                            masonryLayout.currentIndex + 1,
+                            false, false, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_Up && !(event.modifiers & Qt.AltModifier)) {
@@ -502,13 +539,19 @@ MouseArea {
                 if (indexAbove !== -1) {
                     if (event.modifiers & Qt.ControlModifier) {
                         ensureVisible(masonryLayout.currentIndex)
-                        setCurrentIndex(indexAbove, true, false, true)
+                        setCurrentIndex(
+                                    indexAbove, true, false, true,
+                                    keyboardNavigationChangesSelection(
+                                        event.modifiers))
                         let newCurrentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
                         scrollBy(newCurrentItemGeometry.y - currentItemGeometry.y)
                         updateSelectionAfterKeyboardNavigation(event)
                     }
                     else {
-                        setCurrentIndex(indexAbove, true)
+                        setCurrentIndex(
+                                    indexAbove, true, false, false,
+                                    keyboardNavigationChangesSelection(
+                                        event.modifiers))
                         updateSelectionAfterKeyboardNavigation(event)
                     }
                 }
@@ -533,23 +576,34 @@ MouseArea {
                 if (indexBelow !== -1) {
                     if (event.modifiers & Qt.ControlModifier) {
                         ensureVisible(masonryLayout.currentIndex)
-                        setCurrentIndex(indexBelow, true, false, true)
+                        setCurrentIndex(
+                                    indexBelow, true, false, true,
+                                    keyboardNavigationChangesSelection(
+                                        event.modifiers))
                         let newCurrentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
                         scrollBy(newCurrentItemGeometry.y - currentItemGeometry.y)
                         updateSelectionAfterKeyboardNavigation(event)
                     }
                     else {
-                        setCurrentIndex(indexBelow, true)
+                        setCurrentIndex(
+                                    indexBelow, true, false, false,
+                                    keyboardNavigationChangesSelection(
+                                        event.modifiers))
                         updateSelectionAfterKeyboardNavigation(event)
                     }
                 }
             }
             else if (event.key === Qt.Key_Home) {
-                setCurrentIndex(0)
+                setCurrentIndex(
+                            0, false, false, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_End) {
-                setCurrentIndex(masonryLayout.count - 1)
+                setCurrentIndex(
+                            masonryLayout.count - 1,
+                            false, false, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_PageUp && !(event.modifiers & Qt.ControlModifier)) {
@@ -570,7 +624,9 @@ MouseArea {
                     }
                 }
 
-                setCurrentIndex(newCurrentIndex, !hitStart, !hitStart)
+                setCurrentIndex(
+                            newCurrentIndex, !hitStart, !hitStart, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
                 scrollBy(-deltaY)
             }
@@ -597,7 +653,9 @@ MouseArea {
                     }
                 }
 
-                setCurrentIndex(newCurrentIndex2, !hitEnd, !hitEnd)
+                setCurrentIndex(
+                            newCurrentIndex2, !hitEnd, !hitEnd, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
                 scrollBy(deltaY)
             }

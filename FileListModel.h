@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QAbstractProxyModel>
 #include <QSet>
+#include <QTimer>
 
 #include "CacheUsageMode.h"
 #include "ImageFile.h"
@@ -72,6 +73,9 @@ class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterfa
     Q_PROPERTY(QColor activeSelectionGroupColor READ activeSelectionGroupColor NOTIFY activeSelectionGroupChanged)
     Q_PROPERTY(int totalSelectedCount READ totalSelectedCount NOTIFY selectionGroupsChanged)
     Q_PROPERTY(bool canAddSelectionGroup READ canAddSelectionGroup NOTIFY selectionGroupsChanged)
+    Q_PROPERTY(bool canUndoSelectionGroupMove READ canUndoSelectionGroupMove
+               NOTIFY canUndoSelectionGroupMoveChanged)
+    Q_PROPERTY(bool fileDragActive READ fileDragActive NOTIFY fileDragActiveChanged)
 
 public:
     enum ItemUserRoles {
@@ -153,6 +157,18 @@ public:
     Q_INVOKABLE QVariantList dragIndexesForIndex(int index, bool singleItemOnly = false) const;
     Q_INVOKABLE QVariantList dragUrlsForIndex(int index, bool singleItemOnly = false) const;
     Q_INVOKABLE QVariantMap dragPreviewItemsForIndex(int index, int limit, bool singleItemOnly = false) const;
+    Q_INVOKABLE QVariantMap finalizeExternalDrag(
+        const QVariantList &urls, int dropAction);
+    Q_INVOKABLE void configureNativeDragCursors(QObject *dragSource);
+    Q_INVOKABLE QVariantMap dropUrlsIntoFolder(
+        const QVariantList &urls, const QString &destinationFolder,
+        int dropAction);
+    Q_INVOKABLE QVariantMap createFolder(
+        const QString &parentPath, const QString &name);
+    Q_INVOKABLE QVariantMap createFolderAndDropUrls(
+        const QVariantList &urls, const QString &parentPath,
+        const QString &name, int dropAction);
+    bool fileDragActive() const;
     Q_INVOKABLE void beginSelectionPreview();
     Q_INVOKABLE void previewSelectionRange(int anchorIndex, int targetIndex, bool selected, bool includeTarget);
     Q_INVOKABLE void previewSelectionIndexes(const QVariantList &indexes, int mode);
@@ -176,6 +192,13 @@ public:
     Q_INVOKABLE bool renameSelectionGroup(const QString &groupId, const QString &name);
     Q_INVOKABLE bool removeSelectionGroup(const QString &groupId);
     Q_INVOKABLE int copyActiveSelectionGroupPaths() const;
+    bool canUndoSelectionGroupMove() const;
+    Q_INVOKABLE QVariantMap moveActiveSelectionGroupToCurrentFolder();
+    Q_INVOKABLE QVariantMap moveActiveSelectionGroupToCurrentFolderSkipping(
+        const QStringList &skippedPaths);
+    Q_INVOKABLE QVariantMap moveActiveSelectionGroupToCurrentFolderSkippingAll(
+        const QStringList &skippedPaths);
+    Q_INVOKABLE QVariantMap undoLastSelectionGroupMove();
 
     bool runningTasksDebug() const;
     void setRunningTasksDebug(bool isRunningTasksDebug);
@@ -204,13 +227,19 @@ signals:
     void runningTasksChanged(const QString &tasks, const QStringList &tasksInfo);
     void runningTasksDebugChanged();
     void selectionChanged();
+    void selectionPathsChanged(const QStringList &paths);
     void selectionHistoryChanged();
     void selectionGroupsChanged();
     void activeSelectionGroupChanged();
+    void canUndoSelectionGroupMoveChanged();
     void imageCacheModeChanged();
     void fileListCacheModeChanged();
     void cacheInfoChanged();
     void panelReloaded(int sourceIndex);
+    void fileDragActiveChanged();
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     enum SelectionPreviewMode {
@@ -241,6 +270,24 @@ private:
         ImageInfo info;
         QSet<QString> pendingNeighborInfoPaths;
         QSet<QString> pendingNeighborDecodePaths;
+    };
+
+    struct SelectionGroupMoveAction {
+        PersistentSelectionCache::SelectionGroup group;
+        QList<PersistentSelectionCache::SelectedFile> selectedFiles;
+        QString destinationFolder;
+        QHash<QString, QString> originalToMovedPath;
+
+        bool isValid() const {
+            return !group.id.isEmpty() && !destinationFolder.isEmpty() &&
+                   !originalToMovedPath.isEmpty();
+        }
+        void clear() {
+            group = {};
+            selectedFiles.clear();
+            destinationFolder.clear();
+            originalToMovedPath.clear();
+        }
     };
 
     QString generateNewId();
@@ -276,13 +323,25 @@ private:
     void ensureSelectionStateLoaded(const QString &containerKey);
     void loadSelectionStatesForVisibleItems();
     void syncVisibleItemSelection();
-    void emitSelectionDataChanged(int firstIndex = -1, int lastIndex = -1);
+    void emitSelectionDataChanged(int firstIndex = -1, int lastIndex = -1,
+                                  bool persistentChange = false);
     void pushSelectionHistory(const QString &containerKey, const QString &description,
                               const QHash<QString, QString> &previousSelectedGroups);
     void mutateSelectionForIndexes(const QList<int> &indexes, bool selected);
     bool setSelectionInState(int index, bool selected);
     void applySelectionHistoryState(const QString &containerKey, int historyIndex);
+    void refreshAvailableSelectionCounts();
+    void updateAvailableSelectionCounts(const QStringList &paths);
     QString sameKindDescription(int index, bool selected) const;
+    QVariantMap selectionGroupMoveError(const QString &title,
+                                        const QString &message,
+                                        const QString &skipPath = QString()) const;
+    QVariantMap moveActiveSelectionGroupToCurrentFolderImpl(
+        const QStringList &skippedPaths, bool skipAllItemErrors);
+    void removeMovedPathsFromSelection(const QStringList &paths,
+                                       const QString &description);
+    void refreshFoldersAfterFileOperation(const QSet<QString> &folders);
+    void setFileDragActive(bool active);
 
     QString _root;
     QHash<QString, ImageFile *> _fileToItem;
@@ -306,7 +365,12 @@ private:
     int _folderViewImageCount = 16;
 
     DirectOpenState _directOpen;
+    SelectionGroupMoveAction _lastSelectionGroupMove;
     QHash<QString, PersistentSelectionCache::ContainerState> _selectionStates;
+    QSet<QString> _pendingSelectionPaths;
+    QHash<QString, int> _availableSelectionCounts;
+    QHash<QString, QString> _availableSelectedPathGroups;
+    QTimer _selectionSaveTimer;
     bool _selectionPreviewActive = false;
     QHash<QString, QHash<QString, QString>> _selectionPreviewSnapshot;
     CacheUsageMode _imageCacheMode = CacheUsageMode::On;
@@ -314,6 +378,7 @@ private:
     qint64 _imageCacheSize = 0;
     qint64 _fileListCacheSize = 0;
     bool _isClosing = false;
+    bool _fileDragActive = false;
 };
 
 #endif // FILELISTMODEL_H

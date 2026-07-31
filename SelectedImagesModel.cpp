@@ -22,10 +22,16 @@ SelectedImagesModel::SelectedImagesModel(
     _decodeManager->setImageCacheMode(
         cacheUsageModeFromInt(_selectionSourceModel->imageCacheMode()));
 
-    connect(_selectionSourceModel, &FileListModel::selectionChanged,
-            this, &SelectedImagesModel::syncFromPersistentSelection);
+    connect(_selectionSourceModel, &FileListModel::selectionPathsChanged,
+            this, &SelectedImagesModel::syncPathsFromPersistentSelection);
     connect(_selectionSourceModel, &FileListModel::activeSelectionGroupChanged,
-            this, &SelectedImagesModel::syncFromPersistentSelection);
+            this, [this]() {
+                const QString nextGroupId =
+                    _selectionSourceModel->activeSelectionGroupId();
+                if (nextGroupId != _activeGroupId) {
+                    syncFromPersistentSelection();
+                }
+            });
     connect(_selectionSourceModel, &FileListModel::imageCacheModeChanged, this, [this]() {
         _decodeManager->cancelAllRunners();
         _decodeManager->setImageCacheMode(
@@ -451,16 +457,23 @@ void SelectedImagesModel::syncFromPersistentSelection() {
     const QList<PersistentSelectionCache::SelectedFile> selectedFiles =
         PersistentSelectionCache::selectedFilesByAdditionDate();
     const QString activeGroupId = _selectionSourceModel->activeSelectionGroupId();
+    _activeGroupId = activeGroupId;
 
     QSet<QString> retainedPaths;
+    QSet<QString> nextActiveGroupPaths;
+    QHash<QString, QDateTime> nextSelectionAddedAt;
     QList<ImageFile *> nextItems;
     nextItems.reserve(selectedFiles.size());
     int nextTotalPathCount = 0;
     for (const PersistentSelectionCache::SelectedFile &selectedFile : selectedFiles) {
+        const QString normalizedPath =
+            QFileInfo(selectedFile.path).absoluteFilePath();
+        nextSelectionAddedAt.insert(normalizedPath, selectedFile.addedAt);
         const bool belongsToActiveGroup =
             selectedFile.groupId == activeGroupId;
         if (belongsToActiveGroup) {
             nextTotalPathCount++;
+            nextActiveGroupPaths.insert(normalizedPath);
         }
 
         const QFileInfo fileInfo(selectedFile.path);
@@ -511,6 +524,8 @@ void SelectedImagesModel::syncFromPersistentSelection() {
 
     _selectionPreviewActive = false;
     _selectionPreviewSnapshot.clear();
+    _activeGroupPaths = nextActiveGroupPaths;
+    _selectionAddedAt = std::move(nextSelectionAddedAt);
     _totalPathCount = nextTotalPathCount;
     _unavailableCount = qMax(0, nextTotalPathCount - nextItems.size());
     beginResetModel();
@@ -544,6 +559,146 @@ void SelectedImagesModel::syncFromPersistentSelection() {
         // Let MasonryLayout attach to the model before image metadata starts
         // arriving. Its normal ImageFullSizeRole/TimeToFlushRole path then
         // schedules thumbnail decoding exactly like the main gallery.
+        _imageInfoRequestTimer.start();
+    }
+}
+
+void SelectedImagesModel::syncPathsFromPersistentSelection(
+    const QStringList &paths) {
+    // MasonryLayout rebuilds after structural row changes. A single path is
+    // cheap and truly incremental; one reset is faster for a large batch than
+    // rebuilding the layout once per inserted/removed row.
+    constexpr qsizetype IncrementalPathLimit = 1;
+    if (paths.isEmpty() || paths.size() > IncrementalPathLimit) {
+        syncFromPersistentSelection();
+        return;
+    }
+
+    bool contentsChanged = false;
+    bool panelSelectionChangedValue = false;
+    bool needsImageInfo = false;
+    for (const QString &changedPath : paths) {
+        const QFileInfo pathInfo(changedPath);
+        const QString path = pathInfo.absoluteFilePath();
+        const bool wasActive = _activeGroupPaths.contains(path);
+
+        PersistentSelectionCache::SelectedFile selectedFile;
+        const bool isSelected =
+            PersistentSelectionCache::selectedFile(path, selectedFile);
+        const bool isActive =
+            isSelected && selectedFile.groupId == _activeGroupId;
+        if (isSelected) {
+            _selectionAddedAt.insert(path, selectedFile.addedAt);
+        }
+        else {
+            _selectionAddedAt.remove(path);
+        }
+        if (wasActive != isActive) {
+            if (isActive) {
+                _activeGroupPaths.insert(path);
+            }
+            else {
+                _activeGroupPaths.remove(path);
+            }
+            contentsChanged = true;
+        }
+
+        const bool isAvailableImage =
+            isSelected && pathInfo.isFile() &&
+            ThumbnailLoader::isFormatSupported(pathInfo.fileName());
+        ImageFile *item = _pathToItem.value(path, nullptr);
+        int activeRow = item ? item->index() : -1;
+        if (activeRow < 0 || activeRow >= _items.size() ||
+            _items.value(activeRow) != item) {
+            activeRow = -1;
+        }
+
+        if (isAvailableImage && !item) {
+            item = new ImageFile(this);
+            item->setFolderPath(pathInfo.absolutePath());
+            item->setFileName(pathInfo.fileName());
+            item->setIsImage(true);
+            item->setIsFolder(false);
+            item->setIconPath(QStringLiteral(
+                "qrc:/resources/ImageIcon.svg"));
+            item->setInfo(ImageInfo{
+                .path = path,
+                .lastModified = pathInfo.lastModified(),
+                .fileSize = pathInfo.size(),
+            });
+            _pathToItem.insert(path, item);
+        }
+
+        if (item && isSelected) {
+            item->setSelectionGroupId(selectedFile.groupId);
+            item->setSelectionGroupColor(QColor(
+                PersistentSelectionCache::colorForGroup(
+                    selectedFile.groupId)));
+        }
+
+        if (isActive && isAvailableImage && activeRow == -1) {
+            int row = 0;
+            while (row < _items.size()) {
+                const QString existingPath = _items[row]->fullPath();
+                const QDateTime existingAddedAt =
+                    _selectionAddedAt.value(existingPath);
+                if (selectedFile.addedAt != existingAddedAt
+                    ? selectedFile.addedAt < existingAddedAt
+                    : QString::compare(path, existingPath,
+                                       Qt::CaseInsensitive) < 0) {
+                    break;
+                }
+                ++row;
+            }
+            beginInsertRows(QModelIndex(), row, row);
+            _items.insert(row, item);
+            for (int i = row; i < _items.size(); ++i) {
+                _items[i]->setIndex(i);
+            }
+            endInsertRows();
+            contentsChanged = true;
+            panelSelectionChangedValue = true;
+            needsImageInfo |= !item->fullSize().isValid();
+        }
+        else if ((!isActive || !isAvailableImage) && activeRow != -1) {
+            beginRemoveRows(QModelIndex(), activeRow, activeRow);
+            _items.removeAt(activeRow);
+            item->setIndex(-1);
+            for (int i = activeRow; i < _items.size(); ++i) {
+                _items[i]->setIndex(i);
+            }
+            endRemoveRows();
+            contentsChanged = true;
+            panelSelectionChangedValue = true;
+        }
+
+        if (item && (!isSelected || !isAvailableImage)) {
+            const QString imageId =
+                item->imageIdUrl().section(QLatin1Char('/'), -1);
+            _imageIdToItem.remove(imageId);
+            _providerImageStore->remove(imageId);
+            _viewerImageCache.remove(item->fullPath());
+            _pathToItem.remove(path);
+            item->deleteLater();
+        }
+    }
+
+    _selectionPreviewActive = false;
+    _selectionPreviewSnapshot.clear();
+    _totalPathCount = _activeGroupPaths.size();
+    _unavailableCount = qMax(0, _totalPathCount - _items.size());
+    if (!_currentViewerPath.isEmpty() &&
+        indexForPath(_currentViewerPath) == -1) {
+        _currentViewerPath.clear();
+        emit viewerReset();
+    }
+    if (contentsChanged) {
+        emit activeGroupContentsChanged();
+    }
+    if (panelSelectionChangedValue) {
+        emit panelSelectionChanged();
+    }
+    if (needsImageInfo) {
         _imageInfoRequestTimer.start();
     }
 }

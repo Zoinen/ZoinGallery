@@ -197,6 +197,9 @@ MainWindow {
 
         property bool viewerPinchCloseActive: false
         property bool selectedImagesPanelOpen: false
+        property var pendingCreateDropUrls: []
+        property int pendingCreateDropAction: Qt.CopyAction
+        property bool createFolderForDrop: false
         property var viewerSourceContext: ({
             "masonry": masonryLayout,
             "mapper": galleryViewModel,
@@ -220,6 +223,45 @@ MainWindow {
 
         function currentSourceIndex() {
             return galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex)
+        }
+
+        function showFileDropError(title, message) {
+            fileDropErrorPopup.titleText = title || "File operation failed"
+            fileDropErrorPopup.messageText = message || "The operation could not be completed."
+            fileDropErrorPopup.open()
+        }
+
+        function beginFolderCreation(urls, action) {
+            pendingCreateDropUrls = urls || []
+            pendingCreateDropAction = action === Qt.MoveAction
+                                      ? Qt.MoveAction : Qt.CopyAction
+            createFolderForDrop = pendingCreateDropUrls.length > 0
+            createFolderName.text = ""
+            createFolderError.text = ""
+            createFolderPopup.open()
+            Qt.callLater(() => createFolderName.forceActiveFocus())
+        }
+
+        function confirmFolderCreation() {
+            const result = createFolderForDrop
+                         ? fileListModel.createFolderAndDropUrls(
+                               pendingCreateDropUrls,
+                               viewerController.currentPath,
+                               createFolderName.text,
+                               pendingCreateDropAction)
+                         : fileListModel.createFolder(
+                               viewerController.currentPath,
+                               createFolderName.text)
+            if (result.success) {
+                createFolderPopup.close()
+                pendingCreateDropUrls = []
+                masonryLayout.focusProxy.forceActiveFocus()
+            }
+            else {
+                createFolderError.text = result.message || result.title
+                createFolderName.selectAll()
+                createFolderName.forceActiveFocus()
+            }
         }
 
         function viewerSourceIndex() {
@@ -1036,6 +1078,127 @@ MainWindow {
                         text: viewerController.currentPath
                     }
 
+                    ToolbarButton {
+                        id: createButton
+                        implicitWidth: 44
+                        icon.source: "qrc:/resources/FolderIcon.svg"
+                        ToolTip.text: fileListModel.fileDragActive
+                                      ? "Drop here to create a folder for these items"
+                                      : "Create…"
+
+                        onReleased: createMenu.popup()
+
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: 2
+                            z: 10
+                            radius: 6
+                            color: Style.persistentSelectionBorder
+                            opacity: createDropArea.containsDrag
+                                     ? 0.3
+                                     : (fileListModel.fileDragActive ? 0.12 : 0)
+                            border.width: createDropArea.containsDrag ? 2 : 1
+                            border.color: Style.persistentSelectionBorder
+                            visible: opacity > 0
+
+                            Behavior on opacity {
+                                NumberAnimation {
+                                    duration: 140
+                                    easing.type: Easing.OutQuad
+                                }
+                            }
+                        }
+
+                        Text {
+                            anchors.right: parent.right
+                            anchors.rightMargin: 7
+                            anchors.bottom: parent.bottom
+                            anchors.bottomMargin: 7
+                            z: 11
+                            text: "+"
+                            color: Style.text
+                            font.bold: true
+                            font.pixelSize: 13
+                        }
+
+                        DropArea {
+                            id: createDropArea
+                            anchors.fill: parent
+                            z: 20
+
+                            function proposedFileAction(drag) {
+                                if (drag.proposedAction === Qt.MoveAction &&
+                                        (drag.supportedActions & Qt.MoveAction)) {
+                                    return Qt.MoveAction
+                                }
+                                if (drag.supportedActions & Qt.CopyAction) {
+                                    return Qt.CopyAction
+                                }
+                                if (drag.supportedActions & Qt.MoveAction) {
+                                    return Qt.MoveAction
+                                }
+                                return Qt.IgnoreAction
+                            }
+
+                            onEntered: (drag) => {
+                                const action = proposedFileAction(drag)
+                                if (!drag.hasUrls || action === Qt.IgnoreAction) {
+                                    drag.accepted = false
+                                }
+                                else {
+                                    drag.accept(action)
+                                }
+                            }
+                            onPositionChanged: (drag) => {
+                                const action = proposedFileAction(drag)
+                                if (drag.hasUrls && action !== Qt.IgnoreAction) {
+                                    drag.accept(action)
+                                }
+                                else {
+                                    drag.accepted = false
+                                }
+                            }
+                            onDropped: (drop) => {
+                                const action = proposedFileAction(drop)
+                                if (!drop.hasUrls || action === Qt.IgnoreAction) {
+                                    drop.accepted = false
+                                    return
+                                }
+                                const urls = drop.urls
+                                // The actual move is deferred until the name dialog is
+                                // confirmed. Report Copy (or Ignore) now so the drag
+                                // source cannot delete the originals prematurely.
+                                if (drop.supportedActions & Qt.CopyAction) {
+                                    drop.accept(Qt.CopyAction)
+                                }
+                                else {
+                                    drop.accepted = false
+                                }
+                                root.beginFolderCreation(urls, action)
+                            }
+                        }
+
+                        Menu {
+                            id: createMenu
+
+                            MenuItem {
+                                text: "Folder…"
+                                onTriggered: root.beginFolderCreation([], Qt.CopyAction)
+                            }
+
+                            MenuSeparator {}
+
+                            MenuItem {
+                                text: "Selection group"
+                                enabled: fileListModel.canAddSelectionGroup
+                                onTriggered: {
+                                    fileListModel.addSelectionGroup()
+                                    root.selectedImagesPanelOpen = true
+                                }
+                            }
+                        }
+                    }
+
                     Shortcut {
                         sequence: "F12"
                         onActivated: {
@@ -1426,6 +1589,8 @@ MainWindow {
                                         masonryLayout, galleryViewModel,
                                         fileListModel, fileListModel,
                                         imageModel)
+                    onFileDropFailed: (title, message) =>
+                                          root.showFileDropError(title, message)
                 }
 
                 Item {
@@ -1550,6 +1715,130 @@ MainWindow {
             id: settingsDialog
         }
 
+        Popup {
+            id: createFolderPopup
+            anchors.centerIn: parent
+            width: Math.min(420, parent.width - 40)
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape
+            padding: 18
+
+            background: Rectangle {
+                radius: 8
+                color: Style.popupBackground
+                border.width: 1
+                border.color: Style.popupBorder
+            }
+
+            contentItem: ColumnLayout {
+                spacing: 12
+
+                Text {
+                    Layout.fillWidth: true
+                    text: root.createFolderForDrop
+                          ? "Create folder and move items"
+                          : "Create folder"
+                    color: Style.text
+                    font.pixelSize: 17
+                    font.bold: true
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: root.createFolderForDrop
+                          ? "The dropped items will be placed in the new folder."
+                          : "The folder will be created in the current path."
+                    color: Style.viewerSecondaryText
+                    wrapMode: Text.Wrap
+                }
+
+                TextField {
+                    id: createFolderName
+                    Layout.fillWidth: true
+                    placeholderText: "Folder name"
+                    selectByMouse: true
+                    onAccepted: root.confirmFolderCreation()
+                }
+
+                Text {
+                    id: createFolderError
+                    Layout.fillWidth: true
+                    visible: text.length > 0
+                    color: "#e76565"
+                    wrapMode: Text.Wrap
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Item { Layout.fillWidth: true }
+
+                    Button {
+                        text: "Cancel"
+                        onClicked: createFolderPopup.close()
+                    }
+
+                    Button {
+                        text: "Create"
+                        inactive: createFolderName.text.trim().length === 0
+                        onClicked: {
+                            if (!inactive) {
+                                root.confirmFolderCreation()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Popup {
+            id: fileDropErrorPopup
+            property string titleText: ""
+            property string messageText: ""
+
+            anchors.centerIn: parent
+            width: Math.min(460, parent.width - 40)
+            modal: true
+            focus: true
+            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+            padding: 18
+
+            background: Rectangle {
+                radius: 8
+                color: Style.popupBackground
+                border.width: 1
+                border.color: Style.popupBorder
+            }
+
+            contentItem: ColumnLayout {
+                spacing: 12
+
+                Text {
+                    Layout.fillWidth: true
+                    text: fileDropErrorPopup.titleText
+                    color: Style.text
+                    font.pixelSize: 17
+                    font.bold: true
+                    wrapMode: Text.Wrap
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: fileDropErrorPopup.messageText
+                    color: Style.text
+                    wrapMode: Text.Wrap
+                }
+
+                Button {
+                    Layout.alignment: Qt.AlignRight
+                    text: "OK"
+                    onClicked: fileDropErrorPopup.close()
+                }
+            }
+        }
+
         Shortcut {
             sequence: "Ctrl+Shift+H"
             onActivated: {
@@ -1591,11 +1880,6 @@ MainWindow {
 
             Connections {
                 target: fileListModel
-                function onSelectionChanged() {
-                    if (selectionHistoryWindow.visible) {
-                        selectionHistoryWindow.refresh()
-                    }
-                }
                 function onSelectionHistoryChanged() {
                     if (selectionHistoryWindow.visible) {
                         selectionHistoryWindow.refresh(true)

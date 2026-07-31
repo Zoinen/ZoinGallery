@@ -20,6 +20,8 @@ public:
     static void storeFolders(const QList<FolderInfo> &folders);
     static void storeFolder(const FolderInfo &folder);
     static void storeFolder(const FolderInfo &folder, quint64 expectedGeneration);
+    static void removeFolder(const QString &path);
+    static void removeFolders(const QStringList &paths);
 
     static void loadDb();
     static void dumpDb();

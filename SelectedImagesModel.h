@@ -2,6 +2,7 @@
 #define SELECTEDIMAGESMODEL_H
 
 #include <QAbstractListModel>
+#include <QDateTime>
 #include <QHash>
 #include <QSet>
 #include <QTimer>
@@ -77,6 +78,7 @@ signals:
 
 private:
     void syncFromPersistentSelection();
+    void syncPathsFromPersistentSelection(const QStringList &paths);
     void requestMissingImageInfo();
     ImageFile *applyImageInfo(const ImageInfo &info);
     void onImageInfoAvailable(const ImageInfo &info);
@@ -93,12 +95,15 @@ private:
     QList<ImageFile *> _items;
     QHash<QString, ImageFile *> _pathToItem;
     QHash<QString, ImageFile *> _imageIdToItem;
+    QHash<QString, QDateTime> _selectionAddedAt;
     QTimer _imageInfoRequestTimer;
     QSet<int> _selectionPreviewSnapshot;
+    QSet<QString> _activeGroupPaths;
     bool _selectionPreviewActive = false;
     int _lastImageId = 0;
     int _totalPathCount = 0;
     int _unavailableCount = 0;
+    QString _activeGroupId;
     QString _currentViewerPath;
 };
 

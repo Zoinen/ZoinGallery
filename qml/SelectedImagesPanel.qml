@@ -13,6 +13,12 @@ Rectangle {
     property alias viewerTransitionActive: selectedMasonry.viewerTransitionActive
     readonly property int count: selectedMasonry.view.count
     property var contextGroup: null
+    property string pendingFileAction: ""
+    property var skippedMovePaths: []
+    property bool skipAllMoveErrors: false
+    property bool pendingFileActionSkippable: false
+    property string pendingSkipPath: ""
+    property string fileActionFeedback: ""
     property alias masonryMode: selectedMasonry
 
     color: Style.masonryViewBackground
@@ -31,6 +37,12 @@ Rectangle {
     onWidthChanged: scheduleThumbnailReload()
     onHeightChanged: scheduleThumbnailReload()
     onCountChanged: scheduleThumbnailReload()
+
+    Shortcut {
+        sequence: StandardKey.Undo
+        enabled: panel.visible && fileListModel.canUndoSelectionGroupMove
+        onActivated: panel.runFileAction("undo")
+    }
 
     function resetForActiveGroup() {
         Qt.callLater(function() {
@@ -54,6 +66,32 @@ Rectangle {
         }
     }
 
+    function runFileAction(action) {
+        const result = action === "undo"
+                ? fileListModel.undoLastSelectionGroupMove()
+                : skipAllMoveErrors
+                  ? fileListModel.moveActiveSelectionGroupToCurrentFolderSkippingAll(
+                        skippedMovePaths)
+                  : fileListModel.moveActiveSelectionGroupToCurrentFolderSkipping(
+                        skippedMovePaths)
+        if (result.success) {
+            fileActionFeedback = result.message || ""
+            fileActionFeedbackTimer.restart()
+            skippedMovePaths = []
+            skipAllMoveErrors = false
+            pendingFileActionSkippable = false
+            pendingSkipPath = ""
+            fileActionErrorPopup.close()
+            return
+        }
+        pendingFileAction = action
+        pendingFileActionSkippable = Boolean(result.skippable)
+        pendingSkipPath = result.skipPath || ""
+        fileActionErrorTitle.text = result.title || "File operation failed"
+        fileActionErrorMessage.text = result.message || "No files were changed."
+        fileActionErrorPopup.open()
+    }
+
     Connections {
         target: fileListModel
 
@@ -75,6 +113,11 @@ Rectangle {
     Timer {
         id: copyFeedbackTimer
         interval: 1400
+    }
+
+    Timer {
+        id: fileActionFeedbackTimer
+        interval: 2400
     }
 
     Menu {
@@ -227,6 +270,95 @@ Rectangle {
         }
     }
 
+    Popup {
+        id: fileActionErrorPopup
+        width: Math.min(390, panel.width - 24)
+        height: Math.max(172, fileActionErrorContent.implicitHeight + 28)
+        x: Math.round((panel.width - width) / 2)
+        y: Math.round((panel.height - height) / 2)
+        modal: true
+        focus: true
+        padding: 14
+        closePolicy: Popup.CloseOnEscape
+
+        background: Rectangle {
+            color: Style.popupBackground
+            border.color: Style.popupBorder
+            radius: 8
+        }
+
+        ColumnLayout {
+            id: fileActionErrorContent
+            anchors.fill: parent
+            spacing: 10
+
+            Text {
+                id: fileActionErrorTitle
+                Layout.fillWidth: true
+                color: Style.text
+                font.bold: true
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                id: fileActionErrorMessage
+                Layout.fillWidth: true
+                color: Style.viewerSecondaryText
+                wrapMode: Text.WordWrap
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: "What would you like to do?"
+                color: Style.viewerSecondaryText
+                font.pixelSize: 11
+            }
+
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                spacing: 6
+
+                Button {
+                    text: "Cancel"
+                    onClicked: fileActionErrorPopup.close()
+                }
+
+                Button {
+                    text: "Skip"
+                    visible: panel.pendingFileAction === "move" &&
+                             panel.pendingFileActionSkippable &&
+                             panel.pendingSkipPath.length > 0
+                    onClicked: {
+                        const nextSkippedPaths =
+                                panel.skippedMovePaths.slice()
+                        if (nextSkippedPaths.indexOf(
+                                    panel.pendingSkipPath) < 0) {
+                            nextSkippedPaths.push(panel.pendingSkipPath)
+                        }
+                        panel.skippedMovePaths = nextSkippedPaths
+                        panel.runFileAction("move")
+                    }
+                }
+
+                Button {
+                    text: "Skip all"
+                    visible: panel.pendingFileAction === "move" &&
+                             panel.pendingFileActionSkippable &&
+                             panel.pendingSkipPath.length > 0
+                    onClicked: {
+                        panel.skipAllMoveErrors = true
+                        panel.runFileAction("move")
+                    }
+                }
+
+                Button {
+                    text: "Retry"
+                    onClicked: panel.runFileAction(panel.pendingFileAction)
+                }
+            }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -281,6 +413,40 @@ Rectangle {
                 ToolTip.text: copyFeedbackTimer.running
                               ? "Paths copied"
                               : "Copy all full paths in this group, one per line"
+            }
+
+            Button {
+                implicitWidth: 32
+                implicitHeight: 32
+                icon.source: "qrc:/resources/FolderIcon.svg"
+                icon.width: 17
+                icon.height: 17
+                icon.color: Style.text
+                inactive: selectedImagesModel.totalPathCount === 0
+                onClicked: {
+                    if (!inactive) {
+                        panel.skippedMovePaths = []
+                        panel.skipAllMoveErrors = false
+                        panel.runFileAction("move")
+                    }
+                }
+                ToolTip.text: fileActionFeedbackTimer.running
+                              ? panel.fileActionFeedback
+                              : "Move this group into a new folder in the current path"
+            }
+
+            Button {
+                implicitWidth: 32
+                implicitHeight: 30
+                icon.source: "qrc:/resources/SelectionHistory.svg"
+                icon.width: 17
+                icon.height: 17
+                icon.color: Style.text
+                visible: fileListModel.canUndoSelectionGroupMove
+                onClicked: panel.runFileAction("undo")
+                ToolTip.text: fileActionFeedbackTimer.running
+                              ? panel.fileActionFeedback
+                              : "Undo last group move (Ctrl+Z)"
             }
 
             Button {
@@ -457,7 +623,12 @@ Rectangle {
 
                         Drag.active: selectedMouse.drag.active
                         Drag.dragType: Drag.Automatic
+                        Drag.supportedActions: Qt.CopyAction | Qt.MoveAction
                         Drag.mimeData: ({ "text/uri-list": urls })
+                        Drag.onDragStarted: fileListModel.configureNativeDragCursors(dragItem)
+                        Drag.onDragFinished: (dropAction) => {
+                            fileListModel.finalizeExternalDrag(urls, dropAction)
+                        }
 
                         function prepareDrag(singleItemOnly) {
                             urls = selectedImagesModel.dragUrlsForIndex(viewIndex, singleItemOnly)
@@ -604,7 +775,9 @@ Rectangle {
                             drag.target: dragItem
 
                             onPressed: (mouse) => {
-                                dragItem.prepareDrag(mouse.modifiers & Qt.AltModifier)
+                                dragItem.prepareDrag(
+                                            selectedMasonry.singleItemDragRequested(
+                                                mouse.modifiers))
                                 dragItem.Drag.hotSpot.x = 18
                                 dragItem.Drag.hotSpot.y = 18
                                 selectedMasonry.handleItemPressed(viewIndex, mouse.modifiers)

@@ -82,6 +82,21 @@ void PersistentFolderCache::storeFolder(const FolderInfo &folder, quint64 expect
     _db.insert(folder.path, subfiles);
 }
 
+void PersistentFolderCache::removeFolder(const QString &path) {
+    removeFolders({path});
+}
+
+void PersistentFolderCache::removeFolders(const QStringList &paths) {
+    loadDb();
+    {
+        QWriteLocker locker(&_dbAccess);
+        for (const QString &path : paths) {
+            _db.remove(path);
+        }
+    }
+    dumpDb();
+}
+
 QDataStream& operator<<(QDataStream& out, const FileInfo& obj) {
     out << obj.name << obj.lastModified << obj.fileSize << obj.isDirectory;
     return out;

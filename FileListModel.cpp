@@ -11,10 +11,22 @@
 #include <QClipboard>
 #include <QDir>
 #include <QDebug>
+#include <QFile>
 #include <QSet>
 #include <QFileInfo>
 #include <QDeadlineTimer>
 #include <QGuiApplication>
+#include <QDragEnterEvent>
+#include <QDrag>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QCursor>
+#include <QFontMetricsF>
+#include <QPainter>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QScreen>
+#include <QRegularExpression>
 #include <QStack>
 #include <QStandardPaths>
 #include <QSettings>
@@ -23,25 +35,312 @@
 
 #include <chrono>
 #include <utility>
+#ifdef Q_OS_WIN
+#include <QtCore/qt_windows.h>
+#endif
 using namespace std::chrono_literals;
 
 namespace {
 constexpr const char *ImageCacheModeSettingsKey = "Cache/imageUsageMode";
 constexpr const char *FileListCacheModeSettingsKey = "Cache/fileListUsageMode";
 
-QHash<QString, int> availableSelectedImageCounts() {
-    QHash<QString, int> counts;
-    const auto selectedFiles =
-        PersistentSelectionCache::selectedFilesByAdditionDate();
-    for (const auto &selectedFile : selectedFiles) {
-        const QFileInfo fileInfo(selectedFile.path);
-        if (fileInfo.isFile() &&
-            ThumbnailLoader::isFormatSupported(fileInfo.fileName())) {
-            counts[selectedFile.groupId]++;
+QVariantMap fileOperationResult(bool success, const QString &title,
+                                const QString &message, int action = Qt::IgnoreAction,
+                                int count = 0, const QString &destination = {}) {
+    return {
+        {QStringLiteral("success"), success},
+        {QStringLiteral("title"), title},
+        {QStringLiteral("message"), message},
+        {QStringLiteral("action"), action},
+        {QStringLiteral("count"), count},
+        {QStringLiteral("destinationFolder"), destination},
+    };
+}
+
+bool removePath(const QString &path) {
+    const QFileInfo info(path);
+    if (info.isDir() && !info.isSymLink()) {
+        return !QDir(path).isRoot() && QDir(path).removeRecursively();
+    }
+    return QFile::remove(path);
+}
+
+bool copyPath(const QString &source, const QString &destination,
+              QString *error) {
+    const QFileInfo sourceInfo(source);
+    if (!sourceInfo.exists() && !sourceInfo.isSymLink()) {
+        *error = QStringLiteral("Source no longer exists: %1").arg(source);
+        return false;
+    }
+
+    if (!sourceInfo.isDir() || sourceInfo.isSymLink()) {
+        if (QFile::copy(source, destination)) {
+            return true;
+        }
+        *error = QStringLiteral("Could not copy %1 to %2").arg(source, destination);
+        return false;
+    }
+
+    if (!QDir().mkdir(destination)) {
+        *error = QStringLiteral("Could not create folder: %1").arg(destination);
+        return false;
+    }
+    const QDir sourceDir(source);
+    const QFileInfoList entries = sourceDir.entryInfoList(
+        QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
+    for (const QFileInfo &entry : entries) {
+        const QString childDestination = QDir(destination).filePath(entry.fileName());
+        if (!copyPath(entry.absoluteFilePath(), childDestination, error)) {
+            removePath(destination);
+            return false;
         }
     }
-    return counts;
+    return true;
 }
+
+bool movePath(const QString &source, const QString &destination,
+              QString *error) {
+    const QFileInfo info(source);
+    const bool renamed = info.isDir() && !info.isSymLink()
+        ? QDir().rename(source, destination)
+        : QFile::rename(source, destination);
+    if (renamed) {
+        return true;
+    }
+
+    if (!copyPath(source, destination, error)) {
+        return false;
+    }
+    if (removePath(source)) {
+        return true;
+    }
+    removePath(destination);
+    *error = QStringLiteral("Could not remove source after copying: %1").arg(source);
+    return false;
+}
+
+bool isSameOrChildPath(const QString &candidate, const QString &parent) {
+    const QString cleanCandidate = QDir::cleanPath(candidate);
+    QString cleanParent = QDir::cleanPath(parent);
+    if (!cleanParent.endsWith(QDir::separator())) {
+        cleanParent += QDir::separator();
+    }
+    const Qt::CaseSensitivity sensitivity =
+#ifdef Q_OS_WIN
+        Qt::CaseInsensitive;
+#else
+        Qt::CaseSensitive;
+#endif
+    return cleanCandidate.compare(QDir::cleanPath(parent), sensitivity) == 0 ||
+           cleanCandidate.startsWith(cleanParent, sensitivity);
+}
+
+#ifdef Q_OS_WIN
+QPixmap systemArrowCursorPixmap(qreal dpr) {
+    const HCURSOR cursor = LoadCursorW(nullptr, IDC_ARROW);
+    if (!cursor) {
+        return {};
+    }
+
+    ICONINFO iconInfo{};
+    BITMAP cursorBitmap{};
+    if (!GetIconInfo(cursor, &iconInfo)) {
+        return {};
+    }
+    const HBITMAP sizeBitmap = iconInfo.hbmColor
+        ? iconInfo.hbmColor : iconInfo.hbmMask;
+    const bool haveBitmapInfo = sizeBitmap &&
+        GetObjectW(sizeBitmap, sizeof(BITMAP), &cursorBitmap) == sizeof(BITMAP);
+    if (iconInfo.hbmColor) {
+        DeleteObject(iconInfo.hbmColor);
+    }
+    if (iconInfo.hbmMask) {
+        DeleteObject(iconInfo.hbmMask);
+    }
+    if (!haveBitmapInfo) {
+        return {};
+    }
+    const int cursorWidth = cursorBitmap.bmWidth;
+    const int cursorHeight = iconInfo.hbmColor
+        ? cursorBitmap.bmHeight : cursorBitmap.bmHeight / 2;
+
+    BITMAPINFO bitmapInfo{};
+    bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmapInfo.bmiHeader.biWidth = cursorWidth;
+    bitmapInfo.bmiHeader.biHeight = -cursorHeight;
+    bitmapInfo.bmiHeader.biPlanes = 1;
+    bitmapInfo.bmiHeader.biBitCount = 32;
+    bitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+    void *pixels = nullptr;
+    const HDC screenDc = GetDC(nullptr);
+    const HBITMAP bitmap = CreateDIBSection(
+        screenDc, &bitmapInfo, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    const HDC memoryDc = CreateCompatibleDC(screenDc);
+    ReleaseDC(nullptr, screenDc);
+    if (!bitmap || !memoryDc || !pixels) {
+        if (memoryDc) {
+            DeleteDC(memoryDc);
+        }
+        if (bitmap) {
+            DeleteObject(bitmap);
+        }
+        return {};
+    }
+
+    const HGDIOBJ previousBitmap = SelectObject(memoryDc, bitmap);
+    memset(pixels, 0, size_t(cursorWidth) * size_t(cursorHeight) * 4);
+    DrawIconEx(memoryDc, 0, 0, cursor, cursorWidth, cursorHeight,
+               0, nullptr, DI_NORMAL);
+    const QImage image(static_cast<uchar *>(pixels), cursorWidth, cursorHeight,
+                       cursorWidth * 4, QImage::Format_ARGB32_Premultiplied);
+    QPixmap pixmap = QPixmap::fromImage(image.copy());
+    SelectObject(memoryDc, previousBitmap);
+    DeleteDC(memoryDc);
+    DeleteObject(bitmap);
+    pixmap.setDevicePixelRatio(dpr);
+    return pixmap;
+}
+
+QFont windowsDragPillFont() {
+    QFont font = QGuiApplication::font();
+    font.setPixelSize(13);
+    font.setWeight(QFont::DemiBold);
+    return font;
+}
+
+QSizeF windowsDragPillSize(Qt::DropAction action) {
+    const QString label = action == Qt::CopyAction
+        ? QStringLiteral("Copy") : QStringLiteral("Move");
+    const QFontMetricsF metrics(windowsDragPillFont());
+    constexpr qreal horizontalPadding = 11.0;
+    constexpr qreal iconWidth = 14.0;
+    constexpr qreal iconTextSpacing = 7.0;
+    constexpr qreal verticalPadding = 6.0;
+    return QSizeF(qCeil(horizontalPadding + iconWidth + iconTextSpacing +
+                        metrics.horizontalAdvance(label) + horizontalPadding),
+                  qCeil(qMax(iconWidth, metrics.height()) +
+                        verticalPadding * 2.0));
+}
+
+QPixmap windowsDragCursorPixmap(qreal dpr, const QSizeF &previewSize,
+                                const QPointF &hotSpot,
+                                Qt::DropAction action) {
+    const bool showPill = action == Qt::CopyAction ||
+                          action == Qt::MoveAction;
+    const QString label = action == Qt::CopyAction
+        ? QStringLiteral("Copy") : QStringLiteral("Move");
+    const QFont labelFont = windowsDragPillFont();
+    const QSizeF copyPillSize = windowsDragPillSize(Qt::CopyAction);
+    const QSizeF movePillSize = windowsDragPillSize(Qt::MoveAction);
+    const QSizeF pillSize = action == Qt::CopyAction
+        ? copyPillSize : movePillSize;
+    const qreal pillWidth = pillSize.width();
+    const qreal pillHeight = pillSize.height();
+    constexpr qreal shadowExtent = 7.0;
+    const QSizeF effectivePreview = previewSize.isEmpty()
+        ? QSizeF(52.0, 52.0) : previewSize;
+    // QWindowsOleDropSource draws this action cursor with its origin at the
+    // pointer. Offset the pill so it sits below the separate drag preview.
+    const qreal pillCenterX = -hotSpot.x() +
+                              effectivePreview.width() / 2.0;
+    const qreal copyPillX = qMax(shadowExtent,
+        pillCenterX - copyPillSize.width() / 2.0);
+    const qreal movePillX = qMax(shadowExtent,
+        pillCenterX - movePillSize.width() / 2.0);
+    const qreal pillX = action == Qt::CopyAction
+        ? copyPillX : movePillX;
+    const qreal pillY = qMax(36.0,
+        -hotSpot.y() + effectivePreview.height() + 8.0);
+    // Every action cursor must have exactly the same outer geometry. Qt's
+    // Windows backend combines this canvas with the drag preview into one
+    // HCURSOR; differing sizes make the preview jump and flash on transitions.
+    const qreal commonRight = qMax(copyPillX + copyPillSize.width(),
+                                   movePillX + movePillSize.width());
+    const qreal commonPillHeight = qMax(copyPillSize.height(),
+                                        movePillSize.height());
+    const QSizeF logicalSize(
+        qMax(32.0, commonRight + shadowExtent),
+        pillY + commonPillHeight + shadowExtent + 2.0);
+
+    QPixmap pixmap(qCeil(logicalSize.width() * dpr),
+                   qCeil(logicalSize.height() * dpr));
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::TextAntialiasing);
+    painter.scale(dpr, dpr);
+
+    // Use the actual Windows cursor artwork; only the action pill is custom.
+    const QPixmap systemArrow = systemArrowCursorPixmap(dpr);
+    if (!systemArrow.isNull()) {
+        painter.drawPixmap(QPointF(0, 0), systemArrow);
+    }
+
+    if (showPill) {
+        const QRectF pillRect(pillX, pillY, pillWidth, pillHeight);
+        // Approximate a soft Windows-style elevation shadow without baking a
+        // harsh, visibly offset duplicate of the pill.
+        painter.setPen(Qt::NoPen);
+        for (int layer = 7; layer >= 1; --layer) {
+            const qreal spread = layer * 0.7;
+            const QRectF shadowRect = pillRect
+                .adjusted(-spread, -spread * 0.45,
+                          spread, spread * 1.25)
+                .translated(0, 1.5);
+            painter.setBrush(QColor(0, 0, 0, 3 + (7 - layer) * 2));
+            painter.drawRoundedRect(shadowRect,
+                                    pillHeight / 3.0 + spread,
+                                    pillHeight / 3.0 + spread);
+        }
+
+        painter.setPen(QPen(QColor(0, 0, 0, 60), 1.0));
+        painter.setBrush(QColor(250, 250, 250, 246));
+        painter.drawRoundedRect(pillRect, pillHeight / 3.0,
+                                pillHeight / 3.0);
+
+        constexpr qreal horizontalPadding = 11.0;
+        constexpr qreal iconWidth = 14.0;
+        constexpr qreal iconTextSpacing = 7.0;
+        const QPointF iconCenter(
+            pillX + horizontalPadding + iconWidth / 2.0,
+            pillY + pillHeight / 2.0);
+        painter.setPen(QPen(QColor(25, 25, 25), 2.0, Qt::SolidLine,
+                            Qt::RoundCap, Qt::RoundJoin));
+        if (action == Qt::CopyAction) {
+            painter.drawLine(iconCenter + QPointF(-4.5, 0),
+                             iconCenter + QPointF(4.5, 0));
+            painter.drawLine(iconCenter + QPointF(0, -4.5),
+                             iconCenter + QPointF(0, 4.5));
+        }
+        else {
+            painter.drawLine(iconCenter + QPointF(-5.0, 0),
+                             iconCenter + QPointF(4.5, 0));
+            painter.drawLine(iconCenter + QPointF(0.5, -4.0),
+                             iconCenter + QPointF(4.5, 0));
+            painter.drawLine(iconCenter + QPointF(0.5, 4.0),
+                             iconCenter + QPointF(4.5, 0));
+        }
+
+        painter.setFont(labelFont);
+        painter.setPen(QColor(25, 25, 25));
+        const qreal textX = pillX + horizontalPadding + iconWidth +
+                            iconTextSpacing;
+        const QRectF textRect(
+            textX, pillY,
+            pillRect.right() - horizontalPadding - textX, pillHeight);
+        painter.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, label);
+    }
+
+    // QWindowsOleDropSource consumes action cursors as physical pixels; it
+    // does not apply the drag preview's DPR scaling to a custom cursor.
+    pixmap.setDevicePixelRatio(1.0);
+    return pixmap;
+}
+
+#endif
+
 }
 
 FileListModel::FileListModel(
@@ -50,6 +349,7 @@ FileListModel::FileListModel(
       _providerImageStore(std::move(providerImageStore)),
       _viewerImageCache(QStringLiteral("main-viewer-"),
                         _providerImageStore) {
+    qApp->installEventFilter(this);
     _lastId = 0;
     _currentViewIndex = -1;
 
@@ -292,6 +592,13 @@ FileListModel::FileListModel(
             _decodeManager->readImagesInfo(imagePaths, true);
         }
     });
+
+    _selectionSaveTimer.setSingleShot(true);
+    _selectionSaveTimer.setInterval(200);
+    connect(&_selectionSaveTimer, &QTimer::timeout, this, []() {
+        PersistentSelectionCache::dumpDb();
+    });
+    refreshAvailableSelectionCounts();
 }
 
 QHash<int, QByteArray> FileListModel::roleNames() const {
@@ -408,6 +715,7 @@ void FileListModel::prepareToClose() {
     QmlAsyncImageProvider::prepareToClose();
     qInfo() << "[Shutdown] FileListModel::prepareToClose async image provider stopped";
     qInfo() << "[Shutdown] FileListModel::prepareToClose dumping selection cache";
+    _selectionSaveTimer.stop();
     PersistentSelectionCache::dumpDb();
     qInfo() << "[Shutdown] FileListModel::prepareToClose stopping decode manager";
     _decodeManager->prepareToClose();
@@ -1588,7 +1896,7 @@ void FileListModel::setSelection(int index_, bool selected) {
     pushSelectionHistory(containerKey, selected ? QString("Select %1").arg(_items[index_]->fileName())
                                                : QString("Deselect %1").arg(_items[index_]->fileName()),
                          previousSelection);
-    emitSelectionDataChanged(index_, index_);
+    emitSelectionDataChanged(index_, index_, true);
 }
 
 void FileListModel::setPathSelection(const QString &path, bool selected) {
@@ -1614,7 +1922,7 @@ void FileListModel::setPathSelection(const QString &path, bool selected) {
                                   : QString("Deselect %1").arg(fileInfo.fileName()),
                          previousSelection);
     syncVisibleItemSelection();
-    emitSelectionDataChanged();
+    emitSelectionDataChanged(-1, -1, true);
 }
 
 void FileListModel::invertSelection() {
@@ -1637,7 +1945,7 @@ void FileListModel::invertSelection() {
         pushSelectionHistory(containerKey, "Invert selection", previousSelections[containerKey]);
     }
     if (!changedContainers.isEmpty()) {
-        emitSelectionDataChanged();
+        emitSelectionDataChanged(-1, -1, true);
     }
 }
 
@@ -1661,7 +1969,7 @@ void FileListModel::setAllSelection(bool selected) {
         pushSelectionHistory(containerKey, selected ? "Select all" : "Deselect all", previousSelections[containerKey]);
     }
     if (!changedContainers.isEmpty()) {
-        emitSelectionDataChanged();
+        emitSelectionDataChanged(-1, -1, true);
     }
 }
 
@@ -1702,7 +2010,7 @@ void FileListModel::setSameKindSelection(int index_, bool selected) {
 
     if (changed) {
         pushSelectionHistory(currentContainer, sameKindDescription(index_, selected), previousSelection);
-        emitSelectionDataChanged();
+        emitSelectionDataChanged(-1, -1, true);
     }
 }
 
@@ -1774,6 +2082,408 @@ QVariantMap FileListModel::dragPreviewItemsForIndex(int index_, int limit, bool 
     result["totalCount"] = totalCount;
     result["remainingCount"] = qMax(0, totalCount - items.size());
     return result;
+}
+
+QVariantMap FileListModel::finalizeExternalDrag(
+    const QVariantList &urls, int dropAction) {
+    const auto action = static_cast<Qt::DropAction>(dropAction);
+    if (action != Qt::MoveAction && action != Qt::TargetMoveAction) {
+        return {
+            {QStringLiteral("success"), true},
+            {QStringLiteral("movedCount"), 0},
+            {QStringLiteral("failedPaths"), QStringList{}},
+        };
+    }
+
+    const bool sourceMustDelete = action == Qt::MoveAction;
+    QStringList completedPaths;
+    QStringList failedPaths;
+    QSet<QString> sourceFolders;
+    QSet<QString> seenPaths;
+    for (const QVariant &urlValue : urls) {
+        const QUrl url = urlValue.toUrl();
+        if (!url.isLocalFile()) {
+            continue;
+        }
+
+        const QString path = QFileInfo(url.toLocalFile()).absoluteFilePath();
+        if (path.isEmpty() || seenPaths.contains(path)) {
+            continue;
+        }
+        seenPaths.insert(path);
+        const QFileInfo sourceInfo(path);
+        sourceFolders.insert(sourceInfo.absolutePath());
+
+        bool completed = !sourceInfo.exists();
+        if (!completed && sourceMustDelete) {
+            // A MoveAction means the target accepted the data and expects the
+            // source to remove its original. TargetMoveAction is different:
+            // the target took ownership and the source must not delete it.
+            if (sourceInfo.isDir() && !sourceInfo.isSymLink()) {
+                if (QDir(path).isRoot()) {
+                    qWarning() << "Refusing to remove filesystem root after drag"
+                               << path;
+                }
+                else {
+                    completed = QDir(path).removeRecursively();
+                }
+            }
+            else {
+                completed = QFile::remove(path);
+            }
+        }
+
+        if (completed) {
+            completedPaths.append(path);
+        }
+        else if (sourceMustDelete) {
+            failedPaths.append(path);
+            qWarning() << "Could not remove source after external move" << path;
+        }
+    }
+
+    removeMovedPathsFromSelection(
+        completedPaths, QStringLiteral("Move by drag and drop"));
+
+    if (!sourceFolders.isEmpty()) {
+        PersistentFolderCache::removeFolders(sourceFolders.values());
+    }
+    const QString normalizedRoot =
+        PersistentSelectionCache::normalizeContainerKey(_root);
+    if (!normalizedRoot.isEmpty() && normalizedRoot != QStringLiteral("Computer") &&
+        sourceFolders.contains(normalizedRoot)) {
+        cd(_root);
+    }
+
+    return {
+        {QStringLiteral("success"), failedPaths.isEmpty()},
+        {QStringLiteral("movedCount"), completedPaths.size()},
+        {QStringLiteral("failedPaths"), failedPaths},
+    };
+}
+
+void FileListModel::configureNativeDragCursors(QObject *dragSource) {
+#ifdef Q_OS_WIN
+    if (!dragSource) {
+        return;
+    }
+    QDrag *drag = dragSource->findChild<QDrag *>(
+        QString(), Qt::FindDirectChildrenOnly);
+    if (!drag) {
+        qWarning() << "Could not find the active native drag for HiDPI cursors";
+        return;
+    }
+
+    QScreen *screen = nullptr;
+    if (const auto *item = qobject_cast<QQuickItem *>(dragSource)) {
+        if (item->window()) {
+            screen = item->window()->screen();
+        }
+    }
+    if (!screen) {
+        screen = QGuiApplication::screenAt(QCursor::pos());
+    }
+    if (!screen) {
+        screen = QGuiApplication::primaryScreen();
+    }
+
+    const qreal dpr = qBound(1.0,
+        screen ? screen->devicePixelRatio() : 1.0, 4.0);
+    const QSizeF previewSize = drag->pixmap().deviceIndependentSize();
+    const QPointF hotSpot = drag->hotSpot();
+    drag->setDragCursor(
+        windowsDragCursorPixmap(dpr, previewSize, hotSpot,
+                                Qt::CopyAction),
+        Qt::CopyAction);
+    drag->setDragCursor(
+        windowsDragCursorPixmap(dpr, previewSize, hotSpot,
+                                Qt::MoveAction),
+        Qt::MoveAction);
+    drag->setDragCursor(
+        windowsDragCursorPixmap(dpr, previewSize, hotSpot,
+                                Qt::IgnoreAction),
+        Qt::IgnoreAction);
+#else
+    Q_UNUSED(dragSource)
+#endif
+}
+
+bool FileListModel::fileDragActive() const {
+    return _fileDragActive;
+}
+
+void FileListModel::setFileDragActive(bool active) {
+    if (_fileDragActive == active) {
+        return;
+    }
+    _fileDragActive = active;
+    emit fileDragActiveChanged();
+}
+
+bool FileListModel::eventFilter(QObject *watched, QEvent *event) {
+    Q_UNUSED(watched)
+    switch (event->type()) {
+    case QEvent::DragEnter: {
+        const auto *dragEvent = static_cast<QDragEnterEvent *>(event);
+        setFileDragActive(dragEvent->mimeData() &&
+                          dragEvent->mimeData()->hasUrls());
+        break;
+    }
+    case QEvent::DragMove: {
+        const auto *dragEvent = static_cast<QDragMoveEvent *>(event);
+        if (dragEvent->mimeData() && dragEvent->mimeData()->hasUrls()) {
+            setFileDragActive(true);
+        }
+        break;
+    }
+    case QEvent::DragLeave:
+    case QEvent::Drop:
+        setFileDragActive(false);
+        break;
+    default:
+        break;
+    }
+    return false;
+}
+
+void FileListModel::removeMovedPathsFromSelection(
+    const QStringList &paths, const QString &description) {
+    QHash<QString, QHash<QString, QString>> previousSelections;
+    QSet<QString> changedContainers;
+    for (const QString &path : paths) {
+        const QFileInfo pathInfo(path);
+        const QString containerKey =
+            PersistentSelectionCache::normalizeContainerKey(pathInfo.absolutePath());
+        ensureSelectionStateLoaded(containerKey);
+        auto &state = _selectionStates[containerKey];
+        if (!state.selectedGroups.contains(pathInfo.fileName())) {
+            continue;
+        }
+        if (!previousSelections.contains(containerKey)) {
+            previousSelections.insert(containerKey, state.selectedGroups);
+        }
+        state.selectedGroups.remove(pathInfo.fileName());
+        changedContainers.insert(containerKey);
+    }
+    for (const QString &containerKey : std::as_const(changedContainers)) {
+        pushSelectionHistory(containerKey, description,
+                             previousSelections.value(containerKey));
+    }
+    if (!changedContainers.isEmpty()) {
+        syncVisibleItemSelection();
+        emitSelectionDataChanged(-1, -1, true);
+    }
+}
+
+void FileListModel::refreshFoldersAfterFileOperation(
+    const QSet<QString> &folders) {
+    if (folders.isEmpty()) {
+        return;
+    }
+    PersistentFolderCache::removeFolders(folders.values());
+    const QString normalizedRoot =
+        PersistentSelectionCache::normalizeContainerKey(_root);
+    if (!normalizedRoot.isEmpty() && normalizedRoot != QStringLiteral("Computer") &&
+        folders.contains(normalizedRoot)) {
+        cd(_root);
+    }
+}
+
+QVariantMap FileListModel::dropUrlsIntoFolder(
+    const QVariantList &urls, const QString &destinationFolder,
+    int dropAction) {
+    const QFileInfo destinationInfo(destinationFolder);
+    if (!destinationInfo.exists() || !destinationInfo.isDir()) {
+        return fileOperationResult(
+            false, QStringLiteral("Folder is unavailable"),
+            QStringLiteral("The destination folder could not be found:\n%1")
+                .arg(destinationFolder));
+    }
+
+    Qt::DropAction action = static_cast<Qt::DropAction>(dropAction);
+    if (action != Qt::CopyAction && action != Qt::MoveAction) {
+        action = Qt::CopyAction;
+    }
+
+    struct PendingItem { QString source; QString destination; };
+    QList<PendingItem> pending;
+    QSet<QString> seenSources;
+    QSet<QString> seenNames;
+    const Qt::CaseSensitivity sensitivity =
+#ifdef Q_OS_WIN
+        Qt::CaseInsensitive;
+#else
+        Qt::CaseSensitive;
+#endif
+
+    for (const QVariant &value : urls) {
+        const QUrl url = value.canConvert<QUrl>() ? value.toUrl()
+                                                  : QUrl(value.toString());
+        if (!url.isLocalFile()) {
+            return fileOperationResult(
+                false, QStringLiteral("Unsupported item"),
+                QStringLiteral("Only local files and folders can be dropped here."));
+        }
+        const QString source = QFileInfo(url.toLocalFile()).absoluteFilePath();
+        if (seenSources.contains(source)) {
+            continue;
+        }
+        seenSources.insert(source);
+        const QFileInfo sourceInfo(source);
+        if ((!sourceInfo.exists() && !sourceInfo.isSymLink()) ||
+            (sourceInfo.isDir() && !sourceInfo.isSymLink() && QDir(source).isRoot())) {
+            return fileOperationResult(
+                false, QStringLiteral("Source is unavailable"),
+                QStringLiteral("The source item could not be found or cannot be moved:\n%1")
+                    .arg(source));
+        }
+        const QString name = sourceInfo.fileName();
+        bool duplicateName = false;
+        for (const QString &seenName : std::as_const(seenNames)) {
+            if (seenName.compare(name, sensitivity) == 0) {
+                duplicateName = true;
+                break;
+            }
+        }
+        if (duplicateName) {
+            return fileOperationResult(
+                false, QStringLiteral("Duplicate names"),
+                QStringLiteral("More than one dropped item is named “%1”.").arg(name));
+        }
+        seenNames.insert(name);
+        const QString target = QDir(destinationFolder).filePath(name);
+        if (QFileInfo::exists(target) || QFileInfo(target).isSymLink()) {
+            return fileOperationResult(
+                false, QStringLiteral("Item already exists"),
+                QStringLiteral("An item named “%1” already exists in:\n%2")
+                    .arg(name, destinationFolder));
+        }
+        if (sourceInfo.isDir() && isSameOrChildPath(destinationFolder, source)) {
+            return fileOperationResult(
+                false, QStringLiteral("Invalid destination"),
+                QStringLiteral("A folder cannot be placed inside itself:\n%1")
+                    .arg(source));
+        }
+        pending.append({source, target});
+    }
+
+    if (pending.isEmpty()) {
+        return fileOperationResult(false, QStringLiteral("Nothing to drop"),
+                                   QStringLiteral("No local files or folders were provided."));
+    }
+
+    QList<PendingItem> completed;
+    QString error;
+    for (const PendingItem &item : std::as_const(pending)) {
+        const bool ok = action == Qt::MoveAction
+            ? movePath(item.source, item.destination, &error)
+            : copyPath(item.source, item.destination, &error);
+        if (ok) {
+            completed.append(item);
+            continue;
+        }
+
+        QStringList rollbackFailures;
+        for (auto it = completed.crbegin(); it != completed.crend(); ++it) {
+            bool rolledBack = false;
+            if (action == Qt::MoveAction) {
+                QString rollbackError;
+                rolledBack = movePath(it->destination, it->source, &rollbackError);
+            }
+            else {
+                rolledBack = removePath(it->destination);
+            }
+            if (!rolledBack) {
+                rollbackFailures.append(it->destination);
+            }
+        }
+        if (!rollbackFailures.isEmpty()) {
+            error += QStringLiteral("\n\nSome rollback operations also failed:\n%1")
+                         .arg(rollbackFailures.join(QLatin1Char('\n')));
+        }
+        return fileOperationResult(false, QStringLiteral("Drop failed"), error);
+    }
+
+    QStringList movedSources;
+    QSet<QString> invalidatedFolders{destinationInfo.absoluteFilePath()};
+    for (const PendingItem &item : std::as_const(completed)) {
+        const QFileInfo sourceInfo(item.source);
+        invalidatedFolders.insert(sourceInfo.absolutePath());
+        if (action == Qt::MoveAction) {
+            movedSources.append(item.source);
+        }
+    }
+    if (!movedSources.isEmpty()) {
+        removeMovedPathsFromSelection(
+            movedSources, QStringLiteral("Move by drag and drop"));
+    }
+    refreshFoldersAfterFileOperation(invalidatedFolders);
+    return fileOperationResult(true, QString(), QString(), action,
+                               completed.size(), destinationInfo.absoluteFilePath());
+}
+
+QVariantMap FileListModel::createFolder(
+    const QString &parentPath, const QString &name) {
+    const QString trimmedName = name.trimmed();
+    const QFileInfo parentInfo(parentPath);
+    if (!parentInfo.exists() || !parentInfo.isDir()) {
+        return fileOperationResult(
+            false, QStringLiteral("Folder is unavailable"),
+            QStringLiteral("The current folder could not be found:\n%1").arg(parentPath));
+    }
+    if (trimmedName.isEmpty() || trimmedName == QStringLiteral(".") ||
+        trimmedName == QStringLiteral("..") || trimmedName.contains('/') ||
+        trimmedName.contains('\\')) {
+        return fileOperationResult(
+            false, QStringLiteral("Invalid folder name"),
+            QStringLiteral("Enter a valid folder name without path separators."));
+    }
+#ifdef Q_OS_WIN
+    static const QRegularExpression invalidWindowsName(
+        QStringLiteral(R"([<>:"/\\|?*\x00-\x1f])"));
+    static const QRegularExpression reservedWindowsName(
+        QStringLiteral(R"(^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$)"),
+        QRegularExpression::CaseInsensitiveOption);
+    if (invalidWindowsName.match(trimmedName).hasMatch() ||
+        trimmedName.endsWith('.') || trimmedName.endsWith(' ') ||
+        reservedWindowsName.match(trimmedName).hasMatch()) {
+        return fileOperationResult(
+            false, QStringLiteral("Invalid folder name"),
+            QStringLiteral("That name is not allowed on Windows."));
+    }
+#endif
+    const QString newFolder = QDir(parentPath).filePath(trimmedName);
+    if (QFileInfo::exists(newFolder) || QFileInfo(newFolder).isSymLink()) {
+        return fileOperationResult(
+            false, QStringLiteral("Folder already exists"),
+            QStringLiteral("An item named “%1” already exists in this folder.")
+                .arg(trimmedName));
+    }
+    if (!QDir(parentPath).mkdir(trimmedName)) {
+        return fileOperationResult(
+            false, QStringLiteral("Could not create folder"),
+            QStringLiteral("The folder could not be created:\n%1").arg(newFolder));
+    }
+    refreshFoldersAfterFileOperation({parentInfo.absoluteFilePath()});
+    return fileOperationResult(true, QString(), QString(), Qt::IgnoreAction,
+                               0, QFileInfo(newFolder).absoluteFilePath());
+}
+
+QVariantMap FileListModel::createFolderAndDropUrls(
+    const QVariantList &urls, const QString &parentPath,
+    const QString &name, int dropAction) {
+    const QVariantMap created = createFolder(parentPath, name);
+    if (!created.value(QStringLiteral("success")).toBool()) {
+        return created;
+    }
+    const QString folder = created.value(QStringLiteral("destinationFolder")).toString();
+    const QVariantMap dropped = dropUrlsIntoFolder(urls, folder, dropAction);
+    if (!dropped.value(QStringLiteral("success")).toBool()) {
+        QDir(parentPath).rmdir(QFileInfo(folder).fileName());
+        refreshFoldersAfterFileOperation({QFileInfo(parentPath).absoluteFilePath()});
+        return dropped;
+    }
+    return dropped;
 }
 
 void FileListModel::beginSelectionPreview() {
@@ -1896,7 +2606,7 @@ void FileListModel::commitSelectionPreview(const QString &description) {
     _selectionPreviewActive = false;
     _selectionPreviewSnapshot.clear();
     if (!changedContainers.isEmpty()) {
-        emitSelectionDataChanged();
+        emitSelectionDataChanged(-1, -1, true);
     }
 }
 
@@ -1929,7 +2639,7 @@ QVariantList FileListModel::selectionHistoryForIndex(int index_) const {
         row["index"] = i;
         row["description"] = history[i].description;
         row["timestamp"] = history[i].timestamp.toString("yyyy-MM-dd hh:mm:ss");
-        row["selectedCount"] = history[i].selectedGroups.size();
+        row["selectedCount"] = history[i].selectedCount;
         row["current"] = i == stateIt->historyIndex;
         result.append(row);
     }
@@ -1978,13 +2688,13 @@ QVariantList FileListModel::selectionGroups() const {
     const QString activeGroupId = PersistentSelectionCache::activeSelectionGroupId();
     const QList<PersistentSelectionCache::SelectionGroup> groups =
         PersistentSelectionCache::selectionGroups();
-    const QHash<QString, int> availableCounts =
-        availableSelectedImageCounts();
+    const QHash<QString, int> storedCounts =
+        PersistentSelectionCache::selectedCountsByGroup();
     result.reserve(groups.size());
     for (const auto &group : groups) {
-        const int storedCount =
-            PersistentSelectionCache::selectedCountForGroup(group.id);
-        const int availableCount = availableCounts.value(group.id);
+        const int storedCount = storedCounts.value(group.id);
+        const int availableCount =
+            _availableSelectionCounts.value(group.id);
         result.append(QVariantMap{
             {QStringLiteral("id"), group.id},
             {QStringLiteral("name"), group.name},
@@ -2020,10 +2730,8 @@ QColor FileListModel::activeSelectionGroupColor() const {
 
 int FileListModel::totalSelectedCount() const {
     int count = 0;
-    const QHash<QString, int> availableCounts =
-        availableSelectedImageCounts();
-    for (auto it = availableCounts.constBegin();
-         it != availableCounts.constEnd(); ++it) {
+    for (auto it = _availableSelectionCounts.constBegin();
+         it != _availableSelectionCounts.constEnd(); ++it) {
         count += it.value();
     }
     return count;
@@ -2070,7 +2778,7 @@ bool FileListModel::removeSelectionGroup(const QString &groupId) {
     _selectionPreviewSnapshot.clear();
     _selectionStates.clear();
     loadSelectionStatesForVisibleItems();
-    emitSelectionDataChanged();
+    emitSelectionDataChanged(-1, -1, true);
     emit selectionHistoryChanged();
     if (wasActive) {
         emit activeSelectionGroupChanged();
@@ -2097,6 +2805,363 @@ int FileListModel::copyActiveSelectionGroupPaths() const {
     }
     clipboard->setText(paths.join(QLatin1Char('\n')));
     return paths.size();
+}
+
+bool FileListModel::canUndoSelectionGroupMove() const {
+    return _lastSelectionGroupMove.isValid();
+}
+
+QVariantMap FileListModel::selectionGroupMoveError(
+    const QString &title, const QString &message,
+    const QString &skipPath) const {
+    return {
+        {QStringLiteral("success"), false},
+        {QStringLiteral("title"), title},
+        {QStringLiteral("message"), message},
+        {QStringLiteral("skippable"), !skipPath.isEmpty()},
+        {QStringLiteral("skipPath"), skipPath},
+    };
+}
+
+QVariantMap FileListModel::moveActiveSelectionGroupToCurrentFolder() {
+    return moveActiveSelectionGroupToCurrentFolderImpl({}, false);
+}
+
+QVariantMap FileListModel::moveActiveSelectionGroupToCurrentFolderSkipping(
+    const QStringList &skippedPaths) {
+    return moveActiveSelectionGroupToCurrentFolderImpl(skippedPaths, false);
+}
+
+QVariantMap FileListModel::moveActiveSelectionGroupToCurrentFolderSkippingAll(
+    const QStringList &skippedPaths) {
+    return moveActiveSelectionGroupToCurrentFolderImpl(skippedPaths, true);
+}
+
+QVariantMap FileListModel::moveActiveSelectionGroupToCurrentFolderImpl(
+    const QStringList &skippedPaths, bool skipAllItemErrors) {
+    if (_root.isEmpty() || _root == QStringLiteral("Computer")) {
+        return selectionGroupMoveError(
+            QStringLiteral("Choose a folder"),
+            QStringLiteral("The current address is not a filesystem folder. "
+                           "Open the destination folder and try again."));
+    }
+
+    const QString groupId = activeSelectionGroupId();
+    PersistentSelectionCache::SelectionGroup activeGroup;
+    bool foundGroup = false;
+    for (const auto &group : PersistentSelectionCache::selectionGroups()) {
+        if (group.id == groupId) {
+            activeGroup = group;
+            foundGroup = true;
+            break;
+        }
+    }
+    if (!foundGroup) {
+        return selectionGroupMoveError(
+            QStringLiteral("Selection group not found"),
+            QStringLiteral("The active selection group no longer exists."));
+    }
+    const QString folderName = activeGroup.name.trimmed();
+    const bool invalidWindowsName =
+        folderName.endsWith(QLatin1Char('.')) ||
+        folderName.endsWith(QLatin1Char(' ')) ||
+        folderName.contains(QRegularExpression(QStringLiteral(R"([<>:"/\\|?*\x00-\x1f])")));
+    if (folderName.isEmpty() || folderName == QStringLiteral(".") ||
+        folderName == QStringLiteral("..") || invalidWindowsName) {
+        return selectionGroupMoveError(
+            QStringLiteral("Invalid folder name"),
+            QStringLiteral("“%1” cannot be used as a folder name. Rename the "
+                           "selection group and try again.").arg(activeGroup.name));
+    }
+
+    QDir currentDirectory(_root);
+    const QFileInfo currentDirectoryInfo(currentDirectory.absolutePath());
+    if (!currentDirectoryInfo.exists() || !currentDirectoryInfo.isDir()) {
+        return selectionGroupMoveError(
+            QStringLiteral("Destination unavailable"),
+            QStringLiteral("The current folder “%1” cannot be found.")
+                .arg(QDir::toNativeSeparators(_root)));
+    }
+
+    const QString destinationFolder =
+        currentDirectory.absoluteFilePath(folderName);
+    if (QFileInfo::exists(destinationFolder)) {
+        return selectionGroupMoveError(
+            QStringLiteral("Folder already exists"),
+            QStringLiteral("“%1” already exists in the current folder. Rename "
+                           "the selection group or remove the existing folder, "
+                           "then retry.").arg(folderName));
+    }
+
+    QList<PersistentSelectionCache::SelectedFile> selectedFiles;
+    for (const auto &selectedFile :
+         PersistentSelectionCache::selectedFilesByAdditionDate()) {
+        if (selectedFile.groupId == groupId) {
+            selectedFiles.append(selectedFile);
+        }
+    }
+    if (selectedFiles.isEmpty()) {
+        return selectionGroupMoveError(
+            QStringLiteral("Selection group is empty"),
+            QStringLiteral("There are no images to move."));
+    }
+
+    QSet<QString> normalizedSkippedPaths;
+    for (const QString &skippedPath : skippedPaths) {
+        if (!skippedPath.isEmpty()) {
+            normalizedSkippedPaths.insert(
+                QFileInfo(skippedPath).absoluteFilePath());
+        }
+    }
+    QList<PersistentSelectionCache::SelectedFile> candidateFiles;
+    candidateFiles.reserve(selectedFiles.size());
+    for (const auto &selectedFile : std::as_const(selectedFiles)) {
+        if (!normalizedSkippedPaths.contains(
+                QFileInfo(selectedFile.path).absoluteFilePath())) {
+            candidateFiles.append(selectedFile);
+        }
+    }
+    if (candidateFiles.isEmpty()) {
+        return selectionGroupMoveError(
+            QStringLiteral("No images left to move"),
+            QStringLiteral("Every image in this group was skipped. Cancel and "
+                           "start the move again to retry skipped images."));
+    }
+
+    QList<PersistentSelectionCache::SelectedFile> filesToMove;
+    filesToMove.reserve(candidateFiles.size());
+    QHash<QString, QString> originalToMovedPath;
+    QSet<QString> destinationNames;
+    for (const auto &selectedFile : std::as_const(candidateFiles)) {
+        const QFileInfo sourceInfo(selectedFile.path);
+        if (!sourceInfo.exists() || !sourceInfo.isFile()) {
+            if (skipAllItemErrors) {
+                continue;
+            }
+            return selectionGroupMoveError(
+                QStringLiteral("Source image not found"),
+                QStringLiteral("“%1” cannot be found. Retry after restoring "
+                               "it, or skip it and move the remaining images.")
+                    .arg(QDir::toNativeSeparators(selectedFile.path)),
+                selectedFile.path);
+        }
+        const QString destinationNameKey =
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+            sourceInfo.fileName().toCaseFolded();
+#else
+            sourceInfo.fileName();
+#endif
+        if (destinationNames.contains(destinationNameKey)) {
+            if (skipAllItemErrors) {
+                continue;
+            }
+            return selectionGroupMoveError(
+                QStringLiteral("Duplicate image names"),
+                QStringLiteral("More than one selected image is named “%1”. "
+                               "Skip this copy or cancel the move.")
+                    .arg(sourceInfo.fileName()),
+                selectedFile.path);
+        }
+        destinationNames.insert(destinationNameKey);
+        originalToMovedPath.insert(
+            selectedFile.path,
+            QDir(destinationFolder).absoluteFilePath(sourceInfo.fileName()));
+        filesToMove.append(selectedFile);
+    }
+    if (filesToMove.isEmpty()) {
+        return selectionGroupMoveError(
+            QStringLiteral("No images could be moved"),
+            QStringLiteral("All remaining images were unavailable or "
+                           "conflicted with another selected image. Nothing "
+                           "was changed."));
+    }
+
+    if (!currentDirectory.mkdir(folderName)) {
+        return selectionGroupMoveError(
+            QStringLiteral("Could not create folder"),
+            QStringLiteral("The folder “%1” could not be created in “%2”. "
+                           "Check permissions and available space, then retry.")
+                .arg(folderName,
+                     QDir::toNativeSeparators(currentDirectory.absolutePath())));
+    }
+
+    QStringList movedOriginalPaths;
+    auto rollbackMoves = [&]() {
+        for (auto it = movedOriginalPaths.crbegin();
+             it != movedOriginalPaths.crend(); ++it) {
+            QFile::rename(originalToMovedPath.value(*it), *it);
+        }
+        QDir(currentDirectory.absolutePath()).rmdir(folderName);
+    };
+
+    for (const auto &selectedFile : std::as_const(filesToMove)) {
+        const QString movedPath = originalToMovedPath.value(selectedFile.path);
+        if (QFileInfo::exists(movedPath) ||
+            !QFile::rename(selectedFile.path, movedPath)) {
+            if (skipAllItemErrors) {
+                originalToMovedPath.remove(selectedFile.path);
+                continue;
+            }
+            rollbackMoves();
+            return selectionGroupMoveError(
+                QStringLiteral("Could not move image"),
+                QStringLiteral("“%1” could not be moved. The operation was "
+                               "cancelled and previously moved images were "
+                               "returned to their original locations. Retry or "
+                               "skip this image.")
+                    .arg(QDir::toNativeSeparators(selectedFile.path)),
+                selectedFile.path);
+        }
+        movedOriginalPaths.append(selectedFile.path);
+    }
+    if (movedOriginalPaths.isEmpty()) {
+        QDir(currentDirectory.absolutePath()).rmdir(folderName);
+        return selectionGroupMoveError(
+            QStringLiteral("No images could be moved"),
+            QStringLiteral("Every remaining image failed to move. Nothing "
+                           "was changed."));
+    }
+
+    const bool removedGroup = activeGroup.isDefault
+        ? PersistentSelectionCache::removeSelectionGroupForMove(groupId)
+        : PersistentSelectionCache::removeSelectionGroup(groupId);
+    if (!removedGroup) {
+        rollbackMoves();
+        return selectionGroupMoveError(
+            QStringLiteral("Could not remove selection group"),
+            QStringLiteral("The images were returned to their original "
+                           "locations. Retry the operation."));
+    }
+    _selectionPreviewActive = false;
+    _selectionPreviewSnapshot.clear();
+    _selectionStates.clear();
+    loadSelectionStatesForVisibleItems();
+    emitSelectionDataChanged(-1, -1, true);
+    emit selectionHistoryChanged();
+    emit activeSelectionGroupChanged();
+
+    const bool previouslyUndoable = canUndoSelectionGroupMove();
+    _lastSelectionGroupMove = {
+        .group = activeGroup,
+        .selectedFiles = selectedFiles,
+        .destinationFolder = destinationFolder,
+        .originalToMovedPath = originalToMovedPath,
+    };
+    if (!previouslyUndoable) {
+        emit canUndoSelectionGroupMoveChanged();
+    }
+
+    QSet<QString> invalidatedFolders{_root};
+    for (const auto &selectedFile : std::as_const(selectedFiles)) {
+        invalidatedFolders.insert(QFileInfo(selectedFile.path).absolutePath());
+    }
+    PersistentFolderCache::removeFolders(invalidatedFolders.values());
+    cd(_root);
+    const qsizetype movedCount = movedOriginalPaths.size();
+    const qsizetype skippedCount = selectedFiles.size() - movedCount;
+    return {
+        {QStringLiteral("success"), true},
+        {QStringLiteral("message"),
+         QStringLiteral("Moved %1 image%2 to “%3”.%4")
+             .arg(movedCount)
+             .arg(movedCount == 1 ? QString() : QStringLiteral("s"))
+             .arg(folderName)
+             .arg(skippedCount == 0
+                      ? QString()
+                      : QStringLiteral(" Skipped %1 image%2.")
+                            .arg(skippedCount)
+                            .arg(skippedCount == 1
+                                     ? QString() : QStringLiteral("s")))},
+    };
+}
+
+QVariantMap FileListModel::undoLastSelectionGroupMove() {
+    if (!_lastSelectionGroupMove.isValid()) {
+        return selectionGroupMoveError(
+            QStringLiteral("Nothing to undo"),
+            QStringLiteral("There is no group move to undo."));
+    }
+
+    const SelectionGroupMoveAction action = _lastSelectionGroupMove;
+    for (auto it = action.originalToMovedPath.constBegin();
+         it != action.originalToMovedPath.constEnd(); ++it) {
+        if (!QFileInfo::exists(it.value())) {
+            return selectionGroupMoveError(
+                QStringLiteral("Moved image not found"),
+                QStringLiteral("“%1” cannot be found. Nothing was changed.")
+                    .arg(QDir::toNativeSeparators(it.value())));
+        }
+        if (QFileInfo::exists(it.key())) {
+            return selectionGroupMoveError(
+                QStringLiteral("Original path is occupied"),
+                QStringLiteral("“%1” already exists. Remove or rename that "
+                               "file, then retry undo.")
+                    .arg(QDir::toNativeSeparators(it.key())));
+        }
+        if (!QFileInfo(it.key()).dir().exists()) {
+            return selectionGroupMoveError(
+                QStringLiteral("Original folder not found"),
+                QStringLiteral("The original folder for “%1” no longer "
+                               "exists. Recreate it, then retry undo.")
+                    .arg(QDir::toNativeSeparators(it.key())));
+        }
+    }
+
+    QStringList restoredOriginalPaths;
+    auto rollbackUndo = [&]() {
+        for (auto it = restoredOriginalPaths.crbegin();
+             it != restoredOriginalPaths.crend(); ++it) {
+            QFile::rename(*it, action.originalToMovedPath.value(*it));
+        }
+    };
+    for (auto it = action.originalToMovedPath.constBegin();
+         it != action.originalToMovedPath.constEnd(); ++it) {
+        if (!QFile::rename(it.value(), it.key())) {
+            rollbackUndo();
+            return selectionGroupMoveError(
+                QStringLiteral("Could not restore image"),
+                QStringLiteral("“%1” could not be returned to its original "
+                               "location. No selection changes were made.")
+                    .arg(QDir::toNativeSeparators(it.value())));
+        }
+        restoredOriginalPaths.append(it.key());
+    }
+
+    if (!PersistentSelectionCache::restoreSelectionGroup(
+            action.group, action.selectedFiles, true)) {
+        rollbackUndo();
+        return selectionGroupMoveError(
+            QStringLiteral("Could not restore selection group"),
+            QStringLiteral("The files were returned to the moved folder. A "
+                           "group with the same name or color may already exist."));
+    }
+
+    QDir().rmdir(action.destinationFolder);
+    _lastSelectionGroupMove.clear();
+    emit canUndoSelectionGroupMoveChanged();
+    _selectionPreviewActive = false;
+    _selectionPreviewSnapshot.clear();
+    _selectionStates.clear();
+    loadSelectionStatesForVisibleItems();
+    emitSelectionDataChanged(-1, -1, true);
+    emit selectionHistoryChanged();
+    emit activeSelectionGroupChanged();
+    QSet<QString> invalidatedFolders{_root, action.destinationFolder};
+    for (const auto &selectedFile : action.selectedFiles) {
+        invalidatedFolders.insert(QFileInfo(selectedFile.path).absolutePath());
+    }
+    PersistentFolderCache::removeFolders(invalidatedFolders.values());
+    cd(_root);
+
+    return {
+        {QStringLiteral("success"), true},
+        {QStringLiteral("message"),
+         QStringLiteral("Restored “%1” and returned %2 image%3.")
+             .arg(action.group.name)
+             .arg(action.originalToMovedPath.size())
+             .arg(action.originalToMovedPath.size() == 1
+                      ? QString() : QStringLiteral("s"))},
+    };
 }
 
 QString FileListModel::selectionContainerForItem(const ImageFile *item) const {
@@ -2152,7 +3217,8 @@ void FileListModel::syncVisibleItemSelection() {
     }
 }
 
-void FileListModel::emitSelectionDataChanged(int firstIndex, int lastIndex) {
+void FileListModel::emitSelectionDataChanged(int firstIndex, int lastIndex,
+                                             bool persistentChange) {
     if (!_items.isEmpty()) {
         if (firstIndex < 0 || lastIndex < 0) {
             firstIndex = 0;
@@ -2167,7 +3233,64 @@ void FileListModel::emitSelectionDataChanged(int firstIndex, int lastIndex) {
                          {SelectedRole, SelectionGroupIdRole, SelectionGroupColorRole});
     }
     emit selectionChanged();
-    emit selectionGroupsChanged();
+    if (persistentChange) {
+        const QStringList changedPaths = _pendingSelectionPaths.values();
+        _pendingSelectionPaths.clear();
+        if (changedPaths.isEmpty() || changedPaths.size() > 32) {
+            refreshAvailableSelectionCounts();
+        }
+        else {
+            updateAvailableSelectionCounts(changedPaths);
+        }
+        emit selectionPathsChanged(changedPaths);
+        emit selectionGroupsChanged();
+    }
+}
+
+void FileListModel::refreshAvailableSelectionCounts() {
+    _availableSelectionCounts.clear();
+    _availableSelectedPathGroups.clear();
+    const auto selectedFiles =
+        PersistentSelectionCache::selectedFilesByAdditionDate();
+    for (const auto &selectedFile : selectedFiles) {
+        const QFileInfo fileInfo(selectedFile.path);
+        if (!fileInfo.isFile() ||
+            !ThumbnailLoader::isFormatSupported(fileInfo.fileName())) {
+            continue;
+        }
+        const QString path = fileInfo.absoluteFilePath();
+        _availableSelectedPathGroups.insert(path, selectedFile.groupId);
+        _availableSelectionCounts[selectedFile.groupId]++;
+    }
+}
+
+void FileListModel::updateAvailableSelectionCounts(
+    const QStringList &paths) {
+    for (const QString &changedPath : paths) {
+        const QFileInfo fileInfo(changedPath);
+        const QString path = fileInfo.absoluteFilePath();
+        const QString previousGroup =
+            _availableSelectedPathGroups.take(path);
+        if (!previousGroup.isEmpty()) {
+            const int nextCount =
+                _availableSelectionCounts.value(previousGroup) - 1;
+            if (nextCount > 0) {
+                _availableSelectionCounts.insert(previousGroup, nextCount);
+            }
+            else {
+                _availableSelectionCounts.remove(previousGroup);
+            }
+        }
+
+        PersistentSelectionCache::SelectedFile selectedFile;
+        if (!PersistentSelectionCache::selectedFile(path, selectedFile) ||
+            !fileInfo.isFile() ||
+            !ThumbnailLoader::isFormatSupported(fileInfo.fileName())) {
+            continue;
+        }
+        _availableSelectedPathGroups.insert(path, selectedFile.groupId);
+        _availableSelectionCounts[selectedFile.groupId]++;
+    }
 }
 
 void FileListModel::pushSelectionHistory(const QString &containerKey, const QString &description,
@@ -2175,23 +3298,23 @@ void FileListModel::pushSelectionHistory(const QString &containerKey, const QStr
     const QString normalizedKey = PersistentSelectionCache::normalizeContainerKey(containerKey);
     ensureSelectionStateLoaded(normalizedKey);
     auto &state = _selectionStates[normalizedKey];
-    if (state.historyIndex < state.history.size() - 1) {
-        state.history.resize(state.historyIndex + 1);
+    QSet<QString> changedNames(previousSelectedGroups.keyBegin(),
+                               previousSelectedGroups.keyEnd());
+    changedNames.unite(QSet<QString>(state.selectedGroups.keyBegin(),
+                                     state.selectedGroups.keyEnd()));
+    for (const QString &name : std::as_const(changedNames)) {
+        if (previousSelectedGroups.value(name) !=
+            state.selectedGroups.value(name)) {
+            _pendingSelectionPaths.insert(
+                normalizedKey == QStringLiteral("Computer")
+                    ? name
+                    : QDir(normalizedKey).absoluteFilePath(name));
+        }
     }
-    if (state.history.isEmpty()) {
-        state.history.append(PersistentSelectionCache::HistoryEntry{
-            .description = "Initial state",
-            .timestamp = QDateTime::currentDateTime(),
-            .selectedGroups = previousSelectedGroups
-        });
-    }
-    state.history.append(PersistentSelectionCache::HistoryEntry{
-        .description = description,
-        .timestamp = QDateTime::currentDateTime(),
-        .selectedGroups = state.selectedGroups
-    });
-    state.historyIndex = state.history.size() - 1;
-    PersistentSelectionCache::storeContainer(normalizedKey, state);
+    PersistentSelectionCache::appendHistoryEntry(
+        state, description, previousSelectedGroups);
+    PersistentSelectionCache::storeContainer(normalizedKey, state, false);
+    _selectionSaveTimer.start();
     emit selectionHistoryChanged();
 }
 
@@ -2239,11 +3362,26 @@ void FileListModel::applySelectionHistoryState(const QString &containerKey, int 
         return;
     }
 
-    state.historyIndex = historyIndex;
-    state.selectedGroups = state.history[historyIndex].selectedGroups;
-    PersistentSelectionCache::storeContainer(normalizedKey, state);
+    const QHash<QString, QString> previousSelection = state.selectedGroups;
+    if (!PersistentSelectionCache::applyHistoryIndex(state, historyIndex)) {
+        return;
+    }
+    QSet<QString> changedNames(previousSelection.keyBegin(),
+                               previousSelection.keyEnd());
+    changedNames.unite(QSet<QString>(state.selectedGroups.keyBegin(),
+                                     state.selectedGroups.keyEnd()));
+    for (const QString &name : std::as_const(changedNames)) {
+        if (previousSelection.value(name) != state.selectedGroups.value(name)) {
+            _pendingSelectionPaths.insert(
+                normalizedKey == QStringLiteral("Computer")
+                    ? name
+                    : QDir(normalizedKey).absoluteFilePath(name));
+        }
+    }
+    PersistentSelectionCache::storeContainer(normalizedKey, state, false);
+    _selectionSaveTimer.start();
     syncVisibleItemSelection();
-    emitSelectionDataChanged();
+    emitSelectionDataChanged(-1, -1, true);
     emit selectionHistoryChanged();
 }
 

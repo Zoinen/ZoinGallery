@@ -136,8 +136,8 @@ bool isSameOrChildPath(const QString &candidate, const QString &parent) {
 }
 
 #ifdef Q_OS_WIN
-QPixmap systemArrowCursorPixmap(qreal dpr) {
-    const HCURSOR cursor = LoadCursorW(nullptr, IDC_ARROW);
+QPixmap systemCursorPixmap(LPCWSTR cursorId, qreal dpr) {
+    const HCURSOR cursor = LoadCursorW(nullptr, cursorId);
     if (!cursor) {
         return {};
     }
@@ -273,9 +273,10 @@ QPixmap windowsDragCursorPixmap(qreal dpr, const QSizeF &previewSize,
     painter.scale(dpr, dpr);
 
     // Use the actual Windows cursor artwork; only the action pill is custom.
-    const QPixmap systemArrow = systemArrowCursorPixmap(dpr);
-    if (!systemArrow.isNull()) {
-        painter.drawPixmap(QPointF(0, 0), systemArrow);
+    const QPixmap systemCursor = systemCursorPixmap(
+        action == Qt::IgnoreAction ? IDC_NO : IDC_ARROW, dpr);
+    if (!systemCursor.isNull()) {
+        painter.drawPixmap(QPointF(0, 0), systemCursor);
     }
 
     if (showPill) {

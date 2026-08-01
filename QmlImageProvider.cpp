@@ -1,35 +1,31 @@
 #include "QmlImageProvider.h"
 
-#include "FileListModel.h"
-
 #include <QPainter>
 
-QmlImageProvider::QmlImageProvider(const QString &prefix, FileListModel *model)
+#include <utility>
+
+QmlImageProvider::QmlImageProvider(
+    const QString &prefix,
+    QSharedPointer<ProviderImageStore> providerImageStore)
     : QQuickImageProvider(QQuickImageProvider::Image),
-    _prefix(prefix),
-    _model(model) {
+      _prefix(prefix),
+      _providerImageStore(std::move(providerImageStore)) {
 }
 
 QImage QmlImageProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize) {
-//    qDebug() << "requesting image" << id;
-    if (_model) {
-        const ImageFile *item = _model->itemForImageId(id);
-        if (item) {
-            QImage img = item->image();
-            if (!img.isNull()) {
-                return img;
-            }
+    Q_UNUSED(requestedSize)
+    QImage image = _providerImageStore->snapshot(id);
+    if (!image.isNull()) {
+        if (size) {
+            *size = image.size();
         }
-        else {
-            QImage img = _model->viewerForImageId(id);
-            if (!img.isNull()) {
-                return img;
-            }
-        }
+        return image;
     }
 
     QImage empty(1, 1, QImage::Format_RGBA8888);
     empty.fill(Qt::transparent);
-    *size = empty.size();
+    if (size) {
+        *size = empty.size();
+    }
     return empty;
 }

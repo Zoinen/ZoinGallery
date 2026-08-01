@@ -201,6 +201,12 @@ void GalleryViewModel::cancelAllDecodeRunners() {
     }
 }
 
+bool GalleryViewModel::preserveViewStateOnReset() const {
+    const auto *requestModel =
+        dynamic_cast<const ThumbnailsRequestInterface *>(sourceModel());
+    return requestModel && requestModel->preserveViewStateOnReset();
+}
+
 bool GalleryViewModel::filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const {
     if (!_selectedOnly) {
         return true;

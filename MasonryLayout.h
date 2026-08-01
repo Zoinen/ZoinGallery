@@ -3,6 +3,7 @@
 
 #include <QQuickItem>
 #include <QAbstractItemModel>
+#include <QHash>
 
 #include "MasonryLayoutQuickSearch.h"
 #include "ImageFile.h"
@@ -210,7 +211,7 @@ private:
         int row = 0;
         int column = 0;
         BrickItem *item = nullptr;
-        ImageFile *const image = nullptr;
+        ImageFile *image = nullptr;
         int globalIndex = -1;
 
         QRectF geometry() const;
@@ -235,12 +236,17 @@ private:
     void updateProperties(bool animate = false);
     void setContentYInternal(qreal newContentY);
     void restorePreservedCurrentItemPosition();
+    void preservePendingThumbnailRequestsForModelReset();
+    void restorePendingThumbnailRequestsAfterModelReset();
 
     void setContentHeight(int newContentHeight);
     void updateCurrentImageIndex();
 
     void onDataChanged(const QModelIndex &topLeft, const QModelIndex &bottomRight, const QVector<int> &roles = QVector<int>());
     void pushToCurrentRow(int index, bool animate = true);
+    MasonryBrick brickForImage(ImageFile *imageFile) const;
+    void prepareForIncrementalModelChange();
+    void applyIncrementalModelChange();
     void onModelAboutToBeReset();
     void onModelReset();
     void zoom(bool in);
@@ -263,7 +269,7 @@ private:
     int _visibleStart;
     int _visibleEnd;
     int _topItem;
-    int _topItemOffset;
+    qreal _topItemOffset;
     int _currentIndexOffsetOverride;
     QQuickItem *_viewport;
 
@@ -298,8 +304,14 @@ private:
 
     bool _preserveCurrentItemPositionOnNextModelReset;
     QString _preservedCurrentItemFullPath;
-    int _preservedCurrentIndexOffset;
     int _preservedCurrentFallbackIndex;
+    QString _preservedViewportAnchorFullPath;
+    int _preservedViewportAnchorFallbackIndex;
+    qreal _preservedViewportAnchorOffset;
+    QHash<QString, ImageInfo> _preservedPendingThumbnailInfo;
+    bool _preserveDecodeQueueForCurrentRebuild = false;
+    bool _skipThumbnailBackfillUntilFlush = false;
+    int _incrementalModelChangeDepth = 0;
 };
 
 #endif // MASONRYLAYOUT_H

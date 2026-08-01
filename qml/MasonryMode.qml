@@ -10,8 +10,22 @@ MouseArea {
 
     property alias view: masonryLayout
     property alias focusProxy: quickSearchField
+    property alias targetHeight: masonryLayout.targetHeight
+    property alias masonrySpacing: masonryLayout.spacing
+    property var masonryModel: galleryViewModel
+    property Component masonryDelegate: BrickDelegate {}
+    property var selectionModel: fileListModel
+    property var selectionMapper: galleryViewModel
+    property bool primaryView: true
+    property bool selectionInteractionEnabled: primaryView
+    property bool quickSearchEnabled: primaryView
+    property bool viewerTransitionActive: false
+    property color selectionAccentColor: fileListModel.activeSelectionGroupColor
 
     signal toggleViewer()
+    signal currentIndexActivated(int index)
+    signal currentSelectionToggleRequested(int index)
+    signal fileDropFailed(string title, string message)
 
     // <Scrolling>
     property bool scrollingStarted: false
@@ -24,6 +38,15 @@ MouseArea {
 
     acceptedButtons: Qt.LeftButton | Qt.MiddleButton | Qt.RightButton
     clip: true
+
+    function focusView() {
+        if (quickSearchEnabled) {
+            focusProxy.forceActiveFocus()
+        }
+        else {
+            masonryView.forceActiveFocus()
+        }
+    }
 
     function startScrolling() {
         scrollingStarted = false
@@ -52,27 +75,73 @@ MouseArea {
         currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
     }
 
+    function restoreStateAfterLayoutRebuild() {
+        resetCurrentItemCenter()
+        if (shiftSelectionActive && shiftSelectionAnchorPath !== "") {
+            let remappedAnchor = -1
+            for (let i = 0; i < masonryLayout.count; ++i) {
+                if (masonryLayout.indexFullPath(i) ===
+                        shiftSelectionAnchorPath) {
+                    remappedAnchor = i
+                    break
+                }
+            }
+            if (remappedAnchor === -1) {
+                selectionModel.cancelSelectionPreview()
+                shiftSelectionActive = false
+                shiftSelectionAnchorIndex = -1
+                shiftSelectionAnchorPath = ""
+            }
+            else {
+                shiftSelectionAnchorIndex = remappedAnchor
+            }
+        }
+    }
+
     onPressed: (mouse) => {
         if (mouse.button === Qt.LeftButton) {
-            focusProxy.forceActiveFocus()
+            focusView()
             let p = masonryLayout.mapFromItem(masonryView, mouse.x, mouse.y)
-            if (p.x >= 0 && p.y >= 0 && p.x <= masonryLayout.width && p.y <= masonryLayout.height &&
+            if (selectionInteractionEnabled &&
+                    p.x >= 0 && p.y >= 0 && p.x <= masonryLayout.width && p.y <= masonryLayout.height &&
                     masonryLayout.indexAtViewport(p.x, p.y) === -1) {
                 startRubberBand(mouse.x, mouse.y, mouse.modifiers)
             }
         }
-        else {
-            if (mouse.button === Qt.MiddleButton && !scrollingMode) {
+        else if (mouse.button === Qt.MiddleButton) {
+            if (!scrollingMode) {
                 startScrolling()
             }
             else {
                 endScrolling()
             }
         }
+        else if (mouse.button === Qt.RightButton) {
+            if (scrollingMode) {
+                endScrolling()
+            }
+            if (selectionInteractionEnabled) {
+                focusView()
+                let p = masonryLayout.mapFromItem(masonryView, mouse.x, mouse.y)
+                let viewIndex = masonryLayout.indexAtViewport(p.x, p.y)
+                if (viewIndex !== -1) {
+                    setCurrentIndex(viewIndex, false, false, false, true)
+                    selectionModel.toggleSelection(sourceIndexForViewIndex(viewIndex))
+                }
+            }
+        }
+    }
+
+    function singleItemDragRequested(modifiers) {
+        // Option is macOS's native "copy while dragging" modifier, so keep it
+        // free there. Physical Control is exposed as MetaModifier on macOS.
+        const modifier = Qt.platform.os === "osx"
+                ? Qt.MetaModifier : Qt.AltModifier
+        return Boolean(modifiers & modifier)
     }
 
     onReleased: (mouse) => {
-        if (mouse.button === Qt.LeftButton) {
+        if (mouse.button === Qt.LeftButton && selectionInteractionEnabled) {
             finishRubberBand()
         }
         else {
@@ -134,6 +203,7 @@ MouseArea {
     property bool alwaysShowFileNames: false
     property bool shiftSelectionActive: false
     property int shiftSelectionAnchorIndex: -1
+    property string shiftSelectionAnchorPath: ""
     property bool shiftNavigationSelectionValue: true
     property string shiftSelectionDescription: "Range selection"
     readonly property int rubberBandModeAdd: 0
@@ -152,12 +222,19 @@ MouseArea {
     Connections {
         target: masonryLayout
         function onLayoutReset() {
-            resetCurrentItemCenter()
+            restoreStateAfterLayoutRebuild()
+        }
+        function onCountChanged() {
+            // countChanged is emitted after a model rebuild has finished its
+            // rewrap and viewport restoration. Unlike layoutReset it carries
+            // no "re-decode thumbnails" semantics for folder delegates.
+            restoreStateAfterLayoutRebuild()
         }
     }
 
     Connections {
         target: viewerController
+        enabled: masonryView.primaryView
 
         function onCurrentPathChanged() {
             resetCurrentItemCenter()
@@ -263,7 +340,7 @@ MouseArea {
     }
 
     function sourceIndexForViewIndex(viewIndex) {
-        return galleryViewModel.mapToSourceRow(viewIndex)
+        return selectionMapper.mapToSourceRow(viewIndex)
     }
 
     function currentSourceIndex() {
@@ -276,45 +353,55 @@ MouseArea {
         }
         shiftSelectionActive = true
         shiftSelectionAnchorIndex = masonryLayout.currentIndex
+        shiftSelectionAnchorPath =
+                masonryLayout.indexFullPath(shiftSelectionAnchorIndex)
         shiftNavigationSelectionValue = true
         shiftSelectionDescription = "Range selection"
-        fileListModel.beginSelectionPreview()
+        selectionModel.beginSelectionPreview()
     }
 
     function updateShiftNavigationSelection(targetIndex) {
         beginShiftSelection()
         shiftSelectionDescription = shiftNavigationSelectionValue ? "Range selection" : "Range deselection"
-        fileListModel.previewSelectionIndexes(
-                    galleryViewModel.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, false),
+        selectionModel.previewSelectionIndexes(
+                    selectionMapper.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, false),
                     shiftNavigationSelectionValue ? rubberBandModeAdd : rubberBandModeDeselect)
     }
 
     function shiftClickSelection(targetIndex) {
         beginShiftSelection()
         shiftSelectionDescription = "Range selection"
-        fileListModel.previewSelectionIndexes(galleryViewModel.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, true),
-                                              rubberBandModeAdd)
-        setCurrentIndex(targetIndex)
+        selectionModel.previewSelectionIndexes(
+                    selectionMapper.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, true),
+                    rubberBandModeAdd)
+        setCurrentIndex(targetIndex, false, false, false, true)
     }
 
     function toggleCurrentSelection() {
-        setCurrentIndex(masonryLayout.currentIndex)
-        fileListModel.toggleSelection(currentSourceIndex())
+        setCurrentIndex(masonryLayout.currentIndex,
+                        false, false, false, true)
+        selectionModel.toggleSelection(currentSourceIndex())
     }
 
     function finishShiftSelection() {
         if (!shiftSelectionActive) {
             return
         }
-        fileListModel.commitSelectionPreview(shiftSelectionDescription)
+        selectionModel.commitSelectionPreview(shiftSelectionDescription)
         shiftSelectionActive = false
         shiftSelectionAnchorIndex = -1
+        shiftSelectionAnchorPath = ""
     }
 
     function updateSelectionAfterKeyboardNavigation(event) {
-        if (event.modifiers & Qt.ShiftModifier) {
+        if (selectionInteractionEnabled && event.modifiers & Qt.ShiftModifier) {
             updateShiftNavigationSelection(masonryLayout.currentIndex)
         }
+    }
+
+    function keyboardNavigationChangesSelection(modifiers) {
+        return selectionInteractionEnabled &&
+               Boolean(modifiers & Qt.ShiftModifier)
     }
 
     function startRubberBand(mouseX, mouseY, modifiers) {
@@ -348,7 +435,7 @@ MouseArea {
             return false
         }
         rubberBandActive = true
-        fileListModel.beginSelectionPreview()
+        selectionModel.beginSelectionPreview()
         return true
     }
 
@@ -372,7 +459,7 @@ MouseArea {
         let y2 = Math.max(rubberBandStartY, rubberBandCurrentY)
         let p = masonryLayout.mapFromItem(masonryView, x1, y1)
         let indexes = masonryLayout.indexesInViewportRect(p.x, p.y, x2 - x1, y2 - y1)
-        fileListModel.previewSelectionIndexes(galleryViewModel.mapToSourceRows(indexes), rubberBandMode)
+        selectionModel.previewSelectionIndexes(selectionMapper.mapToSourceRows(indexes), rubberBandMode)
     }
 
     function finishRubberBand() {
@@ -381,74 +468,102 @@ MouseArea {
         }
 
         if (rubberBandActive) {
-            fileListModel.commitSelectionPreview(rubberBandDescription())
+            selectionModel.commitSelectionPreview(rubberBandDescription())
         }
         else {
             if (shiftSelectionActive) {
-                fileListModel.cancelSelectionPreview()
+                selectionModel.cancelSelectionPreview()
             }
-            fileListModel.setAllSelection(false)
+            selectionModel.setAllSelection(false)
         }
 
         if (shiftSelectionActive) {
             shiftSelectionActive = false
             shiftSelectionAnchorIndex = -1
+            shiftSelectionAnchorPath = ""
         }
         rubberBandPending = false
         rubberBandActive = false
+    }
+
+    function handleItemPressed(viewIndex, modifiers) {
+        focusView()
+        if (scrollingMode) {
+            endScrolling()
+        }
+
+        if (modifiers & Qt.ShiftModifier) {
+            shiftClickSelection(viewIndex)
+            return
+        }
+        setCurrentIndex(viewIndex, false, false, false,
+                        Boolean(modifiers & Qt.ControlModifier))
+        if (modifiers & Qt.ControlModifier) {
+            selectionModel.toggleSelection(currentSourceIndex())
+        }
     }
 
     property bool backspaceDisabledUntilKeyUp: false
     Keys.onPressed:
         (event) => {
             event.accepted = true
-            if (event.key === Qt.Key_Shift && !event.isAutoRepeat) {
+            if (selectionInteractionEnabled && event.key === Qt.Key_Shift && !event.isAutoRepeat) {
                 beginShiftSelection()
             }
-            else if (event.key === Qt.Key_Left && (event.modifiers & Qt.AltModifier)) {
+            else if (primaryView && event.key === Qt.Key_Left && (event.modifiers & Qt.AltModifier)) {
                 viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                 viewerController.back()
                 masonryLayout.loadSavedState()
             }
-            else if (event.key === Qt.Key_Right && (event.modifiers & Qt.AltModifier)) {
+            else if (primaryView && event.key === Qt.Key_Right && (event.modifiers & Qt.AltModifier)) {
                 viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                 viewerController.forward()
                 masonryLayout.loadSavedState()
             }
-            else if (event.key === Qt.Key_Insert && !(event.modifiers & Qt.ControlModifier)) {
-                fileListModel.toggleSelection(currentSourceIndex())
-                setCurrentIndex(masonryLayout.currentIndex + 1)
+            else if (primaryView && event.key === Qt.Key_Insert && !(event.modifiers & Qt.ControlModifier)) {
+                selectionModel.toggleSelection(currentSourceIndex())
+                setCurrentIndex(masonryLayout.currentIndex + 1,
+                                false, false, false, true)
             }
-            else if (event.key === Qt.Key_Backslash && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
+            else if (primaryView && event.key === Qt.Key_Backslash && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
                 galleryViewModel.selectedOnly = !galleryViewModel.selectedOnly
             }
-            else if (event.key === Qt.Key_Tab && !quickSearchMode) {
+            else if (primaryView && event.key === Qt.Key_Tab && !quickSearchMode) {
                 masonryView.alwaysShowFileNames = !masonryView.alwaysShowFileNames
             }
-            else if (event.key === Qt.Key_Backslash && !quickSearchMode) {
+            else if (!primaryView && (event.key === Qt.Key_Space || event.key === Qt.Key_Backslash)) {
+                masonryView.currentSelectionToggleRequested(masonryLayout.currentIndex)
+            }
+            else if (primaryView && event.key === Qt.Key_Backslash && !quickSearchMode) {
                 toggleCurrentSelection()
             }
-            else if (event.key === Qt.Key_Asterisk) {
-                fileListModel.invertSelection()
+            else if (primaryView && event.key === Qt.Key_Asterisk) {
+                selectionModel.invertSelection()
             }
-            else if ((event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
-                fileListModel.setSameKindSelection(currentSourceIndex(), true)
+            else if (primaryView && (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
+                selectionModel.setSameKindSelection(currentSourceIndex(), true)
             }
-            else if (event.key === Qt.Key_Minus && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
-                fileListModel.setSameKindSelection(currentSourceIndex(), false)
+            else if (primaryView && event.key === Qt.Key_Minus && (event.modifiers & Qt.ControlModifier) && !quickSearchMode) {
+                selectionModel.setSameKindSelection(currentSourceIndex(), false)
             }
-            else if ((event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) && (event.modifiers & Qt.ShiftModifier) && !quickSearchMode) {
-                fileListModel.setAllSelection(true)
+            else if (primaryView && (event.key === Qt.Key_Equal || event.key === Qt.Key_Plus) && (event.modifiers & Qt.ShiftModifier) && !quickSearchMode) {
+                selectionModel.setAllSelection(true)
             }
-            else if (event.key === Qt.Key_Minus && (event.modifiers & Qt.ShiftModifier) && !quickSearchMode) {
-                fileListModel.setAllSelection(false)
+            else if (primaryView && event.key === Qt.Key_Minus && (event.modifiers & Qt.ShiftModifier) && !quickSearchMode) {
+                selectionModel.setAllSelection(false)
             }
             else if (event.key === Qt.Key_Left) {
-                setCurrentIndex(masonryLayout.currentIndex - 1)
+                setCurrentIndex(
+                            masonryLayout.currentIndex - 1,
+                            false, false, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_Right) {
-                setCurrentIndex(masonryLayout.currentIndex + 1)
+                setCurrentIndex(
+                            masonryLayout.currentIndex + 1,
+                            false, false, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_Up && !(event.modifiers & Qt.AltModifier)) {
@@ -458,13 +573,19 @@ MouseArea {
                 if (indexAbove !== -1) {
                     if (event.modifiers & Qt.ControlModifier) {
                         ensureVisible(masonryLayout.currentIndex)
-                        setCurrentIndex(indexAbove, true, false, true)
+                        setCurrentIndex(
+                                    indexAbove, true, false, true,
+                                    keyboardNavigationChangesSelection(
+                                        event.modifiers))
                         let newCurrentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
                         scrollBy(newCurrentItemGeometry.y - currentItemGeometry.y)
                         updateSelectionAfterKeyboardNavigation(event)
                     }
                     else {
-                        setCurrentIndex(indexAbove, true)
+                        setCurrentIndex(
+                                    indexAbove, true, false, false,
+                                    keyboardNavigationChangesSelection(
+                                        event.modifiers))
                         updateSelectionAfterKeyboardNavigation(event)
                     }
                 }
@@ -489,23 +610,34 @@ MouseArea {
                 if (indexBelow !== -1) {
                     if (event.modifiers & Qt.ControlModifier) {
                         ensureVisible(masonryLayout.currentIndex)
-                        setCurrentIndex(indexBelow, true, false, true)
+                        setCurrentIndex(
+                                    indexBelow, true, false, true,
+                                    keyboardNavigationChangesSelection(
+                                        event.modifiers))
                         let newCurrentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
                         scrollBy(newCurrentItemGeometry.y - currentItemGeometry.y)
                         updateSelectionAfterKeyboardNavigation(event)
                     }
                     else {
-                        setCurrentIndex(indexBelow, true)
+                        setCurrentIndex(
+                                    indexBelow, true, false, false,
+                                    keyboardNavigationChangesSelection(
+                                        event.modifiers))
                         updateSelectionAfterKeyboardNavigation(event)
                     }
                 }
             }
             else if (event.key === Qt.Key_Home) {
-                setCurrentIndex(0)
+                setCurrentIndex(
+                            0, false, false, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_End) {
-                setCurrentIndex(masonryLayout.count - 1)
+                setCurrentIndex(
+                            masonryLayout.count - 1,
+                            false, false, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
             }
             else if (event.key === Qt.Key_PageUp && !(event.modifiers & Qt.ControlModifier)) {
@@ -526,7 +658,9 @@ MouseArea {
                     }
                 }
 
-                setCurrentIndex(newCurrentIndex, !hitStart, !hitStart)
+                setCurrentIndex(
+                            newCurrentIndex, !hitStart, !hitStart, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
                 scrollBy(-deltaY)
             }
@@ -553,26 +687,31 @@ MouseArea {
                     }
                 }
 
-                setCurrentIndex(newCurrentIndex2, !hitEnd, !hitEnd)
+                setCurrentIndex(
+                            newCurrentIndex2, !hitEnd, !hitEnd, false,
+                            keyboardNavigationChangesSelection(event.modifiers))
                 updateSelectionAfterKeyboardNavigation(event)
                 scrollBy(deltaY)
             }
-            else if ((event.key === Qt.Key_Backspace && !quickSearchMode && !backspaceDisabledUntilKeyUp) ||
+            else if (primaryView && ((event.key === Qt.Key_Backspace && !quickSearchMode && !backspaceDisabledUntilKeyUp) ||
                      event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier) ||
-                     event.key === Qt.Key_PageUp && (event.modifiers & Qt.ControlModifier)) {
+                     event.key === Qt.Key_PageUp && (event.modifiers & Qt.ControlModifier))) {
                 masonryView.disableAnimation = true
                 viewerController.saveCurrentState(masonryLayout.contentY, masonryLayout.currentIndex)
                 setCurrentIndex(viewerController.up())
                 masonryView.disableAnimation = false
                 masonryLayout.loadSavedState()
             }
-            else if (event.key === Qt.Key_F11 || event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier) ||
-                     (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier)) {
+            else if (primaryView && (event.key === Qt.Key_F11 || event.key === Qt.Key_F && (event.modifiers & Qt.ControlModifier) ||
+                     (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier))) {
                 topLevelWindow.toggleFullscreen()
             }
-            else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ControlModifier) ||
+            else if (!primaryView && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                masonryView.currentIndexActivated(masonryLayout.currentIndex)
+            }
+            else if (primaryView && ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !(event.modifiers & Qt.ControlModifier) ||
                      event.key === Qt.Key_Down && (event.modifiers & Qt.AltModifier) ||
-                     event.key === Qt.Key_PageDown && (event.modifiers & Qt.ControlModifier)) {
+                     event.key === Qt.Key_PageDown && (event.modifiers & Qt.ControlModifier))) {
                 hideQuickSearch()
                 let currentItem = masonryLayout.currentItem
                 if (!currentItem || !currentItem.model) {
@@ -599,13 +738,13 @@ MouseArea {
                     event.accepted = false
                 }
             }
-            else if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_C || event.key === Qt.Key_Insert)) {
+            else if (primaryView && (event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_C || event.key === Qt.Key_Insert)) {
                 viewerController.clipboardCopyIndexName(masonryLayout.currentIndex)
             }
-            else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_D) {
+            else if (primaryView && (event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_D) {
                 viewerController.clipboardCopyIndexFullPath(masonryLayout.currentIndex)
             }
-            else if (event.key === Qt.Key_F5 || (event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) {
+            else if (primaryView && (event.key === Qt.Key_F5 || (event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R)) {
                 masonryLayout.preserveCurrentItemPositionForNextModelReset()
                 viewerController.cd(viewerController.currentPath, false)
             }
@@ -618,7 +757,7 @@ MouseArea {
         (event) => {
             if (!event.isAutoRepeat) {
                 backspaceDisabledUntilKeyUp = false
-                if (event.key === Qt.Key_Shift) {
+                if (selectionInteractionEnabled && event.key === Qt.Key_Shift) {
                     finishShiftSelection()
                 }
             }
@@ -636,14 +775,14 @@ MouseArea {
             right: masonryScroll.left
             rightMargin: masonryLayout.spacing / 2
         }
-        model: galleryViewModel
+        model: masonryView.masonryModel
 
         paddingLeft: 1+5
         paddingRight: 1+5
         paddingTop: 7+5
         paddingBottom: 7+5
 
-        delegate: BrickDelegate {}
+        delegate: masonryView.masonryDelegate
 
         function loadSavedState() {
             masonryView.disableAnimation = true
@@ -662,6 +801,7 @@ MouseArea {
 
         Shortcut {
             sequence: "F9"
+            enabled: masonryView.primaryView
             onActivated: {
                 masonryLayout.showTransparentGrid = !masonryLayout.showTransparentGrid
             }
@@ -724,9 +864,10 @@ MouseArea {
         width: Math.abs(rubberBandCurrentX - rubberBandStartX)
         height: Math.abs(rubberBandCurrentY - rubberBandStartY)
         visible: rubberBandActive && (width > 2 || height > 2)
-        color: Qt.rgba(1, 0.83, 0.23, 0.12)
+        color: Qt.rgba(selectionAccentColor.r, selectionAccentColor.g,
+                       selectionAccentColor.b, 0.12)
         border.width: 1
-        border.color: Style.persistentSelectionBorder
+        border.color: selectionAccentColor
         radius: 2
         z: 20
     }
@@ -791,7 +932,7 @@ MouseArea {
         border.width: 1
         border.color: Style.popupBorder
         radius: 4
-        visible: quickSearchMode
+        visible: quickSearchEnabled && quickSearchMode
 
         MouseArea {
             anchors.fill: parent
@@ -890,7 +1031,10 @@ MouseArea {
         Timer {
             id: delayedOnPressed
             interval: 0
-            onTriggered: {
+                onTriggered: {
+                if (!quickSearchEnabled) {
+                    return
+                }
                 if (quickSearchField.text !== "" && !quickSearchMode) {
                     quickSearchMode = true
                 }

@@ -14,6 +14,15 @@ public:
 
     QString path() const override;
     bool isViewerRequest() const override;
+    bool isHighPriority() const override {
+        return _imageData.request.highPriority;
+    }
+    quint64 viewerGeneration() const override {
+        return _imageData.request.viewerGeneration;
+    }
+    int viewerPriorityOrdinal() const override {
+        return _imageData.request.viewerPriorityOrdinal;
+    }
 
 signals:
     void imageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);

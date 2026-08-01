@@ -6,6 +6,8 @@
 #include "QmlImageProvider.h"
 #include "QmlAsyncImageProvider.h"
 #include "QmlResourcesProvider.h"
+#include "ProviderImageStore.h"
+#include "SelectedImagesModel.h"
 #include "GalleryViewModel.h"
 #include "ImageModel.h"
 #include "CacheViewer.h"
@@ -36,6 +38,19 @@ OSStatus LSSetDefaultRoleHandlerForContentType(CFStringRef inContentType, UInt32
 
 namespace
 {
+QString expandHomePath(const QString &path)
+{
+    if (path == QStringLiteral("~")) {
+        return QDir::homePath();
+    }
+
+    if (path.startsWith(QStringLiteral("~/")) || path.startsWith(QStringLiteral("~\\"))) {
+        return QDir::homePath() + path.mid(1);
+    }
+
+    return path;
+}
+
 #if defined(Q_OS_MACOS)
 constexpr const char *kZoinGalleryBundleIdentifier = "gallery.zoin";
 constexpr UInt32 kZoinGalleryLsRolesAll = 0xFFFFFFFF;
@@ -63,6 +78,7 @@ ViewerController::ViewerController(QQmlEngine *engine)
     : QObject(engine) {
     ThumbnailLoader::init();
     _fileListModel = nullptr;
+    _selectedImagesModel = nullptr;
     _galleryViewModel = nullptr;
     _canUp = true;
     _canBack = false;
@@ -78,11 +94,16 @@ ViewerController::ViewerController(QQmlEngine *engine)
 
     engine->rootContext()->setContextProperty("viewerController", this);
 
-    _fileListModel = new FileListModel(this);
+    const auto providerImageStore =
+        QSharedPointer<ProviderImageStore>::create();
+
+    _fileListModel = new FileListModel(providerImageStore, this);
     engine->rootContext()->setContextProperty("fileListModel", _fileListModel);
     connect(_fileListModel, &FileListModel::directOpenReady, this, [this] (int index) {
         emit setCurrentIndex(mapSourceRowToViewRow(index));
     });
+    connect(_fileListModel, &FileListModel::directOpenFailed, this,
+            [this](const QString &) { clearPendingOpenInViewer(); });
     connect(_fileListModel, &FileListModel::panelReloaded, this, [this] (int index) {
         emit setCurrentIndex(mapSourceRowToViewRow(index));
     });
@@ -90,13 +111,19 @@ ViewerController::ViewerController(QQmlEngine *engine)
     _galleryViewModel = new GalleryViewModel(_fileListModel, this);
     engine->rootContext()->setContextProperty("galleryViewModel", _galleryViewModel);
 
+    _selectedImagesModel = new SelectedImagesModel(
+        _fileListModel, providerImageStore, this);
+    engine->rootContext()->setContextProperty("selectedImagesModel", _selectedImagesModel);
+
     _imageModel = new ImageModel(_galleryViewModel);
     engine->rootContext()->setContextProperty("imageModel", _imageModel);
 
-    QmlImageProvider *imageProvider = new QmlImageProvider("thumbnails", _fileListModel);
+    QmlImageProvider *imageProvider = new QmlImageProvider(
+        "thumbnails", providerImageStore);
     engine->addImageProvider("thumbnails", imageProvider);
 
-    QmlAsyncImageProvider *asyncImageProvider = new QmlAsyncImageProvider("async", _fileListModel);
+    QmlAsyncImageProvider *asyncImageProvider =
+        new QmlAsyncImageProvider("async", providerImageStore);
     engine->addImageProvider("async", asyncImageProvider);
 
     QmlResourcesProvider *resourcesProvider = new QmlResourcesProvider("resources");
@@ -115,6 +142,7 @@ void ViewerController::cd(const QString &folder, bool changeHistory) {
         currentFolder = currentFolder.left(currentFolder.size() - 1);
     }
     currentFolder = currentFolder.trimmed();
+    currentFolder = expandHomePath(currentFolder);
     if (currentFolder.endsWith(":") && !currentFolder.contains("/") && !currentFolder.contains("\\")) {
         currentFolder.append("/");
     }
@@ -293,6 +321,7 @@ void ViewerController::prepareToClose() {
     qInfo() << "[Shutdown] ViewerController::prepareToClose scheduled";
     QTimer::singleShot(0, this, [&] () {
         qInfo() << "[Shutdown] ViewerController::prepareToClose running scheduled close";
+        _selectedImagesModel->prepareToClose();
         _fileListModel->prepareToClose();
     });
 }
@@ -336,6 +365,11 @@ void ViewerController::quitApplication() {
         qInfo() << "[Shutdown] ViewerController::quitApplication tray hide returned";
     }
     if (_fileListModel) {
+        if (_selectedImagesModel) {
+            qInfo() << "[Shutdown] ViewerController::quitApplication calling SelectedImagesModel::prepareToClose";
+            _selectedImagesModel->prepareToClose();
+            qInfo() << "[Shutdown] ViewerController::quitApplication SelectedImagesModel::prepareToClose returned";
+        }
         qInfo() << "[Shutdown] ViewerController::quitApplication calling FileListModel::prepareToClose";
         _fileListModel->prepareToClose();
         qInfo() << "[Shutdown] ViewerController::quitApplication FileListModel::prepareToClose returned";
@@ -521,6 +555,7 @@ void ViewerController::openFileInViewer(const QString &path, int viewerWidth, in
     QFileInfo fileInfo(imagePath);
     if ((_fileListModel->imageSourceAccessEnabled() && !fileInfo.isFile())
         || !FileListModel::isImage(fileInfo.fileName())) {
+        clearPendingOpenInViewer();
         cd(imagePath, changeHistory);
         return;
     }

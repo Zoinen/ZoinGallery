@@ -13,6 +13,9 @@
 #include <QDir>
 #include <QSettings>
 
+#include <algorithm>
+#include <utility>
+
 static void registerMyQmlTypes() {
     qmlRegisterType<MasonryLayout>("ZoinGallery", 1, 0, "MasonryLayout");
     qmlRegisterType<BrickItem>("ZoinGallery", 1, 0, "BrickItem");
@@ -29,6 +32,12 @@ QRectF roundRect(const QRectF &rectF) {
 
 static ImageFile *imageFileFromModelIndex(const QModelIndex &index) {
     return index.data(FileListModel::ImageFileRole).value<ImageFile *>();
+}
+
+static bool modelRequestsViewStatePreservation(QAbstractItemModel *model) {
+    const auto *requestModel =
+        dynamic_cast<const ThumbnailsRequestInterface *>(model);
+    return requestModel && requestModel->preserveViewStateOnReset();
 }
 
 MasonryLayout::MasonryLayout(QQuickItem *parent)
@@ -64,8 +73,9 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _paddingBottom = 0;
 
     _preserveCurrentItemPositionOnNextModelReset = false;
-    _preservedCurrentIndexOffset = -1;
     _preservedCurrentFallbackIndex = -1;
+    _preservedViewportAnchorFallbackIndex = -1;
+    _preservedViewportAnchorOffset = 0;
 
     _quickSearch = new MasonryLayoutQuickSearch(this);
 }
@@ -198,7 +208,8 @@ void MasonryLayout::reReadAndDecodeThumbnails() {
     }
 
     QList<ImageDecodeRequest> requests;
-    for (const MasonryBrick &brick : _bricks) {
+    for (int i = 0; i < _bricks.size(); ++i) {
+        const MasonryBrick &brick = _bricks[i];
         if (brick.image && brick.image->isImage() && brick.image->fullSize().isValid()) {
             QSize thumbnailSize = brick.thumbnailSize(spacing());
             thumbnailSize = dp(thumbnailSize);
@@ -206,7 +217,8 @@ void MasonryLayout::reReadAndDecodeThumbnails() {
                 .info = brick.image->info(),
                 .targetSize = thumbnailSize,
                 .viewerRequest = false,
-                .checkCache = brick.image->info().isCached
+                .checkCache = brick.image->info().isCached,
+                .highPriority = i >= _visibleStart && i <= _visibleEnd,
             });
             qDebug() << "ZZ REQUEST" << brick.image->fileName() << thumbnailSize << brick.thumbnailSize(0) << brick.image->fullSize() << _spacing;
         }
@@ -218,19 +230,96 @@ void MasonryLayout::reReadAndDecodeThumbnails() {
 }
 
 void MasonryLayout::preserveCurrentItemPositionForNextModelReset() {
-    if (_currentIndex < 0 || _currentIndex >= _bricks.size()) {
+    if (_bricks.isEmpty()) {
         return;
     }
 
-    const MasonryBrick &currentBrick = _bricks[_currentIndex];
-    if (!currentBrick.image) {
+    if (_currentIndex >= 0 && _currentIndex < _bricks.size() &&
+        _bricks[_currentIndex].image) {
+        _preservedCurrentItemFullPath =
+            _bricks[_currentIndex].image->fullPath();
+        _preservedCurrentFallbackIndex = _currentIndex;
+    }
+
+    const int anchorIndex = _topItem;
+    if (anchorIndex >= 0 && anchorIndex < _bricks.size() &&
+        _bricks[anchorIndex].image) {
+        const MasonryBrick &anchorBrick = _bricks[anchorIndex];
+        _preservedViewportAnchorFullPath =
+            anchorBrick.image->fullPath();
+        _preservedViewportAnchorFallbackIndex = anchorIndex;
+        _preservedViewportAnchorOffset = anchorBrick.y - _contentY;
+    }
+
+    _preserveCurrentItemPositionOnNextModelReset =
+        !_preservedCurrentItemFullPath.isEmpty() ||
+        !_preservedViewportAnchorFullPath.isEmpty();
+}
+
+void MasonryLayout::preservePendingThumbnailRequestsForModelReset() {
+    for (const MasonryBrick &pendingBrick : std::as_const(_currentLoadingRow)) {
+        const int index = pendingBrick.globalIndex;
+        if (index < 0 || index >= _bricks.size()) {
+            continue;
+        }
+        ImageFile *image = _bricks[index].image;
+        if (image && image->isImage() && image->fullSize().isValid()) {
+            _preservedPendingThumbnailInfo.insert(image->fullPath(),
+                                                   image->info());
+        }
+    }
+}
+
+void MasonryLayout::restorePendingThumbnailRequestsAfterModelReset() {
+    if (_preservedPendingThumbnailInfo.isEmpty()) {
         return;
     }
 
-    _preservedCurrentItemFullPath = currentBrick.image->fullPath();
-    _preservedCurrentIndexOffset = _contentY - currentBrick.y;
-    _preservedCurrentFallbackIndex = _currentIndex;
-    _preserveCurrentItemPositionOnNextModelReset = !_preservedCurrentItemFullPath.isEmpty();
+    const QHash<QString, ImageInfo> pendingInfo =
+        _preservedPendingThumbnailInfo;
+    _preservedPendingThumbnailInfo.clear();
+
+    auto *requestModel = dynamic_cast<ThumbnailsRequestInterface *>(_model);
+    if (!requestModel) {
+        return;
+    }
+
+    QList<ImageDecodeRequest> requests;
+    requests.reserve(pendingInfo.size());
+    for (int i = 0; i < _bricks.size(); ++i) {
+        const MasonryBrick &brick = _bricks[i];
+        if (!brick.image || !brick.image->isImage() ||
+            !brick.image->fullSize().isValid()) {
+            continue;
+        }
+        const auto preserved = pendingInfo.constFind(brick.image->fullPath());
+        if (preserved == pendingInfo.constEnd()) {
+            continue;
+        }
+
+        const ImageInfo currentInfo = brick.image->info();
+        const bool sameModifiedTime =
+            preserved->lastModified.isValid() ==
+                currentInfo.lastModified.isValid() &&
+            (!preserved->lastModified.isValid() ||
+             preserved->lastModified == currentInfo.lastModified);
+        const bool sameFileSize = preserved->fileSize == currentInfo.fileSize;
+        if (!sameModifiedTime || !sameFileSize) {
+            // A new metadata request will enqueue the replacement thumbnail.
+            continue;
+        }
+
+        requests.append(ImageDecodeRequest{
+            .info = currentInfo,
+            .targetSize = dp(brick.thumbnailSize(spacing())),
+            .viewerRequest = false,
+            .checkCache = currentInfo.isCached,
+            .highPriority = i >= _visibleStart && i <= _visibleEnd,
+        });
+    }
+    if (!requests.isEmpty()) {
+        requestModel->decodeImages(requests);
+    }
 }
 
 void MasonryLayout::zoomIn() {
@@ -572,13 +661,16 @@ void MasonryLayout::updateProperties(bool animate) {
     // }
 
     QSet<BrickItem *> itemsToHide;
-    if (_visibleStart != -1) {
-        for (int i = _visibleStart; i <= _visibleEnd; i++) {
-            if (i < newVisibleStart || i > newVisibleEnd) {
-                pushBrickItem(_bricks[i].item);
-                itemsToHide.insert(_bricks[i].item);
-                _bricks[i].item = nullptr;
-            }
+    // A structural model update can shift bricks while their delegates stay
+    // alive. Scan the bricks themselves instead of trusting the previous
+    // numeric visible range, which may now refer to different rows.
+    for (int i = 0; i < _bricks.size(); ++i) {
+        if (_bricks[i].item &&
+            (newVisibleStart == -1 || i < newVisibleStart ||
+             i > newVisibleEnd)) {
+            pushBrickItem(_bricks[i].item);
+            itemsToHide.insert(_bricks[i].item);
+            _bricks[i].item = nullptr;
         }
     }
 
@@ -660,7 +752,23 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
     int index = topLeft.row();
     int indexTo = bottomRight.row();
     int changedIndexes = indexTo - index;
-    if (index >= 0 && index < _bricks.size() && indexTo >= 0 && indexTo <= _bricks.size()) {
+    if (index >= 0 && index < _bricks.size() && indexTo >= 0 &&
+        indexTo < _bricks.size()) {
+        if (!isEmbedded() &&
+            modelRequestsViewStatePreservation(_model) &&
+            (roles.contains(FileListModel::LastModifiedRole) ||
+             roles.contains(FileListModel::FileSizeRole))) {
+            // A watcher version refresh is followed asynchronously by an
+            // ImageFullSizeRole batch. Treat that batch as an incremental
+            // replacement; rebuilding the loading row from index 0 would
+            // re-enqueue every thumbnail before the changed file.
+            for (int i = index; i <= indexTo; ++i) {
+                if (_bricks[i].image && _bricks[i].image->isImage()) {
+                    _skipThumbnailBackfillUntilFlush = true;
+                    break;
+                }
+            }
+        }
         if (roles.contains(FileListModel::ImageFullSizeRole)) {
             bool animateLayoutChange = false;
             for (int i = index; i <= indexTo; i++) {
@@ -670,7 +778,8 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
                     break;
                 }
             }
-            if (isEmbedded() || (changedIndexes > 1 && !_currentLoadingRow.size())) {
+            if (isEmbedded() || _skipThumbnailBackfillUntilFlush ||
+                (changedIndexes > 1 && !_currentLoadingRow.size())) {
                 for (int i = index; i <= indexTo; i++) {
                     if (_bricks[i].image && _bricks[i].image->fullSize().isValid()) {
                         _bricks[i].originalSize = _bricks[i].image->fullSize();
@@ -687,7 +796,8 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
                                 .info = _bricks[i].image->info(),
                                 .targetSize = dp(_bricks[i].thumbnailSize(spacing())),
                                 .viewerRequest = false,
-                                .checkCache = _bricks[i].image->info().isCached
+                                .checkCache = _bricks[i].image->info().isCached,
+                                .highPriority = i >= _visibleStart && i <= _visibleEnd,
                             });
                         }
                     }
@@ -723,6 +833,9 @@ void MasonryLayout::pushToCurrentRow(int index, bool animate) {
         if (_currentLoadingRow.count()) {
             lastIndex = _currentLoadingRow.last().globalIndex;
         }
+        if (_skipThumbnailBackfillUntilFlush) {
+            lastIndex = index - 1;
+        }
         int indexToInsert = _currentLoadingRow.count();
         for (int i = index - 1; i >= 0; i--) {
             if (i > lastIndex) {
@@ -738,6 +851,7 @@ void MasonryLayout::pushToCurrentRow(int index, bool animate) {
     if (!flushMode) {
         _currentLoadingRow.append(MasonryBrick {
             .originalSize = _bricks[index].image->fullSize(),
+            .image = _bricks[index].image,
         });
                                   // (_bricks[index].image->fullSize().width(), _bricks[index].image->fullSize().height()));
         _currentLoadingRow.last().globalIndex = index;
@@ -806,7 +920,8 @@ void MasonryLayout::pushToCurrentRow(int index, bool animate) {
                 .info = _bricks[index].image->info(),
                 .targetSize = dp(_bricks[index].thumbnailSize(spacing())),
                 .viewerRequest = false,
-                .checkCache = _bricks[index].image->info().isCached
+                .checkCache = _bricks[index].image->info().isCached,
+                .highPriority = index >= _visibleStart && index <= _visibleEnd,
             });
             // qDebug() << "decode2 " << requests.last().info.path << requests.last().targetSize;
         }
@@ -818,16 +933,177 @@ void MasonryLayout::onThumbnailReadFinished(bool animate) {
     if (_bricks.count() && _currentLoadingRow.size()) {
         pushToCurrentRow(_bricks.count(), animate);
     }
+    _skipThumbnailBackfillUntilFlush = false;
+}
+
+MasonryLayout::MasonryBrick MasonryLayout::brickForImage(
+    ImageFile *imageFile) const {
+    QSize imageSize = imageFile ? imageFile->fullSize() : QSize();
+    bool lineBreakAfter = false;
+    if (imageFile && imageSize.isEmpty()) {
+        if (imageFile->isFolder() && _listView) {
+            lineBreakAfter = true;
+            imageSize = QSize(0, imageFile->folderView() ? 0
+                                                        : listRowHeight());
+        }
+        else {
+            imageSize = GridView_Folder.toSize();
+        }
+    }
+    return MasonryBrick{
+        .originalSize = imageSize,
+        .lineBreakAfter = lineBreakAfter,
+        .image = imageFile,
+    };
+}
+
+void MasonryLayout::prepareForIncrementalModelChange() {
+    if (_incrementalModelChangeDepth++ > 0) {
+        return;
+    }
+    preserveCurrentItemPositionForNextModelReset();
+
+    // Older loading-row entries did not retain their identity explicitly.
+    // Fill it while their old indexes are still valid so the queue can be
+    // remapped rather than canceled after an insert/remove/move.
+    for (MasonryBrick &pendingBrick : _currentLoadingRow) {
+        if (!pendingBrick.image && pendingBrick.globalIndex >= 0 &&
+            pendingBrick.globalIndex < _bricks.size()) {
+            pendingBrick.image = _bricks[pendingBrick.globalIndex].image;
+        }
+    }
+}
+
+void MasonryLayout::applyIncrementalModelChange() {
+    if (_incrementalModelChangeDepth <= 0) {
+        return;
+    }
+    if (--_incrementalModelChangeDepth > 0) {
+        return;
+    }
+    const int previousCount = _bricks.size();
+    const int previousCurrentIndex = _currentIndex;
+    const QString previousCurrentPath =
+        _preserveCurrentItemPositionOnNextModelReset
+            ? _preservedCurrentItemFullPath
+            : QString();
+
+    QList<MasonryBrick> oldBricks = std::move(_bricks);
+    QHash<ImageFile *, int> oldIndexes;
+    oldIndexes.reserve(oldBricks.size());
+    for (int i = 0; i < oldBricks.size(); ++i) {
+        if (oldBricks[i].image) {
+            oldIndexes.insert(oldBricks[i].image, i);
+        }
+    }
+
+    QList<bool> retained(oldBricks.size(), false);
+    _bricks.clear();
+    if (_model) {
+        _bricks.reserve(_model->rowCount());
+        for (int row = 0; row < _model->rowCount(); ++row) {
+            ImageFile *imageFile =
+                imageFileFromModelIndex(_model->index(row, 0));
+            const auto oldIt = oldIndexes.constFind(imageFile);
+            if (imageFile && oldIt != oldIndexes.constEnd()) {
+                retained[*oldIt] = true;
+                _bricks.append(std::move(oldBricks[*oldIt]));
+            }
+            else if (imageFile) {
+                _bricks.append(brickForImage(imageFile));
+            }
+        }
+    }
+
+    // Recycle delegates only for identities that truly disappeared. Retained
+    // bricks carry their existing BrickItem into the new row position.
+    for (int i = 0; i < oldBricks.size(); ++i) {
+        if (retained[i] || !oldBricks[i].item) {
+            continue;
+        }
+        BrickItem *item = oldBricks[i].item;
+        pushBrickItem(item);
+        item->setVisible(false);
+        item->setProperty("model", QVariant());
+        item->setProperty("viewIndex", -1);
+        item->setProperty("sourceIndex", -1);
+    }
+
+    QHash<ImageFile *, int> newIndexes;
+    newIndexes.reserve(_bricks.size());
+    for (int i = 0; i < _bricks.size(); ++i) {
+        if (_bricks[i].image) {
+            newIndexes.insert(_bricks[i].image, i);
+        }
+    }
+    for (int i = _currentLoadingRow.size() - 1; i >= 0; --i) {
+        const auto newIt = newIndexes.constFind(_currentLoadingRow[i].image);
+        if (!_currentLoadingRow[i].image || newIt == newIndexes.constEnd()) {
+            _currentLoadingRow.removeAt(i);
+        }
+        else {
+            _currentLoadingRow[i].globalIndex = *newIt;
+        }
+    }
+    std::sort(_currentLoadingRow.begin(), _currentLoadingRow.end(),
+              [](const MasonryBrick &left, const MasonryBrick &right) {
+                  return left.globalIndex < right.globalIndex;
+              });
+
+    restorePreservedCurrentItemPosition();
+    if (_bricks.isEmpty()) {
+        _currentIndex = -1;
+        _topItem = 0;
+    }
+    else if (_currentIndex < 0 || _currentIndex >= _bricks.size()) {
+        _currentIndex = qBound(0, _currentIndex, _bricks.size() - 1);
+    }
+
+    // The previous numeric range is stale, but updateProperties() now tracks
+    // delegates by brick identity and will retain every still-visible item.
+    _visibleStart = -1;
+    _visibleEnd = -1;
+    rewrap(false);
+    if (_viewport) {
+        _viewport->setY(-_contentY);
+    }
+
+    const int previousImageCount = _imageCount;
+    _imageCount = 0;
+    for (const MasonryBrick &brick : std::as_const(_bricks)) {
+        if (brick.image && brick.image->isImage()) {
+            ++_imageCount;
+        }
+    }
+    if (_imageCount != previousImageCount) {
+        emit imageCountChanged();
+    }
+    updateCurrentImageIndex();
+    if (previousCount != _bricks.size()) {
+        emit countChanged();
+    }
+    if (!_quickSearch->mask().isEmpty()) {
+        _quickSearch->updateItemsText();
+    }
+
+    const bool currentIdentityPreserved =
+        !previousCurrentPath.isEmpty() && _currentIndex >= 0 &&
+        _currentIndex < _bricks.size() && _bricks[_currentIndex].image &&
+        _bricks[_currentIndex].image->fullPath() == previousCurrentPath;
+    if (!currentIdentityPreserved || previousCurrentIndex != _currentIndex) {
+        emit currentIndexChanged();
+    }
 }
 
 void MasonryLayout::onModelAboutToBeReset() {
+    _incrementalModelChangeDepth = 0;
     _currentLoadingRow.clear();
     _visibleStart = -1;
     _visibleEnd = -1;
     _topItem = 0;
     _bricks.clear();
-    if (_model) {
-        setCurrentIndex(_topItem);
+    if (!_preserveCurrentItemPositionOnNextModelReset) {
+        _currentIndex = 0;
     }
     for (auto it = _usedBrickItems.begin(); it != _usedBrickItems.end(); ++it) {
         (*it)->setVisible(false);
@@ -840,7 +1116,11 @@ void MasonryLayout::onModelAboutToBeReset() {
 }
 
 void MasonryLayout::onModelReset() {
-    bool needToRender = false;
+    const int previousCurrentIndex = _currentIndex;
+    const QString preservedCurrentPath =
+        _preserveCurrentItemPositionOnNextModelReset
+            ? _preservedCurrentItemFullPath
+            : QString();
     if (_model) {
         for (int i = 0; i < _model->rowCount(); i++) {
             ImageFile *imageFile = imageFileFromModelIndex(_model->index(i, 0));
@@ -858,9 +1138,6 @@ void MasonryLayout::onModelReset() {
                     imgSize = GridView_Folder.toSize();
                 }
             }
-            if (imageFile->imageIdUrl().isEmpty() || imageFile->isCachedThumbnail()) {
-                needToRender = true;
-            }
             _bricks.append(MasonryBrick {
                 .originalSize = imgSize,
                 .lineBreakAfter = lineBreakAfter,
@@ -870,14 +1147,19 @@ void MasonryLayout::onModelReset() {
     }
     restorePreservedCurrentItemPosition();
     if (_bricks.isEmpty()) {
-        setCurrentIndex(-1);
+        _currentIndex = -1;
     }
     else if (_currentIndex < 0 || _currentIndex >= _bricks.size()) {
-        setCurrentIndex(qBound(0, _currentIndex, _bricks.size() - 1));
+        _currentIndex = qBound(0, _currentIndex, _bricks.size() - 1);
     }
 
     emit modelChanged();
     rewrap();
+    restorePendingThumbnailRequestsAfterModelReset();
+    if (_preserveDecodeQueueForCurrentRebuild) {
+        _skipThumbnailBackfillUntilFlush = true;
+    }
+    _preserveDecodeQueueForCurrentRebuild = false;
     if (_viewport) {
         _viewport->setY(-_contentY);
     }
@@ -893,7 +1175,17 @@ void MasonryLayout::onModelReset() {
     updateCurrentImageIndex();
     emit countChanged();
 
-    emit currentIndexChanged();
+    if (!_quickSearch->mask().isEmpty()) {
+        _quickSearch->updateItemsText();
+    }
+    const bool currentIdentityPreserved =
+        !preservedCurrentPath.isEmpty() && _currentIndex >= 0 &&
+        _currentIndex < _bricks.size() && _bricks[_currentIndex].image &&
+        _bricks[_currentIndex].image->fullPath() == preservedCurrentPath;
+    if (!currentIdentityPreserved ||
+        previousCurrentIndex != _currentIndex) {
+        emit currentIndexChanged();
+    }
 }
 
 void MasonryLayout::restorePreservedCurrentItemPosition() {
@@ -902,26 +1194,48 @@ void MasonryLayout::restorePreservedCurrentItemPosition() {
     }
 
     _preserveCurrentItemPositionOnNextModelReset = false;
-    if (_preservedCurrentItemFullPath.isEmpty()) {
-        return;
-    }
-
     bool restored = false;
-    for (int i = 0; i < _bricks.size(); i++) {
-        if (_bricks[i].image && _bricks[i].image->fullPath() == _preservedCurrentItemFullPath) {
-            setCurrentIndex(i);
-            _currentIndexOffsetOverride = _preservedCurrentIndexOffset;
-            restored = true;
-            break;
+    if (!_preservedCurrentItemFullPath.isEmpty()) {
+        for (int i = 0; i < _bricks.size(); i++) {
+            if (_bricks[i].image &&
+                _bricks[i].image->fullPath() ==
+                    _preservedCurrentItemFullPath) {
+                _currentIndex = i;
+                restored = true;
+                break;
+            }
         }
     }
     if (!restored && !_bricks.isEmpty()) {
-        setCurrentIndex(qBound(0, _preservedCurrentFallbackIndex, _bricks.size() - 1));
+        _currentIndex = qBound(0, _preservedCurrentFallbackIndex,
+                               _bricks.size() - 1);
+    }
+
+    bool restoredViewportAnchor = false;
+    if (!_preservedViewportAnchorFullPath.isEmpty()) {
+        for (int i = 0; i < _bricks.size(); ++i) {
+            if (_bricks[i].image &&
+                _bricks[i].image->fullPath() ==
+                    _preservedViewportAnchorFullPath) {
+                _topItem = i;
+                _topItemOffset = _preservedViewportAnchorOffset;
+                restoredViewportAnchor = true;
+                break;
+            }
+        }
+    }
+    if (!restoredViewportAnchor && !_bricks.isEmpty() &&
+        _preservedViewportAnchorFallbackIndex >= 0) {
+        _topItem = qBound(0, _preservedViewportAnchorFallbackIndex,
+                          _bricks.size() - 1);
+        _topItemOffset = _preservedViewportAnchorOffset;
     }
 
     _preservedCurrentItemFullPath.clear();
-    _preservedCurrentIndexOffset = -1;
     _preservedCurrentFallbackIndex = -1;
+    _preservedViewportAnchorFullPath.clear();
+    _preservedViewportAnchorFallbackIndex = -1;
+    _preservedViewportAnchorOffset = 0;
 }
 
 void MasonryLayout::zoom(bool in) {
@@ -1253,28 +1567,45 @@ void MasonryLayout::setModel(QAbstractItemModel *newModel) {
         connect(_model, &QAbstractItemModel::dataChanged,
                 this, &MasonryLayout::onDataChanged);
         connect(_model, &QAbstractItemModel::modelAboutToBeReset,
-                this, &MasonryLayout::onModelAboutToBeReset);
+                this, [this]() {
+            const bool preserveReset =
+                modelRequestsViewStatePreservation(_model);
+            _preserveDecodeQueueForCurrentRebuild = preserveReset;
+            if (preserveReset) {
+                preserveCurrentItemPositionForNextModelReset();
+                preservePendingThumbnailRequestsForModelReset();
+            }
+            else {
+                _preservedPendingThumbnailInfo.clear();
+                _skipThumbnailBackfillUntilFlush = false;
+            }
+            onModelAboutToBeReset();
+        });
         connect(_model, &QAbstractItemModel::modelReset,
                 this, &MasonryLayout::onModelReset);
         connect(_model, &QAbstractItemModel::layoutAboutToBeChanged,
                 this, [this]() {
-            preserveCurrentItemPositionForNextModelReset();
-            onModelAboutToBeReset();
+            prepareForIncrementalModelChange();
         });
         connect(_model, &QAbstractItemModel::layoutChanged,
-                this, [this]() { onModelReset(); });
+                this, [this]() { applyIncrementalModelChange(); });
         connect(_model, &QAbstractItemModel::rowsAboutToBeInserted,
                 this, [this](const QModelIndex &parent) {
             if (parent.isValid()) {
                 return;
             }
-            preserveCurrentItemPositionForNextModelReset();
-            onModelAboutToBeReset();
+            if (modelRequestsViewStatePreservation(_model)) {
+                // The metadata for a watcher-added row arrives after this
+                // signal. Do not rebuild the old loading row from index zero;
+                // request that new row directly when its dimensions arrive.
+                _skipThumbnailBackfillUntilFlush = true;
+            }
+            prepareForIncrementalModelChange();
         });
         connect(_model, &QAbstractItemModel::rowsInserted,
                 this, [this](const QModelIndex &parent) {
             if (!parent.isValid()) {
-                onModelReset();
+                applyIncrementalModelChange();
             }
         });
         connect(_model, &QAbstractItemModel::rowsAboutToBeRemoved,
@@ -1282,13 +1613,26 @@ void MasonryLayout::setModel(QAbstractItemModel *newModel) {
             if (parent.isValid()) {
                 return;
             }
-            preserveCurrentItemPositionForNextModelReset();
-            onModelAboutToBeReset();
+            prepareForIncrementalModelChange();
         });
         connect(_model, &QAbstractItemModel::rowsRemoved,
                 this, [this](const QModelIndex &parent) {
             if (!parent.isValid()) {
-                onModelReset();
+                applyIncrementalModelChange();
+            }
+        });
+        connect(_model, &QAbstractItemModel::rowsAboutToBeMoved,
+                this, [this](const QModelIndex &sourceParent, int, int,
+                             const QModelIndex &destinationParent, int) {
+            if (!sourceParent.isValid() && !destinationParent.isValid()) {
+                prepareForIncrementalModelChange();
+            }
+        });
+        connect(_model, &QAbstractItemModel::rowsMoved,
+                this, [this](const QModelIndex &sourceParent, int, int,
+                             const QModelIndex &destinationParent, int) {
+            if (!sourceParent.isValid() && !destinationParent.isValid()) {
+                applyIncrementalModelChange();
             }
         });
     }

@@ -6,6 +6,7 @@
 
 class QQmlEngine;
 class FileListModel;
+class SelectedImagesModel;
 class GalleryViewModel;
 class ImageModel;
 class TrayController;
@@ -98,6 +99,7 @@ private:
     int mapSourceRowToViewRow(int sourceRow) const;
 
     FileListModel *_fileListModel;
+    SelectedImagesModel *_selectedImagesModel;
     GalleryViewModel *_galleryViewModel;
     ImageModel *_imageModel;
     TrayController *_trayController;

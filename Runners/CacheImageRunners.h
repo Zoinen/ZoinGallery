@@ -8,14 +8,17 @@ class CachedImageInfoRunner : public Runner {
 
 public:
     CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView,
-                          bool validateSource, int directOpenGeneration = 0);
+                          bool validateSource, int directOpenGeneration = 0,
+                          bool highPriority = false);
 
     RunnerType type() override { return RunnerType::CachedImageInfo; }
     void run() override;
+    bool isHighPriority() const override { return _highPriority; }
 
 signals:
     void cachedImageInfoRetrieved(const QList<ImageInfo> &result, const QStringList &notFound, bool isFromEmbeddedView,
-                                  const QString &lastPath, int directOpenGeneration);
+                                  const QString &lastPath, int directOpenGeneration,
+                                  bool highPriority);
 
 private:
     friend class DecodeManager;
@@ -24,6 +27,7 @@ private:
     bool _isFromEmbeddedView;
     bool _validateSource;
     int _directOpenGeneration;
+    bool _highPriority;
 };
 
 
@@ -35,6 +39,15 @@ public:
 
     RunnerType type() override { return RunnerType::CachedImageRetrieve; }
     void run() override;
+    QString path() const override { return _request.info.path; }
+    bool isViewerRequest() const override { return _request.viewerRequest; }
+    bool isHighPriority() const override { return _request.highPriority; }
+    quint64 viewerGeneration() const override {
+        return _request.viewerGeneration;
+    }
+    int viewerPriorityOrdinal() const override {
+        return _request.viewerPriorityOrdinal;
+    }
 
 signals:
     void cachedThumbnailRetrieved(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);

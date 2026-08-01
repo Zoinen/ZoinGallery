@@ -13,8 +13,18 @@
 #include <utility>
 
 namespace {
-constexpr int CacheFormatVersion = 7;
+constexpr int CacheFormatVersion = 8;
 constexpr float CacheWebpQuality = 75.0F;
+
+bool sourceMatchesImageInfo(const ImageInfo &imageInfo) {
+    if (!imageInfo.lastModified.isValid() || imageInfo.fileSize < 0) {
+        return false;
+    }
+    const QFileInfo fileInfo(imageInfo.path);
+    return fileInfo.isFile() &&
+           fileInfo.lastModified() == imageInfo.lastModified &&
+           fileInfo.size() == imageInfo.fileSize;
+}
 
 QString cacheBasePath() {
     const QString tempPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
@@ -68,6 +78,8 @@ bool PersistentImageCache::hasImage(const QString &path, bool validateSource) {
     const QFileInfo fileInfo(path);
     return fileInfo.isFile()
         && it->lastModified == fileInfo.lastModified()
+        && it->fileSize >= 0
+        && it->fileSize == fileInfo.size()
         && it->imageSize.width() > 1
         && it->imageSize.height() > 1
         && hasUsableThumbnail(*it);
@@ -83,7 +95,10 @@ void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QLi
         bool cacheIsCurrent = it != _db.cend() && it->lastModified.isValid();
         if (cacheIsCurrent && validateSource) {
             const QFileInfo fileInfo(path);
-            cacheIsCurrent = fileInfo.isFile() && it->lastModified == fileInfo.lastModified();
+            cacheIsCurrent = fileInfo.isFile()
+                && it->lastModified == fileInfo.lastModified()
+                && it->fileSize >= 0
+                && it->fileSize == fileInfo.size();
         }
         const bool cacheHasUsableSize = it != _db.cend()
             && it->imageSize.width() > 1 && it->imageSize.height() > 1;
@@ -91,6 +106,7 @@ void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QLi
             outInfoList.append(ImageInfo {
                 .path = path,
                 .lastModified = it->lastModified,
+                .fileSize = it->fileSize,
                 .imageSize = it->imageSize,
                 .orientation = it->orientation,
                 .exif = it->exif,
@@ -118,6 +134,10 @@ QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request, bool val
 
     if (validateRequestVersion && request.info.lastModified.isValid()
         && request.info.lastModified != info.lastModified) {
+        return {};
+    }
+    if (validateRequestVersion && request.info.fileSize >= 0
+        && request.info.fileSize != info.fileSize) {
         return {};
     }
 
@@ -150,7 +170,9 @@ QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request, bool val
 
 void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArray &imageData) {
     if (imageData.isEmpty() || !imageInfo.lastModified.isValid()
-        || imageInfo.imageSize.width() <= 1 || imageInfo.imageSize.height() <= 1) {
+        || imageInfo.fileSize < 0 || imageInfo.imageSize.width() <= 1
+        || imageInfo.imageSize.height() <= 1
+        || !sourceMatchesImageInfo(imageInfo)) {
         return;
     }
 
@@ -160,6 +182,7 @@ void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArr
         QReadLocker locker(&_dbAccess);
         const auto it = _db.constFind(imageInfo.path);
         if (it != _db.cend() && it->lastModified == imageInfo.lastModified
+            && it->fileSize == imageInfo.fileSize
             && it->imageSize == imageInfo.imageSize && hasUsableThumbnail(*it)) {
             return;
         }
@@ -184,6 +207,7 @@ void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArr
 
     const ThumbnailInfo info {
         .lastModified = imageInfo.lastModified,
+        .fileSize = imageInfo.fileSize,
         .location = ThumbnailLocation {
             .chunkFileIndex = _currentChunkFileIndex,
             .offsetInChunk = offset,
@@ -195,7 +219,8 @@ void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArr
     };
 
     QWriteLocker locker(&_dbAccess);
-    if (generation != _generation.load()) {
+    if (generation != _generation.load() ||
+        !sourceMatchesImageInfo(imageInfo)) {
         return;
     }
     _db.insert(imageInfo.path, info);
@@ -232,12 +257,14 @@ QDataStream& operator>>(QDataStream& in, PersistentImageCache::ThumbnailLocation
 }
 
 QDataStream& operator<<(QDataStream& out, const PersistentImageCache::ThumbnailInfo& obj) {
-    out << obj.lastModified << obj.location << obj.exif << obj.imageSize << obj.orientation;
+    out << obj.lastModified << obj.fileSize << obj.location << obj.exif
+        << obj.imageSize << obj.orientation;
     return out;
 }
 
 QDataStream& operator>>(QDataStream& in, PersistentImageCache::ThumbnailInfo& obj) {
-    in >> obj.lastModified >> obj.location >> obj.exif >> obj.imageSize >> obj.orientation;
+    in >> obj.lastModified >> obj.fileSize >> obj.location >> obj.exif
+       >> obj.imageSize >> obj.orientation;
     return in;
 }
 

@@ -11,6 +11,41 @@ Item {
 
     visible: false
 
+    property var sourceContext
+    readonly property var sourceMasonry:
+        sourceContext ? sourceContext.masonry : null
+    readonly property var sourceMapper:
+        sourceContext ? sourceContext.mapper : null
+    readonly property var decodeModel:
+        sourceContext ? sourceContext.decodeModel : null
+    readonly property var selectionModel:
+        sourceContext ? sourceContext.selectionModel : null
+    readonly property var filmstripModel:
+        sourceContext ? sourceContext.filmstripModel : null
+
+    // sourceContext is a short-lived wrapper recreated whenever the viewer is
+    // opened. The masonry instance identifies the actual persistent source.
+    property var previousSourceMasonry: null
+
+    onSourceContextChanged: {
+        let nextSourceMasonry =
+                sourceContext ? sourceContext.masonry : null
+        let actualSourceChanged =
+                previousSourceMasonry !== nextSourceMasonry
+
+        flickableArea.resetViewerImages()
+        if (actualSourceChanged) {
+            clearPreviousImage()
+        } else {
+            restorePreviousImageLockIndexes()
+        }
+        resetViewerNavigation()
+        lastKnownIndex = sourceMasonry ? sourceMasonry.view.currentIndex : -1
+        lastKnownPath = sourceMasonry && lastKnownIndex >= 0
+                ? pathForIndex(lastKnownIndex) : ""
+        previousSourceMasonry = nextSourceMasonry
+    }
+
     property int animationDuration: 150
     property int easingType: Easing.OutSine
 
@@ -18,8 +53,8 @@ Item {
     property bool sphericViewerMode: false
     onSphericViewerModeChanged: {
         if (sphericViewerMode) {
-            fileListModel.cancelAllDecodeViewerRunners()
-            fileListModel.requestViewer(currentSourceIndex())
+            decodeModel.cancelAllDecodeViewerRunners()
+            decodeModel.requestViewer(currentSourceIndex())
             sphericViewerLoader.sourceComponent = sphericViewerComponent
         }
         else {
@@ -39,17 +74,29 @@ Item {
     signal pinchZoomOutToThumbnailsFinished(bool commit)
 
     function sourceIndexForViewIndex(viewIndex) {
-        return galleryViewModel.mapToSourceRow(viewIndex)
+        return sourceMapper.mapToSourceRow(viewIndex)
     }
 
     function currentSourceIndex() {
-        return sourceIndexForViewIndex(masonryLayout.view.currentIndex)
+        return sourceIndexForViewIndex(sourceMasonry.view.currentIndex)
     }
 
-    readonly property bool currentItemSelected: fileListModel.selectedCount >= 0 &&
-            fileListModel.isIndexSelected(currentSourceIndex())
-    readonly property bool viewerNavigationTargetSelected: fileListModel.selectedCount >= 0 &&
-            viewerNavigationTargetIndex !== -1 && fileListModel.isIndexSelected(sourceIndexForViewIndex(viewerNavigationTargetIndex))
+    readonly property bool currentItemSelected: selectionModel.selectedCount >= 0 &&
+            selectionModel.isIndexSelected(currentSourceIndex())
+    readonly property bool viewerNavigationTargetSelected: selectionModel.selectedCount >= 0 &&
+            viewerNavigationTargetIndex !== -1 && selectionModel.isIndexSelected(sourceIndexForViewIndex(viewerNavigationTargetIndex))
+    readonly property color currentItemSelectionColor: {
+        // Keep the binding subscribed when an already-selected item moves
+        // between groups without changing the current index.
+        selectionModel.selectedCount
+        return selectionModel.selectionGroupColorForIndex(currentSourceIndex())
+    }
+    readonly property color viewerNavigationTargetSelectionColor: {
+        selectionModel.selectedCount
+        return viewerNavigationTargetIndex === -1 ? "transparent" :
+               selectionModel.selectionGroupColorForIndex(
+                   sourceIndexForViewIndex(viewerNavigationTargetIndex))
+    }
     readonly property real viewerBackgroundOpacity: viewerBackground.opacity
     readonly property real currentSelectionHighlightPresence: !viewerNavigationActive || viewerNavigationTargetIndex === -1 ? 1 :
             (viewerNavigationDirection < 0 ? viewerNavigationCurrentOpacity : 1 - viewerNavigationProgress)
@@ -203,14 +250,14 @@ Item {
         }
 
         onTriggered: {
-            let size = masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex)
+            let size = sourceMasonry.view.indexOriginalSize(sourceMasonry.view.currentIndex)
             if (size.width > 1 && size.height > 1) {
                 stop()
                 let level = flickableArea.image.fromLevel >= 0 ? flickableArea.image.fromLevel : 0
-                viewerMode.setImage(flickableArea.image.source, size, masonryLayout.view.currentIndex, level)
+                viewerMode.setImage(flickableArea.image.source, size, sourceMasonry.view.currentIndex, level)
                 fitCurrentImageWhenReady()
-                fileListModel.cancelAllDecodeViewerRunners()
-                fileListModel.requestViewer(currentSourceIndex(), viewerMode.width * dpr, viewerMode.height * dpr)
+                decodeModel.cancelAllDecodeViewerRunners()
+                decodeModel.requestViewer(currentSourceIndex(), viewerMode.width * dpr, viewerMode.height * dpr)
             }
             else if (++attempts >= 600) {
                 stop()
@@ -237,16 +284,16 @@ Item {
     }
 
     function onCurrentIndexChanged() {
-        let exif = masonryLayout.view.indexExif(masonryLayout.view.currentIndex)
+        let exif = sourceMasonry.view.indexExif(sourceMasonry.view.currentIndex)
         sphericViewerMode = exif["Panorama"] === "True"
 
         if (zoomFitView && !sphericViewerMode) {
             // console.log("onCIC FIT", viewerMode.width * dpr, viewerMode.height * dpr)
-            fileListModel.requestViewer(currentSourceIndex(), viewerMode.width * dpr, viewerMode.height * dpr)
+            decodeModel.requestViewer(currentSourceIndex(), viewerMode.width * dpr, viewerMode.height * dpr)
         }
         else {
             // console.log("onCIC ORIG", flickableArea.originalSize.width * dpr, flickableArea.originalSize.height * dpr)
-            fileListModel.requestViewer(currentSourceIndex())
+            decodeModel.requestViewer(currentSourceIndex())
             flickableArea.forceShowScrollBars = true
             flickableArea.forceShowScrollBars = false
         }
@@ -255,12 +302,12 @@ Item {
     }
 
     function updateTitle() {
-        topLevelWindow.title = masonryLayout.view.indexText(masonryLayout.view.currentIndex) + " [" +
-                (masonryLayout.view.currentImageIndex + 1) + "/" + masonryLayout.view.imageCount + "] - ZoinGallery"
+        topLevelWindow.title = sourceMasonry.view.indexText(sourceMasonry.view.currentIndex) + " [" +
+                (sourceMasonry.view.currentImageIndex + 1) + "/" + sourceMasonry.view.imageCount + "] - ZoinGallery"
     }
 
     function toggleCurrentSelection() {
-        fileListModel.toggleSelection(currentSourceIndex())
+        selectionModel.toggleSelection(currentSourceIndex())
     }
 
     property bool leftPressed: false
@@ -272,18 +319,23 @@ Item {
     property bool controlPressed: false
     property bool shiftSelectionActive: false
     property int shiftSelectionAnchorIndex: -1
+    property string shiftSelectionAnchorPath: ""
     property bool shiftNavigationSelectionValue: true
 
     property int previousImageIndex: -1
+    // Indexes are only a projection of the current model order. Keep the
+    // semantic identity as a path so a watcher reset can remap history.
+    property string previousImagePath: ""
     property int lastKnownIndex: -1
+    property string lastKnownPath: ""
     property bool previousImageLocked: false
     property int lockedPreviousReturnIndex: -1
     property string lockedPreviousImagePath: ""
     property string lockedPreviousReturnPath: ""
-    property string lockedPreviousImageIdUrl: previousImageLocked && previousImageIndex !== -1 ? masonryLayout.view.indexImageIdUrl(previousImageIndex) : ""
+    property string lockedPreviousImageIdUrl: previousImageLocked && previousImageIndex !== -1 ? sourceMasonry.view.indexImageIdUrl(previousImageIndex) : ""
     property string lockedPreviousPath: previousImageLocked ?
                                             (lockedPreviousImagePath !== "" ? lockedPreviousImagePath :
-                                                                            (previousImageIndex !== -1 ? masonryLayout.view.indexFullPath(previousImageIndex) : "")) : ""
+                                                                            (previousImageIndex !== -1 ? sourceMasonry.view.indexFullPath(previousImageIndex) : "")) : ""
     property var pendingPreviousImageViewport: null
 
     property real viewerNavigationOffsetX: 0
@@ -301,9 +353,10 @@ Item {
     property int viewerNavigationGestureSerial: 0
     property int viewerNavigationDirection: 0 // -1 = previous image, 1 = next image
     property int viewerNavigationTargetIndex: -1
+    property string viewerNavigationTargetPath: ""
     property string viewerNavigationTargetSource: ""
     readonly property size viewerNavigationTargetOriginalSize: viewerNavigationTargetIndex !== -1 ?
-            masonryLayout.view.indexOriginalSize(viewerNavigationTargetIndex) : Qt.size(0, 0)
+            sourceMasonry.view.indexOriginalSize(viewerNavigationTargetIndex) : Qt.size(0, 0)
     readonly property bool viewerNavigationTargetHasSize: viewerNavigationTargetOriginalSize.width > 1 &&
             viewerNavigationTargetOriginalSize.height > 1 && viewerMode.width > 0 && viewerMode.height > 0
     readonly property size viewerNavigationTargetDisplayOriginalSize: viewerNavigationTargetHasSize ?
@@ -406,7 +459,7 @@ Item {
                 " offset=" + viewerGestureNumber(viewerNavigationOffsetX) +
                 " overdrag=" + viewerGestureNumber(viewerNavigationOverdrag) +
                 " velocity=" + viewerGestureNumber(viewerNavigationVelocityX) +
-                " current=" + masonryLayout.view.currentIndex +
+                " current=" + sourceMasonry.view.currentIndex +
                 " target=" + viewerNavigationTargetIndex +
                 " zoomFit=" + flickableArea.zoomFitView
     }
@@ -434,6 +487,7 @@ Item {
         viewerNavigationCommitAfterAnimation = false
         viewerNavigationDirection = 0
         viewerNavigationTargetIndex = -1
+        viewerNavigationTargetPath = ""
         viewerNavigationTargetSource = ""
     }
 
@@ -504,17 +558,19 @@ Item {
 
     function updateViewerNavigationTargetSource() {
         if (viewerNavigationTargetIndex !== -1) {
-            viewerNavigationTargetSource = fileListModel.bestViewerImageUrlForIndex(sourceIndexForViewIndex(viewerNavigationTargetIndex))
+            viewerNavigationTargetSource = decodeModel.bestViewerImageUrlForIndex(
+                        sourceIndexForViewIndex(viewerNavigationTargetIndex))
         }
     }
 
     function beginViewerNavigation(direction) {
-        let currentIndex = masonryLayout.view.currentIndex
-        let targetIndex = masonryLayout.view.nextImageIndex(direction > 0, false)
+        let currentIndex = sourceMasonry.view.currentIndex
+        let targetIndex = sourceMasonry.view.nextImageIndex(direction > 0, false)
 
         viewerNavigationActive = true
         viewerNavigationDirection = direction
         viewerNavigationTargetIndex = targetIndex !== currentIndex ? targetIndex : -1
+        viewerNavigationTargetPath = pathForIndex(viewerNavigationTargetIndex)
         viewerNavigationTargetSource = ""
         flickableArea.cancelWheelPan()
         updateViewerNavigationTargetSource()
@@ -625,7 +681,7 @@ Item {
         startViewerNavigationResidualSuppression("commit")
         selectionHighlightAnimationSuppressed = true
         resetViewerNavigation("commit")
-        if (targetIndex === -1 || targetIndex === masonryLayout.view.currentIndex) {
+        if (targetIndex === -1 || targetIndex === sourceMasonry.view.currentIndex) {
             Qt.callLater(() => selectionHighlightAnimationSuppressed = false)
             return
         }
@@ -634,8 +690,7 @@ Item {
             flickableArea.image.x = targetImageX
             flickableArea.image.y = targetImageY
         }
-        masonryLayout.setCurrentIndex(targetIndex)
-        onCurrentIndexChanged()
+        sourceMasonry.setCurrentIndex(targetIndex)
         Qt.callLater(() => selectionHighlightAnimationSuppressed = false)
     }
 
@@ -665,17 +720,16 @@ Item {
 
     function switchImageForLegacyWheel(angleDeltaY) {
         let nextIndex = -1
-        let currentIndex = masonryLayout.view.currentIndex
+        let currentIndex = sourceMasonry.view.currentIndex
         if (angleDeltaY < 0) {
-            nextIndex = masonryLayout.moveInImageList(true, false)
+            nextIndex = sourceMasonry.moveInImageList(true, false)
         }
         else if (angleDeltaY > 0) {
-            nextIndex = masonryLayout.moveInImageList(false, false)
+            nextIndex = sourceMasonry.moveInImageList(false, false)
         }
 
         if (nextIndex !== -1 && nextIndex !== currentIndex) {
             logViewerGesture("legacy wheel switch angleDeltaY=" + angleDeltaY + " target=" + nextIndex)
-            onCurrentIndexChanged()
         }
     }
 
@@ -907,15 +961,16 @@ Item {
             return
         }
         shiftSelectionActive = true
-        shiftSelectionAnchorIndex = masonryLayout.view.currentIndex
-        shiftNavigationSelectionValue = !fileListModel.isIndexSelected(sourceIndexForViewIndex(shiftSelectionAnchorIndex))
-        fileListModel.beginSelectionPreview()
+        shiftSelectionAnchorIndex = sourceMasonry.view.currentIndex
+        shiftSelectionAnchorPath = pathForIndex(shiftSelectionAnchorIndex)
+        shiftNavigationSelectionValue = !selectionModel.isIndexSelected(sourceIndexForViewIndex(shiftSelectionAnchorIndex))
+        selectionModel.beginSelectionPreview()
     }
 
     function updateShiftNavigationSelection(targetIndex) {
         beginShiftSelection()
-        fileListModel.previewSelectionIndexes(
-                    galleryViewModel.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, false),
+        selectionModel.previewSelectionIndexes(
+                    sourceMapper.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, false),
                     shiftNavigationSelectionValue ? 0 : 1)
     }
 
@@ -923,13 +978,25 @@ Item {
         if (!shiftSelectionActive) {
             return
         }
-        fileListModel.commitSelectionPreview(shiftNavigationSelectionValue ? "Range selection" : "Range deselection")
+        selectionModel.commitSelectionPreview(shiftNavigationSelectionValue ? "Range selection" : "Range deselection")
         shiftSelectionActive = false
         shiftSelectionAnchorIndex = -1
+        shiftSelectionAnchorPath = ""
+    }
+
+    function cancelShiftSelection() {
+        if (!shiftSelectionActive) {
+            return
+        }
+        selectionModel.cancelSelectionPreview()
+        shiftSelectionActive = false
+        shiftSelectionAnchorIndex = -1
+        shiftSelectionAnchorPath = ""
     }
 
     function clearPreviousImage() {
         previousImageIndex = -1
+        previousImagePath = ""
         previousImageLocked = false
         lockedPreviousReturnIndex = -1
         lockedPreviousImagePath = ""
@@ -937,7 +1004,7 @@ Item {
     }
 
     function pathForIndex(index) {
-        return index !== -1 ? masonryLayout.view.indexFullPath(index) : ""
+        return index !== -1 ? sourceMasonry.view.indexFullPath(index) : ""
     }
 
     function effectiveSizeFromOriginalSize(originalSize) {
@@ -961,8 +1028,8 @@ Item {
         if (path === "") {
             return -1
         }
-        for (let i = 0; i < masonryLayout.view.count; i++) {
-            if (masonryLayout.view.indexFullPath(i) === path) {
+        for (let i = 0; i < sourceMasonry.view.count; i++) {
+            if (sourceMasonry.view.indexFullPath(i) === path) {
                 return i
             }
         }
@@ -975,6 +1042,8 @@ Item {
         }
         if (lockedPreviousImagePath !== "") {
             previousImageIndex = indexForPath(lockedPreviousImagePath)
+            previousImagePath = previousImageIndex !== -1 ?
+                        lockedPreviousImagePath : ""
         }
         if (lockedPreviousReturnPath !== "") {
             lockedPreviousReturnIndex = indexForPath(lockedPreviousReturnPath)
@@ -989,7 +1058,7 @@ Item {
             return
         }
 
-        let targetSize = effectiveSizeFromOriginalSize(masonryLayout.view.indexOriginalSize(targetIndex))
+        let targetSize = effectiveSizeFromOriginalSize(sourceMasonry.view.indexOriginalSize(targetIndex))
         if (targetSize.width <= 1 || targetSize.height <= 1) {
             return
         }
@@ -1009,7 +1078,7 @@ Item {
             return false
         }
         if (pendingPreviousImageViewport.targetPath !== "" &&
-                pendingPreviousImageViewport.targetPath !== pathForIndex(masonryLayout.view.currentIndex)) {
+                pendingPreviousImageViewport.targetPath !== pathForIndex(sourceMasonry.view.currentIndex)) {
             pendingPreviousImageViewport = null
             return false
         }
@@ -1036,6 +1105,7 @@ Item {
             if (previousImageIndex === index) {
                 previousImageLocked = false
                 previousImageIndex = lockedPreviousReturnIndex
+                previousImagePath = lockedPreviousReturnPath
                 lockedPreviousReturnIndex = -1
                 lockedPreviousImagePath = ""
                 lockedPreviousReturnPath = ""
@@ -1043,6 +1113,7 @@ Item {
                 lockedPreviousReturnIndex = previousImageIndex
                 lockedPreviousReturnPath = lockedPreviousImagePath
                 previousImageIndex = index
+                previousImagePath = pathForIndex(index)
                 lockedPreviousImagePath = pathForIndex(index)
             }
             return
@@ -1051,6 +1122,7 @@ Item {
         lockedPreviousReturnIndex = previousImageIndex !== index ? previousImageIndex : -1
         lockedPreviousReturnPath = pathForIndex(lockedPreviousReturnIndex)
         previousImageIndex = index
+        previousImagePath = pathForIndex(index)
         lockedPreviousImagePath = pathForIndex(index)
         previousImageLocked = true
     }
@@ -1065,7 +1137,7 @@ Item {
                 restorePreviousImageLockIndexes()
                 if (lockedPreviousReturnIndex !== -1) {
                     rememberViewportForPreviousImageSwitch(lockedPreviousReturnIndex)
-                    masonryLayout.setCurrentIndex(lockedPreviousReturnIndex)
+                    sourceMasonry.setCurrentIndex(lockedPreviousReturnIndex)
                     return lockedPreviousReturnIndex
                 }
                 return -1
@@ -1074,12 +1146,18 @@ Item {
             lockedPreviousReturnIndex = currentIndex
             lockedPreviousReturnPath = pathForIndex(currentIndex)
         }
+        else if (previousImagePath !== "") {
+            previousImageIndex = indexForPath(previousImagePath)
+        }
+        if (previousImageIndex === -1) {
+            return -1
+        }
 
         // Capture the target before setCurrentIndex(), since changing the index
         // synchronously reassigns previousImageIndex via the view's onCurrentIndexChanged handler.
         let targetIndex = previousImageIndex
         rememberViewportForPreviousImageSwitch(targetIndex)
-        masonryLayout.setCurrentIndex(targetIndex)
+        sourceMasonry.setCurrentIndex(targetIndex)
         return targetIndex
     }
 
@@ -1089,6 +1167,7 @@ Item {
             if (root.state === "thumbnails") {
                 if (!previousImageLocked) {
                     previousImageIndex = -1
+                    previousImagePath = ""
                 }
                 resetViewerNavigation()
                 endViewerNavigationGesture()
@@ -1109,7 +1188,7 @@ Item {
     Keys.onPressed:
         (event) => {
             let nextIndex = -1
-            let currentIndex = masonryLayout.view.currentIndex
+            let currentIndex = sourceMasonry.view.currentIndex
             if (event.key === Qt.Key_Shift && !event.isAutoRepeat) {
                 beginShiftSelection()
                 return
@@ -1118,10 +1197,10 @@ Item {
                 toggleCurrentSelection()
             }
             else if (event.key === Qt.Key_Insert) {
-                fileListModel.setSelection(sourceIndexForViewIndex(currentIndex), true)
+                selectionModel.setSelection(sourceIndexForViewIndex(currentIndex), true)
             }
             else if (event.key === Qt.Key_Delete) {
-                fileListModel.setSelection(sourceIndexForViewIndex(currentIndex), false)
+                selectionModel.setSelection(sourceIndexForViewIndex(currentIndex), false)
             }
             else if (!zoomFitView && (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Up ||
                                  event.key === Qt.Key_Down) ||
@@ -1159,17 +1238,17 @@ Item {
             }
             else if ((event.key === Qt.Key_Left || event.key === Qt.Key_PageUp || event.key === Qt.Key_Backspace ||
                  event.key === Qt.Key_Up) && !(event.modifiers & Qt.AltModifier)) {
-                nextIndex = masonryLayout.moveInImageList(false, false)
+                nextIndex = sourceMasonry.moveInImageList(false, false)
             }
             else if ((event.key === Qt.Key_Right || event.key === Qt.Key_PageDown || event.key === Qt.Key_Space ||
                       event.key === Qt.Key_Down) && !(event.modifiers & Qt.AltModifier)) {
-                nextIndex = masonryLayout.moveInImageList(true, false)
+                nextIndex = sourceMasonry.moveInImageList(true, false)
             }
             else if (event.key === Qt.Key_Home) {
-                nextIndex = masonryLayout.moveInImageList(false, true)
+                nextIndex = sourceMasonry.moveInImageList(false, true)
             }
             else if (event.key === Qt.Key_End) {
-                nextIndex = masonryLayout.moveInImageList(true, true)
+                nextIndex = sourceMasonry.moveInImageList(true, true)
             }
             else if (event.key === Qt.Key_F11 || event.key === Qt.Key_F || event.key === Qt.Key_Clear /*Num_5*/ ||
                      (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier)) {
@@ -1210,11 +1289,11 @@ Item {
                 if (previousImageIndex !== -1) {
                     nextIndex = switchToPreviousImage(currentIndex)
                 } else {
-                    let potentialNext = masonryLayout.view.nextImageIndex(true, false)
+                    let potentialNext = sourceMasonry.view.nextImageIndex(true, false)
                     if (potentialNext !== currentIndex) {
-                        nextIndex = masonryLayout.moveInImageList(true, false)
+                        nextIndex = sourceMasonry.moveInImageList(true, false)
                     } else {
-                        nextIndex = masonryLayout.moveInImageList(false, false)
+                        nextIndex = sourceMasonry.moveInImageList(false, false)
                     }
                 }
             }
@@ -1232,14 +1311,15 @@ Item {
             }
             else if (event.key === Qt.Key_C) {
                 console.log("ZZ F12")
-                fileListModel.dumpCurrentImage()
+                if (decodeModel.dumpCurrentImage) {
+                    decodeModel.dumpCurrentImage()
+                }
             }
 
             if (nextIndex !== -1 && nextIndex !== currentIndex) {
                 if (event.modifiers & Qt.ShiftModifier) {
                     updateShiftNavigationSelection(nextIndex)
                 }
-                onCurrentIndexChanged()
             }
     }
 
@@ -1293,9 +1373,43 @@ Item {
         }
 
     Connections {
-        target: masonryLayout.view
+        target: sourceMasonry.view
         function onCountChanged() {
-            restorePreviousImageLockIndexes()
+            if (root.state === "viewer" && sourceMasonry.view.count === 0) {
+                cancelShiftSelection()
+                root.closeViewer()
+                return
+            }
+            if (previousImageLocked) {
+                restorePreviousImageLockIndexes()
+            }
+            else if (previousImagePath !== "") {
+                previousImageIndex = indexForPath(previousImagePath)
+                if (previousImageIndex === -1) {
+                    previousImagePath = ""
+                }
+            }
+
+            if (shiftSelectionActive && shiftSelectionAnchorPath !== "") {
+                let remappedAnchor = indexForPath(shiftSelectionAnchorPath)
+                if (remappedAnchor === -1) {
+                    cancelShiftSelection()
+                }
+                else {
+                    shiftSelectionAnchorIndex = remappedAnchor
+                }
+            }
+
+            if (viewerNavigationTargetPath !== "") {
+                let remappedTarget = indexForPath(viewerNavigationTargetPath)
+                if (remappedTarget === -1) {
+                    resetViewerNavigation("target-removed-by-model-change")
+                }
+                else {
+                    viewerNavigationTargetIndex = remappedTarget
+                    updateViewerNavigationTargetSource()
+                }
+            }
         }
 
         function onImageCountChanged() {
@@ -1312,23 +1426,46 @@ Item {
 
         function onCurrentIndexChanged() {
             if (root.state === "viewer") {
-                if (lastKnownIndex !== -1 && lastKnownIndex !== masonryLayout.view.currentIndex) {
+                if (sourceMasonry.view.currentIndex < 0 ||
+                        sourceMasonry.view.count === 0) {
+                    return
+                }
+                const currentPath =
+                        pathForIndex(sourceMasonry.view.currentIndex)
+                const currentFileWasPreserved =
+                        currentPath !== "" && currentPath === lastKnownPath
+                if (currentFileWasPreserved) {
+                    flickableArea.remapImageIndex(
+                                lastKnownIndex,
+                                sourceMasonry.view.currentIndex)
+                    lastKnownIndex = sourceMasonry.view.currentIndex
+                    lastKnownPath = currentPath
+                    viewerMode.updateTitle()
+                    return
+                }
+                if (lastKnownPath !== "" && lastKnownPath !== currentPath) {
                     if (previousImageLocked) {
                         restorePreviousImageLockIndexes()
-                        if (masonryLayout.view.currentIndex !== previousImageIndex) {
-                            lockedPreviousReturnIndex = masonryLayout.view.currentIndex
-                            lockedPreviousReturnPath = pathForIndex(masonryLayout.view.currentIndex)
+                        if (sourceMasonry.view.currentIndex !== previousImageIndex) {
+                            lockedPreviousReturnIndex = sourceMasonry.view.currentIndex
+                            lockedPreviousReturnPath = pathForIndex(sourceMasonry.view.currentIndex)
                         }
                     } else {
-                        previousImageIndex = lastKnownIndex
+                        const remappedPreviousIndex =
+                                indexForPath(lastKnownPath)
+                        if (remappedPreviousIndex !== -1) {
+                            previousImageIndex = remappedPreviousIndex
+                            previousImagePath = lastKnownPath
+                        }
                     }
                 }
-                lastKnownIndex = masonryLayout.view.currentIndex
+                lastKnownIndex = sourceMasonry.view.currentIndex
+                lastKnownPath = currentPath
 
-                let imageIdUrl = masonryLayout.view.indexImageIdUrl(masonryLayout.view.currentIndex)
-                // console.log("ZZ INDEX CHANGE 2", masonryLayout.view.currentIndex, imageIdUrl)
+                let imageIdUrl = sourceMasonry.view.indexImageIdUrl(sourceMasonry.view.currentIndex)
+                // console.log("ZZ INDEX CHANGE 2", sourceMasonry.view.currentIndex, imageIdUrl)
                 if (imageIdUrl) {
-                    setImage(imageIdUrl, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, 0)
+                    setImage(imageIdUrl, sourceMasonry.view.indexOriginalSize(sourceMasonry.view.currentIndex), sourceMasonry.view.currentIndex, 0)
                     let viewportRestored = applyPendingPreviousImageViewport()
                     if (!viewportRestored && zoomFitView) {
                         flickableArea.zoomToFit(true)
@@ -1339,17 +1476,20 @@ Item {
                         // console.log("ZZ ELSE")
                     }
                 }
+                viewerMode.onCurrentIndexChanged()
             }
             else {
-                lastKnownIndex = masonryLayout.view.currentIndex
+                lastKnownIndex = sourceMasonry.view.currentIndex
+                lastKnownPath = lastKnownIndex >= 0
+                        ? pathForIndex(lastKnownIndex) : ""
             }
         }
     }
 
     Connections {
-        target: fileListModel
+        target: decodeModel
         function onViewerImageIdUrlChanged(newImageIdUrl, level) {
-            viewerMode.setImage(newImageIdUrl, masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex), masonryLayout.view.currentIndex, level)
+            viewerMode.setImage(newImageIdUrl, sourceMasonry.view.indexOriginalSize(sourceMasonry.view.currentIndex), sourceMasonry.view.currentIndex, level)
             applyPendingPreviousImageViewport()
         }
 
@@ -1358,11 +1498,37 @@ Item {
                 updateViewerNavigationTargetSource()
             }
         }
+
+        function onViewerReset() {
+            if (root.state !== "viewer") {
+                return
+            }
+            Qt.callLater(function() {
+                if (root.state !== "viewer" ||
+                        sourceMasonry.view.count === 0 ||
+                        sourceMasonry.view.currentIndex < 0) {
+                    return
+                }
+                const currentIndex = sourceMasonry.view.currentIndex
+                const imageIdUrl =
+                    sourceMasonry.view.indexImageIdUrl(currentIndex)
+                if (imageIdUrl) {
+                    viewerMode.setImage(
+                                imageIdUrl,
+                                sourceMasonry.view.indexOriginalSize(
+                                    currentIndex),
+                                currentIndex, 0)
+                }
+                viewerMode.onCurrentIndexChanged()
+            })
+        }
     }
 
     Rectangle {
         anchors.fill: parent
-        color: "#ffd23a"
+        color: viewerMode.currentItemSelected
+               ? viewerMode.currentItemSelectionColor
+               : viewerMode.viewerNavigationTargetSelectionColor
         opacity: 0.16 * viewerMode.viewerBackgroundOpacity * viewerMode.selectionHighlightNavigationOpacity
         visible: opacity > 0
         z: -2
@@ -1386,6 +1552,8 @@ Item {
         FlickableZoomable {
             id: flickableArea
 
+            viewerModel: viewerMode.decodeModel
+            sourceMasonry: viewerMode.sourceMasonry
             // visible: !sphericViewerMode
             width: parent.width
             height: parent.height
@@ -1440,8 +1608,8 @@ Item {
                         margins: 5
                     }
 
-                    text: masonryLayout.view.indexText(masonryLayout.view.currentIndex)
-                    textFormat: masonryLayout.quickSearchMode ? Text.RichText : Text.PlainText
+                    text: sourceMasonry.view.indexText(sourceMasonry.view.currentIndex)
+                    textFormat: sourceMasonry.quickSearchMode ? Text.RichText : Text.PlainText
 
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideMiddle
@@ -1740,7 +1908,7 @@ Item {
             if (flickableArea.rotationMode === 1) rotationStr = " [90°]"
             else if (flickableArea.rotationMode === 2) rotationStr = " [180°]"
             else if (flickableArea.rotationMode === 3) rotationStr = " [270°]"
-            return masonryLayout.view.indexText(masonryLayout.view.currentIndex) + rotationStr
+            return sourceMasonry.view.indexText(sourceMasonry.view.currentIndex) + rotationStr
         }
 
         component TitleProxyButton : TitleButton {
@@ -1834,7 +2002,7 @@ Item {
                     Layout.maximumWidth: implicitWidth
 
                     text: (sphericViewerMode ? (sphericViewerLoader.item ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : "") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))) +
-                          " " + fileListModel.selectedCount
+                          " " + selectionModel.selectedCount
                     font.pixelSize: 14
                     color: Style.viewerMainText
                 }
@@ -2057,13 +2225,13 @@ Item {
 
             interactive: false
 
-            model: imageModel
+            model: filmstripModel
 
             Connections {
-                target: masonryLayout.view
+                target: sourceMasonry.view
 
                 function onCurrentIndexChanged() {
-                    filmstrip.positionViewAtIndex(imageModel.mapFromSourceRow(masonryLayout.view.currentIndex), ListView.Center)
+                    filmstrip.positionViewAtIndex(filmstripModel.mapFromSourceRow(sourceMasonry.view.currentIndex), ListView.Center)
                 }
             }
 
@@ -2072,7 +2240,7 @@ Item {
                 width: 86
                 height: 57
 
-                property bool isCurrent: imageModel.mapFromSourceRow(masonryLayout.view.currentIndex) === index
+                property bool isCurrent: filmstripModel.mapFromSourceRow(sourceMasonry.view.currentIndex) === index
 
                 Image {
                     id: filmstripImage
@@ -2101,7 +2269,7 @@ Item {
                     property var source: filmstripImage
                     property var viewportSize: Qt.size(width * dpr, height * dpr)
                     property real sharpenAmount: 2
-                    property bool showCheckerboard: masonryLayout.view.showTransparentGrid
+                    property bool showCheckerboard: sourceMasonry.view.showTransparentGrid
                     property int checkerboardSize: 4 * dpr
                     property real borderRadius: 4.1 * dpr
 
@@ -2145,7 +2313,7 @@ Item {
 
                     color: "transparent"
                     border.width: 3
-                    border.color: Style.persistentSelectionBorder
+                    border.color: model.selectionGroupColorRole
                     radius: 4
                     z: 3
                 }
@@ -2157,8 +2325,7 @@ Item {
                     hoverEnabled: true
 
                     onClicked: {
-                        masonryLayout.setCurrentIndex(imageModel.mapToSourceRow(index))
-                        onCurrentIndexChanged()
+                        sourceMasonry.setCurrentIndex(filmstripModel.mapToSourceRow(index))
                     }
                 }
             }
@@ -2179,8 +2346,8 @@ Item {
             visualHeight: 10
 
             from: 0
-            to: masonryLayout.view.imageCount - 1
-            value: masonryLayout.view.currentImageIndex
+            to: sourceMasonry.view.imageCount - 1
+            value: sourceMasonry.view.currentImageIndex
             stepSize: 1
             snapMode: Slider.SnapAlways
 
@@ -2189,16 +2356,15 @@ Item {
 
             onValueChanged: {
                 if (pressed) {
-                    masonryLayout.view.currentImageIndex = Math.round(value)
-                    masonryLayout.setCurrentIndex(masonryLayout.view.currentIndex)
-                    onCurrentIndexChanged()
+                    sourceMasonry.view.currentImageIndex = Math.round(value)
+                    sourceMasonry.setCurrentIndex(sourceMasonry.view.currentIndex)
                 }
             }
 
             Connections {
-                target: masonryLayout.view
+                target: sourceMasonry.view
                 function onCurrentImageIndexChanged() {
-                    currentImageSlider.value = masonryLayout.view.currentImageIndex
+                    currentImageSlider.value = sourceMasonry.view.currentImageIndex
                 }
             }
         }
@@ -2259,7 +2425,7 @@ Item {
             spacing: 0
 
             Repeater {
-                model: masonryLayout.view.currentImageExif
+                model: sourceMasonry.view.currentImageExif
                 delegate: RowLayout {
                     property bool isTitle: modelData.title !== undefined
 

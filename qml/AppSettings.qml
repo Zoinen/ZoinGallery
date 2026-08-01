@@ -1,15 +1,8 @@
 pragma Singleton
-import QtQuick
-import Qt.labs.settings
+import QtCore
 
-QtObject {
-    id: root
-
-    property alias animateResizing: settings.animateResizing
-
-    Settings {
-        id: settings
-        category: "General"
-        property bool animateResizing: true
-    }
+Settings {
+    category: "General"
+    property bool animateResizing: true
+    property real selectedImagesPanelWidth: 380
 }

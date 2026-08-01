@@ -87,7 +87,11 @@ void PersistentFolderCache::removeFolder(const QString &path) {
 }
 
 void PersistentFolderCache::removeFolders(const QStringList &paths) {
+    if (paths.isEmpty()) {
+        return;
+    }
     loadDb();
+    _generation.fetch_add(1);
     {
         QWriteLocker locker(&_dbAccess);
         for (const QString &path : paths) {

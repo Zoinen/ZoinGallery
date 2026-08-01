@@ -36,7 +36,6 @@ Rectangle {
     onVisibleChanged: scheduleThumbnailReload()
     onWidthChanged: scheduleThumbnailReload()
     onHeightChanged: scheduleThumbnailReload()
-    onCountChanged: scheduleThumbnailReload()
 
     Shortcut {
         sequence: StandardKey.Undo
@@ -356,6 +355,14 @@ Rectangle {
                     onClicked: panel.runFileAction(panel.pendingFileAction)
                 }
             }
+        }
+    }
+
+    Connections {
+        target: selectedImagesModel
+
+        function onThumbnailReloadRequested() {
+            panel.scheduleThumbnailReload()
         }
     }
 

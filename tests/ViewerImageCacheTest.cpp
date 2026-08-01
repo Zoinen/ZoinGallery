@@ -375,6 +375,128 @@ private slots:
         QVERIFY(store->snapshot(imageIdFromUrl(firstStored.url)).isNull());
     }
 
+    void changedSourceVersionKeepsOldFrameWhileQueuingRefresh() {
+        const QSize originalSize(1280, 720);
+        const QSize viewportSize(960, 540);
+        ImageFile item;
+        configureImage(item, QStringLiteral("watched.png"), originalSize);
+        ImageInfo info = item.info();
+        info.lastModified = QDateTime::fromMSecsSinceEpoch(1000);
+        info.fileSize = 1234;
+        item.setInfo(info);
+
+        const QList<ImageFile *> items{&item};
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        ViewerImageCache cache(QStringLiteral("watched-"), store);
+        const ViewerImageCache::RequestPlan firstPlan =
+            cache.planRequest(items, 0, viewportSize, 1);
+        QCOMPARE(firstPlan.decodeRequests.size(), 1);
+
+        QImage firstFrame(firstPlan.decodeRequests.first().targetSize,
+                          QImage::Format_RGBA8888);
+        firstFrame.fill(QColor(20, 40, 60));
+        DecodedImageInfo decodedInfo;
+        decodedInfo.decoderUsed = QStringLiteral("source-decoder");
+        const ViewerImageCache::StoredImage stored =
+            cache.storeDecodedImage(firstPlan.decodeRequests.first(),
+                                    firstFrame, decodedInfo);
+        QVERIFY(stored.accepted);
+
+        info.lastModified = QDateTime::fromMSecsSinceEpoch(2000);
+        info.fileSize = 5678;
+        item.setInfo(info);
+        const ViewerImageCache::RequestPlan refreshedPlan =
+            cache.planRequest(items, 0, viewportSize, 1);
+
+        QCOMPARE(refreshedPlan.cachedImages.size(), 1);
+        QCOMPARE(refreshedPlan.cachedImages.first().first, stored.url);
+        QCOMPARE(refreshedPlan.decodeRequests.size(), 1);
+        QCOMPARE(refreshedPlan.decodeRequests.first().info.lastModified,
+                 info.lastModified);
+        QCOMPARE(refreshedPlan.decodeRequests.first().info.fileSize,
+                 info.fileSize);
+    }
+
+    void knownSourceVersionRefreshesEntryStoredWithoutVersion() {
+        const QSize originalSize(800, 600);
+        ImageFile item;
+        configureImage(item, QStringLiteral("unknown-version.png"),
+                       originalSize);
+
+        const QList<ImageFile *> items{&item};
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        ViewerImageCache cache(QStringLiteral("unknown-version-"), store);
+        const ViewerImageCache::RequestPlan initialPlan =
+            cache.planRequest(items, 0, QSize(400, 300), 1);
+        QCOMPARE(initialPlan.decodeRequests.size(), 1);
+
+        QImage firstFrame(initialPlan.decodeRequests.first().targetSize,
+                          QImage::Format_RGBA8888);
+        firstFrame.fill(QColor(80, 100, 120));
+        DecodedImageInfo decodedInfo;
+        decodedInfo.decoderUsed = QStringLiteral("source-decoder");
+        const ViewerImageCache::StoredImage stored =
+            cache.storeDecodedImage(initialPlan.decodeRequests.first(),
+                                    firstFrame, decodedInfo);
+        QVERIFY(stored.accepted);
+
+        ImageInfo knownInfo = item.info();
+        knownInfo.lastModified = QDateTime::fromMSecsSinceEpoch(5000);
+        knownInfo.fileSize = 4321;
+        item.setInfo(knownInfo);
+        const ViewerImageCache::RequestPlan refreshPlan =
+            cache.planRequest(items, 0, QSize(400, 300), 1);
+
+        QCOMPARE(refreshPlan.cachedImages.size(), 1);
+        QCOMPARE(refreshPlan.cachedImages.first().first, stored.url);
+        QCOMPARE(refreshPlan.decodeRequests.size(), 1);
+        QCOMPARE(refreshPlan.decodeRequests.first().info.lastModified,
+                 knownInfo.lastModified);
+        QCOMPARE(refreshPlan.decodeRequests.first().info.fileSize,
+                 knownInfo.fileSize);
+    }
+
+    void changedSourceVersionCanReplaceLargerOldFrame() {
+        ImageInfo oldInfo;
+        oldInfo.path =
+            QStringLiteral("/virtual/viewer-cache-tests/aspect-change.png");
+        oldInfo.lastModified = QDateTime::fromMSecsSinceEpoch(1000);
+        oldInfo.fileSize = 100;
+        oldInfo.imageSize = QSize(1800, 1200);
+        const ImageDecodeRequest oldRequest =
+            ViewerImageCache::makeRequest(oldInfo, oldInfo.imageSize,
+                                          QSize(1200, 1200));
+        QCOMPARE(oldRequest.targetSize, QSize(1200, 800));
+
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        ViewerImageCache cache(QStringLiteral("aspect-change-"), store);
+        QImage oldFrame(oldRequest.targetSize, QImage::Format_RGBA8888);
+        oldFrame.fill(QColor(160, 40, 40));
+        DecodedImageInfo decodedInfo;
+        decodedInfo.decoderUsed = QStringLiteral("source-decoder");
+        const ViewerImageCache::StoredImage oldStored =
+            cache.storeDecodedImage(oldRequest, oldFrame, decodedInfo);
+        QVERIFY(oldStored.accepted);
+
+        ImageInfo newInfo = oldInfo;
+        newInfo.lastModified = QDateTime::fromMSecsSinceEpoch(2000);
+        newInfo.fileSize = 200;
+        newInfo.imageSize = QSize(1800, 900);
+        const ImageDecodeRequest newRequest =
+            ViewerImageCache::makeRequest(newInfo, newInfo.imageSize,
+                                          QSize(1200, 1200));
+        QCOMPARE(newRequest.targetSize, QSize(1200, 600));
+
+        QImage newFrame(newRequest.targetSize, QImage::Format_RGBA8888);
+        newFrame.fill(QColor(40, 160, 40));
+        const ViewerImageCache::StoredImage newStored =
+            cache.storeDecodedImage(newRequest, newFrame, decodedInfo);
+        QVERIFY(newStored.accepted);
+        QCOMPARE(cache.entryForPath(newInfo.path, false).image.size(),
+                 newRequest.targetSize);
+        QVERIFY(store->snapshot(imageIdFromUrl(oldStored.url)).isNull());
+    }
+
     void rotatedSmallImageUsesFullSizeTierWithoutUpscaling() {
         ImageFile item;
         item.setFolderPath(
@@ -415,6 +537,36 @@ private slots:
         QCOMPARE(repeatedPlan.decodeRequests.size(), 0);
         QCOMPARE(repeatedPlan.cachedImages.size(), 1);
         QCOMPARE(repeatedPlan.cachedImages.first().second, 1);
+    }
+
+    void thumbnailSourceVersionRequiresTimestampAndFileSizeMatch() {
+        ImageFile item;
+        configureImage(item, QStringLiteral("versioned.png"),
+                       QSize(640, 480));
+
+        ImageInfo firstVersion = item.info();
+        firstVersion.lastModified =
+            QDateTime::fromMSecsSinceEpoch(1'700'000'000'000LL);
+        firstVersion.fileSize = 1234;
+        QImage decoded(QSize(320, 240), QImage::Format_RGBA8888);
+        decoded.fill(Qt::red);
+        item.setImage(decoded, firstVersion);
+
+        QVERIFY(item.imageMatchesSource(firstVersion));
+
+        ImageInfo changedTimestamp = firstVersion;
+        changedTimestamp.lastModified =
+            changedTimestamp.lastModified.addMSecs(1);
+        QVERIFY(!item.imageMatchesSource(changedTimestamp));
+
+        ImageInfo changedSize = firstVersion;
+        changedSize.fileSize++;
+        QVERIFY(!item.imageMatchesSource(changedSize));
+
+        ImageInfo unknownVersion = firstVersion;
+        unknownVersion.lastModified = {};
+        unknownVersion.fileSize = -1;
+        QVERIFY(!item.imageMatchesSource(unknownVersion));
     }
 };
 

@@ -4,6 +4,7 @@
 #include <QStandardItemModel>
 #include <QHash>
 #include <QAbstractProxyModel>
+#include <QFileSystemWatcher>
 #include <QSet>
 #include <QTimer>
 
@@ -14,12 +15,14 @@
 
 class DecodeManager;
 class FileListModel;
+class QSocketNotifier;
 
 class ThumbnailsRequestInterface {
 public:
     virtual void decodeImages(const QList<ImageDecodeRequest> &requests) = 0;
     virtual void cancelAllRunners() = 0;
     virtual void cancelAllDecodeRunners() = 0;
+    virtual bool preserveViewStateOnReset() const { return false; }
 
     virtual ImageFile *rootItem() const { return nullptr; }
 };
@@ -49,11 +52,14 @@ public:
 
     void cancelAllRunners() override;
     void cancelAllDecodeRunners() override;
-
-    void resetModel();
+    bool preserveViewStateOnReset() const override;
 
 private:
     ImageFile *_sourceRoot;
+    bool _sourceInsertActive = false;
+    bool _sourceRemoveActive = false;
+    bool _sourceMoveActive = false;
+    bool _sourceResetActive = false;
 };
 
 
@@ -96,6 +102,7 @@ public:
 
     FileListModel(QSharedPointer<ProviderImageStore> providerImageStore,
                   QObject *parent = nullptr);
+    ~FileListModel() override;
 
     QHash<int, QByteArray> roleNames() const override;
 
@@ -110,6 +117,8 @@ public:
 
     int cd(const QString &path, const QString &itemToSelect = QString());
     QString rootPath() const;
+    bool preserveViewStateOnReset() const override;
+    ImageInfo imageInfoForPath(const QString &path) const;
 
     const ImageFile *itemForImageId(const QString &imageId);
 
@@ -119,6 +128,7 @@ public:
     Q_INVOKABLE void cancelAllRunners() override;
     void cancelAllDecodeRunners() override;
     Q_INVOKABLE void cancelAllDecodeViewerRunners();
+    Q_INVOKABLE void cancelAllDecodeViewerRunnersForViewerClose();
 
     static bool isImage(const QString &fileName);
 
@@ -222,12 +232,14 @@ signals:
     void viewerImageCacheChanged(int index);
     void viewerReset();
     void directOpenReady(int index);
+    void directOpenFailed(const QString &path);
     void directOpenPathChanged();
 
     void runningTasksChanged(const QString &tasks, const QStringList &tasksInfo);
     void runningTasksDebugChanged();
     void selectionChanged();
     void selectionPathsChanged(const QStringList &paths);
+    void watchedImageMetadataChanged(const QStringList &paths);
     void selectionHistoryChanged();
     void selectionGroupsChanged();
     void activeSelectionGroupChanged();
@@ -267,6 +279,8 @@ private:
         QSize viewerSize;
         int currentIndex = -1;
         bool sameFolder = false;
+        bool folderPopulated = false;
+        bool readyEmitted = false;
         ImageInfo info;
         QSet<QString> pendingNeighborInfoPaths;
         QSet<QString> pendingNeighborDecodePaths;
@@ -295,10 +309,34 @@ private:
     ImageFile *createFileItem(const QString &folderPath, const QString &fileName,
                               const QDateTime &lastModified = QDateTime(), qint64 fileSize = -1);
     void cleanupModelBeforeCd();
-    void clearModelData(bool clearViewerData);
+    void clearModelData(bool clearViewerData,
+                        bool clearFailedImageWork = true);
     int populateFolderItems(const QString &path, const QString &itemToSelect = QString());
     bool folderEntries(const QString &path, QList<FileInfo> &entries);
     QList<FileInfo> readFolderEntries(const QString &path) const;
+    void configureFolderWatcher();
+#ifdef Q_OS_LINUX
+    bool configureLinuxFolderContentWatcher(const QString &path);
+    void clearLinuxFolderContentWatcher();
+    void resetLinuxFolderContentWatcher();
+    void readLinuxFolderContentEvents();
+#endif
+    void scheduleFolderRefresh();
+    void scheduleFolderWatchRetry();
+    void refreshWatchedFolder();
+    void reconcileFolderEntries(const QList<FileInfo> &entries);
+    bool isCurrentFileVersion(const ImageFile *item,
+                              const ImageInfo &info) const;
+    void emitThumbnailInfoFlush();
+    void refreshCurrentViewerAfterMetadata(ImageFile *item);
+    void rememberFailedImageInfo(const ImageInfo &info);
+    void rememberFailedDecodeRequest(const ImageDecodeRequest &request);
+    void scheduleFailedImageWorkRetry();
+    void retryFailedImageWork();
+    void requestFolderPreviews(const QStringList &paths);
+    void scheduleFolderPreviewRetry(const QString &path,
+                                    quint64 requestGeneration,
+                                    const QString &errorText);
     QString itemNameToPreserve() const;
     void reloadPanelForCacheModeChange();
     void startRegularFolderWork();
@@ -308,9 +346,11 @@ private:
                                     const DecodedImageInfo &decodedInfo);
     void requestDirectOpenFitDecode();
     void requestDirectOpenFullSizeDecode();
-    void populateFolderAfterDirectOpenFullDecode();
+    void populateFolderAfterDirectOpenFullDecode(bool notifyReady = true);
     void requestDirectOpenNeighbors();
     void requestDirectOpenNeighborDecodes();
+    void finishDirectOpenAfterDecodeCancellation(int expectedGeneration,
+                                                 bool notifyReady);
     void finishDirectOpenPriorityWork();
     QList<int> directOpenNeighborIndexes() const;
     QList<ImageDecodeRequest> directOpenViewerRequestsForIndexes(const QList<int> &indexes, QSet<QString> *queuedPaths);
@@ -359,10 +399,24 @@ private:
     ViewerImageCache _viewerImageCache;
     QSet<QString> _requestedViewerImages;
     int _currentViewIndex;
+    QSize _currentViewerRequestSize;
+    bool _hasCurrentViewerRequest = false;
 
-    QHash<int, RootProxyModel *> _folderModels;
+    // Folder models must follow the folder identity, not its mutable row.
+    // Watcher reconciliation can insert/remove rows before a visible folder;
+    // keeping the proxy keyed by ImageFile preserves its embedded Masonry
+    // instance and prevents a row-change binding from resolving another
+    // folder's proxy.
+    QHash<ImageFile *, RootProxyModel *> _folderModels;
     QSize _folderViewImageSize;
     int _folderViewImageCount = 16;
+    QHash<QString, quint64> _folderPreviewGenerations;
+    QHash<QString, int> _folderPreviewRetryAttempts;
+    quint64 _nextFolderPreviewGeneration = 0;
+    QHash<QString, ImageInfo> _failedImageInfoRequests;
+    QHash<QString, ImageDecodeRequest> _failedImageDecodeRequests;
+    QHash<QString, int> _failedImageInfoRetryAttempts;
+    QHash<QString, int> _failedImageDecodeRetryAttempts;
 
     DirectOpenState _directOpen;
     SelectionGroupMoveAction _lastSelectionGroupMove;
@@ -370,6 +424,22 @@ private:
     QSet<QString> _pendingSelectionPaths;
     QHash<QString, int> _availableSelectionCounts;
     QHash<QString, QString> _availableSelectedPathGroups;
+    QFileSystemWatcher _fileSystemWatcher;
+#ifdef Q_OS_LINUX
+    int _linuxFolderWatchFd = -1;
+    int _linuxFolderWatchDescriptor = -1;
+    QSocketNotifier *_linuxFolderWatchNotifier = nullptr;
+    QString _linuxFolderWatchPath;
+#endif
+    QTimer _folderRefreshTimer;
+    QTimer _folderWatchRetryTimer;
+    QTimer _failedImageWorkRetryTimer;
+    quint64 _folderRefreshGeneration = 0;
+    bool _folderRefreshPendingAfterDirectOpen = false;
+    QSet<QString> _folderScansInFlight;
+    QSet<QString> _folderRescanAfterInFlight;
+    int _folderWatchRetryDelayMs = 500;
+    int _failedImageWorkRetryDelayMs = 250;
     QTimer _selectionSaveTimer;
     bool _selectionPreviewActive = false;
     QHash<QString, QHash<QString, QString>> _selectionPreviewSnapshot;
@@ -379,6 +449,8 @@ private:
     qint64 _fileListCacheSize = 0;
     bool _isClosing = false;
     bool _fileDragActive = false;
+    bool _recursiveViewActive = false;
+    bool _preserveViewStateOnReset = false;
 };
 
 #endif // FILELISTMODEL_H

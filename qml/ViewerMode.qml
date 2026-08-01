@@ -41,6 +41,8 @@ Item {
         }
         resetViewerNavigation()
         lastKnownIndex = sourceMasonry ? sourceMasonry.view.currentIndex : -1
+        lastKnownPath = sourceMasonry && lastKnownIndex >= 0
+                ? pathForIndex(lastKnownIndex) : ""
         previousSourceMasonry = nextSourceMasonry
     }
 
@@ -317,10 +319,15 @@ Item {
     property bool controlPressed: false
     property bool shiftSelectionActive: false
     property int shiftSelectionAnchorIndex: -1
+    property string shiftSelectionAnchorPath: ""
     property bool shiftNavigationSelectionValue: true
 
     property int previousImageIndex: -1
+    // Indexes are only a projection of the current model order. Keep the
+    // semantic identity as a path so a watcher reset can remap history.
+    property string previousImagePath: ""
     property int lastKnownIndex: -1
+    property string lastKnownPath: ""
     property bool previousImageLocked: false
     property int lockedPreviousReturnIndex: -1
     property string lockedPreviousImagePath: ""
@@ -346,6 +353,7 @@ Item {
     property int viewerNavigationGestureSerial: 0
     property int viewerNavigationDirection: 0 // -1 = previous image, 1 = next image
     property int viewerNavigationTargetIndex: -1
+    property string viewerNavigationTargetPath: ""
     property string viewerNavigationTargetSource: ""
     readonly property size viewerNavigationTargetOriginalSize: viewerNavigationTargetIndex !== -1 ?
             sourceMasonry.view.indexOriginalSize(viewerNavigationTargetIndex) : Qt.size(0, 0)
@@ -479,6 +487,7 @@ Item {
         viewerNavigationCommitAfterAnimation = false
         viewerNavigationDirection = 0
         viewerNavigationTargetIndex = -1
+        viewerNavigationTargetPath = ""
         viewerNavigationTargetSource = ""
     }
 
@@ -561,6 +570,7 @@ Item {
         viewerNavigationActive = true
         viewerNavigationDirection = direction
         viewerNavigationTargetIndex = targetIndex !== currentIndex ? targetIndex : -1
+        viewerNavigationTargetPath = pathForIndex(viewerNavigationTargetIndex)
         viewerNavigationTargetSource = ""
         flickableArea.cancelWheelPan()
         updateViewerNavigationTargetSource()
@@ -952,6 +962,7 @@ Item {
         }
         shiftSelectionActive = true
         shiftSelectionAnchorIndex = sourceMasonry.view.currentIndex
+        shiftSelectionAnchorPath = pathForIndex(shiftSelectionAnchorIndex)
         shiftNavigationSelectionValue = !selectionModel.isIndexSelected(sourceIndexForViewIndex(shiftSelectionAnchorIndex))
         selectionModel.beginSelectionPreview()
     }
@@ -970,10 +981,22 @@ Item {
         selectionModel.commitSelectionPreview(shiftNavigationSelectionValue ? "Range selection" : "Range deselection")
         shiftSelectionActive = false
         shiftSelectionAnchorIndex = -1
+        shiftSelectionAnchorPath = ""
+    }
+
+    function cancelShiftSelection() {
+        if (!shiftSelectionActive) {
+            return
+        }
+        selectionModel.cancelSelectionPreview()
+        shiftSelectionActive = false
+        shiftSelectionAnchorIndex = -1
+        shiftSelectionAnchorPath = ""
     }
 
     function clearPreviousImage() {
         previousImageIndex = -1
+        previousImagePath = ""
         previousImageLocked = false
         lockedPreviousReturnIndex = -1
         lockedPreviousImagePath = ""
@@ -1019,6 +1042,8 @@ Item {
         }
         if (lockedPreviousImagePath !== "") {
             previousImageIndex = indexForPath(lockedPreviousImagePath)
+            previousImagePath = previousImageIndex !== -1 ?
+                        lockedPreviousImagePath : ""
         }
         if (lockedPreviousReturnPath !== "") {
             lockedPreviousReturnIndex = indexForPath(lockedPreviousReturnPath)
@@ -1080,6 +1105,7 @@ Item {
             if (previousImageIndex === index) {
                 previousImageLocked = false
                 previousImageIndex = lockedPreviousReturnIndex
+                previousImagePath = lockedPreviousReturnPath
                 lockedPreviousReturnIndex = -1
                 lockedPreviousImagePath = ""
                 lockedPreviousReturnPath = ""
@@ -1087,6 +1113,7 @@ Item {
                 lockedPreviousReturnIndex = previousImageIndex
                 lockedPreviousReturnPath = lockedPreviousImagePath
                 previousImageIndex = index
+                previousImagePath = pathForIndex(index)
                 lockedPreviousImagePath = pathForIndex(index)
             }
             return
@@ -1095,6 +1122,7 @@ Item {
         lockedPreviousReturnIndex = previousImageIndex !== index ? previousImageIndex : -1
         lockedPreviousReturnPath = pathForIndex(lockedPreviousReturnIndex)
         previousImageIndex = index
+        previousImagePath = pathForIndex(index)
         lockedPreviousImagePath = pathForIndex(index)
         previousImageLocked = true
     }
@@ -1118,6 +1146,12 @@ Item {
             lockedPreviousReturnIndex = currentIndex
             lockedPreviousReturnPath = pathForIndex(currentIndex)
         }
+        else if (previousImagePath !== "") {
+            previousImageIndex = indexForPath(previousImagePath)
+        }
+        if (previousImageIndex === -1) {
+            return -1
+        }
 
         // Capture the target before setCurrentIndex(), since changing the index
         // synchronously reassigns previousImageIndex via the view's onCurrentIndexChanged handler.
@@ -1133,6 +1167,7 @@ Item {
             if (root.state === "thumbnails") {
                 if (!previousImageLocked) {
                     previousImageIndex = -1
+                    previousImagePath = ""
                 }
                 resetViewerNavigation()
                 endViewerNavigationGesture()
@@ -1341,10 +1376,40 @@ Item {
         target: sourceMasonry.view
         function onCountChanged() {
             if (root.state === "viewer" && sourceMasonry.view.count === 0) {
+                cancelShiftSelection()
                 root.closeViewer()
                 return
             }
-            restorePreviousImageLockIndexes()
+            if (previousImageLocked) {
+                restorePreviousImageLockIndexes()
+            }
+            else if (previousImagePath !== "") {
+                previousImageIndex = indexForPath(previousImagePath)
+                if (previousImageIndex === -1) {
+                    previousImagePath = ""
+                }
+            }
+
+            if (shiftSelectionActive && shiftSelectionAnchorPath !== "") {
+                let remappedAnchor = indexForPath(shiftSelectionAnchorPath)
+                if (remappedAnchor === -1) {
+                    cancelShiftSelection()
+                }
+                else {
+                    shiftSelectionAnchorIndex = remappedAnchor
+                }
+            }
+
+            if (viewerNavigationTargetPath !== "") {
+                let remappedTarget = indexForPath(viewerNavigationTargetPath)
+                if (remappedTarget === -1) {
+                    resetViewerNavigation("target-removed-by-model-change")
+                }
+                else {
+                    viewerNavigationTargetIndex = remappedTarget
+                    updateViewerNavigationTargetSource()
+                }
+            }
         }
 
         function onImageCountChanged() {
@@ -1365,7 +1430,20 @@ Item {
                         sourceMasonry.view.count === 0) {
                     return
                 }
-                if (lastKnownIndex !== -1 && lastKnownIndex !== sourceMasonry.view.currentIndex) {
+                const currentPath =
+                        pathForIndex(sourceMasonry.view.currentIndex)
+                const currentFileWasPreserved =
+                        currentPath !== "" && currentPath === lastKnownPath
+                if (currentFileWasPreserved) {
+                    flickableArea.remapImageIndex(
+                                lastKnownIndex,
+                                sourceMasonry.view.currentIndex)
+                    lastKnownIndex = sourceMasonry.view.currentIndex
+                    lastKnownPath = currentPath
+                    viewerMode.updateTitle()
+                    return
+                }
+                if (lastKnownPath !== "" && lastKnownPath !== currentPath) {
                     if (previousImageLocked) {
                         restorePreviousImageLockIndexes()
                         if (sourceMasonry.view.currentIndex !== previousImageIndex) {
@@ -1373,10 +1451,16 @@ Item {
                             lockedPreviousReturnPath = pathForIndex(sourceMasonry.view.currentIndex)
                         }
                     } else {
-                        previousImageIndex = lastKnownIndex
+                        const remappedPreviousIndex =
+                                indexForPath(lastKnownPath)
+                        if (remappedPreviousIndex !== -1) {
+                            previousImageIndex = remappedPreviousIndex
+                            previousImagePath = lastKnownPath
+                        }
                     }
                 }
                 lastKnownIndex = sourceMasonry.view.currentIndex
+                lastKnownPath = currentPath
 
                 let imageIdUrl = sourceMasonry.view.indexImageIdUrl(sourceMasonry.view.currentIndex)
                 // console.log("ZZ INDEX CHANGE 2", sourceMasonry.view.currentIndex, imageIdUrl)
@@ -1396,6 +1480,8 @@ Item {
             }
             else {
                 lastKnownIndex = sourceMasonry.view.currentIndex
+                lastKnownPath = lastKnownIndex >= 0
+                        ? pathForIndex(lastKnownIndex) : ""
             }
         }
     }

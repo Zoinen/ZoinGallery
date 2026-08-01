@@ -682,6 +682,21 @@ Item {
         viewerImageCrop.fromIndex = -1
     }
 
+    function remapImageIndex(oldIndex, newIndex) {
+        if (oldIndex === newIndex) {
+            return
+        }
+        if (image.fromIndex === oldIndex) {
+            image.fromIndex = newIndex
+        }
+        if (viewerImage2.fromIndex === oldIndex) {
+            viewerImage2.fromIndex = newIndex
+        }
+        if (viewerImageCrop.fromIndex === oldIndex) {
+            viewerImageCrop.fromIndex = newIndex
+        }
+    }
+
     Connections {
         target: flickableArea.viewerModel
         function onViewerReset() {

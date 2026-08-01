@@ -48,6 +48,7 @@ struct ImageInfo {
     bool isCached = false;
     bool isFromScanner = false;
     int directOpenGeneration = 0;
+    bool highPriority = false;
 };
 
 struct ImageDecodeRequest {
@@ -58,6 +59,12 @@ struct ImageDecodeRequest {
     bool checkCache = false;
     // Keeps Fit intent when a small image's target is already its native size.
     bool fitToViewerRequest = false;
+    // Visible/interactively requested work jumps ahead of background scans.
+    bool highPriority = false;
+    // Assigned by DecodeManager so the latest viewer navigation batch stays
+    // ahead of stale queued viewer/prefetch work.
+    quint64 viewerGeneration = 0;
+    int viewerPriorityOrdinal = -1;
 };
 
 struct DecodedImageInfo {
@@ -113,7 +120,8 @@ public:
     void setFileName(const QString &fileName);
 
     QImage image() const;
-    void setImage(const QImage &image);
+    void setImage(const QImage &image, const ImageInfo &sourceInfo);
+    bool imageMatchesSource(const ImageInfo &sourceInfo) const;
 
     QString imageIdUrl() const;
     void setImageId(const QString &imageId);
@@ -149,6 +157,8 @@ public:
 
     QList<ImageFile *> subfiles() const;
     void setSubfiles(const QList<ImageFile *> &subfiles);
+    void beginSubfilesModelUpdate();
+    void endSubfilesModelUpdate();
 
     ImageFile *imageFileParent() const;
     void setImageFileParent(ImageFile *parent);
@@ -200,6 +210,7 @@ private:
     QString _folderPath;
     QString _fileName;
     QImage _image;
+    ImageInfo _imageSourceInfo;
     QString _imageId;
     QSize _fullSize;
     bool _isFolder = false;
@@ -216,6 +227,8 @@ private:
     QColor _selectionGroupColor;
 
     QList<ImageFile *> _subfiles;
+    int _subfilesModelUpdateDepth = 0;
+    bool _folderViewBeforeSubfilesModelUpdate = false;
     ImageFile *_imageFileParent = nullptr;
     QString _searchText;
 };

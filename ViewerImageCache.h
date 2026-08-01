@@ -19,6 +19,8 @@ public:
         QString imageId;
         QSize requestedSize;
         DecodedImageInfo decodedInfo;
+        QDateTime sourceLastModified;
+        qint64 sourceFileSize = -1;
     };
 
     struct StoredImage {
@@ -70,7 +72,7 @@ private:
         bool presentFullSizeAsFitImage) const;
     static bool satisfies(const Entry &entry, const QSize &targetSize);
     static bool covers(const QSize &size, const QSize &targetSize);
-    bool needsDecode(const QString &path, const QSize &targetSize,
+    bool needsDecode(const ImageInfo &info, const QSize &targetSize,
                      bool fullSize) const;
     void removeEntry(const QString &path, bool fullSize);
     void removeEntryLocked(const QString &path, bool fullSize);

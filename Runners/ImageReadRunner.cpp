@@ -10,6 +10,9 @@ void ImageReadRunner::run() {
     if (ThumbnailLoader::readImage(imageData)) {
         emit imageReadReady(imageData);
     }
+    else {
+        emit imageReadFailed(_request);
+    }
     emit finished(this);
 }
 

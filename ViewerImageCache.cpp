@@ -100,6 +100,19 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
         fullSize ? _fullSizeIdToPath : _viewerIdToPath;
     auto cacheIt = cache.find(request.info.path);
     if (cacheIt != cache.end() && !cacheIt->image.isNull()) {
+        const bool incomingVersionKnown =
+            request.info.lastModified.isValid() ||
+            request.info.fileSize >= 0;
+        const bool sameSourceVersion =
+            (!request.info.lastModified.isValid() ||
+             (cacheIt->sourceLastModified.isValid() &&
+              request.info.lastModified ==
+                  cacheIt->sourceLastModified)) &&
+            (request.info.fileSize < 0 ||
+             (cacheIt->sourceFileSize >= 0 &&
+              request.info.fileSize == cacheIt->sourceFileSize));
+        const bool sourceVersionReplacement =
+            incomingVersionKnown && !sameSourceVersion;
         const bool sameSize =
             cacheIt->image.size() == image.size();
         const bool equalSizeSourceReplacement =
@@ -110,10 +123,11 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
         const bool existingCoversIncoming =
             covers(cacheIt->image.size(), image.size());
 
-        if ((qualityDowngrade &&
-             satisfies(cacheIt.value(), request.targetSize)) ||
-            (existingCoversIncoming &&
-             !equalSizeSourceReplacement)) {
+        if (!sourceVersionReplacement &&
+            ((qualityDowngrade &&
+              satisfies(cacheIt.value(), request.targetSize)) ||
+             (existingCoversIncoming &&
+              !equalSizeSourceReplacement))) {
             return result;
         }
     }
@@ -129,6 +143,8 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
         .imageId = imageId,
         .requestedSize = request.targetSize,
         .decodedInfo = decodedInfo,
+        .sourceLastModified = request.info.lastModified,
+        .sourceFileSize = request.info.fileSize,
     };
     idToPath.insert(imageId, request.info.path);
     _providerImageStore->publish(imageId, image);
@@ -231,17 +247,25 @@ ViewerImageCache::Entry ViewerImageCache::entryForPath(
 
 bool ViewerImageCache::needsDecode(
     const ImageDecodeRequest &request) const {
-    return needsDecode(request.info.path, request.targetSize,
+    return needsDecode(request.info, request.targetSize,
                        isFullSizeRequest(request));
 }
 
 bool ViewerImageCache::needsDecode(
-    const QString &path, const QSize &targetSize, bool fullSize) const {
+    const ImageInfo &info, const QSize &targetSize, bool fullSize) const {
     QReadLocker locker(&_lock);
     const QHash<QString, Entry> &cache =
         fullSize ? _fullSizeImages : _viewerImages;
-    const auto it = cache.constFind(path);
+    const auto it = cache.constFind(info.path);
+    const bool sameVersion = it != cache.constEnd() &&
+        (!info.lastModified.isValid() ||
+         (it->sourceLastModified.isValid() &&
+          info.lastModified == it->sourceLastModified)) &&
+        (info.fileSize < 0 ||
+         (it->sourceFileSize >= 0 &&
+          info.fileSize == it->sourceFileSize));
     return it == cache.constEnd() ||
+        !sameVersion ||
         !satisfies(it.value(), targetSize) ||
         it->decodedInfo.isFromCache;
 }

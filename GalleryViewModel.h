@@ -49,6 +49,7 @@ public:
     void decodeImages(const QList<ImageDecodeRequest> &requests) override;
     void cancelAllRunners() override;
     void cancelAllDecodeRunners() override;
+    bool preserveViewStateOnReset() const override;
 
 signals:
     void selectedOnlyChanged();

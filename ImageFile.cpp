@@ -73,8 +73,25 @@ QImage ImageFile::image() const {
     return _image;
 }
 
-void ImageFile::setImage(const QImage &image) {
+void ImageFile::setImage(const QImage &image, const ImageInfo &sourceInfo) {
     _image = image;
+    _imageSourceInfo = image.isNull() ? ImageInfo() : sourceInfo;
+}
+
+bool ImageFile::imageMatchesSource(const ImageInfo &sourceInfo) const {
+    // A size-based "already have a better thumbnail" decision is safe only
+    // when both images are proven to come from the exact same file version.
+    // Watcher reconciliation intentionally keeps the old frame visible while
+    // the replacement is decoded, so the mere presence of _image is not
+    // enough to establish that equivalence.
+    return !_image.isNull() &&
+           !_imageSourceInfo.path.isEmpty() &&
+           _imageSourceInfo.path == sourceInfo.path &&
+           _imageSourceInfo.lastModified.isValid() &&
+           sourceInfo.lastModified.isValid() &&
+           _imageSourceInfo.lastModified == sourceInfo.lastModified &&
+           _imageSourceInfo.fileSize >= 0 && sourceInfo.fileSize >= 0 &&
+           _imageSourceInfo.fileSize == sourceInfo.fileSize;
 }
 
 QString ImageFile::imageIdUrl() const {
@@ -219,7 +236,23 @@ void ImageFile::setSubfiles(const QList<ImageFile *> &subfiles) {
     for (ImageFile *subfile : _subfiles) {
         subfile->setParent(this);
     }
-    if (oldFolderView != folderView()) {
+    if (_subfilesModelUpdateDepth == 0 && oldFolderView != folderView()) {
+        emit folderViewChanged();
+    }
+}
+
+void ImageFile::beginSubfilesModelUpdate() {
+    if (_subfilesModelUpdateDepth++ == 0) {
+        _folderViewBeforeSubfilesModelUpdate = folderView();
+    }
+}
+
+void ImageFile::endSubfilesModelUpdate() {
+    Q_ASSERT(_subfilesModelUpdateDepth > 0);
+    if (_subfilesModelUpdateDepth <= 0 || --_subfilesModelUpdateDepth != 0) {
+        return;
+    }
+    if (_folderViewBeforeSubfilesModelUpdate != folderView()) {
         emit folderViewChanged();
     }
 }

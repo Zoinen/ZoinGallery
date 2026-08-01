@@ -22,6 +22,7 @@
 #include <QMimeData>
 #include <QCursor>
 #include <QFontMetricsF>
+#include <QFutureWatcher>
 #include <QPainter>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -32,17 +33,86 @@
 #include <QSettings>
 #include <QDateTime>
 #include <QUrl>
+#include <QtConcurrent/QtConcurrentRun>
 
 #include <chrono>
+#include <filesystem>
+#include <system_error>
 #include <utility>
 #ifdef Q_OS_WIN
 #include <QtCore/qt_windows.h>
+#endif
+#ifdef Q_OS_LINUX
+#include <QSocketNotifier>
+#include <sys/inotify.h>
+#include <unistd.h>
+#include <cerrno>
 #endif
 using namespace std::chrono_literals;
 
 namespace {
 constexpr const char *ImageCacheModeSettingsKey = "Cache/imageUsageMode";
 constexpr const char *FileListCacheModeSettingsKey = "Cache/fileListUsageMode";
+constexpr int FolderRefreshDebounceMs = 180;
+constexpr int FolderWatchRetryMaxMs = 5000;
+constexpr int FailedImageWorkRetryInitialMs = 250;
+constexpr int FailedImageWorkRetryMaxMs = 5000;
+constexpr int FailedImageWorkMaxAttempts = 8;
+
+enum class FolderScanStatus {
+    Success,
+    RootUnavailable,
+    EnumerationError,
+};
+
+struct FolderScanResult {
+    QString path;
+    QList<FileInfo> entries;
+    FolderScanStatus status = FolderScanStatus::EnumerationError;
+    QString errorText;
+};
+
+std::filesystem::path nativeFileSystemPath(const QString &path) {
+#ifdef Q_OS_WIN
+    return std::filesystem::path(
+        QDir::toNativeSeparators(path).toStdWString());
+#else
+    return std::filesystem::path(QFile::encodeName(path).toStdString());
+#endif
+}
+
+QString qStringFromNativeFileSystemPath(
+    const std::filesystem::path &path) {
+#ifdef Q_OS_WIN
+    return QString::fromStdWString(path.native());
+#else
+    return QFile::decodeName(QByteArray::fromStdString(path.native()));
+#endif
+}
+
+QString decodeRetryKey(const ImageDecodeRequest &request) {
+    return QStringLiteral("%1\x1f%2\x1f%3x%4\x1f%5\x1f%6\x1f%7\x1f%8\x1f%9")
+        .arg(request.info.path)
+        .arg(request.viewerRequest ? 1 : 0)
+        .arg(request.targetSize.width())
+        .arg(request.targetSize.height())
+        .arg(request.info.directOpenGeneration)
+        .arg(request.info.lastModified.isValid()
+                 ? request.info.lastModified.toMSecsSinceEpoch() : -1)
+        .arg(request.info.fileSize)
+        .arg(request.checkCache ? 1 : 0)
+        .arg(request.fitToViewerRequest ? 1 : 0);
+}
+
+QString infoRetryKey(const ImageInfo &info) {
+    return QStringLiteral("%1\x1f%2\x1f%3\x1f%4\x1f%5")
+        .arg(info.path)
+        .arg(info.isFromEmbeddedView ? 1 : 0)
+        .arg(info.directOpenGeneration)
+        .arg(info.lastModified.isValid()
+                 ? info.lastModified.toMSecsSinceEpoch() : -1)
+        .arg(info.fileSize);
+}
 
 QVariantMap fileOperationResult(bool success, const QString &title,
                                 const QString &message, int action = Qt::IgnoreAction,
@@ -133,6 +203,14 @@ bool isSameOrChildPath(const QString &candidate, const QString &parent) {
 #endif
     return cleanCandidate.compare(QDir::cleanPath(parent), sensitivity) == 0 ||
            cleanCandidate.startsWith(cleanParent, sensitivity);
+}
+
+QString fileSystemPathKey(const QString &path) {
+    QString key = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+#ifdef Q_OS_WIN
+    key = key.toCaseFolded();
+#endif
+    return key;
 }
 
 #ifdef Q_OS_WIN
@@ -371,7 +449,7 @@ FileListModel::FileListModel(
     connect(_decodeManager, &DecodeManager::runningTasksChanged, [&] (const QString &runningTasks, const QStringList &tasksInfo) {
         if (runningTasksDebug()) {
             QFile f(QString("C:\\tmp\\log\\%1.txt").arg(QDateTime::currentMSecsSinceEpoch()));
-            f.open(QFile::WriteOnly);
+            (void)f.open(QFile::WriteOnly);
             f.write(runningTasks.toLatin1() + "\n");
             QByteArray ba;
             for (QString task : tasksInfo) {
@@ -391,6 +469,30 @@ FileListModel::FileListModel(
         // qDebug() << "INFO RECEIVED" << result.path << result.imageSize;
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
+            if (!item->isImage()) {
+                if (result.isLast && !result.isFromEmbeddedView) {
+                    emitThumbnailInfoFlush();
+                }
+                return;
+            }
+            if (!result.imageSize.isValid()) {
+                rememberFailedImageInfo(result);
+                if (result.isLast && !result.isFromEmbeddedView) {
+                    emitThumbnailInfoFlush();
+                }
+                handleDirectOpenImageInfo(result);
+                return;
+            }
+            if (!isCurrentFileVersion(item, result) &&
+                !isActiveDirectOpenInfo(result)) {
+                if (result.isLast && !result.isFromEmbeddedView) {
+                    emitThumbnailInfoFlush();
+                }
+                return;
+            }
+            _failedImageInfoRequests.remove(infoRetryKey(result));
+            _failedImageInfoRetryAttempts.remove(infoRetryKey(result));
+            _failedImageWorkRetryDelayMs = FailedImageWorkRetryInitialMs;
             ImageInfo itemInfo = result;
             if (itemInfo.fileSize < 0) {
                 itemInfo.fileSize = item->fileSize();
@@ -398,13 +500,12 @@ FileListModel::FileListModel(
             if (!itemInfo.lastModified.isValid()) {
                 itemInfo.lastModified = item->lastModified();
             }
+            const bool directSourceVersionChanged =
+                isActiveDirectOpenInfo(result) &&
+                (item->lastModified() != itemInfo.lastModified ||
+                 item->fileSize() != itemInfo.fileSize);
             item->setFullSize(rotateToOrientation(itemInfo.imageSize, itemInfo.orientation));
             item->setInfo(itemInfo);
-            if (!result.imageSize.isValid()) {
-                handleDirectOpenImageInfo(itemInfo);
-                return;
-            }
-
             QModelIndex modelIndex = index(item->index(), 0, indexFromItem(item->imageFileParent()));
             if (!modelIndex.isValid()) {
                 qDebug() << "Invalid model index" << item->index() << item->imageFileParent() << item->fullPath();
@@ -415,6 +516,10 @@ FileListModel::FileListModel(
                 roles.append(TimeToFlushRole);
             }
             emit dataChanged(modelIndex, modelIndex, roles);
+            if (directSourceVersionChanged) {
+                emit watchedImageMetadataChanged({item->fullPath()});
+            }
+            refreshCurrentViewerAfterMetadata(item);
 
             if (result.isFromEmbeddedView) {
                 decodeImages({imageDecodeRequestFromEmbeddedImageInfo(itemInfo)});
@@ -424,6 +529,9 @@ FileListModel::FileListModel(
         }
         else {
             qDebug() << "ZZ NOT FOUND" << result.path << _fileToItem.keys();
+            if (result.isLast && !result.isFromEmbeddedView) {
+                emitThumbnailInfoFlush();
+            }
         }
     });
 
@@ -445,19 +553,44 @@ FileListModel::FileListModel(
 
         QList<ImageDecodeRequest> requests;
 
-        int flushIndex = -1;
-        int minIndex = 1000000;
-        int maxIndex = -1;
+        ImageFile *flushItem = nullptr;
         bool foundCurrentItem = false;
-        // TODO: If differents parent come in one signal here it will mess everything up
-        QModelIndex parent;
+        bool flushTopLevelFallback = false;
+        ImageFile *currentViewerMetadataItem = nullptr;
+        QStringList directSourceVersionChanges;
+        QHash<ImageFile *, QList<int>> changedRowsByParent;
 
         for (const ImageInfo &result : currentResults) {
             auto it = _fileToItem.find(result.path);
             // qDebug() << "INFO RECEIVED" << result.path << result.imageSize << result.orientation;
             if (it != _fileToItem.end()) {
-                foundCurrentItem = true;
                 ImageFile *item = it.value();
+                if (!item->isImage()) {
+                    if (result.isLast && !result.isFromEmbeddedView) {
+                        flushTopLevelFallback = true;
+                    }
+                    continue;
+                }
+                if (!result.imageSize.isValid()) {
+                    rememberFailedImageInfo(result);
+                    if (result.isLast && !result.isFromEmbeddedView) {
+                        flushTopLevelFallback = true;
+                    }
+                    handleDirectOpenImageInfo(result);
+                    continue;
+                }
+                if (!isCurrentFileVersion(item, result) &&
+                    !isActiveDirectOpenInfo(result)) {
+                    if (result.isLast && !result.isFromEmbeddedView) {
+                        flushTopLevelFallback = true;
+                    }
+                    continue;
+                }
+                _failedImageInfoRequests.remove(infoRetryKey(result));
+                _failedImageInfoRetryAttempts.remove(infoRetryKey(result));
+                _failedImageWorkRetryDelayMs =
+                    FailedImageWorkRetryInitialMs;
+                foundCurrentItem = true;
                 ImageInfo itemInfo = result;
                 if (itemInfo.fileSize < 0) {
                     itemInfo.fileSize = item->fileSize();
@@ -465,15 +598,21 @@ FileListModel::FileListModel(
                 if (!itemInfo.lastModified.isValid()) {
                     itemInfo.lastModified = item->lastModified();
                 }
+                const bool directSourceVersionChanged =
+                    isActiveDirectOpenInfo(result) &&
+                    (item->lastModified() != itemInfo.lastModified ||
+                     item->fileSize() != itemInfo.fileSize);
                 item->setFullSize(rotateToOrientation(itemInfo.imageSize, itemInfo.orientation));
                 item->setInfo(itemInfo);
+                if (directSourceVersionChanged) {
+                    directSourceVersionChanges.append(item->fullPath());
+                }
 
-                minIndex = qMin(minIndex, item->index());
-                maxIndex = qMax(maxIndex, item->index());
-                parent = indexFromItem(item->imageFileParent());
+                changedRowsByParent[item->imageFileParent()].append(
+                    item->index());
 
                 if (result.isLast) {
-                    flushIndex = item->index();
+                    flushItem = item;
                 }
 
                 if (result.isFromEmbeddedView) {
@@ -481,27 +620,71 @@ FileListModel::FileListModel(
                 }
 
                 handleDirectOpenImageInfo(itemInfo);
+                if (_currentViewIndex >= 0 &&
+                    _currentViewIndex < _items.size() &&
+                    _items.at(_currentViewIndex) == item) {
+                    currentViewerMetadataItem = item;
+                }
             }
             else {
                 qDebug() << "ZZ NOT FOUND" << result.path << _fileToItem.keys();
+                if (result.isLast && !result.isFromEmbeddedView) {
+                    flushTopLevelFallback = true;
+                }
             }
         }
 
         if (!foundCurrentItem) {
+            if (flushTopLevelFallback) {
+                emitThumbnailInfoFlush();
+            }
             return;
         }
 
-        QModelIndex minModelIndex = index(minIndex, 0, parent);
-        QModelIndex maxModelIndex = index(maxIndex, 0, parent);
-        if (!minModelIndex.isValid() || !maxModelIndex.isValid()) {
-            qDebug() << "Invalid model index" << minModelIndex << maxModelIndex << parent;
-            return;
+        for (auto rowsIt = changedRowsByParent.begin();
+             rowsIt != changedRowsByParent.end(); ++rowsIt) {
+            QList<int> rows = rowsIt.value();
+            std::sort(rows.begin(), rows.end());
+            rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+            const QModelIndex parentIndex = indexFromItem(rowsIt.key());
+            int spanStart = -1;
+            int previousRow = -2;
+            for (const int row : std::as_const(rows)) {
+                if (spanStart < 0) {
+                    spanStart = row;
+                }
+                else if (row != previousRow + 1) {
+                    emit dataChanged(index(spanStart, 0, parentIndex),
+                                     index(previousRow, 0, parentIndex),
+                                     {ImageFullSizeRole});
+                    spanStart = row;
+                }
+                previousRow = row;
+            }
+            if (spanStart >= 0) {
+                emit dataChanged(index(spanStart, 0, parentIndex),
+                                 index(previousRow, 0, parentIndex),
+                                 {ImageFullSizeRole});
+            }
         }
-        emit dataChanged(minModelIndex, maxModelIndex, {ImageFullSizeRole});
 
-        if (flushIndex != -1) {
-            QModelIndex flushModelIndex = index(flushIndex, 0, parent);
+        if (flushItem) {
+            const QModelIndex flushParent =
+                indexFromItem(flushItem->imageFileParent());
+            QModelIndex flushModelIndex =
+                index(flushItem->index(), 0, flushParent);
             emit dataChanged(flushModelIndex, flushModelIndex, {TimeToFlushRole});
+        }
+        else if (flushTopLevelFallback) {
+            emitThumbnailInfoFlush();
+        }
+
+        refreshCurrentViewerAfterMetadata(currentViewerMetadataItem);
+
+        directSourceVersionChanges.removeDuplicates();
+        if (!directSourceVersionChanges.isEmpty()) {
+            emit watchedImageMetadataChanged(
+                directSourceVersionChanges);
         }
 
         if (requests.size()) {
@@ -514,15 +697,36 @@ FileListModel::FileListModel(
         if (request.info.directOpenGeneration && request.info.directOpenGeneration != _directOpen.generation) {
             return;
         }
+        if (image.isNull()) {
+            rememberFailedDecodeRequest(request);
+            handleDirectOpenImageReady(request, image, decodedInfo);
+            return;
+        }
         // image.save(QString("c:/tmp/zg/%1.png").arg(QFileInfo(request.info.path).fileName()));
         // qDebug() << "ZZ IMAGE READEY" << request.info.path << request.info.imageSize << request.targetSize << image.size();
         auto it = _fileToItem.find(request.info.path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
+            if (!item->isImage() ||
+                !isCurrentFileVersion(item, request.info)) {
+                return;
+            }
+            if (!decodedInfo.isFromCache) {
+                ImageDecodeRequest sourceRetry = request;
+                sourceRetry.checkCache = false;
+                _failedImageDecodeRequests.remove(
+                    decodeRetryKey(sourceRetry));
+                _failedImageDecodeRetryAttempts.remove(
+                    decodeRetryKey(sourceRetry));
+                _failedImageWorkRetryDelayMs =
+                    FailedImageWorkRetryInitialMs;
+            }
             if (request.viewerRequest) {
                 // qDebug() << "ZZ Viewer image came" << request.info.path << isFromCache << image.size() << item->image.size();
             }
-            if (!request.viewerRequest && decodedInfo.isFromCache &&
+            if (!request.viewerRequest &&
+                item->imageMatchesSource(request.info) &&
+                decodedInfo.isFromCache &&
                 (image.width() <= item->image().width() ||
                  image.height() <= item->image().height())) {
                 handleDirectOpenImageReady(request, image, decodedInfo);
@@ -541,7 +745,7 @@ FileListModel::FileListModel(
                 }
             }
             else {
-                item->setImage(image);
+                item->setImage(image, request.info);
                 item->setIsCachedThumbnail(decodedInfo.isFromCache);
                 updateImageId(item);
             }
@@ -554,44 +758,291 @@ FileListModel::FileListModel(
     });
 
     connect(_decodeManager, &DecodeManager::folderListReady, this,
-            [&] (const QString &path, const QList<FileInfo> &subfiles, bool isFromCache) {
-        if (!subfiles.size()) {
+            [&] (const QString &path, const QList<FileInfo> &subfiles,
+                 bool isFromCache, quint64 requestGeneration) {
+        const auto generationIt = _folderPreviewGenerations.constFind(path);
+        if (generationIt == _folderPreviewGenerations.constEnd() ||
+            generationIt.value() != requestGeneration) {
             return;
         }
 
+        _folderPreviewGenerations.remove(path);
+        _folderPreviewRetryAttempts.remove(path);
         _folderImagePaths.removeOne(path);
         auto it = _fileToItem.find(path);
-        if (it != _fileToItem.end()) {
+        if (it != _fileToItem.end() && it.value()->isFolder()) {
             ImageFile *item = it.value();
             ImageInfo folderInfo = item->info();
             folderInfo.isCached = isFromCache;
             item->setInfo(folderInfo);
 
-            QList<ImageFile *> subImages;
-            subImages.reserve(subfiles.size());
-            QStringList imagePaths;
-            imagePaths.reserve(subfiles.size());
-            for (int i = 0; i < subfiles.size(); i++) {
-                ImageFile *subItem = createFileItem(path, subfiles.at(i).name,
-                                                    subfiles.at(i).lastModified, subfiles.at(i).fileSize);
+            const QModelIndex parentIndex = indexFromItem(item);
+            const QList<ImageFile *> oldSubfiles = item->subfiles();
+            const bool oldFolderView = item->folderView();
+            QHash<QString, ImageFile *> oldByPath;
+            oldByPath.reserve(oldSubfiles.size());
+            for (ImageFile *oldSubfile : oldSubfiles) {
+                oldByPath.insert(fileSystemPathKey(oldSubfile->fullPath()),
+                                 oldSubfile);
+            }
+
+            QList<ImageFile *> nextSubfiles;
+            nextSubfiles.reserve(subfiles.size());
+            QSet<ImageFile *> retainedSubfiles;
+            QHash<ImageFile *, ImageInfo> metadataUpdates;
+            QStringList imageInfoPaths;
+            QStringList changedSubfilePaths;
+            QSet<QString> affectedSubfilePaths;
+            for (const FileInfo &subfileInfo : subfiles) {
+                const QString subfilePath =
+                    QDir(path).absoluteFilePath(subfileInfo.name);
+                ImageFile *subItem = oldByPath.value(
+                    fileSystemPathKey(subfilePath), nullptr);
+                if (subItem && subItem->fullPath() != subfilePath) {
+                    subItem = nullptr;
+                }
+                if (subItem) {
+                    retainedSubfiles.insert(subItem);
+                    ImageInfo info = subItem->info();
+                    if (info.lastModified != subfileInfo.lastModified ||
+                        info.fileSize != subfileInfo.fileSize) {
+                        info.lastModified = subfileInfo.lastModified;
+                        info.fileSize = subfileInfo.fileSize;
+                        metadataUpdates.insert(subItem, info);
+                        imageInfoPaths.append(subfilePath);
+                        changedSubfilePaths.append(subfilePath);
+                    }
+                    if (!subItem->fullSize().isValid() ||
+                        subItem->imageIdUrl().isEmpty()) {
+                        imageInfoPaths.append(subfilePath);
+                    }
+                }
+                else {
+                    subItem = createFileItem(
+                        path, subfileInfo.name, subfileInfo.lastModified,
+                        subfileInfo.fileSize);
+                    imageInfoPaths.append(subfilePath);
+                    affectedSubfilePaths.insert(subfilePath);
+                }
+                nextSubfiles.append(subItem);
+            }
+
+            QList<ImageFile *> removedSubfiles;
+            for (ImageFile *oldSubfile : oldSubfiles) {
+                if (!retainedSubfiles.contains(oldSubfile)) {
+                    removedSubfiles.append(oldSubfile);
+                }
+            }
+
+            bool structureChanged =
+                oldSubfiles.size() != nextSubfiles.size();
+            if (!structureChanged) {
+                for (int i = 0; i < oldSubfiles.size(); ++i) {
+                    if (oldSubfiles.at(i) != nextSubfiles.at(i)) {
+                        structureChanged = true;
+                        break;
+                    }
+                }
+            }
+
+            const bool previousPreserveState = _preserveViewStateOnReset;
+            _preserveViewStateOnReset = true;
+            for (auto updateIt = metadataUpdates.constBegin();
+                 updateIt != metadataUpdates.constEnd(); ++updateIt) {
+                updateIt.key()->setInfo(updateIt.value());
+            }
+
+            if (structureChanged) {
+                // Keep the child model and its existing delegates alive. The
+                // preview is naturally ordered, so this is normally only a
+                // small remove/insert diff; move support also makes the
+                // transaction correct if ordering rules change later.
+                item->beginSubfilesModelUpdate();
+
+                QList<ImageFile *> workingSubfiles = oldSubfiles;
+                QSet<ImageFile *> nextSubfileSet(nextSubfiles.begin(),
+                                                 nextSubfiles.end());
+
+                for (int last = workingSubfiles.size() - 1; last >= 0;) {
+                    if (nextSubfileSet.contains(workingSubfiles.at(last))) {
+                        --last;
+                        continue;
+                    }
+                    int first = last;
+                    while (first > 0 &&
+                           !nextSubfileSet.contains(
+                               workingSubfiles.at(first - 1))) {
+                        --first;
+                    }
+                    beginRemoveRows(parentIndex, first, last);
+                    workingSubfiles.erase(workingSubfiles.begin() + first,
+                                          workingSubfiles.begin() + last + 1);
+                    item->setSubfiles(workingSubfiles);
+                    for (int row = first; row < workingSubfiles.size(); ++row) {
+                        workingSubfiles.at(row)->setIndex(row);
+                    }
+                    endRemoveRows();
+                    last = first - 1;
+                }
+
+                QSet<ImageFile *> presentSubfiles(workingSubfiles.begin(),
+                                                  workingSubfiles.end());
+                for (int targetRow = 0;
+                     targetRow < nextSubfiles.size();) {
+                    ImageFile *desired = nextSubfiles.at(targetRow);
+                    if (targetRow < workingSubfiles.size() &&
+                        workingSubfiles.at(targetRow) == desired) {
+                        ++targetRow;
+                        continue;
+                    }
+
+                    const int existingRow = workingSubfiles.indexOf(desired);
+                    if (existingRow >= 0) {
+                        const int destinationChild =
+                            existingRow < targetRow ? targetRow + 1
+                                                    : targetRow;
+                        const bool moveStarted = beginMoveRows(
+                            parentIndex, existingRow, existingRow,
+                            parentIndex, destinationChild);
+                        Q_ASSERT(moveStarted);
+                        if (!moveStarted) {
+                            qWarning() << "Could not move folder preview row"
+                                       << existingRow << targetRow << path;
+                            break;
+                        }
+                        workingSubfiles.move(existingRow, targetRow);
+                        item->setSubfiles(workingSubfiles);
+                        const int changedFirst = qMin(existingRow, targetRow);
+                        const int changedLast = qMax(existingRow, targetRow);
+                        for (int row = changedFirst; row <= changedLast; ++row) {
+                            workingSubfiles.at(row)->setIndex(row);
+                        }
+                        endMoveRows();
+                        ++targetRow;
+                        continue;
+                    }
+
+                    int insertCount = 1;
+                    while (targetRow + insertCount < nextSubfiles.size() &&
+                           !presentSubfiles.contains(
+                               nextSubfiles.at(targetRow + insertCount))) {
+                        ++insertCount;
+                    }
+                    beginInsertRows(parentIndex, targetRow,
+                                    targetRow + insertCount - 1);
+                    for (int offset = 0; offset < insertCount; ++offset) {
+                        ImageFile *inserted =
+                            nextSubfiles.at(targetRow + offset);
+                        workingSubfiles.insert(targetRow + offset, inserted);
+                        presentSubfiles.insert(inserted);
+                    }
+                    item->setSubfiles(workingSubfiles);
+                    for (int row = targetRow;
+                         row < workingSubfiles.size(); ++row) {
+                        workingSubfiles.at(row)->setIndex(row);
+                    }
+                    endInsertRows();
+                    targetRow += insertCount;
+                }
+
+                Q_ASSERT(workingSubfiles == nextSubfiles);
+                item->endSubfilesModelUpdate();
+            }
+            for (int i = 0; i < nextSubfiles.size(); ++i) {
+                ImageFile *subItem = nextSubfiles.at(i);
                 subItem->setImageFileParent(item);
-                subItem->setIndex(subImages.size());
-                subImages.append(subItem);
-                imagePaths.append(QDir(path).absoluteFilePath(subfiles.at(i).name));
+                subItem->setIndex(i);
+                _fileToItem.insert(subItem->fullPath(), subItem);
             }
 
-            beginInsertRows(indexFromItem(item), 0, subImages.size() - 1);
-            item->setSubfiles(subImages);
-            endInsertRows();
-            if (_folderModels.contains(item->index())) {
-                _folderModels[item->index()]->resetModel();
+            for (ImageFile *removedSubfile : removedSubfiles) {
+                affectedSubfilePaths.insert(removedSubfile->fullPath());
+                if (_fileToItem.value(removedSubfile->fullPath()) ==
+                    removedSubfile) {
+                    _fileToItem.remove(removedSubfile->fullPath());
+                }
+                const QString imageId =
+                    removedSubfile->imageIdUrl().section('/', -1);
+                if (!imageId.isEmpty()) {
+                    _imageIdToItem.remove(imageId);
+                    _providerImageStore->remove(imageId);
+                }
+                _viewerImageCache.remove(removedSubfile->fullPath());
+                removedSubfile->deleteLater();
             }
 
-            QModelIndex modelIndex = index(item->index(), 0, indexFromItem(item->imageFileParent()));
-            emit dataChanged(modelIndex, modelIndex, {FolderViewRole});
+            if (!metadataUpdates.isEmpty()) {
+                QList<int> changedRows;
+                changedRows.reserve(metadataUpdates.size());
+                for (ImageFile *changedItem : metadataUpdates.keys()) {
+                    changedRows.append(changedItem->index());
+                }
+                std::sort(changedRows.begin(), changedRows.end());
+                int spanStart = changedRows.first();
+                int previousRow = spanStart;
+                for (qsizetype i = 1; i < changedRows.size(); ++i) {
+                    const int row = changedRows.at(i);
+                    if (row != previousRow + 1) {
+                        emit dataChanged(
+                            index(spanStart, 0, parentIndex),
+                            index(previousRow, 0, parentIndex),
+                            {LastModifiedRole, FileSizeRole});
+                        spanStart = row;
+                    }
+                    previousRow = row;
+                }
+                emit dataChanged(index(spanStart, 0, parentIndex),
+                                 index(previousRow, 0, parentIndex),
+                                 {LastModifiedRole, FileSizeRole});
+            }
 
-            _decodeManager->readImagesInfo(imagePaths, true);
+            if (oldFolderView != item->folderView()) {
+                QModelIndex modelIndex = index(
+                    item->index(), 0,
+                    indexFromItem(item->imageFileParent()));
+                emit dataChanged(modelIndex, modelIndex, {FolderViewRole});
+            }
+            _preserveViewStateOnReset = previousPreserveState;
+
+            changedSubfilePaths.removeDuplicates();
+            if (!changedSubfilePaths.isEmpty()) {
+                emit watchedImageMetadataChanged(changedSubfilePaths);
+            }
+            if (!affectedSubfilePaths.isEmpty()) {
+                const QStringList affectedPaths =
+                    affectedSubfilePaths.values();
+                updateAvailableSelectionCounts(affectedPaths);
+                emit selectionChanged();
+                emit selectionPathsChanged(affectedPaths);
+                emit selectionGroupsChanged();
+            }
+
+            imageInfoPaths.removeDuplicates();
+            if (!imageInfoPaths.isEmpty()) {
+                _decodeManager->readImagesInfo(imageInfoPaths, true);
+            }
         }
+    });
+
+    connect(_decodeManager, &DecodeManager::imageReadFailed, this,
+            [this](const ImageDecodeRequest &request) {
+        if (request.info.directOpenGeneration &&
+            request.info.directOpenGeneration != _directOpen.generation) {
+            return;
+        }
+        rememberFailedDecodeRequest(request);
+        handleDirectOpenImageReady(request, QImage(), DecodedImageInfo());
+    });
+
+    connect(_decodeManager, &DecodeManager::folderListFailed, this,
+            [this](const QString &path, const QString &errorText,
+                   quint64 requestGeneration) {
+        const auto generationIt = _folderPreviewGenerations.constFind(path);
+        if (generationIt == _folderPreviewGenerations.constEnd() ||
+            generationIt.value() != requestGeneration) {
+            return;
+        }
+        scheduleFolderPreviewRetry(path, requestGeneration, errorText);
     });
 
     _selectionSaveTimer.setSingleShot(true);
@@ -599,7 +1050,60 @@ FileListModel::FileListModel(
     connect(&_selectionSaveTimer, &QTimer::timeout, this, []() {
         PersistentSelectionCache::dumpDb();
     });
+
+    _folderRefreshTimer.setSingleShot(true);
+    _folderRefreshTimer.setInterval(FolderRefreshDebounceMs);
+    connect(&_folderRefreshTimer, &QTimer::timeout,
+            this, &FileListModel::refreshWatchedFolder);
+    _folderWatchRetryTimer.setSingleShot(true);
+    connect(&_folderWatchRetryTimer, &QTimer::timeout, this, [this]() {
+        if (_isClosing || _recursiveViewActive) {
+            return;
+        }
+        configureFolderWatcher();
+        scheduleFolderRefresh();
+    });
+    _failedImageWorkRetryTimer.setSingleShot(true);
+    connect(&_failedImageWorkRetryTimer, &QTimer::timeout,
+            this, &FileListModel::retryFailedImageWork);
+    connect(&_fileSystemWatcher, &QFileSystemWatcher::directoryChanged,
+            this, [this](const QString &path) {
+        if (_isClosing || _recursiveViewActive) {
+            return;
+        }
+        const QString changedKey = fileSystemPathKey(path);
+        const QString rootKey = fileSystemPathKey(_root);
+        if (changedKey == rootKey) {
+            scheduleFolderRefresh();
+            return;
+        }
+
+        // When the root disappears, configureFolderWatcher() watches its
+        // nearest available ancestor. An ancestor event may mean that the
+        // original folder has been recreated or a disconnected share is back.
+        const QString rootParentKey =
+            fileSystemPathKey(QFileInfo(_root).absolutePath());
+        if (changedKey == rootParentKey ||
+            !_fileSystemWatcher.directories().contains(_root)) {
+            configureFolderWatcher();
+            scheduleFolderRefresh();
+        }
+    });
+    connect(&_fileSystemWatcher, &QFileSystemWatcher::fileChanged,
+            this, [this](const QString &path) {
+        if (!_isClosing && !_recursiveViewActive &&
+            fileSystemPathKey(QFileInfo(path).absolutePath()) ==
+                fileSystemPathKey(_root)) {
+            scheduleFolderRefresh();
+        }
+    });
     refreshAvailableSelectionCounts();
+}
+
+FileListModel::~FileListModel() {
+#ifdef Q_OS_LINUX
+    resetLinuxFolderContentWatcher();
+#endif
 }
 
 QHash<int, QByteArray> FileListModel::roleNames() const {
@@ -711,6 +1215,17 @@ void FileListModel::prepareToClose() {
         return;
     }
     _isClosing = true;
+    _folderRefreshTimer.stop();
+    _folderWatchRetryTimer.stop();
+    _failedImageWorkRetryTimer.stop();
+    const QStringList watchedDirectories = _fileSystemWatcher.directories();
+    if (!watchedDirectories.isEmpty()) {
+        _fileSystemWatcher.removePaths(watchedDirectories);
+    }
+    const QStringList watchedFiles = _fileSystemWatcher.files();
+    if (!watchedFiles.isEmpty()) {
+        _fileSystemWatcher.removePaths(watchedFiles);
+    }
 
     qInfo() << "[Shutdown] FileListModel::prepareToClose stopping async image provider";
     QmlAsyncImageProvider::prepareToClose();
@@ -727,6 +1242,17 @@ void FileListModel::prepareToClose() {
 }
 
 int FileListModel::cd(const QString &path, const QString &itemToSelect) {
+    _folderRefreshTimer.stop();
+    _folderWatchRetryTimer.stop();
+    ++_folderRefreshGeneration;
+    _folderRefreshPendingAfterDirectOpen = false;
+    _folderRescanAfterInFlight.clear();
+    _folderWatchRetryDelayMs = 500;
+    _recursiveViewActive = false;
+    const QString canceledDirectOpenPath =
+        _directOpen.stage != DirectOpenStage::None &&
+                !_directOpen.readyEmitted
+            ? _directOpen.path : QString();
     const bool hadDirectOpenPath = !_directOpen.path.isEmpty();
     _directOpen.generation++;
     _directOpen.stage = DirectOpenStage::None;
@@ -735,6 +1261,9 @@ int FileListModel::cd(const QString &path, const QString &itemToSelect) {
     _directOpen.pendingNeighborDecodePaths.clear();
     if (hadDirectOpenPath) {
         emit directOpenPathChanged();
+    }
+    if (!canceledDirectOpenPath.isEmpty()) {
+        emit directOpenFailed(canceledDirectOpenPath);
     }
 
     _root = path;
@@ -746,6 +1275,8 @@ int FileListModel::cd(const QString &path, const QString &itemToSelect) {
     endResetModel();
 
     startRegularFolderWork();
+    configureFolderWatcher();
+    scheduleFolderRefresh();
 
     return indexToSelect;
 }
@@ -879,13 +1410,1300 @@ QList<FileInfo> FileListModel::readFolderEntries(const QString &path) const {
     return entries;
 }
 
+void FileListModel::configureFolderWatcher() {
+    const QStringList watchedDirectories = _fileSystemWatcher.directories();
+    QString desiredPath;
+    QStringList desiredFiles;
+    bool desiredPathIsRoot = false;
+    const bool watcherEnabled =
+        !_isClosing && !_recursiveViewActive && !_root.isEmpty() &&
+        sourceReadsEnabled(_fileListCacheMode) &&
+        _root != QStringLiteral("Computer");
+    if (watcherEnabled) {
+        const QFileInfo rootInfo(_root);
+        if (rootInfo.isDir() && rootInfo.isReadable()) {
+            desiredPath = rootInfo.absoluteFilePath();
+            desiredPathIsRoot = true;
+#ifdef Q_OS_WIN
+            // Qt's Windows backend shares one native directory handle for the
+            // directory and its watched files. Adding one representative file
+            // upgrades that handle to include LAST_WRITE and SIZE changes for
+            // the whole directory, without creating O(number of images)
+            // watches (which is especially costly on kqueue-based platforms).
+            for (const ImageFile *item : std::as_const(_items)) {
+                if (!item->isFolder() && QFileInfo(item->fullPath()).isFile()) {
+                    desiredFiles.append(item->fullPath());
+                    break;
+                }
+            }
+#endif
+        }
+        else {
+            // QFileSystemWatcher drops a path after it is removed. Keep an
+            // eye on the nearest existing ancestor so a rename/recreate can
+            // restore the root watch without clearing the current gallery.
+            QString candidate = rootInfo.absolutePath();
+            QSet<QString> visited;
+            while (!candidate.isEmpty()) {
+                const QString candidateKey = fileSystemPathKey(candidate);
+                if (visited.contains(candidateKey)) {
+                    break;
+                }
+                visited.insert(candidateKey);
+                const QFileInfo candidateInfo(candidate);
+                if (candidateInfo.isDir() && candidateInfo.isReadable()) {
+                    desiredPath = candidateInfo.absoluteFilePath();
+                    break;
+                }
+                const QString parent = candidateInfo.absolutePath();
+                if (fileSystemPathKey(parent) == candidateKey) {
+                    break;
+                }
+                candidate = parent;
+            }
+        }
+    }
+
+    const bool directoryAlreadyWatched =
+        watchedDirectories.size() == 1 && !desiredPath.isEmpty() &&
+        fileSystemPathKey(watchedDirectories.first()) ==
+            fileSystemPathKey(desiredPath);
+    if (!directoryAlreadyWatched && !watchedDirectories.isEmpty()) {
+        _fileSystemWatcher.removePaths(watchedDirectories);
+    }
+    bool directoryWatchReady = directoryAlreadyWatched;
+    if (!directoryAlreadyWatched && !desiredPath.isEmpty()) {
+        directoryWatchReady = _fileSystemWatcher.addPath(desiredPath);
+        if (!directoryWatchReady) {
+            qWarning() << "Could not watch folder for changes" << desiredPath;
+        }
+    }
+
+    const QStringList watchedFiles = _fileSystemWatcher.files();
+    QHash<QString, QString> watchedFilesByKey;
+    for (const QString &file : watchedFiles) {
+        watchedFilesByKey.insert(fileSystemPathKey(file), file);
+    }
+    QSet<QString> desiredFileKeys;
+    QStringList filesToAdd;
+    bool representativeFileWatchReady = desiredFiles.isEmpty();
+    for (const QString &file : std::as_const(desiredFiles)) {
+        const QString key = fileSystemPathKey(file);
+        desiredFileKeys.insert(key);
+        if (watchedFilesByKey.contains(key)) {
+            representativeFileWatchReady = true;
+        }
+        else {
+            filesToAdd.append(file);
+        }
+    }
+    QStringList filesToRemove;
+    for (auto it = watchedFilesByKey.constBegin();
+         it != watchedFilesByKey.constEnd(); ++it) {
+        if (!desiredFileKeys.contains(it.key())) {
+            filesToRemove.append(it.value());
+        }
+    }
+    if (!filesToRemove.isEmpty()) {
+        _fileSystemWatcher.removePaths(filesToRemove);
+    }
+    if (!filesToAdd.isEmpty()) {
+        const QStringList failedFiles = _fileSystemWatcher.addPaths(filesToAdd);
+        if (!failedFiles.isEmpty()) {
+            qWarning() << "Could not watch some files for changes"
+                       << failedFiles.size();
+        }
+        else {
+            representativeFileWatchReady = true;
+        }
+    }
+
+    bool supplementalContentWatchReady = true;
+#ifdef Q_OS_LINUX
+    supplementalContentWatchReady =
+        configureLinuxFolderContentWatcher(
+            desiredPathIsRoot && directoryWatchReady
+                ? desiredPath : QString());
+#endif
+
+    if (watcherEnabled && desiredPathIsRoot && directoryWatchReady &&
+        representativeFileWatchReady && supplementalContentWatchReady) {
+        _folderWatchRetryTimer.stop();
+    }
+    else if (watcherEnabled) {
+        scheduleFolderWatchRetry();
+    }
+}
+
+#ifdef Q_OS_LINUX
+bool FileListModel::configureLinuxFolderContentWatcher(
+    const QString &path) {
+    if (path.isEmpty()) {
+        clearLinuxFolderContentWatcher();
+        return true;
+    }
+    if (_linuxFolderWatchDescriptor >= 0 &&
+        fileSystemPathKey(_linuxFolderWatchPath) ==
+            fileSystemPathKey(path)) {
+        return true;
+    }
+
+    clearLinuxFolderContentWatcher();
+    if (_linuxFolderWatchFd < 0) {
+        _linuxFolderWatchFd =
+            ::inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+        if (_linuxFolderWatchFd < 0) {
+            qWarning() << "Could not initialize supplemental inotify watcher"
+                       << QString::fromStdString(
+                              std::system_category().message(errno));
+            return false;
+        }
+        _linuxFolderWatchNotifier = new QSocketNotifier(
+            _linuxFolderWatchFd, QSocketNotifier::Read, this);
+        connect(_linuxFolderWatchNotifier, &QSocketNotifier::activated,
+                this, [this]() { readLinuxFolderContentEvents(); });
+    }
+
+    constexpr uint32_t contentMask =
+        IN_CLOSE_WRITE | IN_MODIFY | IN_ATTRIB | IN_CREATE | IN_DELETE |
+        IN_MOVED_FROM | IN_MOVED_TO | IN_MOVE_SELF | IN_DELETE_SELF |
+        IN_UNMOUNT;
+    _linuxFolderWatchDescriptor = ::inotify_add_watch(
+        _linuxFolderWatchFd, QFile::encodeName(path).constData(),
+        contentMask);
+    if (_linuxFolderWatchDescriptor < 0) {
+        qWarning() << "Could not watch folder content with inotify" << path
+                   << QString::fromStdString(
+                          std::system_category().message(errno));
+        return false;
+    }
+    _linuxFolderWatchPath = path;
+    return true;
+}
+
+void FileListModel::clearLinuxFolderContentWatcher() {
+    if (_linuxFolderWatchFd >= 0 &&
+        _linuxFolderWatchDescriptor >= 0) {
+        (void)::inotify_rm_watch(_linuxFolderWatchFd,
+                                 _linuxFolderWatchDescriptor);
+        // inotify queues IN_IGNORED for an explicitly removed watch. Drain it
+        // before adding the next root so a recycled watch descriptor cannot
+        // make that new watch look as if it had just been removed.
+        alignas(inotify_event) char discard[4096];
+        for (;;) {
+            const ssize_t bytesRead =
+                ::read(_linuxFolderWatchFd, discard, sizeof(discard));
+            if (bytesRead > 0) {
+                continue;
+            }
+            if (bytesRead < 0 && errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+    }
+    _linuxFolderWatchDescriptor = -1;
+    _linuxFolderWatchPath.clear();
+}
+
+void FileListModel::resetLinuxFolderContentWatcher() {
+    if (_linuxFolderWatchNotifier) {
+        _linuxFolderWatchNotifier->setEnabled(false);
+        _linuxFolderWatchNotifier->deleteLater();
+        _linuxFolderWatchNotifier = nullptr;
+    }
+    if (_linuxFolderWatchFd >= 0) {
+        (void)::close(_linuxFolderWatchFd);
+        _linuxFolderWatchFd = -1;
+    }
+    _linuxFolderWatchDescriptor = -1;
+    _linuxFolderWatchPath.clear();
+}
+
+void FileListModel::readLinuxFolderContentEvents() {
+    if (_linuxFolderWatchFd < 0) {
+        return;
+    }
+
+    alignas(inotify_event) char buffer[64 * 1024];
+    bool refreshRequested = false;
+    bool watchWasRemoved = false;
+    bool watcherResetRequired = false;
+
+    for (;;) {
+        const ssize_t bytesRead =
+            ::read(_linuxFolderWatchFd, buffer, sizeof(buffer));
+        if (bytesRead < 0) {
+            const int readError = errno;
+            if (readError == EINTR) {
+                continue;
+            }
+            if (readError == EAGAIN || readError == EWOULDBLOCK) {
+                break;
+            }
+            qWarning() << "Could not read inotify events"
+                       << QString::fromStdString(
+                              std::system_category().message(readError));
+            watcherResetRequired = true;
+            refreshRequested = true;
+            break;
+        }
+        if (bytesRead == 0) {
+            qWarning() << "Unexpected end of supplemental inotify event stream";
+            watcherResetRequired = true;
+            refreshRequested = true;
+            break;
+        }
+
+        const char *cursor = buffer;
+        const char *const end = buffer + bytesRead;
+        while (cursor + sizeof(inotify_event) <= end) {
+            const auto *event =
+                reinterpret_cast<const inotify_event *>(cursor);
+            const size_t eventSize = sizeof(inotify_event) + event->len;
+            if (cursor + eventSize > end) {
+                break;
+            }
+            if (event->wd == _linuxFolderWatchDescriptor ||
+                (event->mask & IN_Q_OVERFLOW)) {
+                refreshRequested = true;
+            }
+            if (event->mask & IN_Q_OVERFLOW) {
+                // The overflow can discard the IN_IGNORED event for an
+                // automatically removed watch. Recreate the whole inotify
+                // instance rather than trusting the cached descriptor.
+                watcherResetRequired = true;
+            }
+            if (event->wd == _linuxFolderWatchDescriptor &&
+                (event->mask & (IN_IGNORED | IN_DELETE_SELF |
+                                IN_MOVE_SELF | IN_UNMOUNT))) {
+                watchWasRemoved = true;
+            }
+            cursor += eventSize;
+        }
+    }
+
+    if (watcherResetRequired) {
+        resetLinuxFolderContentWatcher();
+        configureFolderWatcher();
+    }
+    else if (watchWasRemoved) {
+        clearLinuxFolderContentWatcher();
+        configureFolderWatcher();
+    }
+    if (refreshRequested) {
+        scheduleFolderRefresh();
+    }
+}
+#endif
+
+void FileListModel::scheduleFolderRefresh() {
+    if (_isClosing || _recursiveViewActive ||
+        _root.isEmpty() || _root == QStringLiteral("Computer") ||
+        !sourceReadsEnabled(_fileListCacheMode)) {
+        return;
+    }
+    ++_folderRefreshGeneration;
+    if (_directOpen.stage != DirectOpenStage::None) {
+        _folderRefreshPendingAfterDirectOpen = true;
+        _folderRefreshTimer.stop();
+        return;
+    }
+    _folderRefreshTimer.start(FolderRefreshDebounceMs);
+}
+
+void FileListModel::scheduleFolderWatchRetry() {
+    if (_isClosing || _recursiveViewActive || _root.isEmpty() ||
+        _root == QStringLiteral("Computer") ||
+        !sourceReadsEnabled(_fileListCacheMode) ||
+        _folderWatchRetryTimer.isActive()) {
+        return;
+    }
+    _folderWatchRetryTimer.start(_folderWatchRetryDelayMs);
+    _folderWatchRetryDelayMs =
+        qMin(_folderWatchRetryDelayMs * 2, FolderWatchRetryMaxMs);
+}
+
+void FileListModel::refreshWatchedFolder() {
+    if (_isClosing || _recursiveViewActive ||
+        _root.isEmpty() || _root == QStringLiteral("Computer") ||
+        !sourceReadsEnabled(_fileListCacheMode)) {
+        return;
+    }
+
+    const QString path = QFileInfo(_root).absoluteFilePath();
+    const QString pathKey = fileSystemPathKey(path);
+    if (_folderScansInFlight.contains(pathKey)) {
+        _folderRescanAfterInFlight.insert(pathKey);
+        return;
+    }
+
+    if (_directOpen.stage != DirectOpenStage::None) {
+        _folderRefreshPendingAfterDirectOpen = true;
+        return;
+    }
+
+    const quint64 generation = _folderRefreshGeneration;
+    _folderRefreshPendingAfterDirectOpen = false;
+    _folderScansInFlight.insert(pathKey);
+    _folderRescanAfterInFlight.remove(pathKey);
+    auto *scanWatcher = new QFutureWatcher<FolderScanResult>(this);
+    connect(scanWatcher, &QFutureWatcher<FolderScanResult>::finished,
+            this, [this, scanWatcher, generation, pathKey]() {
+        const FolderScanResult result = scanWatcher->result();
+        scanWatcher->deleteLater();
+        _folderScansInFlight.remove(pathKey);
+        const bool rescanRequested =
+            _folderRescanAfterInFlight.remove(pathKey);
+        if (_isClosing || _recursiveViewActive) {
+            return;
+        }
+        const bool isCurrentRoot =
+            fileSystemPathKey(result.path) == fileSystemPathKey(_root);
+        if (!isCurrentRoot) {
+            return;
+        }
+        if (_directOpen.stage != DirectOpenStage::None) {
+            _folderRefreshPendingAfterDirectOpen = true;
+            return;
+        }
+        if (generation != _folderRefreshGeneration || rescanRequested) {
+            _folderRefreshTimer.start(FolderRefreshDebounceMs);
+            return;
+        }
+        if (result.status != FolderScanStatus::Success) {
+            // Keep the model intact for a transient share, permission, or
+            // enumeration failure. A recovery watch plus bounded retries
+            // will apply only the next complete snapshot.
+            qWarning() << "Ignoring incomplete folder refresh"
+                       << result.path << result.errorText;
+            configureFolderWatcher();
+            scheduleFolderWatchRetry();
+            return;
+        }
+        _folderWatchRetryTimer.stop();
+        _folderWatchRetryDelayMs = 500;
+        if (cacheWritesEnabled(_fileListCacheMode)) {
+            PersistentFolderCache::storeFolder(
+                FolderInfo{result.path, result.entries});
+        }
+        reconcileFolderEntries(result.entries);
+        retryFailedImageWork();
+        configureFolderWatcher();
+    });
+    scanWatcher->setFuture(QtConcurrent::run([path]() {
+        FolderScanResult result;
+        result.path = path;
+        const QFileInfo rootInfo(path);
+        if (!rootInfo.isDir() || !rootInfo.isReadable()) {
+            result.status = FolderScanStatus::RootUnavailable;
+            result.errorText = QStringLiteral("Folder is unavailable");
+            return result;
+        }
+
+        std::error_code scanError;
+        std::filesystem::directory_iterator iterator(
+            nativeFileSystemPath(path), scanError);
+        const std::filesystem::directory_iterator end;
+        if (scanError) {
+            result.status = FolderScanStatus::EnumerationError;
+            result.errorText = QString::fromStdString(
+                scanError.message());
+            return result;
+        }
+        while (iterator != end) {
+            const std::filesystem::directory_entry sourceEntry = *iterator;
+            std::error_code metadataError;
+            const std::filesystem::file_status linkStatus =
+                sourceEntry.symlink_status(metadataError);
+            if (metadataError) {
+                result.status = FolderScanStatus::EnumerationError;
+                result.errorText = QString::fromStdString(
+                    metadataError.message());
+                result.entries.clear();
+                return result;
+            }
+
+            const bool sourceIsSymlink =
+                std::filesystem::is_symlink(linkStatus);
+            const bool sourceIsDirectory =
+                std::filesystem::is_directory(linkStatus);
+            const bool sourceIsRegularFile =
+                std::filesystem::is_regular_file(linkStatus);
+            std::filesystem::file_time_type sourceWriteTime;
+            std::uintmax_t sourceFileSize = 0;
+            if (!sourceIsSymlink) {
+                sourceWriteTime =
+                    sourceEntry.last_write_time(metadataError);
+                if (!metadataError && sourceIsRegularFile) {
+                    sourceFileSize = sourceEntry.file_size(metadataError);
+                }
+                if (metadataError) {
+                    result.status = FolderScanStatus::EnumerationError;
+                    result.errorText = QString::fromStdString(
+                        metadataError.message());
+                    result.entries.clear();
+                    return result;
+                }
+            }
+
+            const QFileInfo entry(qStringFromNativeFileSystemPath(
+                sourceEntry.path()));
+            const bool entryExists = entry.exists() || entry.isSymLink();
+            const bool entryIsDirectory = entry.isDir();
+            const QDateTime entryLastModified = entry.lastModified();
+            const qint64 entryFileSize =
+                entryIsDirectory ? 0 : entry.size();
+
+            std::error_code verificationError;
+            const std::filesystem::file_status verifiedStatus =
+                sourceEntry.symlink_status(verificationError);
+            bool metadataChangedDuringScan = verificationError ||
+                verifiedStatus.type() != linkStatus.type() || !entryExists;
+            if (!metadataChangedDuringScan && !sourceIsSymlink) {
+                const std::filesystem::file_time_type verifiedWriteTime =
+                    sourceEntry.last_write_time(verificationError);
+                metadataChangedDuringScan = verificationError ||
+                    verifiedWriteTime != sourceWriteTime ||
+                    entryIsDirectory != sourceIsDirectory ||
+                    !entryLastModified.isValid();
+                if (!metadataChangedDuringScan && sourceIsRegularFile) {
+                    const std::uintmax_t verifiedFileSize =
+                        sourceEntry.file_size(verificationError);
+                    metadataChangedDuringScan = verificationError ||
+                        verifiedFileSize != sourceFileSize ||
+                        entryFileSize < 0 ||
+                        static_cast<std::uintmax_t>(entryFileSize) !=
+                            sourceFileSize;
+                }
+            }
+            if (metadataChangedDuringScan) {
+                result.status = FolderScanStatus::EnumerationError;
+                result.errorText = QStringLiteral(
+                    "Folder entry changed while reading metadata: %1")
+                    .arg(entry.absoluteFilePath());
+                result.entries.clear();
+                return result;
+            }
+            result.entries.append(FileInfo{
+                .name = entry.fileName(),
+                .lastModified = entryLastModified,
+                .fileSize = entryFileSize,
+                .isDirectory = entryIsDirectory,
+            });
+            iterator.increment(scanError);
+            if (scanError) {
+                result.status = FolderScanStatus::EnumerationError;
+                result.errorText = QString::fromStdString(
+                    scanError.message());
+                result.entries.clear();
+                return result;
+            }
+        }
+        const QFileInfo rootAfterMetadata(path);
+        if (!rootAfterMetadata.isDir() || !rootAfterMetadata.isReadable()) {
+            result.status = FolderScanStatus::RootUnavailable;
+            result.entries.clear();
+            result.errorText =
+                QStringLiteral("Folder disappeared while reading metadata");
+            return result;
+        }
+        result.status = FolderScanStatus::Success;
+        return result;
+    }));
+}
+
+void FileListModel::reconcileFolderEntries(
+    const QList<FileInfo> &sourceEntries) {
+    QList<FileInfo> folders;
+    QList<FileInfo> files;
+    folders.reserve(sourceEntries.size());
+    files.reserve(sourceEntries.size());
+    for (const FileInfo &entry : sourceEntries) {
+        (entry.isDirectory ? folders : files).append(entry);
+    }
+    sortFileInfosNaturally(folders);
+    sortFileInfosNaturally(files);
+    QList<FileInfo> entries = folders;
+    entries.append(files);
+
+    QHash<QString, ImageFile *> existingByPath;
+    existingByPath.reserve(_items.size());
+    for (ImageFile *item : std::as_const(_items)) {
+        existingByPath.insert(fileSystemPathKey(item->fullPath()), item);
+    }
+
+    QList<ImageFile *> nextItems;
+    nextItems.reserve(entries.size());
+    QSet<ImageFile *> retainedItems;
+    QHash<ImageFile *, ImageInfo> metadataUpdates;
+    QStringList addedImagePaths;
+    QStringList changedImagePaths;
+    QStringList addedFolderPaths;
+    QStringList changedFolderPaths;
+    QSet<QString> affectedPaths;
+
+    for (const FileInfo &entry : std::as_const(entries)) {
+        const QString path = QDir(_root).absoluteFilePath(entry.name);
+        ImageFile *item = existingByPath.value(fileSystemPathKey(path), nullptr);
+        if (item && (item->isFolder() != entry.isDirectory ||
+                     item->fullPath() != path)) {
+            item = nullptr;
+        }
+
+        if (item) {
+            retainedItems.insert(item);
+            ImageInfo info = item->info();
+            if (info.path != path || info.lastModified != entry.lastModified ||
+                info.fileSize != entry.fileSize) {
+                info.path = path;
+                info.lastModified = entry.lastModified;
+                info.fileSize = entry.fileSize;
+                metadataUpdates.insert(item, info);
+                if (item->isImage()) {
+                    changedImagePaths.append(path);
+                }
+                else if (item->isFolder()) {
+                    changedFolderPaths.append(path);
+                }
+            }
+        }
+        else if (entry.isDirectory) {
+            item = new ImageFile(this);
+            item->setFolderPath(_root);
+            item->setFileName(entry.name);
+            item->setIsFolder(true);
+            item->setIsImage(false);
+            item->setIconPath(QStringLiteral("qrc:/resources/FolderIcon.svg"));
+            item->setInfo(ImageInfo{
+                .path = item->fullPath(),
+                .lastModified = entry.lastModified,
+                .fileSize = 0,
+            });
+            addedFolderPaths.append(item->fullPath());
+            affectedPaths.insert(item->fullPath());
+        }
+        else {
+            item = createFileItem(_root, entry.name, entry.lastModified,
+                                  entry.fileSize);
+            if (item->isImage()) {
+                addedImagePaths.append(item->fullPath());
+            }
+            affectedPaths.insert(item->fullPath());
+        }
+        nextItems.append(item);
+    }
+
+    QList<ImageFile *> removedItems;
+    for (ImageFile *item : std::as_const(_items)) {
+        if (!retainedItems.contains(item)) {
+            removedItems.append(item);
+            affectedPaths.insert(item->fullPath());
+        }
+    }
+
+    bool structureChanged = nextItems.size() != _items.size();
+    if (!structureChanged) {
+        for (int i = 0; i < nextItems.size(); ++i) {
+            if (nextItems.at(i) != _items.at(i)) {
+                structureChanged = true;
+                break;
+            }
+        }
+    }
+
+    if (!structureChanged && metadataUpdates.isEmpty()) {
+        return;
+    }
+
+    // Keep this true for every model/proxy signal emitted by reconciliation.
+    // Masonry uses it to distinguish a watcher refresh from ordinary cd().
+    _preserveViewStateOnReset = true;
+
+    const int previousCurrentIndex = _currentViewIndex;
+    ImageFile *const previousCurrentItem =
+        previousCurrentIndex >= 0 && previousCurrentIndex < _items.size()
+            ? _items.at(previousCurrentIndex)
+            : nullptr;
+    const QString directOpenPath = _directOpen.path;
+
+    QSet<QString> pendingFolderKeys;
+    for (const QString &path : std::as_const(_folderImagePaths)) {
+        pendingFolderKeys.insert(fileSystemPathKey(path));
+    }
+
+    // A sorted/filtered proxy can inspect selection roles while forwarding an
+    // insertion. Seed newly created items before beginInsertRows so a selected
+    // item does not briefly appear in the wrong filtered state.
+    for (ImageFile *item : std::as_const(nextItems)) {
+        if (retainedItems.contains(item)) {
+            continue;
+        }
+        const QString containerKey = selectionContainerForItem(item);
+        ensureSelectionStateLoaded(containerKey);
+        const QString groupId =
+            _selectionStates[containerKey].selectedGroups.value(
+                selectionItemKey(item));
+        item->setIsSelected(!groupId.isEmpty());
+        item->setSelectionGroupId(groupId);
+        item->setSelectionGroupColor(
+            groupId.isEmpty()
+                ? QColor()
+                : QColor(PersistentSelectionCache::colorForGroup(groupId)));
+    }
+
+    auto removeDecodedState = [this](ImageFile *item) {
+        const QString imageId = item->imageIdUrl().section('/', -1);
+        if (!imageId.isEmpty()) {
+            _imageIdToItem.remove(imageId);
+            _providerImageStore->remove(imageId);
+        }
+        _viewerImageCache.remove(item->fullPath());
+    };
+
+    if (structureChanged) {
+        auto indexForPath = [this](const QString &path) {
+            if (path.isEmpty()) {
+                return -1;
+            }
+            const QString key = fileSystemPathKey(path);
+            for (int i = 0; i < _items.size(); ++i) {
+                if (fileSystemPathKey(_items.at(i)->fullPath()) == key) {
+                    return i;
+                }
+            }
+            return -1;
+        };
+        auto remapTrackedIndexes = [&]() {
+            const int currentItemIndex =
+                previousCurrentItem ? _items.indexOf(previousCurrentItem) : -1;
+            if (currentItemIndex >= 0) {
+                _currentViewIndex = currentItemIndex;
+            }
+            else if (_items.isEmpty()) {
+                _currentViewIndex = -1;
+            }
+            else if (previousCurrentIndex >= 0) {
+                _currentViewIndex = qBound(0, previousCurrentIndex,
+                                           _items.size() - 1);
+            }
+            if (!directOpenPath.isEmpty()) {
+                _directOpen.currentIndex = indexForPath(directOpenPath);
+            }
+        };
+        auto reindexItemsFrom = [this](int first) {
+            for (int row = qMax(0, first); row < _items.size(); ++row) {
+                _items.at(row)->setIndex(row);
+            }
+        };
+
+        const QSet<ImageFile *> nextItemSet(nextItems.begin(),
+                                            nextItems.end());
+        for (int last = _items.size() - 1; last >= 0;) {
+            if (nextItemSet.contains(_items.at(last))) {
+                --last;
+                continue;
+            }
+            int first = last;
+            while (first > 0 &&
+                   !nextItemSet.contains(_items.at(first - 1))) {
+                --first;
+            }
+            beginRemoveRows(QModelIndex(), first, last);
+            for (int row = last; row >= first; --row) {
+                _items.removeAt(row);
+            }
+            reindexItemsFrom(first);
+            remapTrackedIndexes();
+            endRemoveRows();
+            last = first - 1;
+        }
+
+        QSet<ImageFile *> presentItems(_items.begin(), _items.end());
+        for (int targetRow = 0; targetRow < nextItems.size();) {
+            ImageFile *desired = nextItems.at(targetRow);
+            if (targetRow < _items.size() &&
+                _items.at(targetRow) == desired) {
+                ++targetRow;
+                continue;
+            }
+
+            const int existingRow = _items.indexOf(desired);
+            if (existingRow >= 0) {
+                const int destinationChild =
+                    existingRow < targetRow ? targetRow + 1 : targetRow;
+                const bool moveStarted = beginMoveRows(
+                    QModelIndex(), existingRow, existingRow,
+                    QModelIndex(), destinationChild);
+                Q_ASSERT(moveStarted);
+                if (!moveStarted) {
+                    qWarning() << "Could not move watched folder row"
+                               << existingRow << targetRow << _root;
+                    break;
+                }
+                _items.move(existingRow, targetRow);
+                reindexItemsFrom(qMin(existingRow, targetRow));
+                remapTrackedIndexes();
+                endMoveRows();
+                ++targetRow;
+                continue;
+            }
+
+            int insertCount = 1;
+            while (targetRow + insertCount < nextItems.size() &&
+                   !presentItems.contains(
+                       nextItems.at(targetRow + insertCount))) {
+                ++insertCount;
+            }
+            beginInsertRows(QModelIndex(), targetRow,
+                            targetRow + insertCount - 1);
+            for (int offset = 0; offset < insertCount; ++offset) {
+                ImageFile *inserted = nextItems.at(targetRow + offset);
+                _items.insert(targetRow + offset, inserted);
+                presentItems.insert(inserted);
+            }
+            reindexItemsFrom(targetRow);
+            remapTrackedIndexes();
+            endInsertRows();
+            targetRow += insertCount;
+        }
+        Q_ASSERT(_items == nextItems);
+
+        _fileToItem.clear();
+        _imagePaths.clear();
+        _folderImagePaths.clear();
+
+        for (int i = 0; i < _items.size(); ++i) {
+            ImageFile *item = _items.at(i);
+            item->setIndex(i);
+            if (item->isFolder()) {
+                _fileToItem.insert(item->fullPath(), item);
+                const QList<ImageFile *> subfiles = item->subfiles();
+                for (int subfileIndex = 0;
+                     subfileIndex < subfiles.size(); ++subfileIndex) {
+                    ImageFile *subfile = subfiles.at(subfileIndex);
+                    subfile->setIndex(subfileIndex);
+                    subfile->setImageFileParent(item);
+                    _fileToItem.insert(subfile->fullPath(), subfile);
+                }
+                if (pendingFolderKeys.contains(
+                        fileSystemPathKey(item->fullPath())) ||
+                    addedFolderPaths.contains(item->fullPath())) {
+                    _folderImagePaths.append(item->fullPath());
+                }
+            }
+            else if (item->isImage()) {
+                _fileToItem.insert(item->fullPath(), item);
+                _imagePaths.append(item->fullPath());
+            }
+        }
+
+        for (ImageFile *removedItem : std::as_const(removedItems)) {
+            if (RootProxyModel *proxy = _folderModels.take(removedItem)) {
+                proxy->setRoot(nullptr);
+                proxy->deleteLater();
+            }
+        }
+        remapTrackedIndexes();
+        loadSelectionStatesForVisibleItems();
+    }
+
+    // Apply metadata after structural proxy updates. Otherwise a dynamic sort
+    // proxy can compare a mixture of new and old values while it is forwarding
+    // insertions, before receiving the dataChanged that authorizes a resort.
+    for (auto it = metadataUpdates.constBegin();
+         it != metadataUpdates.constEnd(); ++it) {
+        it.key()->setInfo(it.value());
+    }
+
+    QList<int> changedIndexes;
+    changedIndexes.reserve(metadataUpdates.size());
+    for (ImageFile *item : metadataUpdates.keys()) {
+        changedIndexes.append(item->index());
+    }
+    std::sort(changedIndexes.begin(), changedIndexes.end());
+    if (!changedIndexes.isEmpty()) {
+        int spanStart = changedIndexes.first();
+        int previousRow = spanStart;
+        for (qsizetype i = 1; i < changedIndexes.size(); ++i) {
+            const int row = changedIndexes.at(i);
+            if (row != previousRow + 1) {
+                emit dataChanged(index(spanStart, 0),
+                                 index(previousRow, 0),
+                                 {LastModifiedRole, FileSizeRole});
+                spanStart = row;
+            }
+            previousRow = row;
+        }
+        emit dataChanged(index(spanStart, 0), index(previousRow, 0),
+                         {LastModifiedRole, FileSizeRole});
+    }
+
+    // Cleanup only after rowsRemoved has synchronously detached visible QML
+    // delegates. Removing provider/cache state earlier can blank the delegate
+    // for a file that is on its way out.
+    for (ImageFile *item : std::as_const(removedItems)) {
+        _folderPreviewGenerations.remove(item->fullPath());
+        _folderPreviewRetryAttempts.remove(item->fullPath());
+        removeDecodedState(item);
+        for (ImageFile *subfile : item->subfiles()) {
+            removeDecodedState(subfile);
+        }
+    }
+
+    for (ImageFile *item : std::as_const(removedItems)) {
+        item->deleteLater();
+    }
+
+    if (previousCurrentItem &&
+        (_currentViewIndex < 0 || _currentViewIndex >= _items.size() ||
+         _items.at(_currentViewIndex) != previousCurrentItem)) {
+        emit viewerReset();
+    }
+
+    addedImagePaths.removeDuplicates();
+    changedImagePaths.removeDuplicates();
+    if (!changedImagePaths.isEmpty()) {
+        emit watchedImageMetadataChanged(changedImagePaths);
+    }
+    if (!addedImagePaths.isEmpty()) {
+        _decodeManager->readImagesInfo(addedImagePaths, false, 0, true);
+    }
+    if (!changedImagePaths.isEmpty()) {
+        _decodeManager->readImagesInfo(changedImagePaths, false);
+    }
+    QStringList folderPreviewPaths = addedFolderPaths;
+    folderPreviewPaths.append(changedFolderPaths);
+    folderPreviewPaths.removeDuplicates();
+    QStringList folderCacheInvalidations = folderPreviewPaths;
+    for (ImageFile *removedItem : std::as_const(removedItems)) {
+        if (removedItem->isFolder()) {
+            folderCacheInvalidations.append(removedItem->fullPath());
+        }
+    }
+    folderCacheInvalidations.removeDuplicates();
+    if (!folderCacheInvalidations.isEmpty()) {
+        PersistentFolderCache::removeFolders(folderCacheInvalidations);
+    }
+    if (!folderPreviewPaths.isEmpty()) {
+        requestFolderPreviews(folderPreviewPaths);
+    }
+
+    if (!affectedPaths.isEmpty()) {
+        const QStringList changedPaths = affectedPaths.values();
+        updateAvailableSelectionCounts(changedPaths);
+        emit selectionChanged();
+        emit selectionPathsChanged(changedPaths);
+        emit selectionGroupsChanged();
+    }
+
+    qDebug() << "Reconciled watched folder" << _root
+             << "added" << addedImagePaths.size() + addedFolderPaths.size()
+             << "removed" << removedItems.size()
+             << "metadata" << metadataUpdates.size();
+    _preserveViewStateOnReset = false;
+}
+
+bool FileListModel::isCurrentFileVersion(
+    const ImageFile *item, const ImageInfo &info) const {
+    if (!item) {
+        return false;
+    }
+    if (!sourceReadsEnabled(_imageCacheMode)) {
+        // In cache-only mode there is deliberately no source fallback. The
+        // cached frame remains the best available version even if the folder
+        // listing was produced from newer source metadata.
+        return true;
+    }
+    if (info.lastModified.isValid() && item->lastModified().isValid() &&
+        info.lastModified != item->lastModified()) {
+        return false;
+    }
+    if (info.fileSize >= 0 && item->fileSize() >= 0 &&
+        info.fileSize != item->fileSize()) {
+        return false;
+    }
+    return true;
+}
+
+void FileListModel::emitThumbnailInfoFlush() {
+    for (int row = _items.size() - 1; row >= 0; --row) {
+        if (!_items.at(row)->isImage()) {
+            continue;
+        }
+        const QModelIndex flushIndex = index(row, 0);
+        if (flushIndex.isValid()) {
+            emit dataChanged(flushIndex, flushIndex, {TimeToFlushRole});
+        }
+        return;
+    }
+}
+
+void FileListModel::refreshCurrentViewerAfterMetadata(ImageFile *item) {
+    if (!item || !_hasCurrentViewerRequest ||
+        _currentViewIndex < 0 || _currentViewIndex >= _items.size()) {
+        return;
+    }
+    if (_items.at(_currentViewIndex) != item) {
+        return;
+    }
+    const ViewerImageCache::RequestPlan requestPlan =
+        _viewerImageCache.planRequest(_items, _currentViewIndex,
+                                      _currentViewerRequestSize, 1);
+    if (!requestPlan.decodeRequests.isEmpty()) {
+        _decodeManager->decodeImages(requestPlan.decodeRequests);
+    }
+}
+
+void FileListModel::rememberFailedImageInfo(const ImageInfo &info) {
+    if (!sourceReadsEnabled(_imageCacheMode)) {
+        return;
+    }
+    const auto itemIt = _fileToItem.constFind(info.path);
+    if (itemIt == _fileToItem.constEnd() || !itemIt.value()->isImage()) {
+        return;
+    }
+    ImageInfo sourceRetry = info;
+    sourceRetry.lastModified = itemIt.value()->lastModified();
+    sourceRetry.fileSize = itemIt.value()->fileSize();
+    const QString retryKey = infoRetryKey(sourceRetry);
+    const auto existingRetry = _failedImageInfoRequests.constFind(retryKey);
+    if (existingRetry != _failedImageInfoRequests.constEnd()) {
+        sourceRetry.highPriority =
+            sourceRetry.highPriority || existingRetry->highPriority;
+    }
+    _failedImageInfoRequests.insert(retryKey, sourceRetry);
+    scheduleFailedImageWorkRetry();
+}
+
+void FileListModel::rememberFailedDecodeRequest(
+    const ImageDecodeRequest &request) {
+    if (!sourceReadsEnabled(_imageCacheMode)) {
+        return;
+    }
+    const auto itemIt = _fileToItem.constFind(request.info.path);
+    if (itemIt == _fileToItem.constEnd() || !itemIt.value()->isImage() ||
+        !isCurrentFileVersion(itemIt.value(), request.info)) {
+        return;
+    }
+    ImageDecodeRequest sourceRetry = request;
+    sourceRetry.checkCache = false;
+    const QString retryKey = decodeRetryKey(sourceRetry);
+    const auto existingRetry = _failedImageDecodeRequests.constFind(retryKey);
+    if (existingRetry != _failedImageDecodeRequests.constEnd()) {
+        sourceRetry.highPriority =
+            sourceRetry.highPriority || existingRetry->highPriority;
+        if (existingRetry->viewerGeneration >
+            sourceRetry.viewerGeneration) {
+            sourceRetry.viewerGeneration = existingRetry->viewerGeneration;
+            sourceRetry.viewerPriorityOrdinal =
+                existingRetry->viewerPriorityOrdinal;
+        }
+        else if (existingRetry->viewerGeneration ==
+                     sourceRetry.viewerGeneration &&
+                 existingRetry->viewerPriorityOrdinal >= 0 &&
+                 (sourceRetry.viewerPriorityOrdinal < 0 ||
+                  existingRetry->viewerPriorityOrdinal <
+                      sourceRetry.viewerPriorityOrdinal)) {
+            sourceRetry.viewerPriorityOrdinal =
+                existingRetry->viewerPriorityOrdinal;
+        }
+    }
+    _failedImageDecodeRequests.insert(retryKey, sourceRetry);
+    scheduleFailedImageWorkRetry();
+}
+
+void FileListModel::scheduleFailedImageWorkRetry() {
+    if (_isClosing || !sourceReadsEnabled(_imageCacheMode) ||
+        _failedImageWorkRetryTimer.isActive()) {
+        return;
+    }
+    _failedImageWorkRetryTimer.start(_failedImageWorkRetryDelayMs);
+    _failedImageWorkRetryDelayMs = qMin(
+        _failedImageWorkRetryDelayMs * 2, FailedImageWorkRetryMaxMs);
+}
+
+void FileListModel::retryFailedImageWork() {
+    _failedImageWorkRetryTimer.stop();
+    if (!sourceReadsEnabled(_imageCacheMode) ||
+        (_failedImageInfoRequests.isEmpty() &&
+         _failedImageDecodeRequests.isEmpty())) {
+        return;
+    }
+
+    const QHash<QString, ImageInfo> pendingInfo =
+        std::exchange(_failedImageInfoRequests, {});
+    QHash<int, QStringList> topLevelInfoPaths;
+    QHash<int, QStringList> embeddedInfoPaths;
+    QHash<int, QStringList> highTopLevelInfoPaths;
+    QHash<int, QStringList> highEmbeddedInfoPaths;
+    QList<int> topLevelRows;
+    bool abandonDirectPriority = false;
+    for (auto pendingIt = pendingInfo.constBegin();
+         pendingIt != pendingInfo.constEnd(); ++pendingIt) {
+        ImageInfo info = pendingIt.value();
+        QString attemptKey = pendingIt.key();
+        const auto itemIt = _fileToItem.constFind(info.path);
+        if (itemIt == _fileToItem.constEnd() || !itemIt.value()->isImage()) {
+            _failedImageInfoRetryAttempts.remove(attemptKey);
+            continue;
+        }
+        const bool activeDirectRetry =
+            info.directOpenGeneration && isActiveDirectOpenInfo(info);
+        if (info.directOpenGeneration &&
+            !activeDirectRetry) {
+            if (info.directOpenGeneration != _directOpen.generation ||
+                _directOpen.stage != DirectOpenStage::None) {
+                _failedImageInfoRetryAttempts.remove(attemptKey);
+                continue;
+            }
+            // A cached direct-open tier may have completed the priority state
+            // while its parallel source read failed. Keep the quality retry as
+            // ordinary model work for the same still-current generation.
+            info.directOpenGeneration = 0;
+        }
+        const QString effectiveAttemptKey = infoRetryKey(info);
+        int attempts = _failedImageInfoRetryAttempts.value(
+            attemptKey,
+            _failedImageInfoRetryAttempts.value(effectiveAttemptKey, 0));
+        if (effectiveAttemptKey != attemptKey) {
+            _failedImageInfoRetryAttempts.remove(attemptKey);
+            attemptKey = effectiveAttemptKey;
+        }
+        if (activeDirectRetry &&
+            attempts >= FailedImageWorkMaxAttempts) {
+            abandonDirectPriority = true;
+            _failedImageInfoRetryAttempts.remove(attemptKey);
+            info.directOpenGeneration = 0;
+            attemptKey = infoRetryKey(info);
+            attempts = _failedImageInfoRetryAttempts.value(attemptKey, 0);
+        }
+        _failedImageInfoRetryAttempts.insert(
+            attemptKey,
+            qMin(attempts + 1, FailedImageWorkMaxAttempts));
+        QHash<int, QStringList> &pathsByGeneration =
+            info.isFromEmbeddedView
+                ? (info.highPriority ? highEmbeddedInfoPaths
+                                     : embeddedInfoPaths)
+                : (info.highPriority ? highTopLevelInfoPaths
+                                     : topLevelInfoPaths);
+        pathsByGeneration[info.directOpenGeneration].append(info.path);
+        if (!info.isFromEmbeddedView &&
+            !info.directOpenGeneration &&
+            !itemIt.value()->imageFileParent()) {
+            topLevelRows.append(itemIt.value()->index());
+        }
+    }
+
+    if (!topLevelRows.isEmpty()) {
+        std::sort(topLevelRows.begin(), topLevelRows.end());
+        topLevelRows.erase(
+            std::unique(topLevelRows.begin(), topLevelRows.end()),
+            topLevelRows.end());
+        const bool previousPreserveState = _preserveViewStateOnReset;
+        _preserveViewStateOnReset = true;
+        int spanStart = topLevelRows.first();
+        int previousRow = spanStart;
+        for (qsizetype i = 1; i < topLevelRows.size(); ++i) {
+            const int row = topLevelRows.at(i);
+            if (row != previousRow + 1) {
+                emit dataChanged(index(spanStart, 0),
+                                 index(previousRow, 0),
+                                 {LastModifiedRole, FileSizeRole});
+                spanStart = row;
+            }
+            previousRow = row;
+        }
+        emit dataChanged(index(spanStart, 0), index(previousRow, 0),
+                         {LastModifiedRole, FileSizeRole});
+        _preserveViewStateOnReset = previousPreserveState;
+    }
+    for (auto it = topLevelInfoPaths.constBegin();
+         it != topLevelInfoPaths.constEnd(); ++it) {
+        QStringList paths = it.value();
+        paths.removeDuplicates();
+        _decodeManager->readImagesInfo(paths, false, it.key());
+    }
+    for (auto it = embeddedInfoPaths.constBegin();
+         it != embeddedInfoPaths.constEnd(); ++it) {
+        QStringList paths = it.value();
+        paths.removeDuplicates();
+        _decodeManager->readImagesInfo(paths, true, it.key());
+    }
+    for (auto it = highTopLevelInfoPaths.constBegin();
+         it != highTopLevelInfoPaths.constEnd(); ++it) {
+        QStringList paths = it.value();
+        paths.removeDuplicates();
+        _decodeManager->readImagesInfo(paths, false, it.key(), true);
+    }
+    for (auto it = highEmbeddedInfoPaths.constBegin();
+         it != highEmbeddedInfoPaths.constEnd(); ++it) {
+        QStringList paths = it.value();
+        paths.removeDuplicates();
+        _decodeManager->readImagesInfo(paths, true, it.key(), true);
+    }
+
+    const QHash<QString, ImageDecodeRequest> pendingDecode =
+        std::exchange(_failedImageDecodeRequests, {});
+    QList<ImageDecodeRequest> decodeRetries;
+    for (auto pendingIt = pendingDecode.constBegin();
+         pendingIt != pendingDecode.constEnd(); ++pendingIt) {
+        ImageDecodeRequest request = pendingIt.value();
+        QString attemptKey = pendingIt.key();
+        const auto itemIt = _fileToItem.constFind(request.info.path);
+        if (itemIt == _fileToItem.constEnd() ||
+            !itemIt.value()->isImage() ||
+            !isCurrentFileVersion(itemIt.value(), request.info)) {
+            _failedImageDecodeRetryAttempts.remove(attemptKey);
+            continue;
+        }
+        const bool activeDirectRetry =
+            request.info.directOpenGeneration &&
+            isActiveDirectOpenRequest(request);
+        if (request.info.directOpenGeneration &&
+            !activeDirectRetry) {
+            if (request.info.directOpenGeneration !=
+                    _directOpen.generation ||
+                _directOpen.stage != DirectOpenStage::None) {
+                _failedImageDecodeRetryAttempts.remove(attemptKey);
+                continue;
+            }
+            request.info.directOpenGeneration = 0;
+        }
+        const QString effectiveAttemptKey = decodeRetryKey(request);
+        int attempts = _failedImageDecodeRetryAttempts.value(
+            attemptKey,
+            _failedImageDecodeRetryAttempts.value(effectiveAttemptKey, 0));
+        if (effectiveAttemptKey != attemptKey) {
+            _failedImageDecodeRetryAttempts.remove(attemptKey);
+            attemptKey = effectiveAttemptKey;
+        }
+        if (activeDirectRetry &&
+            attempts >= FailedImageWorkMaxAttempts) {
+            abandonDirectPriority = true;
+            _failedImageDecodeRetryAttempts.remove(attemptKey);
+            request.info.directOpenGeneration = 0;
+            attemptKey = decodeRetryKey(request);
+            attempts = _failedImageDecodeRetryAttempts.value(attemptKey, 0);
+        }
+        if (request.viewerRequest) {
+            if (!_viewerImageCache.needsDecode(request)) {
+                _failedImageDecodeRetryAttempts.remove(attemptKey);
+                continue;
+            }
+        }
+        else if (itemIt.value()->imageMatchesSource(request.info) &&
+                 !itemIt.value()->isCachedThumbnail() &&
+                 itemIt.value()->image().width() >=
+                     request.targetSize.width() &&
+                 itemIt.value()->image().height() >=
+                     request.targetSize.height()) {
+            _failedImageDecodeRetryAttempts.remove(attemptKey);
+            continue;
+        }
+        _failedImageDecodeRetryAttempts.insert(
+            attemptKey,
+            qMin(attempts + 1, FailedImageWorkMaxAttempts));
+        decodeRetries.append(request);
+    }
+    if (!decodeRetries.isEmpty()) {
+        _decodeManager->decodeImages(decodeRetries);
+    }
+    if (abandonDirectPriority &&
+        _directOpen.stage != DirectOpenStage::None) {
+        qWarning() << "Giving up direct-open priority after repeated source "
+                      "failures"
+                   << _directOpen.path;
+        finishDirectOpenPriorityWork();
+    }
+}
+
 void FileListModel::startRegularFolderWork() {
     _decodeManager->readImagesInfo(_imagePaths, false);
-    _decodeManager->readFolderList(_folderImagePaths, 16); // TODO: FIX!
+    requestFolderPreviews(_folderImagePaths);
+}
+
+void FileListModel::requestFolderPreviews(const QStringList &paths) {
+    QStringList requestPaths;
+    requestPaths.reserve(paths.size());
+    for (const QString &path : paths) {
+        auto itemIt = _fileToItem.constFind(path);
+        if (itemIt == _fileToItem.constEnd() ||
+            !itemIt.value()->isFolder() || requestPaths.contains(path)) {
+            continue;
+        }
+        requestPaths.append(path);
+        if (!_folderImagePaths.contains(path)) {
+            _folderImagePaths.append(path);
+        }
+    }
+    if (requestPaths.isEmpty()) {
+        return;
+    }
+
+    ++_nextFolderPreviewGeneration;
+    if (_nextFolderPreviewGeneration == 0) {
+        ++_nextFolderPreviewGeneration;
+    }
+    for (const QString &path : std::as_const(requestPaths)) {
+        _folderPreviewGenerations.insert(path,
+                                         _nextFolderPreviewGeneration);
+        _folderPreviewRetryAttempts.remove(path);
+    }
+    _decodeManager->readFolderList(requestPaths, 16,
+                                   _nextFolderPreviewGeneration);
+}
+
+void FileListModel::scheduleFolderPreviewRetry(
+    const QString &path, quint64 requestGeneration,
+    const QString &errorText) {
+    const int attempt = _folderPreviewRetryAttempts.value(path, 0);
+    const int delayMs = qMin(500 * (1 << qMin(attempt, 3)),
+                             FolderWatchRetryMaxMs);
+    _folderPreviewRetryAttempts.insert(path, attempt + 1);
+    qWarning() << "Keeping existing folder preview after incomplete refresh"
+               << path << errorText << "retry in" << delayMs << "ms";
+
+    QTimer::singleShot(delayMs, this,
+                       [this, path, requestGeneration]() {
+        if (_isClosing || _recursiveViewActive ||
+            !sourceReadsEnabled(_fileListCacheMode) ||
+            _folderPreviewGenerations.value(path) != requestGeneration) {
+            return;
+        }
+        const auto itemIt = _fileToItem.constFind(path);
+        if (itemIt == _fileToItem.constEnd() ||
+            !itemIt.value()->isFolder()) {
+            return;
+        }
+        _decodeManager->readFolderList({path}, 16,
+                                       requestGeneration);
+    });
 }
 
 QString FileListModel::rootPath() const {
     return _root;
+}
+
+bool FileListModel::preserveViewStateOnReset() const {
+    return _preserveViewStateOnReset;
+}
+
+ImageInfo FileListModel::imageInfoForPath(const QString &path) const {
+    const QString absolutePath = QFileInfo(path).absoluteFilePath();
+    auto itemIt = _fileToItem.constFind(absolutePath);
+    if (itemIt != _fileToItem.constEnd() && itemIt.value()->isImage()) {
+        return itemIt.value()->info();
+    }
+
+    const QString pathKey = fileSystemPathKey(absolutePath);
+    for (ImageFile *item : std::as_const(_items)) {
+        if (item->isImage() &&
+            fileSystemPathKey(item->fullPath()) == pathKey) {
+            return item->info();
+        }
+    }
+    return {};
 }
 
 const ImageFile *FileListModel::itemForImageId(const QString &imageId) {
@@ -950,22 +2768,36 @@ void FileListModel::cleanupModelBeforeCd() {
     clearModelData(true);
 }
 
-void FileListModel::clearModelData(bool clearViewerData) {
+void FileListModel::clearModelData(bool clearViewerData,
+                                   bool clearFailedImageWork) {
     if (clearViewerData) {
         // Viewer
         _viewerImageCache.clear();
         emit viewerReset();
     }
     _currentViewIndex = -1;
+    _currentViewerRequestSize = QSize();
+    _hasCurrentViewerRequest = false;
     _selectionPreviewActive = false;
     _selectionPreviewSnapshot.clear();
 
     for (auto it = _folderModels.begin(); it != _folderModels.end(); ++it) {
+        it.value()->setRoot(nullptr);
         it.value()->deleteLater();
     }
     _folderModels.clear();
 
     _fileToItem.clear();
+    _folderPreviewGenerations.clear();
+    _folderPreviewRetryAttempts.clear();
+    if (clearFailedImageWork) {
+        _failedImageInfoRequests.clear();
+        _failedImageDecodeRequests.clear();
+        _failedImageInfoRetryAttempts.clear();
+        _failedImageDecodeRetryAttempts.clear();
+        _failedImageWorkRetryTimer.stop();
+        _failedImageWorkRetryDelayMs = FailedImageWorkRetryInitialMs;
+    }
     _providerImageStore->remove(_imageIdToItem.keys());
     _imageIdToItem.clear();
     _folderImagePaths.clear();
@@ -1007,12 +2839,18 @@ QModelIndex FileListModel::indexFromItem(const ImageFile *item) const {
 }
 
 QAbstractItemModel *FileListModel::folderModel(int index_) {
-    auto it = _folderModels.find(index_);
+    if (index_ < 0 || index_ >= _items.size() ||
+        !_items.at(index_)->isFolder()) {
+        return nullptr;
+    }
+
+    ImageFile *folder = _items.at(index_);
+    auto it = _folderModels.find(folder);
     if (it == _folderModels.end()) {
         RootProxyModel *proxy = new RootProxyModel(this);
-        proxy->setRoot(_items[index_]);
+        proxy->setRoot(folder);
         proxy->setSourceModel(this);
-        _folderModels[index_] = proxy;
+        _folderModels.insert(folder, proxy);
         return proxy;
     }
     return *it;
@@ -1064,10 +2902,30 @@ void FileListModel::enterRecursiveView() {
         return;
     }
 
+    _folderRefreshTimer.stop();
+    _folderWatchRetryTimer.stop();
+    _folderRefreshGeneration++;
+    _folderRefreshPendingAfterDirectOpen = false;
+    _folderRescanAfterInFlight.clear();
+    _recursiveViewActive = true;
+    configureFolderWatcher();
+
+    const QString canceledDirectOpenPath =
+        _directOpen.stage != DirectOpenStage::None &&
+                !_directOpen.readyEmitted
+            ? _directOpen.path : QString();
+    const bool hadDirectOpenPath = !_directOpen.path.isEmpty();
     _directOpen.generation++;
     _directOpen.stage = DirectOpenStage::None;
+    _directOpen.path.clear();
     _directOpen.pendingNeighborInfoPaths.clear();
     _directOpen.pendingNeighborDecodePaths.clear();
+    if (hadDirectOpenPath) {
+        emit directOpenPathChanged();
+    }
+    if (!canceledDirectOpenPath.isEmpty()) {
+        emit directOpenFailed(canceledDirectOpenPath);
+    }
 
     beginResetModel();
     cleanupModelBeforeCd();
@@ -1128,7 +2986,7 @@ void FileListModel::enterRecursiveView() {
     endResetModel();
 
     _decodeManager->readImagesInfo(_imagePaths, true);
-    _decodeManager->readFolderList(_folderImagePaths, 16);
+    requestFolderPreviews(_folderImagePaths);
 }
 
 bool FileListModel::isImage(const QString &fileName) {
@@ -1142,12 +3000,25 @@ void FileListModel::openImageDirectly(const QString &path, int width, int height
 
     QFileInfo fileInfo(imagePath);
     if ((imageSourceAccessEnabled() && !fileInfo.isFile()) || !isImage(fileInfo.fileName())) {
+        emit directOpenFailed(imagePath);
         return;
     }
 
     const QString folderPath = fileInfo.dir().absolutePath();
     const QString fileName = fileInfo.fileName();
     const QString fullPath = QDir(folderPath).absoluteFilePath(fileName);
+
+    const QString rootKey = fileSystemPathKey(_root);
+    const bool keepPendingFolderRefresh =
+        fileSystemPathKey(folderPath) == rootKey &&
+        (_folderRefreshTimer.isActive() ||
+         _folderRefreshPendingAfterDirectOpen ||
+         _folderScansInFlight.contains(rootKey) ||
+         _folderRescanAfterInFlight.contains(rootKey));
+    _folderRefreshTimer.stop();
+    ++_folderRefreshGeneration;
+    _folderRefreshPendingAfterDirectOpen = keepPendingFolderRefresh;
+    _hasCurrentViewerRequest = false;
 
     const int generation = _directOpen.generation + 1;
     _directOpen = DirectOpenState();
@@ -1168,6 +3039,7 @@ void FileListModel::openImageDirectly(const QString &path, int width, int height
     }
 
     _directOpen.sameFolder = existingIndex >= 0;
+    _directOpen.folderPopulated = _directOpen.sameFolder;
     if (_directOpen.sameFolder) {
         _directOpen.currentIndex = existingIndex;
         _currentViewIndex = existingIndex;
@@ -1229,7 +3101,6 @@ void FileListModel::handleDirectOpenImageInfo(const ImageInfo &result) {
     if (_directOpen.stage == DirectOpenStage::WaitingInfo && result.path == _directOpen.path) {
         if (!result.imageSize.isValid()) {
             qWarning() << "Direct open metadata is invalid" << result.path << result.imageSize;
-            _directOpen.stage = DirectOpenStage::None;
             return;
         }
 
@@ -1310,11 +3181,16 @@ bool FileListModel::handleDirectOpenImageReady(const ImageDecodeRequest &request
     if (!isActiveDirectOpenRequest(request)) {
         return false;
     }
+    if (image.isNull()) {
+        // The source-only retry owns this exact stage. Advancing here would
+        // make the preserved request inactive and silently lose it.
+        return true;
+    }
 
     if (request.info.path == _directOpen.path && _directOpen.stage == DirectOpenStage::WaitingFitDecode) {
         auto itemIt = _fileToItem.find(_directOpen.path);
         if (itemIt != _fileToItem.end() && !image.isNull() && itemIt.value()->imageIdUrl().isEmpty()) {
-            itemIt.value()->setImage(image);
+            itemIt.value()->setImage(image, request.info);
             itemIt.value()->setIsCachedThumbnail(decodedInfo.isFromCache);
             updateImageId(itemIt.value());
         }
@@ -1326,6 +3202,7 @@ bool FileListModel::handleDirectOpenImageReady(const ImageDecodeRequest &request
         }
         else {
             if (_directOpen.currentIndex >= 0) {
+                _directOpen.readyEmitted = true;
                 emit directOpenReady(_directOpen.currentIndex);
             }
             requestDirectOpenFullSizeDecode();
@@ -1352,15 +3229,16 @@ bool FileListModel::handleDirectOpenImageReady(const ImageDecodeRequest &request
     return false;
 }
 
-void FileListModel::populateFolderAfterDirectOpenFullDecode() {
+void FileListModel::populateFolderAfterDirectOpenFullDecode(bool notifyReady) {
     if (_directOpen.stage != DirectOpenStage::WaitingFullDecode) {
         return;
     }
 
     if (!_directOpen.sameFolder) {
         beginResetModel();
-        clearModelData(false);
+        clearModelData(false, false);
         _root = _directOpen.folderPath;
+        _recursiveViewActive = false;
         populateFolderItems(_root, _directOpen.fileName);
         loadSelectionStatesForVisibleItems();
 
@@ -1370,10 +3248,37 @@ void FileListModel::populateFolderAfterDirectOpenFullDecode() {
             targetIt.value()->setInfo(_directOpen.info);
         }
         endResetModel();
+        _directOpen.folderPopulated = true;
 
-        const int targetIndex = fileIndex(_directOpen.fileName);
-        _directOpen.currentIndex = targetIndex >= 0 ? targetIndex : 0;
+        int targetIndex = -1;
+        const QString targetPathKey = fileSystemPathKey(_directOpen.path);
+        for (ImageFile *item : std::as_const(_items)) {
+            if (item->isImage() &&
+                fileSystemPathKey(item->fullPath()) == targetPathKey) {
+                targetIndex = item->index();
+                break;
+            }
+        }
+        configureFolderWatcher();
+        scheduleFolderRefresh();
+        if (targetIndex < 0) {
+            const QString vanishedPath = _directOpen.path;
+            _directOpen.currentIndex = -1;
+            _currentViewIndex = -1;
+            finishDirectOpenPriorityWork();
+            if (!vanishedPath.isEmpty() &&
+                _directOpen.path == vanishedPath) {
+                _directOpen.path.clear();
+                emit directOpenPathChanged();
+                emit directOpenFailed(vanishedPath);
+            }
+            emit viewerReset();
+            return;
+        }
+        _directOpen.currentIndex = targetIndex;
     }
+
+    _directOpen.folderPopulated = true;
 
     _currentViewIndex = _directOpen.currentIndex;
 
@@ -1386,7 +3291,10 @@ void FileListModel::populateFolderAfterDirectOpenFullDecode() {
         const ViewerImageCache::Entry viewerEntry =
             _viewerImageCache.entryForPath(_directOpen.path, false);
         if (!viewerEntry.image.isNull() && item->imageIdUrl().isEmpty()) {
-            item->setImage(viewerEntry.image);
+            ImageInfo thumbnailInfo = item->info();
+            thumbnailInfo.lastModified = viewerEntry.sourceLastModified;
+            thumbnailInfo.fileSize = viewerEntry.sourceFileSize;
+            item->setImage(viewerEntry.image, thumbnailInfo);
             item->setIsCachedThumbnail(
                 viewerEntry.decodedInfo.isFromCache);
             updateImageId(item);
@@ -1398,7 +3306,8 @@ void FileListModel::populateFolderAfterDirectOpenFullDecode() {
         }
     }
 
-    if (_directOpen.currentIndex >= 0) {
+    if (notifyReady && _directOpen.currentIndex >= 0) {
+        _directOpen.readyEmitted = true;
         emit directOpenReady(_directOpen.currentIndex);
         emitViewerImagesForCurrentIndex();
     }
@@ -1488,15 +3397,67 @@ void FileListModel::requestDirectOpenNeighborDecodes() {
     _decodeManager->decodeImages(requests);
 }
 
+void FileListModel::finishDirectOpenAfterDecodeCancellation(
+    int expectedGeneration, bool notifyReady) {
+    if (_directOpen.generation != expectedGeneration) {
+        return;
+    }
+    switch (_directOpen.stage) {
+    case DirectOpenStage::WaitingFitDecode:
+        // Metadata is complete in every decode stage, so the full folder can
+        // be materialized even if the first pixels were intentionally canceled.
+        _directOpen.stage = DirectOpenStage::WaitingFullDecode;
+        [[fallthrough]];
+    case DirectOpenStage::WaitingFullDecode:
+        populateFolderAfterDirectOpenFullDecode(notifyReady);
+        if (_directOpen.generation == expectedGeneration &&
+            _directOpen.stage != DirectOpenStage::None) {
+            finishDirectOpenPriorityWork();
+        }
+        break;
+    case DirectOpenStage::WaitingNeighborDecode:
+        // Neighbor prefetch is optional and must never block watcher refreshes.
+        finishDirectOpenPriorityWork();
+        break;
+    case DirectOpenStage::WaitingInfo:
+    case DirectOpenStage::WaitingNeighborInfo:
+        // Closing the viewer abandons metadata-only direct work as well. The
+        // runner may finish later, but it can no longer defer watcher refreshes.
+        if (!notifyReady) {
+            finishDirectOpenPriorityWork();
+        }
+        break;
+    default:
+        break;
+    }
+}
+
 void FileListModel::finishDirectOpenPriorityWork() {
     if (_directOpen.stage == DirectOpenStage::None) {
         return;
     }
 
+    const bool refreshFolder = _folderRefreshPendingAfterDirectOpen;
+    const bool populateProvisionalFolder =
+        !_directOpen.folderPopulated && !_directOpen.folderPath.isEmpty();
+    const QString failedDirectOpenPath =
+        !_directOpen.readyEmitted ? _directOpen.path : QString();
+    _folderRefreshPendingAfterDirectOpen = false;
     _directOpen.stage = DirectOpenStage::None;
     _directOpen.pendingNeighborInfoPaths.clear();
     _directOpen.pendingNeighborDecodePaths.clear();
     startRegularFolderWork();
+    if (populateProvisionalFolder) {
+        configureFolderWatcher();
+    }
+    if (refreshFolder || populateProvisionalFolder) {
+        scheduleFolderRefresh();
+    }
+    if (!failedDirectOpenPath.isEmpty()) {
+        _directOpen.path.clear();
+        emit directOpenPathChanged();
+        emit directOpenFailed(failedDirectOpenPath);
+    }
 }
 
 void FileListModel::emitViewerImagesForCurrentIndex() {
@@ -1520,6 +3481,8 @@ void FileListModel::requestViewer(int index, int width, int height) {
     }
 
     _currentViewIndex = index;
+    _currentViewerRequestSize = QSize(width, height);
+    _hasCurrentViewerRequest = true;
     if (!_items[index]->imageIdUrl().isEmpty()) {
         emit viewerImageIdUrlChanged(_items[index]->imageIdUrl(), 0);
     }
@@ -1548,6 +3511,10 @@ QImage FileListModel::fullSizeViewerForImageId(const QString &imageId) {
 }
 
 void FileListModel::cancelAllRunners() {
+    const QString canceledDirectOpenPath =
+        _directOpen.stage != DirectOpenStage::None &&
+                !_directOpen.readyEmitted
+            ? _directOpen.path : QString();
     const bool hadDirectOpenPath = !_directOpen.path.isEmpty();
     _directOpen.generation++;
     _directOpen.stage = DirectOpenStage::None;
@@ -1557,16 +3524,53 @@ void FileListModel::cancelAllRunners() {
     if (hadDirectOpenPath) {
         emit directOpenPathChanged();
     }
+    if (!canceledDirectOpenPath.isEmpty()) {
+        emit directOpenFailed(canceledDirectOpenPath);
+    }
     _decodeManager->cancelAllRunners();
+    if (_folderRefreshPendingAfterDirectOpen) {
+        _folderRefreshPendingAfterDirectOpen = false;
+        scheduleFolderRefresh();
+    }
 }
 
 void FileListModel::cancelAllDecodeRunners() {
     // qDebug() << __FUNCTION__;
+    const int directOpenGeneration = _directOpen.generation;
     _decodeManager->cancelAllDecodeRunners();
+    _failedImageDecodeRequests.clear();
+    _failedImageDecodeRetryAttempts.clear();
+    finishDirectOpenAfterDecodeCancellation(directOpenGeneration, true);
 }
 
 void FileListModel::cancelAllDecodeViewerRunners() {
+    const int directOpenGeneration = _directOpen.generation;
     _decodeManager->cancelAllDecodeViewerRunners();
+    for (auto it = _failedImageDecodeRequests.begin();
+         it != _failedImageDecodeRequests.end();) {
+        if (it.value().viewerRequest) {
+            _failedImageDecodeRetryAttempts.remove(it.key());
+            it = _failedImageDecodeRequests.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    finishDirectOpenAfterDecodeCancellation(directOpenGeneration, true);
+}
+
+void FileListModel::cancelAllDecodeViewerRunnersForViewerClose() {
+    const int directOpenGeneration = _directOpen.generation;
+    _decodeManager->cancelAllDecodeViewerRunners();
+    for (auto it = _failedImageDecodeRequests.begin();
+         it != _failedImageDecodeRequests.end();) {
+        if (it.value().viewerRequest) {
+            _failedImageDecodeRetryAttempts.remove(it.key());
+            it = _failedImageDecodeRequests.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    finishDirectOpenAfterDecodeCancellation(directOpenGeneration, false);
 }
 
 void FileListModel::decodeImages(const QList<ImageDecodeRequest> &requests) {
@@ -1588,22 +3592,133 @@ RootProxyModel::RootProxyModel(QObject *parent)
 }
 
 void RootProxyModel::setRoot(ImageFile *root) {
+    if (_sourceRoot == root) {
+        return;
+    }
+    if (_sourceResetActive) {
+        _sourceRoot = root;
+        return;
+    }
+    beginResetModel();
     _sourceRoot = root;
+    endResetModel();
 }
 
 void RootProxyModel::setSourceModel(QAbstractItemModel *sourceModel) {
+    if (QAbstractProxyModel::sourceModel() == sourceModel) {
+        return;
+    }
+    if (QAbstractProxyModel::sourceModel()) {
+        disconnect(QAbstractProxyModel::sourceModel(), nullptr,
+                   this, nullptr);
+    }
+    _sourceResetActive = false;
+    _sourceInsertActive = false;
+    _sourceRemoveActive = false;
+    _sourceMoveActive = false;
     QAbstractProxyModel::setSourceModel(sourceModel);
+
+    if (!sourceModel) {
+        return;
+    }
+
+    // QAbstractProxyModel already resets itself together with its source. Drop
+    // the raw root identity inside that transaction so clearModelData() can
+    // destroy the ImageFile without starting a nested proxy reset.
+    connect(sourceModel, &QAbstractItemModel::modelAboutToBeReset,
+            this, [this]() {
+        _sourceResetActive = true;
+        _sourceRoot = nullptr;
+    });
+    connect(sourceModel, &QAbstractItemModel::modelReset,
+            this, [this]() { _sourceResetActive = false; });
 
     connect(sourceModel, &QAbstractItemModel::dataChanged, this,
             [&] (const QModelIndex &topLeft, const QModelIndex &bottomRight, const QList<int> &roles = QList<int>()) {
-        if (FileListModel::itemFromIndex(topLeft.parent()) == _sourceRoot) {
+        if (_sourceRoot &&
+            FileListModel::itemFromIndex(topLeft.parent()) == _sourceRoot) {
             emit dataChanged(mapFromSource(topLeft), mapFromSource(bottomRight), roles);
         }
+    });
+
+    connect(sourceModel, &QAbstractItemModel::rowsAboutToBeInserted,
+            this, [this](const QModelIndex &parent, int first, int last) {
+        _sourceInsertActive = false;
+        if (!_sourceRoot ||
+            FileListModel::itemFromIndex(parent) != _sourceRoot) {
+            return;
+        }
+        beginInsertRows(QModelIndex(), first, last);
+        _sourceInsertActive = true;
+    });
+    connect(sourceModel, &QAbstractItemModel::rowsInserted,
+            this, [this](const QModelIndex &, int, int) {
+        if (!_sourceInsertActive) {
+            return;
+        }
+        _sourceInsertActive = false;
+        endInsertRows();
+    });
+
+    connect(sourceModel, &QAbstractItemModel::rowsAboutToBeRemoved,
+            this, [this](const QModelIndex &parent, int first, int last) {
+        _sourceRemoveActive = false;
+        if (!parent.isValid() && _sourceRoot &&
+            _sourceRoot->index() >= first && _sourceRoot->index() <= last) {
+            // The top-level folder itself is leaving the source model. Make
+            // this flat proxy empty while the old index still identifies that
+            // folder; after the mutation the same row may belong to another
+            // item.
+            beginResetModel();
+            _sourceRoot = nullptr;
+            endResetModel();
+            return;
+        }
+        if (!_sourceRoot ||
+            FileListModel::itemFromIndex(parent) != _sourceRoot) {
+            return;
+        }
+        beginRemoveRows(QModelIndex(), first, last);
+        _sourceRemoveActive = true;
+    });
+    connect(sourceModel, &QAbstractItemModel::rowsRemoved,
+            this, [this](const QModelIndex &, int, int) {
+        if (!_sourceRemoveActive) {
+            return;
+        }
+        _sourceRemoveActive = false;
+        endRemoveRows();
+    });
+
+    connect(sourceModel, &QAbstractItemModel::rowsAboutToBeMoved,
+            this, [this](const QModelIndex &sourceParent, int sourceFirst,
+                         int sourceLast,
+                         const QModelIndex &destinationParent,
+                         int destinationChild) {
+        _sourceMoveActive = false;
+        if (!_sourceRoot ||
+            FileListModel::itemFromIndex(sourceParent) != _sourceRoot ||
+            FileListModel::itemFromIndex(destinationParent) != _sourceRoot) {
+            return;
+        }
+        _sourceMoveActive = beginMoveRows(
+            QModelIndex(), sourceFirst, sourceLast,
+            QModelIndex(), destinationChild);
+    });
+    connect(sourceModel, &QAbstractItemModel::rowsMoved,
+            this, [this](const QModelIndex &, int, int,
+                         const QModelIndex &, int) {
+        if (!_sourceMoveActive) {
+            return;
+        }
+        _sourceMoveActive = false;
+        endMoveRows();
     });
 }
 
 QModelIndex RootProxyModel::index(int row, int column, const QModelIndex &parent) const {
-    if (!_sourceRoot || !sourceModel()) {
+    if (!_sourceRoot || !sourceModel() || parent.isValid() ||
+        row < 0 || row >= _sourceRoot->subfiles().size() || column != 0) {
         return QModelIndex();
     }
     return createIndex(row, column, _sourceRoot->subfiles().at(row));
@@ -1614,7 +3729,7 @@ QModelIndex RootProxyModel::parent(const QModelIndex &child) const {
 }
 
 int RootProxyModel::rowCount(const QModelIndex &parent) const {
-    if (!_sourceRoot || !sourceModel()) {
+    if (!_sourceRoot || !sourceModel() || parent.isValid()) {
         return 0;
     }
     return sourceModel()->rowCount(sourceModel()->indexFromItem(_sourceRoot));
@@ -1667,16 +3782,15 @@ void RootProxyModel::cancelAllDecodeRunners() {
     dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())->cancelAllDecodeRunners();
 }
 
+bool RootProxyModel::preserveViewStateOnReset() const {
+    return sourceModel() && sourceModel()->preserveViewStateOnReset();
+}
+
 void RootProxyModel::decodeImages(const QList<ImageDecodeRequest> &requests) {
     if (!sourceModel()) {
         return;
     }
     dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())->decodeImages(requests);
-}
-
-void RootProxyModel::resetModel() {
-    beginResetModel();
-    endResetModel();
 }
 
 void FileListModel::setFolderViewImageSize(int width, int height) {
@@ -2153,7 +4267,7 @@ QVariantMap FileListModel::finalizeExternalDrag(
         PersistentSelectionCache::normalizeContainerKey(_root);
     if (!normalizedRoot.isEmpty() && normalizedRoot != QStringLiteral("Computer") &&
         sourceFolders.contains(normalizedRoot)) {
-        cd(_root);
+        scheduleFolderRefresh();
     }
 
     return {
@@ -2286,7 +4400,7 @@ void FileListModel::refreshFoldersAfterFileOperation(
         PersistentSelectionCache::normalizeContainerKey(_root);
     if (!normalizedRoot.isEmpty() && normalizedRoot != QStringLiteral("Computer") &&
         folders.contains(normalizedRoot)) {
-        cd(_root);
+        scheduleFolderRefresh();
     }
 }
 
@@ -3057,7 +5171,7 @@ QVariantMap FileListModel::moveActiveSelectionGroupToCurrentFolderImpl(
         invalidatedFolders.insert(QFileInfo(selectedFile.path).absolutePath());
     }
     PersistentFolderCache::removeFolders(invalidatedFolders.values());
-    cd(_root);
+    scheduleFolderRefresh();
     const qsizetype movedCount = movedOriginalPaths.size();
     const qsizetype skippedCount = selectedFiles.size() - movedCount;
     return {
@@ -3152,7 +5266,7 @@ QVariantMap FileListModel::undoLastSelectionGroupMove() {
         invalidatedFolders.insert(QFileInfo(selectedFile.path).absolutePath());
     }
     PersistentFolderCache::removeFolders(invalidatedFolders.values());
-    cd(_root);
+    scheduleFolderRefresh();
 
     return {
         {QStringLiteral("success"), true},

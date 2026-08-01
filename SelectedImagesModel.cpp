@@ -8,7 +8,35 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
 #include <utility>
+
+namespace {
+constexpr int FailedImageWorkRetryInitialMs = 250;
+constexpr int FailedImageWorkRetryMaxMs = 5000;
+constexpr int FailedImageWorkMaxAttempts = 8;
+
+QString selectedInfoRetryKey(const ImageInfo &info) {
+    return QStringLiteral("%1\x1f%2\x1f%3")
+        .arg(info.path)
+        .arg(info.lastModified.isValid()
+                 ? info.lastModified.toMSecsSinceEpoch() : -1)
+        .arg(info.fileSize);
+}
+
+QString selectedDecodeRetryKey(const ImageDecodeRequest &request) {
+    return QStringLiteral("%1\x1f%2\x1f%3x%4\x1f%5\x1f%6\x1f%7\x1f%8")
+        .arg(request.info.path)
+        .arg(request.viewerRequest ? 1 : 0)
+        .arg(request.targetSize.width())
+        .arg(request.targetSize.height())
+        .arg(request.info.lastModified.isValid()
+                 ? request.info.lastModified.toMSecsSinceEpoch() : -1)
+        .arg(request.info.fileSize)
+        .arg(request.checkCache ? 1 : 0)
+        .arg(request.fitToViewerRequest ? 1 : 0);
+}
+}
 
 SelectedImagesModel::SelectedImagesModel(
     FileListModel *sourceModel,
@@ -24,6 +52,9 @@ SelectedImagesModel::SelectedImagesModel(
 
     connect(_selectionSourceModel, &FileListModel::selectionPathsChanged,
             this, &SelectedImagesModel::syncPathsFromPersistentSelection);
+    connect(_selectionSourceModel,
+            &FileListModel::watchedImageMetadataChanged,
+            this, &SelectedImagesModel::refreshWatchedImageMetadata);
     connect(_selectionSourceModel, &FileListModel::activeSelectionGroupChanged,
             this, [this]() {
                 const QString nextGroupId =
@@ -36,7 +67,21 @@ SelectedImagesModel::SelectedImagesModel(
         _decodeManager->cancelAllRunners();
         _decodeManager->setImageCacheMode(
             cacheUsageModeFromInt(_selectionSourceModel->imageCacheMode()));
+        if (_selectionSourceModel->imageSourceAccessEnabled()) {
+            scheduleFailedImageWorkRetry();
+        } else {
+            _failedImageWorkRetryTimer.stop();
+        }
         _imageInfoRequestTimer.start();
+        if (_hasCurrentViewerRequest) {
+            const int viewerIndex = indexForPath(_currentViewerPath);
+            if (viewerIndex >= 0) {
+                requestViewer(viewerIndex,
+                              _currentViewerRequestSize.width(),
+                              _currentViewerRequestSize.height());
+            }
+        }
+        emit thumbnailReloadRequested();
     });
     connect(_decodeManager, &DecodeManager::imageInfoReady,
             this, &SelectedImagesModel::onImageInfoAvailable);
@@ -44,6 +89,10 @@ SelectedImagesModel::SelectedImagesModel(
             this, &SelectedImagesModel::onImagesInfoAvailable);
     connect(_decodeManager, &DecodeManager::imageReady,
             this, &SelectedImagesModel::onImageAvailable);
+    connect(_decodeManager, &DecodeManager::imageReadFailed,
+            this, [this](const ImageDecodeRequest &request) {
+                rememberFailedDecodeRequest(request);
+            });
     connect(_decodeManager, &DecodeManager::viewerRunnerCanceled,
             this, [this](const QString &path) {
                 _viewerImageCache.removeIncomplete(path);
@@ -52,6 +101,9 @@ SelectedImagesModel::SelectedImagesModel(
     _imageInfoRequestTimer.setInterval(0);
     connect(&_imageInfoRequestTimer, &QTimer::timeout,
             this, &SelectedImagesModel::requestMissingImageInfo);
+    _failedImageWorkRetryTimer.setSingleShot(true);
+    connect(&_failedImageWorkRetryTimer, &QTimer::timeout,
+            this, &SelectedImagesModel::retryFailedImageWork);
 
     syncFromPersistentSelection();
 }
@@ -112,14 +164,34 @@ void SelectedImagesModel::cancelAllRunners() {
 
 void SelectedImagesModel::cancelAllDecodeRunners() {
     _decodeManager->cancelAllDecodeRunners();
+    _failedImageDecodeRequests.clear();
+    _failedImageDecodeRetryAttempts.clear();
+}
+
+bool SelectedImagesModel::preserveViewStateOnReset() const {
+    return _preserveViewStateOnReset;
 }
 
 void SelectedImagesModel::cancelAllDecodeViewerRunners() {
     _decodeManager->cancelAllDecodeViewerRunners();
+    for (auto it = _failedImageDecodeRequests.begin();
+         it != _failedImageDecodeRequests.end();) {
+        if (it.value().viewerRequest) {
+            _failedImageDecodeRetryAttempts.remove(it.key());
+            it = _failedImageDecodeRequests.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void SelectedImagesModel::cancelAllDecodeViewerRunnersForViewerClose() {
+    cancelAllDecodeViewerRunners();
 }
 
 void SelectedImagesModel::prepareToClose() {
     _imageInfoRequestTimer.stop();
+    _failedImageWorkRetryTimer.stop();
     _decodeManager->prepareToClose();
 }
 
@@ -301,7 +373,7 @@ void SelectedImagesModel::beginSelectionPreview() {
     _selectionPreviewSnapshot.clear();
     for (int i = 0; i < _items.size(); i++) {
         if (_items[i]->isSelected()) {
-            _selectionPreviewSnapshot.insert(i);
+            _selectionPreviewSnapshot.insert(_items[i]->fullPath());
         }
     }
 }
@@ -325,7 +397,8 @@ void SelectedImagesModel::previewSelectionIndexes(const QVariantList &indexes, i
     constexpr int Replace = 2;
     constexpr int Toggle = 3;
     for (int i = 0; i < _items.size(); i++) {
-        bool selected = _selectionPreviewSnapshot.contains(i);
+        bool selected = _selectionPreviewSnapshot.contains(
+            _items[i]->fullPath());
         if (mode == Replace) {
             selected = affectedIndexes.contains(i);
         }
@@ -357,7 +430,8 @@ void SelectedImagesModel::cancelSelectionPreview() {
         return;
     }
     for (int i = 0; i < _items.size(); i++) {
-        _items[i]->setIsSelected(_selectionPreviewSnapshot.contains(i));
+        _items[i]->setIsSelected(_selectionPreviewSnapshot.contains(
+            _items[i]->fullPath()));
     }
     _selectionPreviewActive = false;
     _selectionPreviewSnapshot.clear();
@@ -429,6 +503,8 @@ void SelectedImagesModel::requestViewer(int index, int width, int height) {
 
     ImageFile *item = _items[index];
     _currentViewerPath = item->fullPath();
+    _currentViewerRequestSize = QSize(width, height);
+    _hasCurrentViewerRequest = true;
     if (!item->imageIdUrl().isEmpty()) {
         emit viewerImageIdUrlChanged(item->imageIdUrl(), 0);
     }
@@ -453,7 +529,8 @@ QColor SelectedImagesModel::selectionGroupColorForIndex(int index) const {
         : QColor();
 }
 
-void SelectedImagesModel::syncFromPersistentSelection() {
+void SelectedImagesModel::syncFromPersistentSelection(
+    bool preserveTransientState) {
     const QList<PersistentSelectionCache::SelectedFile> selectedFiles =
         PersistentSelectionCache::selectedFilesByAdditionDate();
     const QString activeGroupId = _selectionSourceModel->activeSelectionGroupId();
@@ -522,12 +599,16 @@ void SelectedImagesModel::syncFromPersistentSelection() {
         }
     }
 
-    _selectionPreviewActive = false;
-    _selectionPreviewSnapshot.clear();
+    if (!preserveTransientState) {
+        _selectionPreviewActive = false;
+        _selectionPreviewSnapshot.clear();
+    }
     _activeGroupPaths = nextActiveGroupPaths;
     _selectionAddedAt = std::move(nextSelectionAddedAt);
     _totalPathCount = nextTotalPathCount;
     _unavailableCount = qMax(0, nextTotalPathCount - nextItems.size());
+    const bool previousPreserveState = _preserveViewStateOnReset;
+    _preserveViewStateOnReset = preserveTransientState;
     beginResetModel();
     _items = nextItems;
     for (ImageFile *item : std::as_const(_pathToItem)) {
@@ -537,9 +618,12 @@ void SelectedImagesModel::syncFromPersistentSelection() {
         _items[i]->setIndex(i);
     }
     endResetModel();
+    _preserveViewStateOnReset = previousPreserveState;
     if (!_currentViewerPath.isEmpty() &&
         indexForPath(_currentViewerPath) == -1) {
         _currentViewerPath.clear();
+        _currentViewerRequestSize = QSize();
+        _hasCurrentViewerRequest = false;
         emit viewerReset();
     }
     emit activeGroupContentsChanged();
@@ -565,12 +649,27 @@ void SelectedImagesModel::syncFromPersistentSelection() {
 
 void SelectedImagesModel::syncPathsFromPersistentSelection(
     const QStringList &paths) {
-    // MasonryLayout rebuilds after structural row changes. A single path is
-    // cheap and truly incremental; one reset is faster for a large batch than
-    // rebuilding the layout once per inserted/removed row.
-    constexpr qsizetype IncrementalPathLimit = 1;
-    if (paths.isEmpty() || paths.size() > IncrementalPathLimit) {
-        syncFromPersistentSelection();
+    if (paths.isEmpty()) {
+        return;
+    }
+    if (paths.size() > 1) {
+        bool affectsSelectedModel = false;
+        for (const QString &changedPath : paths) {
+            const QString path = QFileInfo(changedPath).absoluteFilePath();
+            PersistentSelectionCache::SelectedFile selectedFile;
+            if (_pathToItem.contains(path) ||
+                _activeGroupPaths.contains(path) ||
+                PersistentSelectionCache::selectedFile(path, selectedFile)) {
+                affectsSelectedModel = true;
+                break;
+            }
+        }
+        if (affectsSelectedModel) {
+            // A single preserving reset avoids rebuilding Masonry once per
+            // changed row while retaining every unchanged ImageFile, decoded
+            // frame, viewer entry, selection preview and pending decode.
+            syncFromPersistentSelection(true);
+        }
         return;
     }
 
@@ -683,13 +782,13 @@ void SelectedImagesModel::syncPathsFromPersistentSelection(
         }
     }
 
-    _selectionPreviewActive = false;
-    _selectionPreviewSnapshot.clear();
     _totalPathCount = _activeGroupPaths.size();
     _unavailableCount = qMax(0, _totalPathCount - _items.size());
     if (!_currentViewerPath.isEmpty() &&
         indexForPath(_currentViewerPath) == -1) {
         _currentViewerPath.clear();
+        _currentViewerRequestSize = QSize();
+        _hasCurrentViewerRequest = false;
         emit viewerReset();
     }
     if (contentsChanged) {
@@ -700,6 +799,66 @@ void SelectedImagesModel::syncPathsFromPersistentSelection(
     }
     if (needsImageInfo) {
         _imageInfoRequestTimer.start();
+    }
+}
+
+void SelectedImagesModel::refreshWatchedImageMetadata(
+    const QStringList &paths) {
+    QStringList imageInfoPaths;
+    QList<int> changedRows;
+    for (const QString &changedPath : paths) {
+        const QString path = QFileInfo(changedPath).absoluteFilePath();
+        ImageFile *item = _pathToItem.value(path, nullptr);
+        if (!item) {
+            continue;
+        }
+
+        const ImageInfo sourceInfo =
+            _selectionSourceModel->imageInfoForPath(path);
+        if (sourceInfo.path.isEmpty() ||
+            (item->lastModified() == sourceInfo.lastModified &&
+             item->fileSize() == sourceInfo.fileSize)) {
+            continue;
+        }
+
+        ImageInfo itemInfo = item->info();
+        itemInfo.lastModified = sourceInfo.lastModified;
+        itemInfo.fileSize = sourceInfo.fileSize;
+        item->setInfo(itemInfo);
+        imageInfoPaths.append(path);
+        if (item->index() >= 0 && item->index() < _items.size() &&
+            _items.at(item->index()) == item) {
+            changedRows.append(item->index());
+        }
+    }
+
+    std::sort(changedRows.begin(), changedRows.end());
+    changedRows.erase(std::unique(changedRows.begin(), changedRows.end()),
+                      changedRows.end());
+    if (!changedRows.isEmpty()) {
+        const bool previousPreserveState = _preserveViewStateOnReset;
+        _preserveViewStateOnReset = true;
+        int spanStart = changedRows.first();
+        int previousRow = spanStart;
+        for (qsizetype i = 1; i < changedRows.size(); ++i) {
+            const int row = changedRows.at(i);
+            if (row != previousRow + 1) {
+                emit dataChanged(index(spanStart, 0), index(previousRow, 0),
+                                 {FileListModel::LastModifiedRole,
+                                  FileListModel::FileSizeRole});
+                spanStart = row;
+            }
+            previousRow = row;
+        }
+        emit dataChanged(index(spanStart, 0), index(previousRow, 0),
+                         {FileListModel::LastModifiedRole,
+                          FileListModel::FileSizeRole});
+        _preserveViewStateOnReset = previousPreserveState;
+    }
+
+    imageInfoPaths.removeDuplicates();
+    if (!imageInfoPaths.isEmpty()) {
+        _decodeManager->readImagesInfo(imageInfoPaths, false);
     }
 }
 
@@ -717,9 +876,20 @@ void SelectedImagesModel::requestMissingImageInfo() {
 
 ImageFile *SelectedImagesModel::applyImageInfo(const ImageInfo &info) {
     ImageFile *item = _pathToItem.value(QFileInfo(info.path).absoluteFilePath(), nullptr);
-    if (!item || !info.imageSize.isValid()) {
+    if (!item) {
         return nullptr;
     }
+    if (!info.imageSize.isValid()) {
+        rememberFailedImageInfo(info);
+        return nullptr;
+    }
+    if (!isCurrentFileVersion(item, info)) {
+        return nullptr;
+    }
+
+    _failedImageInfoRequests.remove(selectedInfoRetryKey(info));
+    _failedImageInfoRetryAttempts.remove(selectedInfoRetryKey(info));
+    _failedImageWorkRetryDelayMs = FailedImageWorkRetryInitialMs;
 
     ImageInfo itemInfo = info;
     if (itemInfo.fileSize < 0) {
@@ -733,9 +903,222 @@ ImageFile *SelectedImagesModel::applyImageInfo(const ImageInfo &info) {
     return item;
 }
 
+bool SelectedImagesModel::isCurrentFileVersion(
+    const ImageFile *item, const ImageInfo &info) const {
+    if (!item) {
+        return false;
+    }
+    if (!_selectionSourceModel->imageSourceAccessEnabled()) {
+        return true;
+    }
+    if (info.lastModified.isValid() && item->lastModified().isValid() &&
+        info.lastModified != item->lastModified()) {
+        return false;
+    }
+    if (info.fileSize >= 0 && item->fileSize() >= 0 &&
+        info.fileSize != item->fileSize()) {
+        return false;
+    }
+    return true;
+}
+
+void SelectedImagesModel::refreshCurrentViewerAfterMetadata(ImageFile *item) {
+    if (!item || !_hasCurrentViewerRequest ||
+        item->fullPath() != _currentViewerPath) {
+        return;
+    }
+    const int itemIndex = indexForPath(item->fullPath());
+    if (itemIndex < 0) {
+        return;
+    }
+    const ViewerImageCache::RequestPlan requestPlan =
+        _viewerImageCache.planRequest(_items, itemIndex,
+                                      _currentViewerRequestSize, 1);
+    for (const auto &[url, level] : requestPlan.cachedImages) {
+        emit viewerImageIdUrlChanged(url, level);
+    }
+    if (!requestPlan.decodeRequests.isEmpty()) {
+        _decodeManager->decodeImages(requestPlan.decodeRequests);
+    }
+}
+
+void SelectedImagesModel::emitThumbnailInfoFlush() {
+    if (_items.isEmpty()) {
+        return;
+    }
+    const QModelIndex flushIndex = index(_items.size() - 1, 0);
+    if (flushIndex.isValid()) {
+        emit dataChanged(flushIndex, flushIndex,
+                         {FileListModel::TimeToFlushRole});
+    }
+}
+
+void SelectedImagesModel::rememberFailedImageInfo(const ImageInfo &info) {
+    ImageFile *item = _pathToItem.value(
+        QFileInfo(info.path).absoluteFilePath(), nullptr);
+    if (!item || !_selectionSourceModel->imageSourceAccessEnabled()) {
+        return;
+    }
+    ImageInfo sourceRetry = info;
+    sourceRetry.lastModified = item->lastModified();
+    sourceRetry.fileSize = item->fileSize();
+    _failedImageInfoRequests.insert(selectedInfoRetryKey(sourceRetry),
+                                    sourceRetry);
+    scheduleFailedImageWorkRetry();
+}
+
+void SelectedImagesModel::rememberFailedDecodeRequest(
+    const ImageDecodeRequest &request) {
+    ImageFile *item = _pathToItem.value(
+        QFileInfo(request.info.path).absoluteFilePath(), nullptr);
+    if (!item || !_selectionSourceModel->imageSourceAccessEnabled() ||
+        !isCurrentFileVersion(item, request.info)) {
+        return;
+    }
+    ImageDecodeRequest sourceRetry = request;
+    sourceRetry.checkCache = false;
+    const QString retryKey = selectedDecodeRetryKey(sourceRetry);
+    const auto existingRetry = _failedImageDecodeRequests.constFind(retryKey);
+    if (existingRetry != _failedImageDecodeRequests.constEnd()) {
+        sourceRetry.highPriority =
+            sourceRetry.highPriority || existingRetry->highPriority;
+        if (existingRetry->viewerGeneration >
+            sourceRetry.viewerGeneration) {
+            sourceRetry.viewerGeneration = existingRetry->viewerGeneration;
+            sourceRetry.viewerPriorityOrdinal =
+                existingRetry->viewerPriorityOrdinal;
+        }
+        else if (existingRetry->viewerGeneration ==
+                     sourceRetry.viewerGeneration &&
+                 existingRetry->viewerPriorityOrdinal >= 0 &&
+                 (sourceRetry.viewerPriorityOrdinal < 0 ||
+                  existingRetry->viewerPriorityOrdinal <
+                      sourceRetry.viewerPriorityOrdinal)) {
+            sourceRetry.viewerPriorityOrdinal =
+                existingRetry->viewerPriorityOrdinal;
+        }
+    }
+    _failedImageDecodeRequests.insert(retryKey, sourceRetry);
+    scheduleFailedImageWorkRetry();
+}
+
+void SelectedImagesModel::scheduleFailedImageWorkRetry() {
+    if (!_selectionSourceModel->imageSourceAccessEnabled() ||
+        (_failedImageInfoRequests.isEmpty() &&
+         _failedImageDecodeRequests.isEmpty()) ||
+        _failedImageWorkRetryTimer.isActive()) {
+        return;
+    }
+    _failedImageWorkRetryTimer.start(_failedImageWorkRetryDelayMs);
+    _failedImageWorkRetryDelayMs = qMin(
+        _failedImageWorkRetryDelayMs * 2, FailedImageWorkRetryMaxMs);
+}
+
+void SelectedImagesModel::retryFailedImageWork() {
+    _failedImageWorkRetryTimer.stop();
+    if (!_selectionSourceModel->imageSourceAccessEnabled()) {
+        return;
+    }
+
+    const QHash<QString, ImageInfo> pendingInfo =
+        std::exchange(_failedImageInfoRequests, {});
+    QStringList infoPaths;
+    QList<int> infoRows;
+    for (auto pendingIt = pendingInfo.constBegin();
+         pendingIt != pendingInfo.constEnd(); ++pendingIt) {
+        const QString attemptKey = pendingIt.key();
+        const ImageInfo &info = pendingIt.value();
+        ImageFile *item = _pathToItem.value(
+            QFileInfo(info.path).absoluteFilePath(), nullptr);
+        if (!item || !isCurrentFileVersion(item, info)) {
+            _failedImageInfoRetryAttempts.remove(attemptKey);
+            continue;
+        }
+        const int attempts =
+            _failedImageInfoRetryAttempts.value(attemptKey, 0);
+        _failedImageInfoRetryAttempts.insert(
+            attemptKey,
+            qMin(attempts + 1, FailedImageWorkMaxAttempts));
+        infoPaths.append(item->fullPath());
+        if (item->index() >= 0 && item->index() < _items.size() &&
+            _items.at(item->index()) == item) {
+            infoRows.append(item->index());
+        }
+    }
+    infoPaths.removeDuplicates();
+    if (!infoPaths.isEmpty()) {
+        std::sort(infoRows.begin(), infoRows.end());
+        infoRows.erase(std::unique(infoRows.begin(), infoRows.end()),
+                       infoRows.end());
+        if (!infoRows.isEmpty()) {
+            const bool previousPreserveState = _preserveViewStateOnReset;
+            _preserveViewStateOnReset = true;
+            int spanStart = infoRows.first();
+            int previousRow = spanStart;
+            for (qsizetype i = 1; i < infoRows.size(); ++i) {
+                const int row = infoRows.at(i);
+                if (row != previousRow + 1) {
+                    emit dataChanged(
+                        index(spanStart, 0), index(previousRow, 0),
+                        {FileListModel::LastModifiedRole,
+                         FileListModel::FileSizeRole});
+                    spanStart = row;
+                }
+                previousRow = row;
+            }
+            emit dataChanged(
+                index(spanStart, 0), index(previousRow, 0),
+                {FileListModel::LastModifiedRole,
+                 FileListModel::FileSizeRole});
+            _preserveViewStateOnReset = previousPreserveState;
+        }
+        _decodeManager->readImagesInfo(infoPaths, false);
+    }
+
+    const QHash<QString, ImageDecodeRequest> pendingDecode =
+        std::exchange(_failedImageDecodeRequests, {});
+    QList<ImageDecodeRequest> decodeRequests;
+    for (auto pendingIt = pendingDecode.constBegin();
+         pendingIt != pendingDecode.constEnd(); ++pendingIt) {
+        const QString attemptKey = pendingIt.key();
+        const ImageDecodeRequest &request = pendingIt.value();
+        ImageFile *item = _pathToItem.value(
+            QFileInfo(request.info.path).absoluteFilePath(), nullptr);
+        if (!item || !isCurrentFileVersion(item, request.info)) {
+            _failedImageDecodeRetryAttempts.remove(attemptKey);
+            continue;
+        }
+        const int attempts =
+            _failedImageDecodeRetryAttempts.value(attemptKey, 0);
+        if (request.viewerRequest &&
+            !_viewerImageCache.needsDecode(request)) {
+            _failedImageDecodeRetryAttempts.remove(attemptKey);
+            continue;
+        }
+        if (!request.viewerRequest &&
+            item->imageMatchesSource(request.info) &&
+            !item->isCachedThumbnail() &&
+            item->image().width() >= request.targetSize.width() &&
+            item->image().height() >= request.targetSize.height()) {
+            _failedImageDecodeRetryAttempts.remove(attemptKey);
+            continue;
+        }
+        _failedImageDecodeRetryAttempts.insert(
+            attemptKey,
+            qMin(attempts + 1, FailedImageWorkMaxAttempts));
+        decodeRequests.append(request);
+    }
+    if (!decodeRequests.isEmpty()) {
+        _decodeManager->decodeImages(decodeRequests);
+    }
+}
+
 void SelectedImagesModel::onImageInfoAvailable(const ImageInfo &info) {
     ImageFile *item = applyImageInfo(info);
     if (!item) {
+        if (info.isLast) {
+            emitThumbnailInfoFlush();
+        }
         return;
     }
     if (item->index() < 0 || item->index() >= _items.size() ||
@@ -750,34 +1133,73 @@ void SelectedImagesModel::onImageInfoAvailable(const ImageInfo &info) {
         }
         emit dataChanged(modelIndex, modelIndex, roles);
     }
+    refreshCurrentViewerAfterMetadata(item);
 }
 
 void SelectedImagesModel::onImagesInfoAvailable(const QList<ImageInfo> &results) {
-    int firstRow = _items.size();
-    int lastRow = -1;
+    QList<int> changedRows;
+    ImageFile *currentViewerMetadataItem = nullptr;
+    bool flushFallback = false;
     for (const ImageInfo &info : results) {
         ImageFile *item = applyImageInfo(info);
         if (item && item->index() >= 0 && item->index() < _items.size() &&
             _items[item->index()] == item) {
-            firstRow = qMin(firstRow, item->index());
-            lastRow = qMax(lastRow, item->index());
+            changedRows.append(item->index());
+            if (item->fullPath() == _currentViewerPath) {
+                currentViewerMetadataItem = item;
+            }
+        }
+        else if (info.isLast) {
+            flushFallback = true;
         }
     }
-    if (lastRow < firstRow) {
+    if (changedRows.isEmpty()) {
+        if (flushFallback) {
+            emitThumbnailInfoFlush();
+        }
         return;
     }
 
-    emit dataChanged(index(firstRow, 0), index(lastRow, 0),
+    std::sort(changedRows.begin(), changedRows.end());
+    changedRows.erase(std::unique(changedRows.begin(), changedRows.end()),
+                      changedRows.end());
+    int spanStart = changedRows.first();
+    int previousRow = spanStart;
+    for (qsizetype i = 1; i < changedRows.size(); ++i) {
+        const int row = changedRows.at(i);
+        if (row != previousRow + 1) {
+            emit dataChanged(index(spanStart, 0), index(previousRow, 0),
+                             {FileListModel::ImageFullSizeRole});
+            spanStart = row;
+        }
+        previousRow = row;
+    }
+    emit dataChanged(index(spanStart, 0), index(previousRow, 0),
                      {FileListModel::ImageFullSizeRole});
-    emit dataChanged(index(lastRow, 0), index(lastRow, 0),
+    emit dataChanged(index(changedRows.last(), 0),
+                     index(changedRows.last(), 0),
                      {FileListModel::TimeToFlushRole});
+    refreshCurrentViewerAfterMetadata(currentViewerMetadataItem);
 }
 
 void SelectedImagesModel::onImageAvailable(const ImageDecodeRequest &request, const QImage &image,
                                             const DecodedImageInfo &decodedInfo) {
     ImageFile *item = _pathToItem.value(QFileInfo(request.info.path).absoluteFilePath(), nullptr);
-    if (!item || image.isNull()) {
+    if (!item || !isCurrentFileVersion(item, request.info)) {
         return;
+    }
+    if (image.isNull()) {
+        rememberFailedDecodeRequest(request);
+        return;
+    }
+    if (!decodedInfo.isFromCache) {
+        ImageDecodeRequest sourceRetry = request;
+        sourceRetry.checkCache = false;
+        _failedImageDecodeRequests.remove(
+            selectedDecodeRetryKey(sourceRetry));
+        _failedImageDecodeRetryAttempts.remove(
+            selectedDecodeRetryKey(sourceRetry));
+        _failedImageWorkRetryDelayMs = FailedImageWorkRetryInitialMs;
     }
     if (request.viewerRequest) {
         const ViewerImageCache::StoredImage storedImage =
@@ -795,7 +1217,8 @@ void SelectedImagesModel::onImageAvailable(const ImageDecodeRequest &request, co
         }
         return;
     }
-    if (decodedInfo.isFromCache &&
+    if (item->imageMatchesSource(request.info) &&
+        decodedInfo.isFromCache &&
         (image.width() <= item->image().width() || image.height() <= item->image().height())) {
         return;
     }
@@ -806,7 +1229,7 @@ void SelectedImagesModel::onImageAvailable(const ImageDecodeRequest &request, co
         _providerImageStore->remove(previousId);
     }
     const QString imageId = QString("selected-%1").arg(_lastImageId++);
-    item->setImage(image);
+    item->setImage(image, request.info);
     item->setIsCachedThumbnail(decodedInfo.isFromCache);
     _imageIdToItem.insert(imageId, item);
     _providerImageStore->publish(imageId, image);

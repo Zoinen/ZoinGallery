@@ -23,6 +23,7 @@ public:
 
     struct ThumbnailInfo {
         QDateTime lastModified;
+        qint64 fileSize = -1;
         ThumbnailLocation location;
         QVariantMap exif;
         QSize imageSize;

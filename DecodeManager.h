@@ -32,6 +32,9 @@ public:
 
     virtual QString path() const { return QString(); }
     virtual bool isViewerRequest() const { return false; }
+    virtual bool isHighPriority() const { return false; }
+    virtual quint64 viewerGeneration() const { return 0; }
+    virtual int viewerPriorityOrdinal() const { return -1; }
 
     void cancel();
     bool isCanceled() const { return _isCanceled; }
@@ -53,9 +56,12 @@ class DecodeManager : public QObject {
 public:
     explicit DecodeManager(QObject *parent = nullptr);
     ~DecodeManager() override;
-    void readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView, int directOpenGeneration = 0);
+    void readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView,
+                        int directOpenGeneration = 0,
+                        bool highPriority = false);
     void decodeImages(const QList<ImageDecodeRequest> &requests);
-    void readFolderList(const QStringList &paths, int totalImages = -1);
+    void readFolderList(const QStringList &paths, int totalImages = -1,
+                        quint64 requestGeneration = 0);
 
     void scan(const QString &root);
     void scanImages(const QList<QString> &imagePaths);
@@ -78,7 +84,11 @@ signals:
     void imageInfoReady(const ImageInfo &result);
     void imagesInfoReady(const QList<ImageInfo> &result);
     void imageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
-    void folderListReady(const QString &path, const QList<FileInfo> &subfiles, bool isFromCache);
+    void imageReadFailed(const ImageDecodeRequest &request);
+    void folderListReady(const QString &path, const QList<FileInfo> &subfiles,
+                         bool isFromCache, quint64 requestGeneration);
+    void folderListFailed(const QString &path, const QString &errorText,
+                          quint64 requestGeneration);
 
     void runningTasksChanged(const QString &runningTasks, const QStringList &tasksInfo);
     void viewerRunnerCanceled(const QString &path);
@@ -90,14 +100,25 @@ protected:
 private:
     void onImageInfoReady(const ImageInfo &result);
     void onImageReadReady(const ImageData &result);
+    void onImageReadFailed(const ImageDecodeRequest &request);
     void onImageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
-    void onFolderListReady(const QString &path, const QList<FileInfo> &subfiles);
+    void onFolderListReady(const QString &path, const QList<FileInfo> &subfiles,
+                           quint64 requestGeneration);
+    void onFolderListFailed(const QString &path, const QString &errorText,
+                            quint64 requestGeneration);
     void onScannerInfoReady(const ImageInfo &result);
 
     void onStoreInCache(const ImageDecodeRequest &request, const QByteArray &imageData);
-    void onCachedImageInfoRetrieved(const QList<ImageInfo> &results, const QStringList &notFound,
-                                    bool isFromEmbeddedView, const QString &lastPath, int directOpenGeneration);
-    void onInfoNotFoundInCache(const QList<QString> &paths, bool isFromEmbeddedView, int directOpenGeneration = 0);
+    void onCachedImageInfoRetrieved(const QList<ImageInfo> &results,
+                                    const QStringList &notFound,
+                                    bool isFromEmbeddedView,
+                                    const QString &lastPath,
+                                    int directOpenGeneration,
+                                    bool highPriority);
+    void onInfoNotFoundInCache(const QList<QString> &paths,
+                               bool isFromEmbeddedView,
+                               int directOpenGeneration = 0,
+                               bool highPriority = false);
     bool isRunnerTypeMatchesThreadType(Runner *runner, int threadType);
     void updateRunningTasksCount();
     QString runnerToString(Runner *task);
@@ -128,6 +149,7 @@ private:
     bool _fileListCacheNeedsDump = false;
     bool _runningTasksDebug = false;
     bool _isClosing = false;
+    quint64 _nextViewerGeneration = 0;
 };
 
 #endif // DECODEMANAGER_H

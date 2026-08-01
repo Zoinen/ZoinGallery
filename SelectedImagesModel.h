@@ -32,7 +32,9 @@ public:
     void decodeImages(const QList<ImageDecodeRequest> &requests) override;
     void cancelAllRunners() override;
     void cancelAllDecodeRunners() override;
+    bool preserveViewStateOnReset() const override;
     Q_INVOKABLE void cancelAllDecodeViewerRunners();
+    Q_INVOKABLE void cancelAllDecodeViewerRunnersForViewerClose();
     void prepareToClose();
 
     const ImageFile *itemForImageId(const QString &imageId) const;
@@ -75,12 +77,22 @@ signals:
     void viewerImageIdUrlChanged(const QString &imageId, int level);
     void viewerImageCacheChanged(int index);
     void viewerReset();
+    void thumbnailReloadRequested();
 
 private:
-    void syncFromPersistentSelection();
+    void syncFromPersistentSelection(bool preserveTransientState = false);
     void syncPathsFromPersistentSelection(const QStringList &paths);
+    void refreshWatchedImageMetadata(const QStringList &paths);
     void requestMissingImageInfo();
+    void emitThumbnailInfoFlush();
     ImageFile *applyImageInfo(const ImageInfo &info);
+    bool isCurrentFileVersion(const ImageFile *item,
+                              const ImageInfo &info) const;
+    void refreshCurrentViewerAfterMetadata(ImageFile *item);
+    void rememberFailedImageInfo(const ImageInfo &info);
+    void rememberFailedDecodeRequest(const ImageDecodeRequest &request);
+    void scheduleFailedImageWorkRetry();
+    void retryFailedImageWork();
     void onImageInfoAvailable(const ImageInfo &info);
     void onImagesInfoAvailable(const QList<ImageInfo> &results);
     void onImageAvailable(const ImageDecodeRequest &request, const QImage &image,
@@ -97,7 +109,12 @@ private:
     QHash<QString, ImageFile *> _imageIdToItem;
     QHash<QString, QDateTime> _selectionAddedAt;
     QTimer _imageInfoRequestTimer;
-    QSet<int> _selectionPreviewSnapshot;
+    QTimer _failedImageWorkRetryTimer;
+    QHash<QString, ImageInfo> _failedImageInfoRequests;
+    QHash<QString, ImageDecodeRequest> _failedImageDecodeRequests;
+    QHash<QString, int> _failedImageInfoRetryAttempts;
+    QHash<QString, int> _failedImageDecodeRetryAttempts;
+    QSet<QString> _selectionPreviewSnapshot;
     QSet<QString> _activeGroupPaths;
     bool _selectionPreviewActive = false;
     int _lastImageId = 0;
@@ -105,6 +122,10 @@ private:
     int _unavailableCount = 0;
     QString _activeGroupId;
     QString _currentViewerPath;
+    QSize _currentViewerRequestSize;
+    int _failedImageWorkRetryDelayMs = 250;
+    bool _hasCurrentViewerRequest = false;
+    bool _preserveViewStateOnReset = false;
 };
 
 #endif // SELECTEDIMAGESMODEL_H

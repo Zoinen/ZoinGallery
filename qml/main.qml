@@ -323,12 +323,13 @@ MainWindow {
         }
 
         function closeViewer(startGeometry) {
+            viewerController.clearPendingOpenInViewer()
+            viewerDecodeModel.cancelAllDecodeViewerRunnersForViewerClose()
             switchToThumbnails(startGeometry)
             if (thumbnailsDirty) {
                 thumbnailsDirty = false
                 viewerSourceMasonry.view.reReadAndDecodeThumbnails()
             }
-            viewerDecodeModel.cancelAllDecodeViewerRunners()
         }
 
         function validGeometry(geometry) {
@@ -459,6 +460,8 @@ MainWindow {
         }
 
         function enterThumbnailsAfterViewerPinchClose() {
+            viewerController.clearPendingOpenInViewer()
+            viewerDecodeModel.cancelAllDecodeViewerRunnersForViewerClose()
             viewerSourceMasonry.focusView()
             if (root.state !== "thumbnails") {
                 root.state = "thumbnails"
@@ -469,7 +472,6 @@ MainWindow {
                 thumbnailsDirty = false
                 viewerSourceMasonry.view.reReadAndDecodeThumbnails()
             }
-            viewerDecodeModel.cancelAllDecodeViewerRunners()
             viewerMode.panelsVisible = false
             topLevelWindow.title = "ZoinGallery"
             thumbnailsView.opacity = 1

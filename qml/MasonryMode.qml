@@ -75,6 +75,29 @@ MouseArea {
         currentItemCenterY = currentItemGeometry.y + currentItemGeometry.height / 2 - (scrollAnimation2.running ? scrollAnimation2.to : masonryLayout.contentY)
     }
 
+    function restoreStateAfterLayoutRebuild() {
+        resetCurrentItemCenter()
+        if (shiftSelectionActive && shiftSelectionAnchorPath !== "") {
+            let remappedAnchor = -1
+            for (let i = 0; i < masonryLayout.count; ++i) {
+                if (masonryLayout.indexFullPath(i) ===
+                        shiftSelectionAnchorPath) {
+                    remappedAnchor = i
+                    break
+                }
+            }
+            if (remappedAnchor === -1) {
+                selectionModel.cancelSelectionPreview()
+                shiftSelectionActive = false
+                shiftSelectionAnchorIndex = -1
+                shiftSelectionAnchorPath = ""
+            }
+            else {
+                shiftSelectionAnchorIndex = remappedAnchor
+            }
+        }
+    }
+
     onPressed: (mouse) => {
         if (mouse.button === Qt.LeftButton) {
             focusView()
@@ -180,6 +203,7 @@ MouseArea {
     property bool alwaysShowFileNames: false
     property bool shiftSelectionActive: false
     property int shiftSelectionAnchorIndex: -1
+    property string shiftSelectionAnchorPath: ""
     property bool shiftNavigationSelectionValue: true
     property string shiftSelectionDescription: "Range selection"
     readonly property int rubberBandModeAdd: 0
@@ -198,7 +222,13 @@ MouseArea {
     Connections {
         target: masonryLayout
         function onLayoutReset() {
-            resetCurrentItemCenter()
+            restoreStateAfterLayoutRebuild()
+        }
+        function onCountChanged() {
+            // countChanged is emitted after a model rebuild has finished its
+            // rewrap and viewport restoration. Unlike layoutReset it carries
+            // no "re-decode thumbnails" semantics for folder delegates.
+            restoreStateAfterLayoutRebuild()
         }
     }
 
@@ -323,6 +353,8 @@ MouseArea {
         }
         shiftSelectionActive = true
         shiftSelectionAnchorIndex = masonryLayout.currentIndex
+        shiftSelectionAnchorPath =
+                masonryLayout.indexFullPath(shiftSelectionAnchorIndex)
         shiftNavigationSelectionValue = true
         shiftSelectionDescription = "Range selection"
         selectionModel.beginSelectionPreview()
@@ -358,6 +390,7 @@ MouseArea {
         selectionModel.commitSelectionPreview(shiftSelectionDescription)
         shiftSelectionActive = false
         shiftSelectionAnchorIndex = -1
+        shiftSelectionAnchorPath = ""
     }
 
     function updateSelectionAfterKeyboardNavigation(event) {
@@ -447,6 +480,7 @@ MouseArea {
         if (shiftSelectionActive) {
             shiftSelectionActive = false
             shiftSelectionAnchorIndex = -1
+            shiftSelectionAnchorPath = ""
         }
         rubberBandPending = false
         rubberBandActive = false

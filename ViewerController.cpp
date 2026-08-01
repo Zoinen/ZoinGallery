@@ -102,6 +102,8 @@ ViewerController::ViewerController(QQmlEngine *engine)
     connect(_fileListModel, &FileListModel::directOpenReady, this, [this] (int index) {
         emit setCurrentIndex(mapSourceRowToViewRow(index));
     });
+    connect(_fileListModel, &FileListModel::directOpenFailed, this,
+            [this](const QString &) { clearPendingOpenInViewer(); });
     connect(_fileListModel, &FileListModel::panelReloaded, this, [this] (int index) {
         emit setCurrentIndex(mapSourceRowToViewRow(index));
     });
@@ -553,6 +555,7 @@ void ViewerController::openFileInViewer(const QString &path, int viewerWidth, in
     QFileInfo fileInfo(imagePath);
     if ((_fileListModel->imageSourceAccessEnabled() && !fileInfo.isFile())
         || !FileListModel::isImage(fileInfo.fileName())) {
+        clearPendingOpenInViewer();
         cd(imagePath, changeHistory);
         return;
     }

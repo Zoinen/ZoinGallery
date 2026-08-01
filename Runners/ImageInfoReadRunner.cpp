@@ -4,9 +4,11 @@
 #include <QThread>
 
 ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool isFromEmbeddedView, bool isFromScanner,
-                                         int directOpenGeneration)
+                                         int directOpenGeneration,
+                                         bool highPriority)
     : _path(path), _isLast(isLast), _isFromEmbeddedView(isFromEmbeddedView), _isFromScanner(isFromScanner),
-      _directOpenGeneration(directOpenGeneration) {
+      _directOpenGeneration(directOpenGeneration),
+      _highPriority(highPriority) {
 }
 
 void ImageInfoReadRunner::run() {
@@ -15,7 +17,8 @@ void ImageInfoReadRunner::run() {
         .isLast = _isLast,
         .isFromEmbeddedView = _isFromEmbeddedView,
         .isFromScanner = _isFromScanner,
-        .directOpenGeneration = _directOpenGeneration
+        .directOpenGeneration = _directOpenGeneration,
+        .highPriority = _highPriority,
     };
 
     ThumbnailLoader::readMetadata(result);

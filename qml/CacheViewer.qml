@@ -4,7 +4,7 @@ import QtQuick.Layouts
 import QtQuick.Controls
 import QtQuick.Effects
 
-import com.example.imagecache 1.0
+import ZoinGallery.Native 1.0
 
 Window {
     id: topLevelWindow

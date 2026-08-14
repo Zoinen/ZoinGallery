@@ -9,6 +9,8 @@
 #include <QDateTime>
 #include <QColor>
 #include <QSharedPointer>
+#include <QVariantMap>
+#include <QSet>
 
 #include <memory>
 
@@ -38,6 +40,10 @@ struct ImageInfo {
     QString path;
     QDateTime lastModified;
     qint64 fileSize = -1;
+    // Opaque host-provided source version. Unlike QDateTime this retains a
+    // nanosecond token, allowing embedded catalogs to reject a stale result
+    // even when two revisions have the same size and millisecond timestamp.
+    qint64 sourceVersionToken = 0;
 
     QSize imageSize;
     ExifOrientation orientation = ExifOrientation::Horizontal;
@@ -49,14 +55,30 @@ struct ImageInfo {
     bool isFromScanner = false;
     int directOpenGeneration = 0;
     bool highPriority = false;
+    // Optional owner for metadata work running on the shared embedded
+    // scheduler. Standalone requests leave this empty.
+    QString requestNamespace;
 };
 
 struct ImageDecodeRequest {
     ImageInfo info;
 
     QSize targetSize;
+    // Optional owner used by a shared embedded scheduler. Standalone requests
+    // leave this empty; external sessions stamp their stable session ID.
+    QString requestNamespace;
     bool viewerRequest = false;
     bool checkCache = false;
+    // A cold standalone thumbnail decode intentionally prepares a reusable
+    // cache-resolution frame before publishing the requested tile. External
+    // catalogs carry an opaque host version which the legacy persistent cache
+    // cannot validate, so they disable this expansion and decode the exact
+    // masonry/viewer target instead.
+    bool expandToCacheResolution = true;
+    // Keep exact external decodes out of the legacy millisecond-versioned
+    // persistent cache. Otherwise a small tile could poison a later request
+    // and the cache still could not prove the host's nanosecond version.
+    bool storeInPersistentCache = true;
     // Keeps Fit intent when a small image's target is already its native size.
     bool fitToViewerRequest = false;
     // Visible/interactively requested work jumps ahead of background scans.
@@ -65,6 +87,9 @@ struct ImageDecodeRequest {
     // ahead of stale queued viewer/prefetch work.
     quint64 viewerGeneration = 0;
     int viewerPriorityOrdinal = -1;
+    // Distinguishes decoded pixels produced with different thumbnail fit/crop
+    // policies. Empty preserves the historical stretched-thumbnail policy.
+    QString thumbnailTransformKey;
 };
 
 struct DecodedImageInfo {
@@ -109,6 +134,8 @@ class ImageFile : public QObject {
     Q_PROPERTY(bool isSelected READ isSelected WRITE setIsSelected NOTIFY isSelectedChanged)
     Q_PROPERTY(QString selectionGroupId READ selectionGroupId WRITE setSelectionGroupId NOTIFY selectionGroupChanged)
     Q_PROPERTY(QColor selectionGroupColor READ selectionGroupColor WRITE setSelectionGroupColor NOTIFY selectionGroupChanged)
+    Q_PROPERTY(QVariantMap highlightStyle READ highlightStyle WRITE setHighlightStyle NOTIFY highlightStyleChanged)
+    Q_PROPERTY(QVariantMap displayFields READ displayFields WRITE setDisplayFields NOTIFY displayFieldsChanged)
 
 public:
     using QObject::QObject;
@@ -125,6 +152,8 @@ public:
 
     QString imageIdUrl() const;
     void setImageId(const QString &imageId);
+    QString imageProviderName() const;
+    void setImageProviderName(const QString &providerName);
 
     QSize fullSize() const;
     void setFullSize(const QSize &fullSize);
@@ -184,6 +213,10 @@ public:
     void setSelectionGroupId(const QString &selectionGroupId);
     QColor selectionGroupColor() const;
     void setSelectionGroupColor(const QColor &selectionGroupColor);
+    QVariantMap highlightStyle() const;
+    void setHighlightStyle(const QVariantMap &highlightStyle);
+    QVariantMap displayFields() const;
+    void setDisplayFields(const QVariantMap &displayFields);
 
 signals:
     void fullPathChanged();
@@ -205,13 +238,19 @@ signals:
     void isFilteredOutChanged();
     void isSelectedChanged();
     void selectionGroupChanged();
+    void highlightStyleChanged();
+    void displayFieldsChanged();
 
 private:
+    QVariantMap defaultDisplayFields() const;
+    void refreshDefaultDisplayFields();
+
     QString _folderPath;
     QString _fileName;
     QImage _image;
     ImageInfo _imageSourceInfo;
     QString _imageId;
+    QString _imageProviderName = QStringLiteral("zoingallery-thumbnails");
     QSize _fullSize;
     bool _isFolder = false;
     bool _isImage = false;
@@ -225,6 +264,9 @@ private:
     bool _isSelected = false;
     QString _selectionGroupId;
     QColor _selectionGroupColor;
+    QVariantMap _highlightStyle;
+    QVariantMap _displayFields;
+    QSet<QString> _explicitDisplayFieldKeys;
 
     QList<ImageFile *> _subfiles;
     int _subfilesModelUpdateDepth = 0;

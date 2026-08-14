@@ -1,5 +1,7 @@
 #include "PersistentSelectionCache.h"
 
+#include "StorageLocations.h"
+
 #include <QDataStream>
 #include <QDebug>
 #include <QDir>
@@ -7,7 +9,6 @@
 #include <QMap>
 #include <QSaveFile>
 #include <QSet>
-#include <QStandardPaths>
 #include <QUuid>
 
 #include <algorithm>
@@ -73,7 +74,7 @@ QString dataFilePath(const QString &fileName) {
         testDir.mkpath(".");
         return testDir.filePath(fileName);
     }
-    const QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const QString dataPath = ZoinGallery::StorageLocations::dataRoot();
     QDir dir(dataPath);
     dir.mkpath(".");
     return dir.filePath(fileName);

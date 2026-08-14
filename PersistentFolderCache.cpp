@@ -1,6 +1,7 @@
 #include "PersistentFolderCache.h"
 
 #include "NaturalSort.h"
+#include "StorageLocations.h"
 
 #include <QBuffer>
 #include <QImage>
@@ -9,12 +10,11 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QMutexLocker>
-#include <QStandardPaths>
 
 namespace {
 QString folderCacheDbPath() {
-    const QString tempPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-    const QString basePath = tempPath.isEmpty() ? QDir::tempPath() : tempPath;
+    const QString basePath = ZoinGallery::StorageLocations::cacheRoot();
+    QDir().mkpath(basePath);
     return QDir(basePath).filePath("zg_folders_v2.db");
 }
 }

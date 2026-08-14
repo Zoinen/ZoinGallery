@@ -1,13 +1,12 @@
 #include "FileListModel.h"
+#include "PathArgument.h"
 #include "DecodeManager.h"
-#include "LaunchOptions.h"
 #include "NaturalSort.h"
 #include "PersistentFolderCache.h"
 #include "PersistentImageCache.h"
 #include "QmlAsyncImageProvider.h"
 #include "ThumbnailLoader.h"
 
-#include <QCoreApplication>
 #include <QClipboard>
 #include <QDir>
 #include <QDebug>
@@ -55,6 +54,7 @@ constexpr const char *ImageCacheModeSettingsKey = "Cache/imageUsageMode";
 constexpr const char *FileListCacheModeSettingsKey = "Cache/fileListUsageMode";
 constexpr int FolderRefreshDebounceMs = 180;
 constexpr int FolderWatchRetryMaxMs = 5000;
+constexpr int FolderPreviewRetryMaxAttempts = 4;
 constexpr int FailedImageWorkRetryInitialMs = 250;
 constexpr int FailedImageWorkRetryMaxMs = 5000;
 constexpr int FailedImageWorkMaxAttempts = 8;
@@ -424,29 +424,87 @@ QPixmap windowsDragCursorPixmap(qreal dpr, const QSizeF &previewSize,
 
 FileListModel::FileListModel(
     QSharedPointer<ProviderImageStore> providerImageStore, QObject *parent)
+    : FileListModel(std::move(providerImageStore), nullptr, QString(),
+                    QStringLiteral("main-"),
+                    QStringLiteral("zoingallery-thumbnails"),
+                    QStringLiteral("zoingallery-async"), parent) {
+}
+
+FileListModel::FileListModel(
+    QSharedPointer<ProviderImageStore> providerImageStore,
+    DecodeManager *sharedDecodeManager,
+    const QString &requestNamespace,
+    const QString &imageIdPrefix,
+    const QString &thumbnailProviderName,
+    const QString &asyncProviderName,
+    QObject *parent)
+    : FileListModel(std::move(providerImageStore), sharedDecodeManager,
+                    requestNamespace, imageIdPrefix,
+                    thumbnailProviderName, asyncProviderName,
+                    ViewerImageCache::DefaultFitByteBudget,
+                    ViewerImageCache::DefaultNativeByteBudget,
+                    parent) {
+}
+
+FileListModel::FileListModel(
+    QSharedPointer<ProviderImageStore> providerImageStore,
+    DecodeManager *sharedDecodeManager,
+    const QString &requestNamespace,
+    const QString &imageIdPrefix,
+    const QString &thumbnailProviderName,
+    const QString &asyncProviderName,
+    qint64 viewerFitCacheByteBudget,
+    qint64 viewerNativeCacheByteBudget,
+    QObject *parent)
     : QAbstractItemModel(parent),
       _providerImageStore(std::move(providerImageStore)),
-      _viewerImageCache(QStringLiteral("main-viewer-"),
-                        _providerImageStore) {
-    qApp->installEventFilter(this);
+      _viewerImageCache(imageIdPrefix + QStringLiteral("viewer-"),
+                        _providerImageStore,
+                        thumbnailProviderName,
+                        asyncProviderName,
+                        viewerFitCacheByteBudget,
+                        viewerNativeCacheByteBudget),
+      _decodeManager(sharedDecodeManager
+                         ? sharedDecodeManager
+                         : new DecodeManager(this)),
+      _ownsDecodeManager(!sharedDecodeManager),
+      _requestNamespace(requestNamespace),
+      _imageIdPrefix(imageIdPrefix),
+      _thumbnailProviderName(thumbnailProviderName),
+      _asyncProviderName(asyncProviderName) {
+    if (qApp) {
+        qApp->installEventFilter(this);
+    }
     _lastId = 0;
     _currentViewIndex = -1;
 
-    _decodeManager = new DecodeManager(this);
     QSettings settings;
     _imageCacheMode = cacheUsageModeFromInt(
         settings.value(ImageCacheModeSettingsKey, static_cast<int>(CacheUsageMode::On)).toInt());
     _fileListCacheMode = cacheUsageModeFromInt(
         settings.value(FileListCacheModeSettingsKey, static_cast<int>(CacheUsageMode::On)).toInt());
-    _decodeManager->setImageCacheMode(_imageCacheMode);
-    _decodeManager->setFileListCacheMode(_fileListCacheMode);
+    if (_ownsDecodeManager) {
+        _decodeManager->setImageCacheMode(_imageCacheMode);
+        _decodeManager->setFileListCacheMode(_fileListCacheMode);
+    }
+    else {
+        _imageCacheMode = _decodeManager->imageCacheMode();
+        _fileListCacheMode = _decodeManager->fileListCacheMode();
+    }
 
-    connect(_decodeManager, &DecodeManager::viewerRunnerCanceled, this, [&] (const QString &path) {
-        qDebug() << "REMOVE CANCELLED RUNNER???" << path;
-        _viewerImageCache.removeIncomplete(path);
+    connect(_decodeManager, &DecodeManager::viewerRunnerCanceled, this,
+            [this](const QString &path, const QString &requestNamespace) {
+        if (acceptsRequestNamespace(requestNamespace)) {
+            _viewerImageCache.removeIncomplete(path);
+        }
     });
 
-    connect(_decodeManager, &DecodeManager::runningTasksChanged, [&] (const QString &runningTasks, const QStringList &tasksInfo) {
+    // A reusable session can be destroyed while the runtime-owned shared
+    // DecodeManager keeps running for another panel.  Give this functor the
+    // model as its QObject context so Qt disconnects it before `this` dies.
+    connect(_decodeManager, &DecodeManager::runningTasksChanged, this,
+            [this] (const QString &runningTasks,
+                    const QStringList &tasksInfo) {
         if (runningTasksDebug()) {
             QFile f(QString("C:\\tmp\\log\\%1.txt").arg(QDateTime::currentMSecsSinceEpoch()));
             (void)f.open(QFile::WriteOnly);
@@ -462,6 +520,9 @@ FileListModel::FileListModel(
     });
 
     connect(_decodeManager, &DecodeManager::imageInfoReady, this, [&] (const ImageInfo &result) {
+        if (!acceptsRequestNamespace(result.requestNamespace)) {
+            return;
+        }
         if (result.directOpenGeneration && result.directOpenGeneration != _directOpen.generation) {
             return;
         }
@@ -543,7 +604,9 @@ FileListModel::FileListModel(
         QList<ImageInfo> currentResults;
         currentResults.reserve(results.size());
         for (const ImageInfo &result : results) {
-            if (!result.directOpenGeneration || result.directOpenGeneration == _directOpen.generation) {
+            if (acceptsRequestNamespace(result.requestNamespace) &&
+                (!result.directOpenGeneration ||
+                 result.directOpenGeneration == _directOpen.generation)) {
                 currentResults.append(result);
             }
         }
@@ -694,6 +757,9 @@ FileListModel::FileListModel(
 
     connect(_decodeManager, &DecodeManager::imageReady, this, [&] (const ImageDecodeRequest &request,
                                                                    const QImage &image, const DecodedImageInfo &decodedInfo) {
+        if (!acceptsRequestNamespace(request.requestNamespace)) {
+            return;
+        }
         if (request.info.directOpenGeneration && request.info.directOpenGeneration != _directOpen.generation) {
             return;
         }
@@ -736,7 +802,7 @@ FileListModel::FileListModel(
                 const ViewerImageCache::StoredImage storedImage =
                     _viewerImageCache.storeDecodedImage(request, image,
                                                         decodedInfo);
-                if (storedImage.accepted) {
+                if (storedImage.presentable) {
                     emit viewerImageCacheChanged(item->index());
                     if (item->index() == _currentViewIndex) {
                         emit viewerImageIdUrlChanged(storedImage.url,
@@ -1019,13 +1085,16 @@ FileListModel::FileListModel(
 
             imageInfoPaths.removeDuplicates();
             if (!imageInfoPaths.isEmpty()) {
-                _decodeManager->readImagesInfo(imageInfoPaths, true);
+                readImagesInfo(imageInfoPaths, true);
             }
         }
     });
 
     connect(_decodeManager, &DecodeManager::imageReadFailed, this,
             [this](const ImageDecodeRequest &request) {
+        if (!acceptsRequestNamespace(request.requestNamespace)) {
+            return;
+        }
         if (request.info.directOpenGeneration &&
             request.info.directOpenGeneration != _directOpen.generation) {
             return;
@@ -1203,15 +1272,18 @@ int FileListModel::columnCount(const QModelIndex &parent) const {
 }
 
 void FileListModel::prepareToClose() {
-    qInfo() << "[Shutdown] FileListModel::prepareToClose begin"
+    shutdown();
+}
+
+void FileListModel::shutdown() {
+    qInfo() << "[Shutdown] FileListModel::shutdown begin"
             << "alreadyClosing" << _isClosing
             << "items" << _items.size()
             << "viewerImages" << _viewerImageCache.viewerImageCount()
             << "fullSizeViewerImages"
             << _viewerImageCache.fullSizeImageCount();
     if (_isClosing) {
-        qInfo() << "[Shutdown] FileListModel::prepareToClose already closing, calling QCoreApplication::exit(0)";
-        QCoreApplication::exit(0);
+        qInfo() << "[Shutdown] FileListModel::shutdown already complete";
         return;
     }
     _isClosing = true;
@@ -1227,18 +1299,22 @@ void FileListModel::prepareToClose() {
         _fileSystemWatcher.removePaths(watchedFiles);
     }
 
-    qInfo() << "[Shutdown] FileListModel::prepareToClose stopping async image provider";
-    QmlAsyncImageProvider::prepareToClose();
-    qInfo() << "[Shutdown] FileListModel::prepareToClose async image provider stopped";
-    qInfo() << "[Shutdown] FileListModel::prepareToClose dumping selection cache";
+    qInfo() << "[Shutdown] FileListModel::shutdown dumping selection cache";
     _selectionSaveTimer.stop();
     PersistentSelectionCache::dumpDb();
-    qInfo() << "[Shutdown] FileListModel::prepareToClose stopping decode manager";
-    _decodeManager->prepareToClose();
-    qInfo() << "[Shutdown] FileListModel::prepareToClose decode manager stopped";
-    qInfo() << "[Shutdown] FileListModel::prepareToClose calling QCoreApplication::exit(0)";
-    QCoreApplication::exit(0);
-    qInfo() << "[Shutdown] FileListModel::prepareToClose end";
+    if (qApp) {
+        qApp->removeEventFilter(this);
+    }
+    if (_ownsDecodeManager) {
+        qInfo() << "[Shutdown] FileListModel::shutdown stopping owned decode manager";
+        _decodeManager->prepareToClose();
+    }
+    else {
+        qInfo() << "[Shutdown] FileListModel::shutdown canceling session work"
+                << _requestNamespace;
+        cancelSessionRequests();
+    }
+    qInfo() << "[Shutdown] FileListModel::shutdown end";
 }
 
 int FileListModel::cd(const QString &path, const QString &itemToSelect) {
@@ -1291,10 +1367,11 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
     if (path == "Computer") {
         for (const FileInfo &drive : entries) {
             ImageFile *item = new ImageFile(this);
+            configureImageFile(item);
             item->setFileName(drive.name);
             item->setIsFolder(true);
             item->setIsImage(false);
-            item->setIconPath("qrc:/resources/DriveIcon.svg");
+            item->setIconPath("qrc:/ZoinGallery/resources/DriveIcon.svg");
             item->setInfo(ImageInfo{
                 .path = item->fullPath(),
                 .lastModified = drive.lastModified,
@@ -1319,11 +1396,12 @@ int FileListModel::populateFolderItems(const QString &path, const QString &itemT
 
         for (const FileInfo &folder : folders) {
             ImageFile *item = new ImageFile(this);
+            configureImageFile(item);
             item->setFolderPath(_root);
             item->setFileName(folder.name);
             item->setIsFolder(true);
             item->setIsImage(false);
-            item->setIconPath("qrc:/resources/FolderIcon.svg");
+            item->setIconPath("qrc:/ZoinGallery/resources/FolderIcon.svg");
             item->setInfo(ImageInfo{
                 .path = item->fullPath(),
                 .lastModified = folder.lastModified,
@@ -1970,11 +2048,12 @@ void FileListModel::reconcileFolderEntries(
         }
         else if (entry.isDirectory) {
             item = new ImageFile(this);
+            configureImageFile(item);
             item->setFolderPath(_root);
             item->setFileName(entry.name);
             item->setIsFolder(true);
             item->setIsImage(false);
-            item->setIconPath(QStringLiteral("qrc:/resources/FolderIcon.svg"));
+            item->setIconPath(QStringLiteral("qrc:/ZoinGallery/resources/FolderIcon.svg"));
             item->setInfo(ImageInfo{
                 .path = item->fullPath(),
                 .lastModified = entry.lastModified,
@@ -2267,10 +2346,10 @@ void FileListModel::reconcileFolderEntries(
         emit watchedImageMetadataChanged(changedImagePaths);
     }
     if (!addedImagePaths.isEmpty()) {
-        _decodeManager->readImagesInfo(addedImagePaths, false, 0, true);
+        readImagesInfo(addedImagePaths, false, 0, true);
     }
     if (!changedImagePaths.isEmpty()) {
-        _decodeManager->readImagesInfo(changedImagePaths, false);
+        readImagesInfo(changedImagePaths, false);
     }
     QStringList folderPreviewPaths = addedFolderPaths;
     folderPreviewPaths.append(changedFolderPaths);
@@ -2351,7 +2430,7 @@ void FileListModel::refreshCurrentViewerAfterMetadata(ImageFile *item) {
         _viewerImageCache.planRequest(_items, _currentViewIndex,
                                       _currentViewerRequestSize, 1);
     if (!requestPlan.decodeRequests.isEmpty()) {
-        _decodeManager->decodeImages(requestPlan.decodeRequests);
+        decodeImages(requestPlan.decodeRequests);
     }
 }
 
@@ -2522,25 +2601,25 @@ void FileListModel::retryFailedImageWork() {
          it != topLevelInfoPaths.constEnd(); ++it) {
         QStringList paths = it.value();
         paths.removeDuplicates();
-        _decodeManager->readImagesInfo(paths, false, it.key());
+        readImagesInfo(paths, false, it.key());
     }
     for (auto it = embeddedInfoPaths.constBegin();
          it != embeddedInfoPaths.constEnd(); ++it) {
         QStringList paths = it.value();
         paths.removeDuplicates();
-        _decodeManager->readImagesInfo(paths, true, it.key());
+        readImagesInfo(paths, true, it.key());
     }
     for (auto it = highTopLevelInfoPaths.constBegin();
          it != highTopLevelInfoPaths.constEnd(); ++it) {
         QStringList paths = it.value();
         paths.removeDuplicates();
-        _decodeManager->readImagesInfo(paths, false, it.key(), true);
+        readImagesInfo(paths, false, it.key(), true);
     }
     for (auto it = highEmbeddedInfoPaths.constBegin();
          it != highEmbeddedInfoPaths.constEnd(); ++it) {
         QStringList paths = it.value();
         paths.removeDuplicates();
-        _decodeManager->readImagesInfo(paths, true, it.key(), true);
+        readImagesInfo(paths, true, it.key(), true);
     }
 
     const QHash<QString, ImageDecodeRequest> pendingDecode =
@@ -2607,7 +2686,7 @@ void FileListModel::retryFailedImageWork() {
         decodeRetries.append(request);
     }
     if (!decodeRetries.isEmpty()) {
-        _decodeManager->decodeImages(decodeRetries);
+        decodeImages(decodeRetries);
     }
     if (abandonDirectPriority &&
         _directOpen.stage != DirectOpenStage::None) {
@@ -2619,7 +2698,7 @@ void FileListModel::retryFailedImageWork() {
 }
 
 void FileListModel::startRegularFolderWork() {
-    _decodeManager->readImagesInfo(_imagePaths, false);
+    readImagesInfo(_imagePaths, false);
     requestFolderPreviews(_folderImagePaths);
 }
 
@@ -2651,13 +2730,23 @@ void FileListModel::requestFolderPreviews(const QStringList &paths) {
         _folderPreviewRetryAttempts.remove(path);
     }
     _decodeManager->readFolderList(requestPaths, 16,
-                                   _nextFolderPreviewGeneration);
+                                   _nextFolderPreviewGeneration,
+                                   _requestNamespace);
 }
 
 void FileListModel::scheduleFolderPreviewRetry(
     const QString &path, quint64 requestGeneration,
     const QString &errorText) {
     const int attempt = _folderPreviewRetryAttempts.value(path, 0);
+    if (attempt >= FolderPreviewRetryMaxAttempts) {
+        qWarning() << "Keeping existing folder preview after repeated refresh "
+                      "failures"
+                   << path << errorText << "giving up after" << attempt
+                   << "retries";
+        _folderPreviewGenerations.remove(path);
+        _folderPreviewRetryAttempts.remove(path);
+        return;
+    }
     const int delayMs = qMin(500 * (1 << qMin(attempt, 3)),
                              FolderWatchRetryMaxMs);
     _folderPreviewRetryAttempts.insert(path, attempt + 1);
@@ -2677,7 +2766,8 @@ void FileListModel::scheduleFolderPreviewRetry(
             return;
         }
         _decodeManager->readFolderList({path}, 16,
-                                       requestGeneration);
+                                       requestGeneration,
+                                       _requestNamespace);
     });
 }
 
@@ -2715,9 +2805,37 @@ const ImageFile *FileListModel::itemForImageId(const QString &imageId) {
 }
 
 QString FileListModel::generateNewId() {
-    QString id = QString::number(_lastId);
+    QString id = _imageIdPrefix + QString::number(_lastId);
     _lastId++;
     return id;
+}
+
+void FileListModel::readImagesInfo(
+    const QList<QString> &paths, bool isFromEmbeddedView,
+    int directOpenGeneration, bool highPriority) {
+    _decodeManager->readImagesInfo(paths, isFromEmbeddedView,
+                                   directOpenGeneration, highPriority,
+                                   _requestNamespace);
+}
+
+void FileListModel::cancelSessionRequests() {
+    if (_requestNamespace.isEmpty()) {
+        _decodeManager->cancelAllRunners();
+    }
+    else {
+        _decodeManager->cancelRequests(_requestNamespace);
+    }
+}
+
+bool FileListModel::acceptsRequestNamespace(
+    const QString &requestNamespace) const {
+    return requestNamespace == _requestNamespace;
+}
+
+void FileListModel::configureImageFile(ImageFile *item) const {
+    if (item) {
+        item->setImageProviderName(_thumbnailProviderName);
+    }
 }
 
 void FileListModel::updateImageId(ImageFile *item) {
@@ -2738,6 +2856,7 @@ void FileListModel::updateImageId(ImageFile *item) {
 ImageFile *FileListModel::createFileItem(const QString &folderPath, const QString &fileName,
                                          const QDateTime &lastModified, qint64 fileSize) {
     ImageFile *item = new ImageFile(this);
+    configureImageFile(item);
     item->setFolderPath(folderPath);
     item->setFileName(fileName);
     item->setIsFolder(false);
@@ -2751,14 +2870,14 @@ ImageFile *FileListModel::createFileItem(const QString &folderPath, const QStrin
     if (isImage(item->fileName())) {
         item->setIsImage(true);
         QString lowerFileName = item->fileName().toLower();
-        item->setIconPath("qrc:/resources/ImageIcon.svg");
+        item->setIconPath("qrc:/ZoinGallery/resources/ImageIcon.svg");
 //                updateImageId(item);
         QString path = item->fullPath();
         _fileToItem.insert(path, item);
     }
     else {
         item->setIsImage(false);
-        item->setIconPath("qrc:/resources/FileIcon.svg");
+        item->setIconPath("qrc:/ZoinGallery/resources/FileIcon.svg");
     }
     return item;
 }
@@ -2937,7 +3056,7 @@ void FileListModel::enterRecursiveView() {
     //         item->isFolder = true;
     //         item->isImage = false;
     //         item->index = _items.size();
-    //         item->iconPath = "qrc:/resources/DriveIcon.svg";
+    //         item->iconPath = "qrc:/ZoinGallery/resources/DriveIcon.svg";
     //         _items.append(item);
 
     //         if (item->fileName == itemToSelect) {
@@ -2952,11 +3071,12 @@ void FileListModel::enterRecursiveView() {
             QFileInfo info(folder.path);
             // qDebug() << folder.level << info.filePath() << info.fileName();
             ImageFile *item = new ImageFile(this);
+            configureImageFile(item);
             item->setFolderPath(info.dir().absolutePath());
             item->setFileName(info.fileName()); // QString("%1: %2").arg(folder.first).arg(folder.second);
             item->setIsFolder(true);
             item->setIsImage(false);
-            item->setIconPath("qrc:/resources/FolderIcon.svg");
+            item->setIconPath("qrc:/ZoinGallery/resources/FolderIcon.svg");
             item->setInfo(ImageInfo{
                 .path = item->fullPath(),
                 .lastModified = info.lastModified(),
@@ -2985,7 +3105,7 @@ void FileListModel::enterRecursiveView() {
     loadSelectionStatesForVisibleItems();
     endResetModel();
 
-    _decodeManager->readImagesInfo(_imagePaths, true);
+    readImagesInfo(_imagePaths, true);
     requestFolderPreviews(_folderImagePaths);
 }
 
@@ -3030,7 +3150,7 @@ void FileListModel::openImageDirectly(const QString &path, int width, int height
     _directOpen.viewerSize = QSize(width, height);
     emit directOpenPathChanged();
 
-    _decodeManager->cancelAllRunners();
+    cancelSessionRequests();
 
     int existingIndex = -1;
     if (!_root.isEmpty() && _root != "Computer" &&
@@ -3073,7 +3193,7 @@ void FileListModel::openImageDirectly(const QString &path, int width, int height
         handleDirectOpenImageInfo(info);
     }
     else {
-        _decodeManager->readImagesInfo({fullPath}, false, generation);
+        readImagesInfo({fullPath}, false, generation);
     }
 }
 
@@ -3150,7 +3270,7 @@ void FileListModel::requestDirectOpenFitDecode() {
     }
 
     _directOpen.stage = DirectOpenStage::WaitingFitDecode;
-    _decodeManager->decodeImages({request});
+    decodeImages({request});
 }
 
 void FileListModel::requestDirectOpenFullSizeDecode() {
@@ -3173,7 +3293,7 @@ void FileListModel::requestDirectOpenFullSizeDecode() {
     const ImageDecodeRequest request =
         ViewerImageCache::makeRequest(info, targetSize);
     _directOpen.stage = DirectOpenStage::WaitingFullDecode;
-    _decodeManager->decodeImages({request});
+    decodeImages({request});
 }
 
 bool FileListModel::handleDirectOpenImageReady(const ImageDecodeRequest &request, const QImage &image,
@@ -3349,7 +3469,7 @@ void FileListModel::requestDirectOpenNeighbors() {
 
     if (!_directOpen.pendingNeighborInfoPaths.isEmpty()) {
         _directOpen.stage = DirectOpenStage::WaitingNeighborInfo;
-        _decodeManager->readImagesInfo(pathsNeedingInfo, false, _directOpen.generation);
+        readImagesInfo(pathsNeedingInfo, false, _directOpen.generation);
         return;
     }
 
@@ -3394,7 +3514,7 @@ void FileListModel::requestDirectOpenNeighborDecodes() {
 
     _directOpen.pendingNeighborDecodePaths = queuedPaths;
     _directOpen.stage = DirectOpenStage::WaitingNeighborDecode;
-    _decodeManager->decodeImages(requests);
+    decodeImages(requests);
 }
 
 void FileListModel::finishDirectOpenAfterDecodeCancellation(
@@ -3465,17 +3585,23 @@ void FileListModel::emitViewerImagesForCurrentIndex() {
         return;
     }
 
-    if (!_items[_currentViewIndex]->imageIdUrl().isEmpty()) {
-        emit viewerImageIdUrlChanged(_items[_currentViewIndex]->imageIdUrl(), 0);
-    }
-    const auto cachedImages = _viewerImageCache.cachedImagesForPath(
-        _items[_currentViewIndex]->fullPath(), true);
-    for (const auto &[url, level] : cachedImages) {
+    // Direct-open completion follows the same requested-size filtering as
+    // normal viewer navigation. Never republish an older undersized Fit tier
+    // merely because it exists in the retained cache.
+    const auto sources = viewerImageSourcesForIndex(
+        _currentViewIndex, _currentViewerRequestSize);
+    for (const auto &[url, level] : sources) {
         emit viewerImageIdUrlChanged(url, level);
     }
 }
 
 void FileListModel::requestViewer(int index, int width, int height) {
+    requestViewerInOrder(index, {}, width, height);
+}
+
+void FileListModel::requestViewerInOrder(
+    int index, const QVariantList &orderedSourceRows,
+    int width, int height) {
     if (index < 0 || index >= _items.size()) {
         return;
     }
@@ -3487,19 +3613,100 @@ void FileListModel::requestViewer(int index, int width, int height) {
         emit viewerImageIdUrlChanged(_items[index]->imageIdUrl(), 0);
     }
 
+    QList<ImageFile *> prioritizedItems;
+    prioritizedItems.reserve(orderedSourceRows.size());
+    for (const QVariant &rowValue : orderedSourceRows) {
+        bool ok = false;
+        const int sourceRow = rowValue.toInt(&ok);
+        if (!ok || sourceRow < 0 || sourceRow >= _items.size()) {
+            continue;
+        }
+        ImageFile *item = _items.at(sourceRow);
+        if (item && item->isImage() &&
+            !prioritizedItems.contains(item)) {
+            prioritizedItems.append(item);
+        }
+    }
+    if (!prioritizedItems.isEmpty() &&
+        prioritizedItems.first() != _items.at(index)) {
+        prioritizedItems.removeAll(_items.at(index));
+        prioritizedItems.prepend(_items.at(index));
+    }
+
+    // The explicit list is already in viewer priority order
+    // (current, previous, next, ...). Starting planRequest at its first row
+    // consumes that edge-anchored list in exactly the supplied order.
     const ViewerImageCache::RequestPlan requestPlan =
-        _viewerImageCache.planRequest(_items, index, QSize(width, height));
+        prioritizedItems.isEmpty()
+        ? _viewerImageCache.planRequest(
+              _items, index, QSize(width, height))
+        : _viewerImageCache.planRequest(
+              prioritizedItems, 0, QSize(width, height),
+              prioritizedItems.size());
     for (const auto &[url, level] : requestPlan.cachedImages) {
         emit viewerImageIdUrlChanged(url, level);
     }
-    _decodeManager->decodeImages(requestPlan.decodeRequests);
+    decodeImages(requestPlan.decodeRequests);
+}
+
+void FileListModel::requestViewerAt(
+    int index, int width, int height) {
+    if (index < 0 || index >= _items.size() ||
+        !_items.at(index)->isImage()) {
+        return;
+    }
+
+    // A swipe may expose a neighbor before it becomes the authoritative
+    // current row. Prepare that one frame for the requested presentation target
+    // without replacing the active current row or its ordered prefetch plan.
+    const QList<ImageFile *> targetItems{_items.at(index)};
+    const ViewerImageCache::RequestPlan requestPlan =
+        _viewerImageCache.planRequest(
+            targetItems, 0, QSize(width, height), 1);
+    decodeImages(requestPlan.decodeRequests);
 }
 
 QString FileListModel::bestViewerImageUrlForIndex(int index) const {
+    const auto sources = viewerImageSourcesForIndex(index);
+    return sources.isEmpty() ? QString() : sources.constLast().first;
+}
+
+QString FileListModel::preparedViewerImageUrlForIndex(
+    int index, int width, int height) const {
     if (index < 0 || index >= _items.size()) {
-        return QString();
+        return {};
     }
-    return _viewerImageCache.bestImageUrl(_items[index]);
+
+    const bool fitRequest = width > 0 && height > 0;
+    const int requiredLevel = fitRequest ? 1 : 2;
+    const auto sources = _viewerImageCache.imageSources(
+        _items.at(index), QSize(width, height));
+    for (auto it = sources.crbegin(); it != sources.crend(); ++it) {
+        if (it->second == requiredLevel) {
+            return it->first;
+        }
+    }
+    return {};
+}
+
+QSize FileListModel::viewerImageOriginalSizeForIndex(int index) const {
+    return index >= 0 && index < _items.size() && _items.at(index)
+        ? _items.at(index)->fullSize() : QSize();
+}
+
+QList<QPair<QString, int>> FileListModel::viewerImageSourcesForIndex(
+    int index, const QSize &viewerSize) const {
+    if (index < 0 || index >= _items.size()) {
+        return {};
+    }
+    QSize effectiveViewerSize = viewerSize;
+    if (!effectiveViewerSize.isValid() &&
+        _hasCurrentViewerRequest &&
+        _currentViewerRequestSize.isValid()) {
+        effectiveViewerSize = _currentViewerRequestSize;
+    }
+    return _viewerImageCache.imageSources(_items[index],
+                                          effectiveViewerSize);
 }
 
 QImage FileListModel::viewerForImageId(const QString &imageId) {
@@ -3527,7 +3734,7 @@ void FileListModel::cancelAllRunners() {
     if (!canceledDirectOpenPath.isEmpty()) {
         emit directOpenFailed(canceledDirectOpenPath);
     }
-    _decodeManager->cancelAllRunners();
+    cancelSessionRequests();
     if (_folderRefreshPendingAfterDirectOpen) {
         _folderRefreshPendingAfterDirectOpen = false;
         scheduleFolderRefresh();
@@ -3537,7 +3744,16 @@ void FileListModel::cancelAllRunners() {
 void FileListModel::cancelAllDecodeRunners() {
     // qDebug() << __FUNCTION__;
     const int directOpenGeneration = _directOpen.generation;
-    _decodeManager->cancelAllDecodeRunners();
+    if (_requestNamespace.isEmpty()) {
+        _decodeManager->cancelAllDecodeRunners();
+    }
+    else {
+        // Preserve the original method contract: metadata and folder work are
+        // not decode runners, so a session-scoped cancellation must only stop
+        // thumbnail and viewer decode stages.
+        _decodeManager->cancelThumbnailRequests(_requestNamespace);
+        _decodeManager->cancelViewerRequests(_requestNamespace);
+    }
     _failedImageDecodeRequests.clear();
     _failedImageDecodeRetryAttempts.clear();
     finishDirectOpenAfterDecodeCancellation(directOpenGeneration, true);
@@ -3545,7 +3761,12 @@ void FileListModel::cancelAllDecodeRunners() {
 
 void FileListModel::cancelAllDecodeViewerRunners() {
     const int directOpenGeneration = _directOpen.generation;
-    _decodeManager->cancelAllDecodeViewerRunners();
+    if (_requestNamespace.isEmpty()) {
+        _decodeManager->cancelAllDecodeViewerRunners();
+    }
+    else {
+        _decodeManager->cancelViewerRequests(_requestNamespace);
+    }
     for (auto it = _failedImageDecodeRequests.begin();
          it != _failedImageDecodeRequests.end();) {
         if (it.value().viewerRequest) {
@@ -3560,7 +3781,15 @@ void FileListModel::cancelAllDecodeViewerRunners() {
 
 void FileListModel::cancelAllDecodeViewerRunnersForViewerClose() {
     const int directOpenGeneration = _directOpen.generation;
-    _decodeManager->cancelAllDecodeViewerRunners();
+    if (_requestNamespace.isEmpty()) {
+        _decodeManager->cancelAllDecodeViewerRunners();
+    }
+    else {
+        // Closing the viewer must not throw away already queued thumbnail or
+        // metadata work for the same standalone/embedded catalog.  The old
+        // monolithic model canceled viewer prefetch only.
+        _decodeManager->cancelViewerRequests(_requestNamespace);
+    }
     for (auto it = _failedImageDecodeRequests.begin();
          it != _failedImageDecodeRequests.end();) {
         if (it.value().viewerRequest) {
@@ -3574,7 +3803,12 @@ void FileListModel::cancelAllDecodeViewerRunnersForViewerClose() {
 }
 
 void FileListModel::decodeImages(const QList<ImageDecodeRequest> &requests) {
-    _decodeManager->decodeImages(requests);
+    QList<ImageDecodeRequest> namespacedRequests = requests;
+    for (ImageDecodeRequest &request : namespacedRequests) {
+        request.requestNamespace = _requestNamespace;
+        request.info.requestNamespace = _requestNamespace;
+    }
+    _decodeManager->decodeImages(namespacedRequests);
 }
 
 int FileListModel::fileIndex(const QString &fileName) const {
@@ -3805,7 +4039,7 @@ void FileListModel::setFolderViewImageCount(int count) {
 }
 
 void FileListModel::startScanner() {
-    _decodeManager->scan(_root);
+    _decodeManager->scan(_root, _requestNamespace);
 }
 
 bool FileListModel::runningTasksDebug() const {
@@ -3830,7 +4064,7 @@ void FileListModel::setImageCacheMode(int mode) {
         return;
     }
 
-    _decodeManager->cancelAllRunners();
+    cancelSessionRequests();
     _imageCacheMode = newMode;
     _decodeManager->setImageCacheMode(newMode);
     QSettings().setValue(ImageCacheModeSettingsKey, static_cast<int>(newMode));
@@ -3848,7 +4082,7 @@ void FileListModel::setFileListCacheMode(int mode) {
         return;
     }
 
-    _decodeManager->cancelAllRunners();
+    cancelSessionRequests();
     _fileListCacheMode = newMode;
     _decodeManager->setFileListCacheMode(newMode);
     QSettings().setValue(FileListCacheModeSettingsKey, static_cast<int>(newMode));

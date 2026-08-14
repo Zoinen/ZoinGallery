@@ -184,7 +184,7 @@ bool MainWindow::isPressedOnTitleBar() const {
 }
 
 void MainWindow::setSphereScrollingMouseCursor(bool set, bool idle, qreal rotation) {
-    SvgCursor::setOverrideCursor(set ? (idle ? ":/resources/SphereScrollIdle.svg" : ":/resources/SphereScroll.svg") : "",
+    SvgCursor::setOverrideCursor(set ? (idle ? ":/ZoinGallery/resources/SphereScrollIdle.svg" : ":/ZoinGallery/resources/SphereScroll.svg") : "",
                                  devicePixelRatio(), rotation);
 }
 

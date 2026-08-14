@@ -80,9 +80,9 @@ bool TrayController::isAvailable() const {
 }
 
 void TrayController::createTrayIcon() {
-    QIcon icon(QStringLiteral(":/resources/ZoinGallery.ico"));
+    QIcon icon(QStringLiteral(":/ZoinGallery/resources/ZoinGallery.ico"));
     if (icon.isNull()) {
-        icon = QIcon(QStringLiteral(":/resources/Logo.svg"));
+        icon = QIcon(QStringLiteral(":/ZoinGallery/resources/Logo.svg"));
     }
 
     _trayIcon = new QSystemTrayIcon(icon, this);

@@ -23,6 +23,26 @@ public:
         FileListModel *sourceModel,
         QSharedPointer<ProviderImageStore> providerImageStore,
         QObject *parent = nullptr);
+    SelectedImagesModel(
+        FileListModel *sourceModel,
+        QSharedPointer<ProviderImageStore> providerImageStore,
+        DecodeManager *sharedDecodeManager,
+        const QString &requestNamespace,
+        const QString &imageIdPrefix,
+        const QString &thumbnailProviderName,
+        const QString &asyncProviderName,
+        QObject *parent = nullptr);
+    SelectedImagesModel(
+        FileListModel *sourceModel,
+        QSharedPointer<ProviderImageStore> providerImageStore,
+        DecodeManager *sharedDecodeManager,
+        const QString &requestNamespace,
+        const QString &imageIdPrefix,
+        const QString &thumbnailProviderName,
+        const QString &asyncProviderName,
+        qint64 viewerFitCacheByteBudget,
+        qint64 viewerNativeCacheByteBudget,
+        QObject *parent = nullptr);
 
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role) const override;
@@ -56,6 +76,8 @@ public:
     Q_INVOKABLE int mapToSourceRow(int viewRow) const;
     Q_INVOKABLE int mapFromSourceRow(int sourceRow) const;
     Q_INVOKABLE QVariantList mapToSourceRows(const QVariantList &viewRows) const;
+    Q_INVOKABLE QVariantList viewerPrefetchSourceRows(
+        int currentViewRow, int imageCount = 16) const;
     Q_INVOKABLE QVariantList sourceRowsForViewRange(int anchorViewRow, int targetViewRow,
                                                     bool includeTarget) const;
     Q_INVOKABLE void beginSelectionPreview();
@@ -68,7 +90,15 @@ public:
     Q_INVOKABLE QVariantMap dragPreviewItemsForIndex(int index, int limit,
                                                      bool singleItemOnly = false) const;
     Q_INVOKABLE void requestViewer(int index, int width = -1, int height = -1);
+    Q_INVOKABLE void requestViewerInOrder(
+        int index, const QVariantList &orderedSourceRows,
+        int width = -1, int height = -1);
+    Q_INVOKABLE void requestViewerAt(
+        int index, int width = -1, int height = -1);
     Q_INVOKABLE QString bestViewerImageUrlForIndex(int index) const;
+    Q_INVOKABLE QString preparedViewerImageUrlForIndex(
+        int index, int width = -1, int height = -1) const;
+    Q_INVOKABLE QSize viewerImageOriginalSizeForIndex(int index) const;
     Q_INVOKABLE QColor selectionGroupColorForIndex(int index) const;
 
 signals:
@@ -99,9 +129,19 @@ private:
                           const DecodedImageInfo &decodedInfo);
     void emitSelectionDataChanged();
     int indexForPath(const QString &path) const;
+    void readImagesInfo(const QList<QString> &paths,
+                        bool isFromEmbeddedView);
+    void cancelSessionRequests();
+    bool acceptsRequestNamespace(const QString &requestNamespace) const;
+    void configureImageFile(ImageFile *item) const;
 
     FileListModel *_selectionSourceModel;
     DecodeManager *_decodeManager;
+    bool _ownsDecodeManager = false;
+    QString _requestNamespace;
+    QString _imageIdPrefix;
+    QString _thumbnailProviderName = QStringLiteral("zoingallery-thumbnails");
+    QString _asyncProviderName = QStringLiteral("zoingallery-async");
     QSharedPointer<ProviderImageStore> _providerImageStore;
     ViewerImageCache _viewerImageCache;
     QList<ImageFile *> _items;
@@ -126,6 +166,7 @@ private:
     int _failedImageWorkRetryDelayMs = 250;
     bool _hasCurrentViewerRequest = false;
     bool _preserveViewStateOnReset = false;
+    bool _isClosing = false;
 };
 
 #endif // SELECTEDIMAGESMODEL_H

@@ -6,11 +6,14 @@ import QtQuick.Effects
 import Qt.labs.platform as Platform
 
 import ZoinGallery.MainWindow 1.0
+import ZoinGallery 1.0
+import ZoinGallery.Native 1.0
 
 import QWindowKit 1.0
 
 MainWindow {
     id: topLevelWindow
+    objectName: "standaloneMainWindow"
     // visible: true
     property bool isQWKLegacy: false
     property bool windowAgentReady: false
@@ -123,8 +126,7 @@ MainWindow {
                     // console.log("onMainWindowResized")
                     viewerMode.imageContainer.zoomToFit(true)
                     root.viewerDecodeModel.cancelAllDecodeViewerRunners()
-                    root.viewerDecodeModel.requestViewer(
-                                root.viewerSourceIndex(),
+                    viewerMode.requestCurrentViewer(
                                 viewerMode.width * dpr,
                                 viewerMode.height * dpr)
                     viewerDirty = false
@@ -151,17 +153,19 @@ MainWindow {
     Connections {
         target: viewerMode
         function onZoomFitViewChanged() {
-            if (viewerMode.zoomFitView && viewerDirty) {
-                root.viewerDecodeModel.cancelAllDecodeViewerRunners()
-                root.viewerDecodeModel.requestViewer(
-                            root.viewerSourceIndex(),
+            root.viewerDecodeModel.cancelAllDecodeViewerRunners()
+            if (viewerMode.zoomFitView) {
+                // The requested decode tier must follow the actual viewer
+                // mode even when the current image was already clean.  A
+                // native request here leaves swipe lookup biased toward the
+                // full-size tier while the UI is visibly in Fit mode.
+                viewerMode.requestCurrentViewer(
                             viewerMode.width * dpr,
                             viewerMode.height * dpr)
                 viewerDirty = false
             }
             else {
-                root.viewerDecodeModel.cancelAllDecodeViewerRunners()
-                root.viewerDecodeModel.requestViewer(root.viewerSourceIndex())
+                viewerMode.requestCurrentViewer()
             }
         }
     }
@@ -192,6 +196,7 @@ MainWindow {
 
     Rectangle {
         id: root
+        objectName: "standaloneShellContent"
         anchors.fill: parent
         color: topLevelWindow.useMacNativeTitleBar ? Style.macGlassWindowColor : Style.windowColor
 
@@ -726,7 +731,7 @@ MainWindow {
 
                     Layout.alignment: Qt.AlignTop
 
-                    source: "qrc:/resources/WindowMinimize.svg"
+                    source: "qrc:/ZoinGallery/resources/WindowMinimize.svg"
                     onClicked: topLevelWindow.showMinimized()
                     Component.onCompleted: {
                         if (!topLevelWindow.useMacNativeTitleBar) {
@@ -740,8 +745,8 @@ MainWindow {
 
                     Layout.alignment: Qt.AlignTop
 
-                    source: topLevelWindow.visibility === Window.Maximized ? "qrc:/resources/WindowRestore.svg" :
-                            topLevelWindow.visibility === Window.FullScreen ? "qrc:/resources/WindowFullscreen.svg" :"qrc:/resources/WindowMaximize.svg"
+                    source: topLevelWindow.visibility === Window.Maximized ? "qrc:/ZoinGallery/resources/WindowRestore.svg" :
+                            topLevelWindow.visibility === Window.FullScreen ? "qrc:/ZoinGallery/resources/WindowFullscreen.svg" :"qrc:/ZoinGallery/resources/WindowMaximize.svg"
                     onClicked: {
                         if (topLevelWindow.visibility === Window.FullScreen) {
                             topLevelWindow.toggleFullscreen()
@@ -765,7 +770,7 @@ MainWindow {
 
                     Layout.alignment: Qt.AlignTop
 
-                    source: "qrc:/resources/WindowClose.svg"
+                    source: "qrc:/ZoinGallery/resources/WindowClose.svg"
                     icon.color: closeButton.hovered ? Style.closeButtonHoveredIcon : Style.text
                     backgroundColor: {
                         if (!closeButton.enabled) {
@@ -917,7 +922,7 @@ MainWindow {
                         icon.height: 18
 
                         colorfulIcon: true
-                        icon.source: "qrc:/resources/Logo.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/Logo.svg"
                         onClicked: {
                             // windowAgent.showSystemMenu(mapToGlobal(0, height))
                             // fileListModel.startScanner()
@@ -943,7 +948,7 @@ MainWindow {
                     }
 
                     ToolbarButton {
-                        icon.source: "qrc:/resources/Back.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/Back.svg"
                         ToolTip.text: "Go Back\tAlt+←"
                         inactive: !viewerController.canBack
 
@@ -999,7 +1004,7 @@ MainWindow {
                     }
 
                     ToolbarButton {
-                        icon.source: "qrc:/resources/Forward.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/Forward.svg"
                         ToolTip.text: "Go Forward\tAlt+→"
                         inactive: !viewerController.canForward
 
@@ -1051,7 +1056,7 @@ MainWindow {
                     }
 
                     ToolbarButton {
-                        icon.source: "qrc:/resources/Up.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/Up.svg"
                         ToolTip.text: "Go Up\tBackspace"
                         inactive: !viewerController.canUp
 
@@ -1083,7 +1088,7 @@ MainWindow {
                     ToolbarButton {
                         id: createButton
                         implicitWidth: 44
-                        icon.source: "qrc:/resources/FolderIcon.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/FolderIcon.svg"
                         ToolTip.text: fileListModel.fileDragActive
                                       ? "Drop here to create a folder for these items"
                                       : "Create…"
@@ -1262,12 +1267,27 @@ MainWindow {
                         implicitHeight: 30 // To work around a warning
                         Layout.preferredHeight: 30
                         Layout.alignment: Qt.AlignVCenter
-                        from: 40
-                        value: masonryLayout.view.targetHeight
-                        to: 500
+                        from: masonryLayout.view.presentationMode === MasonryLayout.Columns
+                              || masonryLayout.view.presentationMode === MasonryLayout.Details
+                              ? 22
+                              : masonryLayout.view.presentationMode === MasonryLayout.Grid
+                                ? 96
+                                : masonryLayout.view.presentationMode === MasonryLayout.Icons
+                                  ? 72 : 30
+                        value: masonryLayout.view.density
+                        to: masonryLayout.view.presentationMode === MasonryLayout.Columns
+                            || masonryLayout.view.presentationMode === MasonryLayout.Details
+                            ? 72
+                            : masonryLayout.view.presentationMode === MasonryLayout.Grid
+                              ? 320
+                              : masonryLayout.view.presentationMode === MasonryLayout.Icons
+                                ? 256 : 500
                         stepSize: 1
 
                         function updateTargetSize() {
+                            if (masonryLayout.view.presentationMode
+                                    !== MasonryLayout.Masonry)
+                                return
                             if (masonryLayout.view.listView) {
                                 // 36 is hardcoded and comes from BrickDelegate's layout folderViewDelegate
                                 fileListModel.setFolderViewImageSize(0, (masonryZoomSlider.value - 36) * dpr)
@@ -1304,7 +1324,7 @@ MainWindow {
                         }
 
                         onValueChanged: {
-                            masonryLayout.view.targetHeight = masonryZoomSlider.value
+                            masonryLayout.view.density = masonryZoomSlider.value
                             updateTargetSize()
                         }
                         property int lastValue: value
@@ -1314,6 +1334,91 @@ MainWindow {
                             }
                             else if (lastValue !== value) {
                                 masonryLayout.view.reReadAndDecodeThumbnails()
+                            }
+                        }
+                    }
+
+                    Separator {
+                    }
+
+                    ToolbarButton {
+                        id: collectionLayoutButton
+                        icon.source: "qrc:/ZoinGallery/resources/GridView.svg"
+                        icon.width: 16
+                        icon.height: 16
+                        ToolTip.text: "Collection layout"
+
+                        function choose(mode, columns) {
+                            masonryLayout.view.columnCount = columns || 2
+                            masonryLayout.view.presentationMode = mode
+                            masonryLayout.focusView()
+                        }
+
+                        onReleased: collectionLayoutMenu.open()
+
+                        Platform.Menu {
+                            id: collectionLayoutMenu
+
+                            Platform.MenuItemGroup {
+                                id: collectionLayoutMenuGroup
+                                exclusive: true
+                            }
+
+                            Platform.MenuItem {
+                                text: "Masonry"
+                                checkable: true
+                                group: collectionLayoutMenuGroup
+                                checked: masonryLayout.view.presentationMode
+                                         === MasonryLayout.Masonry
+                                onTriggered: collectionLayoutButton.choose(
+                                                 MasonryLayout.Masonry, 2)
+                            }
+                            Platform.MenuItem {
+                                text: "Columns (2)"
+                                checkable: true
+                                group: collectionLayoutMenuGroup
+                                checked: masonryLayout.view.presentationMode
+                                         === MasonryLayout.Columns
+                                         && masonryLayout.view.columnCount === 2
+                                onTriggered: collectionLayoutButton.choose(
+                                                 MasonryLayout.Columns, 2)
+                            }
+                            Platform.MenuItem {
+                                text: "Columns (3)"
+                                checkable: true
+                                group: collectionLayoutMenuGroup
+                                checked: masonryLayout.view.presentationMode
+                                         === MasonryLayout.Columns
+                                         && masonryLayout.view.columnCount === 3
+                                onTriggered: collectionLayoutButton.choose(
+                                                 MasonryLayout.Columns, 3)
+                            }
+                            Platform.MenuItem {
+                                text: "Details"
+                                checkable: true
+                                group: collectionLayoutMenuGroup
+                                checked: masonryLayout.view.presentationMode
+                                         === MasonryLayout.Details
+                                onTriggered: collectionLayoutButton.choose(
+                                                 MasonryLayout.Details, 1)
+                            }
+                            Platform.MenuItem {
+                                text: "Uniform grid"
+                                checkable: true
+                                group: collectionLayoutMenuGroup
+                                checked: masonryLayout.view.presentationMode
+                                         === MasonryLayout.Grid
+                                onTriggered: collectionLayoutButton.choose(
+                                                 MasonryLayout.Grid, 1)
+                            }
+                            Platform.MenuItem {
+                                text: "Large icons"
+                                checkable: true
+                                group: collectionLayoutMenuGroup
+                                checked: masonryLayout.view.presentationMode
+                                         === MasonryLayout.Icons
+                                onTriggered: collectionLayoutButton.choose(
+                                                 MasonryLayout.Icons, 1)
                             }
                         }
                     }
@@ -1336,10 +1441,10 @@ MainWindow {
                             implicitWidth: 32
                             implicitHeight: titleBar.thumbnailsHeight
 
-                            icon.source: "qrc:/resources/ListView.svg"
+                            icon.source: "qrc:/ZoinGallery/resources/ListView.svg"
                             icon.width: 16
                             icon.height: 16
-                            ToolTip.text: "List View\tF8"
+                            ToolTip.text: "Folder preview list\tF8"
 
                             checked: masonryLayout.view.listView
 
@@ -1355,10 +1460,10 @@ MainWindow {
                             implicitWidth: 32
                             implicitHeight: titleBar.thumbnailsHeight
 
-                            icon.source: "qrc:/resources/GridView.svg"
+                            icon.source: "qrc:/ZoinGallery/resources/GridView.svg"
                             icon.width: 16
                             icon.height: 16
-                            ToolTip.text: "Grid View\tF8"
+                            ToolTip.text: "Folder preview grid\tF8"
 
                             checked: !masonryLayout.view.listView
 
@@ -1375,7 +1480,7 @@ MainWindow {
                     ToolbarButton {
                         id: sortButton
                         Layout.leftMargin: 8
-                        icon.source: "qrc:/resources/Sort.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/Sort.svg"
                         ToolTip.text: "Sort: " + galleryViewModel.sortModeLabel +
                                       (galleryViewModel.selectedOnly ? "\nShowing selected only" : "")
 
@@ -1469,7 +1574,7 @@ MainWindow {
 
                     ToolbarButton {
                         Layout.leftMargin: 8
-                        icon.source: "qrc:/resources/RecursiveView.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/RecursiveView.svg"
                         ToolTip.text: "Recursive View\tF10"
 
                         onReleased: {
@@ -1478,7 +1583,7 @@ MainWindow {
                     }
 
                     ToolbarButton {
-                        icon.source: "qrc:/resources/SelectionCheck.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/SelectionCheck.svg"
                         ToolTip.text: (root.selectedImagesPanelOpen ? "Hide" : "Show") +
                                       " selected images panel (" +
                                       fileListModel.totalSelectedCount + ")"
@@ -1488,7 +1593,7 @@ MainWindow {
                     }
 
                     ToolbarButton {
-                        icon.source: "qrc:/resources/SelectionHistory.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/SelectionHistory.svg"
                         ToolTip.text: "Selection history\tCtrl+Shift+H"
                         Layout.rightMargin: isQWK ? 0 : 7
 
@@ -1579,20 +1684,34 @@ MainWindow {
                     }
                 }
 
-                MasonryMode {
-                    id: masonryLayout
+                GalleryPanel {
+                    id: standaloneGalleryPanel
+                    objectName: "standaloneGalleryPanel"
                     SplitView.fillWidth: true
                     SplitView.minimumWidth: 320
-                    viewerTransitionActive:
-                        root.viewerShowAnimationRunning &&
-                        root.viewerSourceMasonry === masonryLayout
+                    session: gallerySession
+                    autoFocus: false
+                    // GalleryPanel is a FocusScope. Keep it focused so the
+                    // original MasonryMode's focused quick-search proxy remains
+                    // the standalone shell's startup keyboard surface.
+                    focus: true
+                    customContent: masonryLayout
 
-                    onToggleViewer: root.openViewerFrom(
-                                        masonryLayout, galleryViewModel,
-                                        fileListModel, fileListModel,
-                                        imageModel)
-                    onFileDropFailed: (title, message) =>
-                                          root.showFileDropError(title, message)
+                    MasonryMode {
+                        id: masonryLayout
+                        objectName: "standaloneMasonryMode"
+                        anchors.fill: parent
+                        viewerTransitionActive:
+                            root.viewerShowAnimationRunning &&
+                            root.viewerSourceMasonry === masonryLayout
+
+                        onToggleViewer: root.openViewerFrom(
+                                            masonryLayout, galleryViewModel,
+                                            fileListModel, fileListModel,
+                                            imageModel)
+                        onFileDropFailed: (title, message) =>
+                                              root.showFileDropError(title, message)
+                    }
                 }
 
                 Item {
@@ -1703,14 +1822,23 @@ MainWindow {
             }
         }
 
-        ViewerMode {
-            id: viewerMode
+        GalleryViewer {
+            id: standaloneGalleryViewer
+            objectName: "standaloneGalleryViewer"
             anchors.fill: parent
+            session: gallerySession
+            customContent: viewerMode
 
-            sourceContext: root.viewerSourceContext
+            ViewerMode {
+                id: viewerMode
+                objectName: "standaloneViewerMode"
+                anchors.fill: parent
 
-            onPinchZoomOutToThumbnailsProgressed: (progress) => root.updateViewerPinchClose(progress)
-            onPinchZoomOutToThumbnailsFinished: (commit) => root.finishViewerPinchClose(commit)
+                sourceContext: root.viewerSourceContext
+
+                onPinchZoomOutToThumbnailsProgressed: (progress) => root.updateViewerPinchClose(progress)
+                onPinchZoomOutToThumbnailsFinished: (commit) => root.finishViewerPinchClose(commit)
+            }
         }
 
         SettingsDialog {
@@ -1938,7 +2066,7 @@ MainWindow {
                     Button {
                         implicitWidth: 36
                         implicitHeight: 32
-                        icon.source: "qrc:/resources/Back.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/Back.svg"
                         inactive: selectionHistoryWindow.historyIndex <= 0
                         onClicked: {
                             if (!inactive) {
@@ -1950,7 +2078,7 @@ MainWindow {
                     Button {
                         implicitWidth: 36
                         implicitHeight: 32
-                        icon.source: "qrc:/resources/Forward.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/Forward.svg"
                         inactive: selectionHistoryWindow.historyIndex < 0 ||
                                   selectionHistoryWindow.historyIndex >= selectionHistoryWindow.historyModel.length - 1
                         onClicked: {

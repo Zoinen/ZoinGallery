@@ -4,15 +4,10 @@
 #include <QMetaObject>
 #include <QMutexLocker>
 
-#include <atomic>
 #include <utility>
 
 namespace
 {
-std::atomic_bool closing = false;
-QMutex activeProviderMutex;
-QmlAsyncImageProvider *activeProvider = nullptr;
-
 QImage emptyImage()
 {
     QImage empty(1, 1, QImage::Format_RGBA8888);
@@ -43,47 +38,40 @@ QRect parseCrop(const QString &cropDescription)
 
 QmlAsyncImageProvider::QmlAsyncImageProvider(
     const QString &prefix,
-    QSharedPointer<ProviderImageStore> providerImageStore)
-    : _providerImageStore(std::move(providerImageStore)) {
+    QSharedPointer<ProviderImageStore> providerImageStore,
+    std::function<void()> destructionCallback,
+    int maxThreads)
+    : _providerImageStore(std::move(providerImageStore)),
+      _destructionCallback(std::move(destructionCallback)) {
     Q_UNUSED(prefix);
-    QMutexLocker locker(&activeProviderMutex);
-    closing.store(false);
-    activeProvider = this;
+    if (maxThreads > 0) {
+        _threadPool.setMaxThreadCount(maxThreads);
+    }
 }
 
 QmlAsyncImageProvider::~QmlAsyncImageProvider() {
-    {
-        QMutexLocker locker(&activeProviderMutex);
-        if (activeProvider == this) {
-            activeProvider = nullptr;
-        }
-    }
     stopThreadPool();
+    if (_destructionCallback) {
+        std::exchange(_destructionCallback, {})();
+    }
 }
 
-void QmlAsyncImageProvider::prepareToClose() {
-    QMutexLocker locker(&activeProviderMutex);
-    qInfo() << "[Shutdown] QmlAsyncImageProvider::prepareToClose begin"
-            << "alreadyClosing" << closing.load()
-            << "hasProvider" << (activeProvider != nullptr);
-    closing.store(true);
-
-    if (activeProvider) {
-        activeProvider->stopThreadPool();
-    }
-
-    qInfo() << "[Shutdown] QmlAsyncImageProvider::prepareToClose end";
+void QmlAsyncImageProvider::shutdown() {
+    stopThreadPool();
 }
 
 QQuickImageResponse *QmlAsyncImageProvider::requestImageResponse(const QString &id, const QSize &requestedSize) {
     QMutexLocker locker(&_requestMutex);
     return new AsyncImageResponse(
         id, requestedSize, _providerImageStore,
-        _acceptingRequests && !closing.load() ? &_threadPool : nullptr);
+        _acceptingRequests ? &_threadPool : nullptr);
 }
 
 void QmlAsyncImageProvider::stopThreadPool() {
     QMutexLocker locker(&_requestMutex);
+    if (!_acceptingRequests) {
+        return;
+    }
     _acceptingRequests = false;
     qInfo() << "[Shutdown] QmlAsyncImageProvider stopping private thread pool"
             << "activeThreads" << _threadPool.activeThreadCount()
@@ -138,7 +126,7 @@ QQuickTextureFactory *AsyncImageResponse::textureFactory() const {
 
 
 void AsyncImageResponseRunnable::run() {
-    if (!closing.load() && !_image.isNull()) {
+    if (!_image.isNull()) {
         emit done(_crop.isValid() ? _image.copy(_crop) : _image);
         return;
     }

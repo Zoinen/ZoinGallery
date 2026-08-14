@@ -12,7 +12,8 @@ void ImageDecodeRunner::run() {
     QImage thumbnail = ThumbnailLoader::createThumbnail(image, _imageData.request.targetSize);
     emit imageReady(_imageData.request, thumbnail, decodedInfo);
 
-    if (!PersistentImageCache::hasImage(_imageData.request.info.path)) {
+    if (_imageData.request.storeInPersistentCache &&
+        !PersistentImageCache::hasImage(_imageData.request.info.path)) {
         QByteArray imageData = PersistentImageCache::createImageForCache(image);
         emit storeInCache(_imageData.request, imageData);
     }

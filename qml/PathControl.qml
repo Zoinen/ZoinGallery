@@ -3,10 +3,22 @@ import QtQuick.Layouts
 import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Effects
+import "../ZGStyle" as ZGS
 
 Item {
     id: pathRoot
     property string text
+    // Embedded hosts can own navigation while reusing the complete original
+    // path control. The standalone application keeps its historical
+    // viewerController/masonryLayout transaction when no callback is set.
+    property var navigationHandler: null
+    // Keep the standalone control's original appearance by default while
+    // allowing embedded hosts to share their own chrome and content grid.
+    property bool backgroundOnHoverOnly: false
+    property real leadingInset: 15
+	// Hosts may align breadcrumb labels with their ordinary UI typography
+	// without changing the editable path field or standalone defaults.
+	property real breadcrumbFontPixelSize: 14
     property bool isNetworkDrive: text.startsWith("//")
     property string textNetworkFixed: isNetworkDrive ? text.slice(2) : text
     property var breadcrumbs: (textNetworkFixed.endsWith("/") ? textNetworkFixed.slice(0, -1) : textNetworkFixed).split("/")
@@ -49,14 +61,25 @@ Item {
             verticalCenter: parent.verticalCenter
         }
         height: 32
-        color: pathMouse.containsMouse ? Style.pathBackgroundHovered : Style.pathBackground
+        color: pathMouse.containsMouse
+               ? Style.pathBackgroundHovered
+               : (backgroundOnHoverOnly ? "transparent"
+                                        : Style.pathBackground)
         radius: 4
     }
 
-    function folderClicked(path) {
+    function navigateTo(path) {
+        if (navigationHandler) {
+            navigationHandler(path)
+            return
+        }
         viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
-        viewerController.cd(rootFolder.text + "/" + path)
+        viewerController.cd(path)
         masonryLayout.view.loadSavedState()
+    }
+
+    function folderClicked(path) {
+        navigateTo(rootFolder.text + "/" + path)
     }
 
     MouseArea {
@@ -100,7 +123,7 @@ Item {
             Text {
                 id: folderText
                 color: Style.text
-                font.pixelSize: 14
+				font.pixelSize: pathRoot.breadcrumbFontPixelSize
                 renderType: Text.NativeRendering
             }
 
@@ -112,7 +135,7 @@ Item {
                 visible: needArrow
                 opacity: 0.5
 
-                icon.source: "qrc:/resources/PathSeparator.svg"
+                icon.source: "qrc:/ZoinGallery/resources/PathSeparator.svg"
                 icon.color: Style.text
             }
         }
@@ -136,7 +159,7 @@ Item {
         spacing: 0
 
         Item {
-            Layout.leftMargin: 15
+            Layout.leftMargin: pathRoot.leadingInset
             Layout.preferredWidth: 24
             Layout.preferredHeight: parent.height
 
@@ -147,7 +170,7 @@ Item {
                     rightMargin: 7
                 }
 
-                source: isNetworkDrive ? "qrc:/resources/NetworkDriveIcon.svg" : "qrc:/resources/DriveIcon.svg"
+                source: isNetworkDrive ? "qrc:/ZoinGallery/resources/NetworkDriveIcon.svg" : "qrc:/ZoinGallery/resources/DriveIcon.svg"
                 sourceSize.width: 18
                 sourceSize.height: 18
             }
@@ -240,7 +263,7 @@ Item {
         visible: !editMode
     }
 
-    TextField {
+    ZGS.TextField {
         id: pathField
         anchors {
             left: fixedPart.right
@@ -266,14 +289,12 @@ Item {
         Keys.onEscapePressed: editMode = false
 
         function accept() {
-            viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
             if (Qt.platform.os === "windows") {
-                viewerController.cd(replaceAll(pathField.text, "\\\\", "/"))
+                pathRoot.navigateTo(replaceAll(pathField.text, "\\\\", "/"))
             }
             else {
-                viewerController.cd(pathField.text)
+                pathRoot.navigateTo(pathField.text)
             }
-            masonryLayout.view.loadSavedState()
             editMode = false
         }
 

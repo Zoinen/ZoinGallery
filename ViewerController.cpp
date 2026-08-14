@@ -1,19 +1,19 @@
 #include "ViewerController.h"
 
 #include "BackgroundInstance.h"
-#include "ThumbnailLoader.h"
 #include "FileListModel.h"
-#include "QmlImageProvider.h"
-#include "QmlAsyncImageProvider.h"
 #include "QmlResourcesProvider.h"
-#include "ProviderImageStore.h"
 #include "SelectedImagesModel.h"
 #include "GalleryViewModel.h"
 #include "ImageModel.h"
 #include "CacheViewer.h"
 #include "TrayController.h"
 #include "LaunchOptions.h"
+#include "PathArgument.h"
 #include "MacApplication.h"
+
+#include <ZoinGallery/GalleryRuntime.h>
+#include <ZoinGallery/GallerySession.h>
 
 #include <QClipboard>
 #include <QCoreApplication>
@@ -74,9 +74,11 @@ bool registerCurrentBundle()
 #endif
 }
 
-ViewerController::ViewerController(QQmlEngine *engine)
+ViewerController::ViewerController(
+    QQmlEngine *engine,
+    ZoinGallery::GallerySession &gallerySession,
+    ZoinGallery::GalleryRuntime &galleryRuntime)
     : QObject(engine) {
-    ThumbnailLoader::init();
     _fileListModel = nullptr;
     _selectedImagesModel = nullptr;
     _galleryViewModel = nullptr;
@@ -88,16 +90,26 @@ ViewerController::ViewerController(QQmlEngine *engine)
     _savedCurrentIndex = -1;
     _trayController = nullptr;
     _backgroundInstance = nullptr;
+    _gallerySession = &gallerySession;
+    _galleryRuntime = &galleryRuntime;
     _backgroundMode = false;
     _pendingOpenInViewer = false;
     _explicitQuitRequested = false;
 
     engine->rootContext()->setContextProperty("viewerController", this);
 
-    const auto providerImageStore =
-        QSharedPointer<ProviderImageStore>::create();
+    if (!gallerySession.localSource()) {
+        qFatal("Standalone ViewerController requires a local GallerySession");
+    }
+    _fileListModel = qobject_cast<FileListModel *>(gallerySession.fileListModel());
+    _galleryViewModel = qobject_cast<GalleryViewModel *>(gallerySession.galleryViewModel());
+    _selectedImagesModel = qobject_cast<SelectedImagesModel *>(gallerySession.selectedImagesModel());
+    _imageModel = qobject_cast<ImageModel *>(gallerySession.imageModel());
+    if (!_fileListModel || !_galleryViewModel || !_selectedImagesModel ||
+        !_imageModel) {
+        qFatal("Local GallerySession did not provide the standalone models");
+    }
 
-    _fileListModel = new FileListModel(providerImageStore, this);
     engine->rootContext()->setContextProperty("fileListModel", _fileListModel);
     connect(_fileListModel, &FileListModel::directOpenReady, this, [this] (int index) {
         emit setCurrentIndex(mapSourceRowToViewRow(index));
@@ -108,28 +120,18 @@ ViewerController::ViewerController(QQmlEngine *engine)
         emit setCurrentIndex(mapSourceRowToViewRow(index));
     });
 
-    _galleryViewModel = new GalleryViewModel(_fileListModel, this);
     engine->rootContext()->setContextProperty("galleryViewModel", _galleryViewModel);
 
-    _selectedImagesModel = new SelectedImagesModel(
-        _fileListModel, providerImageStore, this);
     engine->rootContext()->setContextProperty("selectedImagesModel", _selectedImagesModel);
 
-    _imageModel = new ImageModel(_galleryViewModel);
     engine->rootContext()->setContextProperty("imageModel", _imageModel);
+    engine->rootContext()->setContextProperty("gallerySession", _gallerySession);
 
-    QmlImageProvider *imageProvider = new QmlImageProvider(
-        "thumbnails", providerImageStore);
-    engine->addImageProvider("thumbnails", imageProvider);
+    QmlResourcesProvider *resourcesProvider =
+        new QmlResourcesProvider(QStringLiteral("ZoinGallery/resources"));
+    engine->addImageProvider(QStringLiteral("zoingallery-resources"),
+                             resourcesProvider);
 
-    QmlAsyncImageProvider *asyncImageProvider =
-        new QmlAsyncImageProvider("async", providerImageStore);
-    engine->addImageProvider("async", asyncImageProvider);
-
-    QmlResourcesProvider *resourcesProvider = new QmlResourcesProvider("resources");
-    engine->addImageProvider("resources", resourcesProvider);
-
-    qmlRegisterType<ImageInfoModel>("com.example.imagecache", 1, 0, "ImageInfoModel");
 }
 
 void ViewerController::cd(const QString &folder, bool changeHistory) {
@@ -175,7 +177,7 @@ void ViewerController::cd(const QString &folder, bool changeHistory) {
         }
         else if (QFile::exists(newCurrentPath)) {
             setCurrentPath(QDir(QFileInfo(newCurrentPath).path()).absolutePath());
-            QTimer::singleShot(10, this, [=] {
+            QTimer::singleShot(10, this, [=, this] {
                 emit setCurrentIndex(mapSourceRowToViewRow(_fileListModel->fileIndex(QFileInfo(newCurrentPath).fileName())));
             });
         }
@@ -321,8 +323,9 @@ void ViewerController::prepareToClose() {
     qInfo() << "[Shutdown] ViewerController::prepareToClose scheduled";
     QTimer::singleShot(0, this, [&] () {
         qInfo() << "[Shutdown] ViewerController::prepareToClose running scheduled close";
-        _selectedImagesModel->prepareToClose();
-        _fileListModel->prepareToClose();
+        _gallerySession->shutdown();
+        _galleryRuntime->shutdown();
+        QCoreApplication::exit(0);
     });
 }
 
@@ -364,20 +367,10 @@ void ViewerController::quitApplication() {
         _trayController->hideTray(false);
         qInfo() << "[Shutdown] ViewerController::quitApplication tray hide returned";
     }
-    if (_fileListModel) {
-        if (_selectedImagesModel) {
-            qInfo() << "[Shutdown] ViewerController::quitApplication calling SelectedImagesModel::prepareToClose";
-            _selectedImagesModel->prepareToClose();
-            qInfo() << "[Shutdown] ViewerController::quitApplication SelectedImagesModel::prepareToClose returned";
-        }
-        qInfo() << "[Shutdown] ViewerController::quitApplication calling FileListModel::prepareToClose";
-        _fileListModel->prepareToClose();
-        qInfo() << "[Shutdown] ViewerController::quitApplication FileListModel::prepareToClose returned";
-    }
-    else {
-        qInfo() << "[Shutdown] ViewerController::quitApplication no file model, calling QCoreApplication::quit";
-        QCoreApplication::quit();
-    }
+    qInfo() << "[Shutdown] ViewerController::quitApplication stopping shared gallery runtime";
+    _gallerySession->shutdown();
+    _galleryRuntime->shutdown();
+    QCoreApplication::quit();
     qInfo() << "[Shutdown] ViewerController::quitApplication end";
 }
 
@@ -629,13 +622,18 @@ void ViewerController::loadSavedState() {
 int ViewerController::setCurrentPath(const QString &newPath, const QString &itemToSelect) {
     const bool pathChanged = _currentPath != newPath;
     _currentPath = newPath;
-    int indexToSelect = _fileListModel->cd(_currentPath, itemToSelect);
+    const bool sessionCatalog = _gallerySession &&
+        _gallerySession->localSource();
+    int indexToSelect = sessionCatalog
+        ? _gallerySession->cd(_currentPath, itemToSelect)
+        : _fileListModel->cd(_currentPath, itemToSelect);
     QSettings set;
     set.setValue("currentPath", _currentPath);
     if (pathChanged) {
         emit currentPathChanged();
     }
-    return mapSourceRowToViewRow(indexToSelect);
+    return sessionCatalog ? indexToSelect
+                          : mapSourceRowToViewRow(indexToSelect);
 }
 
 int ViewerController::mapViewRowToSourceRow(int viewRow) const {

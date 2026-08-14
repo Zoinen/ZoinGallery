@@ -25,6 +25,9 @@ public:
 
 signals:
     void wheelForwarded();
+    void zoomWheelReceived(qreal angleDeltaY,
+                           int modifiers,
+                           int buttons);
     void wheelReceived(qreal pixelDeltaX,
                        qreal pixelDeltaY,
                        qreal angleDeltaX,

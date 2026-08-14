@@ -1,0 +1,39 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Qt6 COMPONENTS
+    Core Gui Quick Qml Concurrent Svg QuickControls2)
+find_dependency(TIFF)
+find_dependency(libraw)
+find_dependency(PNG)
+find_dependency(JPEG)
+find_dependency(libjpeg-turbo)
+find_dependency(libheif)
+find_dependency(WebP)
+if(@USE_EXIV2@)
+    find_dependency(exiv2)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/ZoinGalleryTargets.cmake")
+
+set(ZoinGallery_QML_IMPORT_PATH
+    "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/qml")
+set(_zoin_qmldir_path
+    "@CMAKE_INSTALL_LIBDIR@/qml/ZoinGallery/qmldir")
+set_target_properties(ZoinGallery::Qml PROPERTIES
+    QT_QML_IMPORT_PATH "${ZoinGallery_QML_IMPORT_PATH}"
+    QT_QML_MODULE_INSTALLED_PLUGIN_TARGET
+        "ZoinGallery::ZoinGalleryQmlplugin"
+    _qt_qml_module_installed_plugin_target
+        "ZoinGallery::ZoinGalleryQmlplugin"
+    _qt_qml_module_installed_qmldir_path
+        "${_zoin_qmldir_path}")
+set_target_properties(ZoinGallery::ZoinGalleryQmlplugin PROPERTIES
+    _qt_qml_module_installed_qmldir_path
+        "${_zoin_qmldir_path}")
+unset(_zoin_qmldir_path)
+
+set(ZoinGallery_Core_FOUND TRUE)
+set(ZoinGallery_Qml_FOUND TRUE)
+check_required_components(ZoinGallery)

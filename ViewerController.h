@@ -12,6 +12,11 @@ class ImageModel;
 class TrayController;
 class BackgroundInstance;
 
+namespace ZoinGallery {
+class GalleryRuntime;
+class GallerySession;
+}
+
 class ViewerController : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString currentPath MEMBER _currentPath NOTIFY currentPathChanged)
@@ -25,7 +30,10 @@ class ViewerController : public QObject {
     Q_PROPERTY(bool explicitQuitRequested READ explicitQuitRequested NOTIFY explicitQuitRequestedChanged)
 
 public:
-    ViewerController(QQmlEngine *engine);
+    ViewerController(
+        QQmlEngine *engine,
+        ZoinGallery::GallerySession &gallerySession,
+        ZoinGallery::GalleryRuntime &galleryRuntime);
 
     Q_INVOKABLE void cd(const QString &currentFolder, bool changeHistory = true);
 
@@ -104,6 +112,8 @@ private:
     ImageModel *_imageModel;
     TrayController *_trayController;
     BackgroundInstance *_backgroundInstance;
+    ZoinGallery::GallerySession *_gallerySession;
+    ZoinGallery::GalleryRuntime *_galleryRuntime;
 
     QString _currentPath;
     QString _startupFilePath;

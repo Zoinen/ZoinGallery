@@ -5,6 +5,7 @@ import QtQuick.Controls
 import QtQuick.Controls.impl
 import QtQuick.Effects
 import ZoinGallery 1.0
+import ZoinGallery.Native 1.0
 
 Item {
     id: viewerMode
@@ -54,7 +55,7 @@ Item {
     onSphericViewerModeChanged: {
         if (sphericViewerMode) {
             decodeModel.cancelAllDecodeViewerRunners()
-            decodeModel.requestViewer(currentSourceIndex())
+            requestCurrentViewer()
             sphericViewerLoader.sourceComponent = sphericViewerComponent
         }
         else {
@@ -79,6 +80,33 @@ Item {
 
     function currentSourceIndex() {
         return sourceIndexForViewIndex(sourceMasonry.view.currentIndex)
+    }
+
+    function currentViewerPrefetchRows() {
+        if (!sourceMapper ||
+                typeof sourceMapper.viewerPrefetchSourceRows !== "function") {
+            return []
+        }
+        return sourceMapper.viewerPrefetchSourceRows(
+                    sourceMasonry.view.currentIndex, 16)
+    }
+
+    function requestCurrentViewer(width, height) {
+        if (!decodeModel || !sourceMasonry || !sourceMasonry.view) {
+            return
+        }
+        const sourceIndex = currentSourceIndex()
+        const requestedWidth = width === undefined ? -1 : width
+        const requestedHeight = height === undefined ? -1 : height
+        if (typeof decodeModel.requestViewerInOrder === "function") {
+            decodeModel.requestViewerInOrder(
+                        sourceIndex, currentViewerPrefetchRows(),
+                        requestedWidth, requestedHeight)
+        }
+        else {
+            decodeModel.requestViewer(
+                        sourceIndex, requestedWidth, requestedHeight)
+        }
     }
 
     readonly property bool currentItemSelected: selectionModel.selectedCount >= 0 &&
@@ -212,7 +240,7 @@ Item {
         property color blurColor: Style.viewerMainTextOutline
         property real blurOpacity: 0.7
 
-        fragmentShader: "qrc:/resources/outline.frag.qsb"
+        fragmentShader: "qrc:/ZoinGallery/resources/outline.frag.qsb"
     }
 
     // ZZZ: Viewer size request takes current image's full size for all future images!!!
@@ -257,7 +285,8 @@ Item {
                 viewerMode.setImage(flickableArea.image.source, size, sourceMasonry.view.currentIndex, level)
                 fitCurrentImageWhenReady()
                 decodeModel.cancelAllDecodeViewerRunners()
-                decodeModel.requestViewer(currentSourceIndex(), viewerMode.width * dpr, viewerMode.height * dpr)
+                requestCurrentViewer(viewerMode.width * dpr,
+                                     viewerMode.height * dpr)
             }
             else if (++attempts >= 600) {
                 stop()
@@ -289,11 +318,12 @@ Item {
 
         if (zoomFitView && !sphericViewerMode) {
             // console.log("onCIC FIT", viewerMode.width * dpr, viewerMode.height * dpr)
-            decodeModel.requestViewer(currentSourceIndex(), viewerMode.width * dpr, viewerMode.height * dpr)
+            requestCurrentViewer(viewerMode.width * dpr,
+                                 viewerMode.height * dpr)
         }
         else {
             // console.log("onCIC ORIG", flickableArea.originalSize.width * dpr, flickableArea.originalSize.height * dpr)
-            decodeModel.requestViewer(currentSourceIndex())
+            requestCurrentViewer()
             flickableArea.forceShowScrollBars = true
             flickableArea.forceShowScrollBars = false
         }
@@ -355,8 +385,36 @@ Item {
     property int viewerNavigationTargetIndex: -1
     property string viewerNavigationTargetPath: ""
     property string viewerNavigationTargetSource: ""
-    readonly property size viewerNavigationTargetOriginalSize: viewerNavigationTargetIndex !== -1 ?
-            sourceMasonry.view.indexOriginalSize(viewerNavigationTargetIndex) : Qt.size(0, 0)
+    property int viewerNavigationTargetSourceLevel: -1
+    property int viewerNavigationTargetRequestWidth: -1
+    property int viewerNavigationTargetRequestHeight: -1
+    // Records the native-size value handed to FlickableZoomable when the
+    // already-visible Fit transition frame is adopted at commit time. Besides
+    // documenting the handoff contract, this keeps the value-type lifetime
+    // regression observable to the standalone shell test.
+    property size viewerNavigationLastAdoptedOriginalSize: Qt.size(0, 0)
+    function viewerNavigationOriginalSize(index) {
+        if (index === -1) {
+            return Qt.size(0, 0)
+        }
+        const layoutSize = sourceMasonry.view.indexOriginalSize(index)
+        if (layoutSize.width > 1 && layoutSize.height > 1) {
+            return layoutSize
+        }
+        // Off-screen masonry bricks can still carry their provisional 0x0
+        // geometry even though FileListModel already has metadata and an
+        // prepared viewer frame. Read that authoritative metadata so
+        // the swipe layer uses the same fitted rectangle as the main viewer.
+        if (decodeModel &&
+                typeof decodeModel.viewerImageOriginalSizeForIndex ===
+                    "function") {
+            return decodeModel.viewerImageOriginalSizeForIndex(
+                        sourceIndexForViewIndex(index))
+        }
+        return Qt.size(0, 0)
+    }
+    readonly property size viewerNavigationTargetOriginalSize:
+            viewerNavigationOriginalSize(viewerNavigationTargetIndex)
     readonly property bool viewerNavigationTargetHasSize: viewerNavigationTargetOriginalSize.width > 1 &&
             viewerNavigationTargetOriginalSize.height > 1 && viewerMode.width > 0 && viewerMode.height > 0
     readonly property size viewerNavigationTargetDisplayOriginalSize: viewerNavigationTargetHasSize ?
@@ -489,6 +547,9 @@ Item {
         viewerNavigationTargetIndex = -1
         viewerNavigationTargetPath = ""
         viewerNavigationTargetSource = ""
+        viewerNavigationTargetSourceLevel = -1
+        viewerNavigationTargetRequestWidth = -1
+        viewerNavigationTargetRequestHeight = -1
     }
 
     function beginViewerNavigationGesture(forceNew, hasPhase) {
@@ -557,23 +618,68 @@ Item {
     }
 
     function updateViewerNavigationTargetSource() {
-        if (viewerNavigationTargetIndex !== -1) {
-            viewerNavigationTargetSource = decodeModel.bestViewerImageUrlForIndex(
-                        sourceIndexForViewIndex(viewerNavigationTargetIndex))
+        if (viewerNavigationTargetIndex === -1 || !decodeModel) {
+            viewerNavigationTargetSource = ""
+            viewerNavigationTargetSourceLevel = -1
+            return
         }
+
+        const sourceIndex = sourceIndexForViewIndex(
+                              viewerNavigationTargetIndex)
+        if (typeof decodeModel.preparedViewerImageUrlForIndex === "function") {
+            viewerNavigationTargetSource =
+                    decodeModel.preparedViewerImageUrlForIndex(
+                        sourceIndex,
+                        viewerNavigationTargetRequestWidth,
+                        viewerNavigationTargetRequestHeight)
+            viewerNavigationTargetSourceLevel =
+                    viewerNavigationTargetSource !== ""
+                    ? (viewerNavigationTargetRequestWidth > 0 &&
+                       viewerNavigationTargetRequestHeight > 0 ? 1 : 2)
+                    : -1
+        }
+        else {
+            viewerNavigationTargetSource =
+                    decodeModel.bestViewerImageUrlForIndex(sourceIndex)
+            viewerNavigationTargetSourceLevel =
+                    viewerNavigationTargetSource !== "" ? 0 : -1
+        }
+    }
+
+    function prepareViewerNavigationTarget() {
+        if (viewerNavigationTargetIndex === -1 || !decodeModel) {
+            return
+        }
+
+        const fitRequest = flickableArea.zoomFitView && !sphericViewerMode
+        viewerNavigationTargetRequestWidth = fitRequest
+                ? Math.max(1, Math.ceil(viewerMode.width * dpr)) : -1
+        viewerNavigationTargetRequestHeight = fitRequest
+                ? Math.max(1, Math.ceil(viewerMode.height * dpr)) : -1
+        const sourceIndex = sourceIndexForViewIndex(
+                              viewerNavigationTargetIndex)
+        if (typeof decodeModel.requestViewerAt === "function") {
+            decodeModel.requestViewerAt(
+                        sourceIndex,
+                        viewerNavigationTargetRequestWidth,
+                        viewerNavigationTargetRequestHeight)
+        }
+        updateViewerNavigationTargetSource()
     }
 
     function beginViewerNavigation(direction) {
         let currentIndex = sourceMasonry.view.currentIndex
         let targetIndex = sourceMasonry.view.nextImageIndex(direction > 0, false)
 
+        viewerNavigationLastAdoptedOriginalSize = Qt.size(0, 0)
         viewerNavigationActive = true
         viewerNavigationDirection = direction
         viewerNavigationTargetIndex = targetIndex !== currentIndex ? targetIndex : -1
         viewerNavigationTargetPath = pathForIndex(viewerNavigationTargetIndex)
         viewerNavigationTargetSource = ""
+        viewerNavigationTargetSourceLevel = -1
         flickableArea.cancelWheelPan()
-        updateViewerNavigationTargetSource()
+        prepareViewerNavigationTarget()
         logViewerGesture("navigation begin direction=" + viewerGestureDirectionName(direction) +
                          " current=" + currentIndex + " target=" + viewerNavigationTargetIndex +
                          " sourceReady=" + (viewerNavigationTargetSource !== ""))
@@ -673,19 +779,49 @@ Item {
     }
 
     function commitViewerNavigation() {
-        let targetIndex = viewerNavigationTargetIndex
-        let targetImageX = viewerNavigationTargetFinalImageX
-        let targetImageY = viewerNavigationTargetFinalImageY
+        const targetIndex = viewerNavigationTargetIndex
+        const targetImageX = viewerNavigationTargetFinalImageX
+        const targetImageY = viewerNavigationTargetFinalImageY
+        const targetSource = viewerNavigationTargetSource
+        const targetSourceLevel = viewerNavigationTargetSourceLevel
+        // QML value types read from a bound property can continue to reference
+        // that property. resetViewerNavigation() changes its target index and
+        // therefore its size to 0x0, so make an explicit value copy first.
+        const targetOriginalSize = Qt.size(
+                    viewerNavigationTargetOriginalSize.width,
+                    viewerNavigationTargetOriginalSize.height)
+        const targetIsValid = targetIndex !== -1
+                && targetIndex !== sourceMasonry.view.currentIndex
+        const canAdoptFitTransition = targetIsValid
+                && flickableArea.zoomFitView
+                && !sphericViewerMode
+                && targetSourceLevel === 1
+                && targetSource !== ""
+                && targetOriginalSize.width > 1
+                && targetOriginalSize.height > 1
+                && viewerNavigationNeighborImage.source.toString()
+                   === targetSource
+                && viewerNavigationNeighborImage.status === Image.Ready
         logViewerGesture("commit target=" + targetIndex)
         viewerNavigationGestureCommitted = true
         startViewerNavigationResidualSuppression("commit")
         selectionHighlightAnimationSuppressed = true
         resetViewerNavigation("commit")
-        if (targetIndex === -1 || targetIndex === sourceMasonry.view.currentIndex) {
+        if (!targetIsValid) {
             Qt.callLater(() => selectionHighlightAnimationSuppressed = false)
             return
         }
 
+        // The swipe overlay is already showing a prepared Fit tier. Adopt it
+        // before changing the model row so the normal current-index handler
+        // cannot replace it with the masonry thumbnail during the handoff.
+        // Native/free-zoom navigation retains the original current-index flow.
+        if (canAdoptFitTransition) {
+            viewerNavigationLastAdoptedOriginalSize = Qt.size(
+                        targetOriginalSize.width, targetOriginalSize.height)
+            flickableArea.setImage(targetSource, targetOriginalSize,
+                                   targetIndex, targetSourceLevel)
+        }
         if (!flickableArea.zoomFitView) {
             flickableArea.image.x = targetImageX
             flickableArea.image.y = targetImageY
@@ -1554,6 +1690,21 @@ Item {
 
             viewerModel: viewerMode.decodeModel
             sourceMasonry: viewerMode.sourceMasonry
+            active: root.state === "viewer"
+            devicePixelRatio: dpr
+            topInset: titleBar.viewerHeight
+            checkerboardEnabled: Boolean(sourceMasonry && sourceMasonry.view
+                                         && sourceMasonry.view.showTransparentGrid)
+            scrollBarTheme: ({
+                "scrollBarHandle": Style.scrollBarHandle,
+                "scrollBarHandleBackgroundHovered":
+                    Style.scrollBarHandleBackgroundHovered,
+                "scrollBarHandleHovered": Style.scrollBarHandleHovered,
+                "scrollBarHandlePressed": Style.scrollBarHandlePressed,
+                "scrollBarTrackHovered": Style.lighter
+            })
+            onCloseRequested: root.toggleViewer()
+            onMiddleClickRequested: topLevelWindow.toggleFullscreen()
             // visible: !sphericViewerMode
             width: parent.width
             height: parent.height
@@ -1668,6 +1819,12 @@ Item {
             originalSize: flickableArea.originalSize
             source: flickableArea.textureSource
             opacity: sphericViewerOpacity
+            easingType: viewerMode.easingType
+            onCloseRequested: root.toggleViewer()
+            onSphereScrollingMouseCursorRequested:
+                (set, idle, rotation) =>
+                    topLevelWindow.setSphereScrollingMouseCursor(
+                        set, idle, rotation)
         }
     }
 
@@ -1683,16 +1840,61 @@ Item {
                  viewerNavigationActive &&
                  viewerNavigationTargetIndex !== -1 && viewerNavigationTargetSource !== ""
 
-        Image {
+        Item {
+            id: viewerNavigationNeighborEffectiveBounds
             x: viewerNavigationTargetImageX
             y: viewerNavigationTargetImageY
             width: viewerNavigationTargetDisplayWidth
             height: viewerNavigationTargetDisplayHeight
-            source: viewerNavigationTargetSource
-            fillMode: Image.PreserveAspectFit
-            asynchronous: true
-            cache: false
-            mipmap: true
+
+            // Match FlickableZoomable's effective-bounds/unrotated-content
+            // structure. The shader samples the raw texture, so rotation must
+            // happen around a source-aspect item rather than by stretching the
+            // texture into the already-swapped effective bounds.
+            Item {
+                id: viewerNavigationNeighborUnrotatedContent
+                x: (parent.width - width) / 2
+                y: (parent.height - height) / 2
+                width: viewerNavigationTargetHasSize
+                       ? viewerNavigationTargetDisplayOriginalSize.width
+                         * viewerNavigationTargetScale : parent.width
+                height: viewerNavigationTargetHasSize
+                        ? viewerNavigationTargetDisplayOriginalSize.height
+                          * viewerNavigationTargetScale : parent.height
+                rotation: flickableArea.rotationMode * 90
+
+                Image {
+                    id: viewerNavigationNeighborImage
+                    objectName: "standaloneViewerNavigationNeighborImage"
+                    anchors.fill: parent
+                    source: viewerNavigationTargetSource
+                    fillMode: Image.PreserveAspectFit
+                    asynchronous: true
+                    cache: false
+                    visible: false
+                    // Level 1 already covers the requested physical Fit size.
+                    // Native level 2 can still need minification.
+                    mipmap: viewerMode.viewerNavigationTargetSourceLevel === 2
+                }
+
+                ShaderEffect {
+                    objectName: "standaloneViewerNavigationNeighborShader"
+                    anchors.fill: parent
+
+                    property var source: viewerNavigationNeighborImage
+                    property var viewportSize: Qt.size(width * dpr,
+                                                       height * dpr)
+                    property real sharpenAmount:
+                        viewerMode.viewerNavigationTargetScale < 1 ? 1.5 : 0
+                    property bool showCheckerboard:
+                        flickableArea.checkerboardEnabled
+                        && viewerNavigationNeighborImage.status === Image.Ready
+                    property int checkerboardSize: 4 * dpr
+                    property int borderRadius: 0
+
+                    fragmentShader: "qrc:/ZoinGallery/resources/shader.frag.qsb"
+                }
+            }
         }
     }
 
@@ -1755,6 +1957,18 @@ Item {
             logViewerGesture("wheel forwarded to zoom/drag handler")
             finishViewerNavigation()
         }
+
+        onZoomWheelReceived:
+            (angleDeltaY, modifiers, buttons) => {
+                if (sphericViewerMode && sphericViewerLoader.item) {
+                    sphericViewerLoader.item.handleZoomWheel(
+                                angleDeltaY, modifiers, buttons)
+                }
+                else {
+                    flickableArea.handleZoomWheel(
+                                angleDeltaY, modifiers, buttons)
+                }
+            }
     }
 
     MouseArea {
@@ -1762,14 +1976,11 @@ Item {
         anchors.fill: parent
         enabled: root.state === "viewer" // && zoomFitView
 
-        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+        acceptedButtons: Qt.LeftButton
 
         onPressed:
             (mouse) => {
-                if (mouse.button === Qt.MiddleButton) {
-                    topLevelWindow.toggleFullscreen()
-                }
-                else if (mouse.button === Qt.LeftButton) {
+                if (mouse.button === Qt.LeftButton) {
                     mouse.accepted = false
                 }
             }
@@ -1983,7 +2194,7 @@ Item {
 
                 IconLabel {
                     Layout.leftMargin: 13
-                    icon.source: "qrc:/resources/Sphere.svg"
+                    icon.source: "qrc:/ZoinGallery/resources/Sphere.svg"
                     icon.width: 16
                     icon.height: 16
                     icon.color: Style.viewerMainText
@@ -2019,7 +2230,7 @@ Item {
                     IconLabel {
                         anchors.centerIn: parent
 
-                        icon.source: "qrc:/resources/TildeLock.svg"
+                        icon.source: "qrc:/ZoinGallery/resources/TildeLock.svg"
                         icon.width: 16
                         icon.height: 16
                         icon.color: Style.viewerMainText
@@ -2083,7 +2294,7 @@ Item {
                     implicitWidth: 36
                     implicitHeight: titleBar.viewerHeight
 
-                    icon.source: "qrc:/resources/Settings.svg"
+                    icon.source: "qrc:/ZoinGallery/resources/Settings.svg"
                     onClicked: panelsVisible = !panelsVisible
                     Component.onCompleted: {
                         windowAgent.setHitTestVisible(settingsButton)
@@ -2273,7 +2484,7 @@ Item {
                     property int checkerboardSize: 4 * dpr
                     property real borderRadius: 4.1 * dpr
 
-                    fragmentShader: "qrc:/resources/shader.frag.qsb"
+                    fragmentShader: "qrc:/ZoinGallery/resources/shader.frag.qsb"
                     visible: filmstripImage.source != ""
                 }
 

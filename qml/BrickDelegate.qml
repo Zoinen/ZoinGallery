@@ -5,6 +5,7 @@ import QtQuick.Controls.impl
 import QtQuick.Effects
 
 import ZoinGallery 1.0
+import ZoinGallery.Native 1.0
 
 BrickItem {
     id: brickDelegate
@@ -53,6 +54,7 @@ BrickItem {
         id: imageViewRoot
         property alias source: internalImage.source
         property real padding
+        property int fillMode: Image.PreserveAspectCrop
         property bool needScaling: internalImage.sourceSize.width !== Math.round(internalImage.width * dpr) ||
                                    internalImage.sourceSize.height !== Math.round(internalImage.height * dpr)
         property alias internalImage: internalImage
@@ -81,7 +83,7 @@ BrickItem {
 
             width: diffIsSmall ? implicitWidth / dpr : imageViewRoot.width
             height: diffIsSmall ? implicitHeight / dpr : imageViewRoot.height
-            fillMode: diffIsSmall ? Image.Pad : Image.PreserveAspectCrop
+            fillMode: diffIsSmall ? Image.Pad : imageViewRoot.fillMode
 
             cache: false
             // Async adds black blinking for folder views
@@ -91,7 +93,30 @@ BrickItem {
 
         ShaderEffect {
             id: imageShader
-            anchors.fill: internalImage
+
+            // A ShaderEffect receives the provider texture directly and does
+            // not inherit the hidden Image's PreserveAspectFit paint node.
+            // Recreate that fitted geometry for the visible shader quad.
+            readonly property real textureAspect:
+                internalImage.implicitWidth > 0
+                && internalImage.implicitHeight > 0
+                ? internalImage.implicitWidth / internalImage.implicitHeight
+                : 0
+            readonly property bool fitTexture:
+                imageViewRoot.fillMode === Image.PreserveAspectFit
+                && textureAspect > 0
+            readonly property real fittedWidth: fitTexture
+                ? Math.min(imageViewRoot.width,
+                           imageViewRoot.height * textureAspect)
+                : internalImage.width
+            readonly property real fittedHeight: fitTexture
+                ? Math.min(imageViewRoot.height,
+                           imageViewRoot.width / textureAspect)
+                : internalImage.height
+            x: (imageViewRoot.width - width) / 2
+            y: (imageViewRoot.height - height) / 2
+            width: fittedWidth
+            height: fittedHeight
 
             property var source: internalImage
             property var viewportSize: Qt.size(width * dpr, height * dpr)
@@ -100,7 +125,7 @@ BrickItem {
             property int checkerboardSize: 4 * dpr
             property real borderRadius: 4.1 * dpr
 
-            fragmentShader: "qrc:/resources/shader.frag.qsb"
+            fragmentShader: "qrc:/ZoinGallery/resources/shader.frag.qsb"
             visible: internalImage.source != ""
         }
 
@@ -388,7 +413,7 @@ BrickItem {
                     }
 
                     visible: model.isPanorama
-                    icon.source: "qrc:/resources/Sphere.svg"
+                    icon.source: "qrc:/ZoinGallery/resources/Sphere.svg"
                     icon.width: 16
                     icon.height: 16
                     icon.color: Style.text
@@ -398,6 +423,143 @@ BrickItem {
             Component.onCompleted: {
                 brickDelegate.imageItem = image
             }
+        }
+    }
+
+    Component {
+        id: collectionDelegate
+
+        Item {
+            id: collectionRoot
+            readonly property bool columnsMode:
+                masonryLayout.presentationMode === MasonryLayout.Columns
+            readonly property bool detailsMode:
+                masonryLayout.presentationMode === MasonryLayout.Details
+            readonly property bool gridMode:
+                masonryLayout.presentationMode === MasonryLayout.Grid
+            readonly property bool iconsMode:
+                masonryLayout.presentationMode === MasonryLayout.Icons
+            readonly property var fields:
+                model && model.displayFields ? model.displayFields : ({})
+            readonly property string baseTitle:
+                fields.displayBaseName !== undefined
+                ? fields.displayBaseName : (model ? model.text : "")
+            readonly property string extension:
+                fields.displayExtension || ""
+            readonly property string title:
+                extension !== "" ? baseTitle + "." + extension : baseTitle
+            readonly property string sizeText:
+                fields.sizeText || (model && model.fileSize >= 0
+                                    ? Number(model.fileSize).toLocaleString() : "")
+            readonly property rect mediaRect: {
+                const rect = brickDelegate.previewRect
+                if (rect && rect.width > 0 && rect.height > 0)
+                    return rect
+                const inset = 3
+                return Qt.rect(inset, inset,
+                               Math.max(0, width - inset * 2),
+                               Math.max(0, height - inset * 2))
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: collectionRoot.columnsMode
+                                 || collectionRoot.detailsMode ? 1 : 2
+                radius: 5
+                color: brickMouseArea.pressed
+                       ? Style.brickPressed
+                       : isCurrent ? Style.brickSelected
+                       : brickMouseArea.containsMouse && !hideHovered
+                         ? Style.brickHovered : "transparent"
+                border.width: isCurrent ? 1 : 0
+                border.color: Style.brickSelectedBorder
+            }
+
+            Item {
+                id: collectionPreview
+                x: collectionRoot.mediaRect.x
+                y: collectionRoot.mediaRect.y
+                width: collectionRoot.mediaRect.width
+                height: collectionRoot.mediaRect.height
+                clip: true
+                visible: !(isCurrent && masonryView.viewerTransitionActive)
+
+                ImageView {
+                    anchors.fill: parent
+                    padding: 0
+                    source: model ? model.imageIdUrl : ""
+                    fillMode: Image.PreserveAspectFit
+                    visible: source !== ""
+                }
+
+                Image {
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width, parent.height)
+                           * (collectionRoot.columnsMode
+                              || collectionRoot.detailsMode ? 0.82 : 0.62)
+                    height: width
+                    sourceSize: Qt.size(width * dpr, height * dpr)
+                    source: model ? model.iconPath : ""
+                    fillMode: Image.PreserveAspectFit
+                    visible: model && model.imageIdUrl === ""
+                }
+            }
+
+            Text {
+                visible: collectionRoot.gridMode || collectionRoot.iconsMode
+                x: 5
+                y: collectionRoot.mediaRect.y + collectionRoot.mediaRect.height + 3
+                width: Math.max(0, parent.width - 10)
+                height: Math.max(0, parent.height - y - 3)
+                text: collectionRoot.title
+                textFormat: quickSearchMode ? Text.RichText : Text.PlainText
+                color: Style.text
+                elide: collectionRoot.iconsMode
+                       ? Text.ElideRight : Text.ElideMiddle
+                wrapMode: collectionRoot.iconsMode ? Text.Wrap : Text.NoWrap
+                maximumLineCount: collectionRoot.iconsMode ? 2 : 1
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Row {
+                visible: collectionRoot.columnsMode || collectionRoot.detailsMode
+                x: collectionRoot.mediaRect.x + collectionRoot.mediaRect.width + 6
+                width: Math.max(0, parent.width - x - 7)
+                height: parent.height
+                spacing: 4
+
+                Text {
+                    width: Math.max(0, parent.width
+                                    - (collectionRoot.detailsMode
+                                       ? collectionSize.width + parent.spacing : 0))
+                    height: parent.height
+                    text: collectionRoot.title
+                    textFormat: quickSearchMode ? Text.RichText : Text.PlainText
+                    color: Style.text
+                    elide: Text.ElideMiddle
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                Text {
+                    id: collectionSize
+                    visible: collectionRoot.detailsMode
+                    width: Math.min(112, Math.max(72, implicitWidth + 8))
+                    height: parent.height
+                    text: collectionRoot.sizeText
+                    color: Style.text
+                    opacity: 0.72
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignRight
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            PersistentSelectionBorder {
+                anchors.fill: parent
+                anchors.margins: 2
+            }
+
+            Component.onCompleted: brickDelegate.imageItem = collectionPreview
         }
     }
 
@@ -934,6 +1096,11 @@ BrickItem {
         State {
             when: model === undefined
             PropertyChanges { loader.sourceComponent: undefined }
+        },
+        State {
+            when: model !== undefined
+                  && masonryLayout.presentationMode !== MasonryLayout.Masonry
+            PropertyChanges { loader.sourceComponent: collectionDelegate }
         },
         State {
             when: model !== undefined && masonryLayout.listView && model.folderView

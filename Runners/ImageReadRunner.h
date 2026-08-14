@@ -15,6 +15,9 @@ public:
     QString path() const override;
     bool isViewerRequest() const override;
     bool isHighPriority() const override { return _request.highPriority; }
+    QString requestNamespace() const override {
+        return _request.requestNamespace;
+    }
     quint64 viewerGeneration() const override {
         return _request.viewerGeneration;
     }

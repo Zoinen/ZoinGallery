@@ -8,13 +8,6 @@
 #include <QWheelEvent>
 #include <QQmlEngine>
 
-static void registerViewerWheelAreaQmlType()
-{
-    qmlRegisterType<ViewerWheelArea>("ZoinGallery", 1, 0, "ViewerWheelArea");
-}
-
-Q_COREAPP_STARTUP_FUNCTION(registerViewerWheelAreaQmlType)
-
 ViewerWheelArea::ViewerWheelArea(QQuickItem *parent)
     : QQuickItem(parent)
 {
@@ -41,7 +34,13 @@ void ViewerWheelArea::wheelEvent(QWheelEvent *event)
 {
     if (event->modifiers() == Qt::ControlModifier || (event->buttons() & Qt::LeftButton)) {
         emit wheelForwarded();
-        event->ignore();
+        emit zoomWheelReceived(event->angleDelta().y(),
+                               int(event->modifiers()),
+                               int(event->buttons()));
+        // The QML handler invokes FlickableZoomable's original wheel math.
+        // Accept here so a backend that does propagate ignored wheel events
+        // to lower siblings cannot apply the same zoom a second time.
+        event->accept();
         return;
     }
 

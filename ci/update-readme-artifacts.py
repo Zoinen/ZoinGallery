@@ -33,7 +33,7 @@ PLATFORMS = [
     {
         "platform": "macOS",
         "icon": ".github/readme/platforms/macos.svg",
-        "version": "macOS 10.15 or later",
+        "version": "macOS 13 or later",
         "artifact_prefix": "ZoinGallery-macos-15-b",
         "download_label": "Download DMG",
     },

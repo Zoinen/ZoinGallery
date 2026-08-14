@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 import ZoinGallery 1.0
+import ZoinGallery.Native 1.0
 
 Rectangle {
     id: panel
@@ -406,7 +407,7 @@ Rectangle {
             Button {
                 implicitWidth: 32
                 implicitHeight: 32
-                icon.source: "qrc:/resources/Copy.svg"
+                icon.source: "qrc:/ZoinGallery/resources/Copy.svg"
                 icon.width: 16
                 icon.height: 16
                 icon.color: Style.text
@@ -425,7 +426,7 @@ Rectangle {
             Button {
                 implicitWidth: 32
                 implicitHeight: 32
-                icon.source: "qrc:/resources/FolderIcon.svg"
+                icon.source: "qrc:/ZoinGallery/resources/FolderIcon.svg"
                 icon.width: 17
                 icon.height: 17
                 icon.color: Style.text
@@ -445,7 +446,7 @@ Rectangle {
             Button {
                 implicitWidth: 32
                 implicitHeight: 30
-                icon.source: "qrc:/resources/SelectionHistory.svg"
+                icon.source: "qrc:/ZoinGallery/resources/SelectionHistory.svg"
                 icon.width: 17
                 icon.height: 17
                 icon.color: Style.text
@@ -467,7 +468,7 @@ Rectangle {
             Button {
                 implicitWidth: 32
                 implicitHeight: 32
-                icon.source: "qrc:/resources/PanelClose.svg"
+                icon.source: "qrc:/ZoinGallery/resources/PanelClose.svg"
                 icon.width: 16
                 icon.height: 16
                 icon.color: Style.text
@@ -705,7 +706,7 @@ Rectangle {
                                     anchors.verticalCenter: parent.verticalCenter
                                     width: 28
                                     height: 28
-                                    icon.source: "qrc:/resources/WindowClose.svg"
+                                    icon.source: "qrc:/ZoinGallery/resources/WindowClose.svg"
                                     onClicked: selectedImagesModel.removeFromCollection(viewIndex)
                                     ToolTip.text: "Remove from selected images"
                                     z: 3
@@ -808,7 +809,7 @@ Rectangle {
                     anchors.horizontalCenter: parent.horizontalCenter
                     width: 36
                     height: 36
-                    source: "qrc:/resources/ImageIcon.svg"
+                    source: "qrc:/ZoinGallery/resources/ImageIcon.svg"
                     opacity: 0.45
                 }
 

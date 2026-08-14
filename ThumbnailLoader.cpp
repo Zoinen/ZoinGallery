@@ -35,7 +35,8 @@ void ThumbnailLoader::readMetadata(ImageInfo &result) {
     }
 
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
-        if (ImageDecoderFactory::createDecoder(i)->readMetadata(result)) {
+        const auto decoder = ImageDecoderFactory::createDecoder(i);
+        if (decoder && decoder->readMetadata(result)) {
             break;
         }
     }
@@ -50,7 +51,8 @@ void ThumbnailLoader::readMetadata(ImageInfo &result) {
 bool ThumbnailLoader::readImage(ImageData &result) {
     bool previewLoaded = false;
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
-        previewLoaded = ImageDecoderFactory::createDecoder(i)->readPreviewAndMime(result);
+        const auto decoder = ImageDecoderFactory::createDecoder(i);
+        previewLoaded = decoder && decoder->readPreviewAndMime(result);
         if (previewLoaded) {
             break;
         }
@@ -67,7 +69,8 @@ bool ThumbnailLoader::readImage(ImageData &result) {
     }
 
     QSize targetSize = result.request.targetSize;
-    if (!result.request.checkCache) {
+    if (!result.request.checkCache &&
+        result.request.expandToCacheResolution) {
         targetSize = expandToCacheImageResolution(targetSize);
     }
     QSize sizeRotated = rotateToOrientation(result.request.info.imageSize, result.request.info.orientation);
@@ -85,7 +88,8 @@ bool ThumbnailLoader::readImage(ImageData &result) {
 
 QImage ThumbnailLoader::decode(const ImageData &imageData, DecodedImageInfo &decodedInfo) {
     QSize targetSize = imageData.request.targetSize;
-    if (!imageData.request.checkCache) {
+    if (!imageData.request.checkCache &&
+        imageData.request.expandToCacheResolution) {
         targetSize = expandToCacheImageResolution(targetSize);
     }
 
@@ -114,9 +118,13 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
     t.start();
     // qDebug() << "ZZ MIME??" << mimeType;
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
-        result = ImageDecoderFactory::createDecoder(i)->decode(mimeType, data, targetSize);
+        const auto decoder = ImageDecoderFactory::createDecoder(i);
+        if (!decoder) {
+            continue;
+        }
+        result = decoder->decode(mimeType, data, targetSize);
         if (!result.isNull()) {
-            decodedInfo.decoderUsed = ImageDecoderFactory::createDecoder(i)->decoderName();
+            decodedInfo.decoderUsed = decoder->decoderName();
             break;
         }
     }
@@ -172,7 +180,11 @@ QStringList ThumbnailLoader::supportedFormats() {
     if (formats.isEmpty()) {
         QSet<QString> formatsSet;
         for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
-            QStringList supportedFormats = ImageDecoderFactory::createDecoder(i)->supportedFormats();
+            const auto decoder = ImageDecoderFactory::createDecoder(i);
+            if (!decoder) {
+                continue;
+            }
+            const QStringList supportedFormats = decoder->supportedFormats();
             for (const QString &extension : supportedFormats) {
                 formatsSet.insert(QString("*.%1").arg(extension));
             }

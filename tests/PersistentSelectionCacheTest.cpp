@@ -1,4 +1,5 @@
 #include "PersistentSelectionCache.h"
+#include "StorageLocations.h"
 
 #include <QDataStream>
 #include <QDir>
@@ -90,6 +91,28 @@ private slots:
              dir.entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot)) {
             QVERIFY(QFile::remove(dir.filePath(fileName)));
         }
+    }
+
+    void isolatesStandaloneAndEmbeddedStorageRoots() {
+        const QString standaloneCache =
+            ZoinGallery::StorageLocations::cacheRootForNamespace(
+                QStringLiteral("standalone"));
+        const QString f4Cache =
+            ZoinGallery::StorageLocations::cacheRootForNamespace(
+                QStringLiteral("f4"));
+        const QString standaloneData =
+            ZoinGallery::StorageLocations::dataRootForNamespace(
+                QStringLiteral("standalone"));
+        const QString f4Data =
+            ZoinGallery::StorageLocations::dataRootForNamespace(
+                QStringLiteral("f4"));
+
+        QVERIFY(!standaloneCache.isEmpty());
+        QVERIFY(!standaloneData.isEmpty());
+        QVERIFY(standaloneCache != f4Cache);
+        QVERIFY(standaloneData != f4Data);
+        QVERIFY(f4Cache.endsWith(QStringLiteral("ZoinGallery/f4")));
+        QVERIFY(f4Data.endsWith(QStringLiteral("ZoinGallery/f4")));
     }
 
     void createsDistinctPresetGroups() {

@@ -2,26 +2,31 @@
 #define IMAGEDECODERFACTORY_H
 
 #include <functional>
+#include <memory>
 #include <QString>
 #include <QList>
 
 class ImageDecoderInterface;
 
 #define REGISTER_DECODER_DECLARATION(className, decoderPriority) \
+public: \
     QString decoderName() const override { return #className; } \
     static ImageDecoderInterface* create(); \
-    static const bool _registered; \
-    static const int _decoderPriority = decoderPriority;
+    static constexpr int _decoderPriority = decoderPriority;
 
 #define REGISTER_DECODER_DEFINITION(className) \
     ImageDecoderInterface* className::create() { \
         return new className(); \
-    } \
-    const bool className::_registered = ImageDecoderFactory::registerClass(&className::create, _decoderPriority);
+    }
 
 class ImageDecoderFactory {
 public:
     using CreatorFunc = std::function<ImageDecoderInterface*()>;
+
+    // References every built-in decoder explicitly. This is intentionally not
+    // a static initializer: ZoinGalleryCore is a static archive and otherwise
+    // linkers are free to discard decoder-only translation units.
+    static void registerBuiltInDecoders();
 
     static bool registerClass(CreatorFunc creator, int priority) {
         auto it = _decoders.begin();
@@ -33,14 +38,18 @@ public:
     }
 
     static int decoderCount() {
+        registerBuiltInDecoders();
         return _decoders.size();
     }
 
-    static ImageDecoderInterface* createDecoder(int decoderIndex) {
+    static std::unique_ptr<ImageDecoderInterface> createDecoder(
+        int decoderIndex) {
+        registerBuiltInDecoders();
         if (decoderIndex >= 0 && decoderIndex < _decoders.size()) {
-            return _decoders[decoderIndex].creatorFunc();
+            return std::unique_ptr<ImageDecoderInterface>(
+                _decoders[decoderIndex].creatorFunc());
         }
-        return nullptr;
+        return {};
     }
 
 private:

@@ -42,6 +42,8 @@ public:
     Q_INVOKABLE int mapToSourceRow(int viewRow) const;
     Q_INVOKABLE int mapFromSourceRow(int sourceRow) const;
     Q_INVOKABLE QVariantList mapToSourceRows(const QVariantList &viewRows) const;
+    Q_INVOKABLE QVariantList viewerPrefetchSourceRows(
+        int currentViewRow, int imageCount = 16) const;
     Q_INVOKABLE QVariantList sourceRowsForViewRange(int anchorViewRow, int targetViewRow, bool includeTarget) const;
     Q_INVOKABLE int nearestVisibleRow(int sourceRow) const;
 

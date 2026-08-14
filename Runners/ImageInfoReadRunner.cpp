@@ -3,22 +3,30 @@
 
 #include <QThread>
 
+#include <utility>
+
 ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool isFromEmbeddedView, bool isFromScanner,
                                          int directOpenGeneration,
-                                         bool highPriority)
+                                         bool highPriority,
+                                         QString requestNamespace,
+                                         qint64 sourceVersionToken)
     : _path(path), _isLast(isLast), _isFromEmbeddedView(isFromEmbeddedView), _isFromScanner(isFromScanner),
       _directOpenGeneration(directOpenGeneration),
-      _highPriority(highPriority) {
+      _highPriority(highPriority),
+      _requestNamespace(std::move(requestNamespace)),
+      _sourceVersionToken(sourceVersionToken) {
 }
 
 void ImageInfoReadRunner::run() {
     ImageInfo result{
         .path = _path,
+        .sourceVersionToken = _sourceVersionToken,
         .isLast = _isLast,
         .isFromEmbeddedView = _isFromEmbeddedView,
         .isFromScanner = _isFromScanner,
         .directOpenGeneration = _directOpenGeneration,
         .highPriority = _highPriority,
+        .requestNamespace = _requestNamespace,
     };
 
     ThumbnailLoader::readMetadata(result);

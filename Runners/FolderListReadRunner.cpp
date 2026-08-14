@@ -165,10 +165,12 @@ bool readCompleteFolderSnapshot(const QString &path, QList<FileInfo> *entries,
 
 FolderListReadRunner::FolderListReadRunner(const QString &path, int totalImages,
                                            bool storeInCache,
-                                           quint64 requestGeneration)
+                                           quint64 requestGeneration,
+                                           const QString &requestNamespace)
     : _path(path), _totalImages(totalImages), _storeInCache(storeInCache),
       _cacheGeneration(PersistentFolderCache::generation()),
-      _requestGeneration(requestGeneration) {
+      _requestGeneration(requestGeneration),
+      _requestNamespace(requestNamespace) {
 }
 
 void FolderListReadRunner::run() {

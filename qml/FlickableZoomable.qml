@@ -9,6 +9,22 @@ Item {
     property var viewerModel: null
     property var sourceMasonry: null
 
+    // All engine/application state needed by the reusable viewport is passed
+    // explicitly.  The standalone ViewerMode supplies these bindings while an
+    // embedded GalleryViewer can use the component without a surrounding
+    // Window, title bar, or dynamically-scoped root object.
+    property bool active: true
+    property real devicePixelRatio: 1.0
+    property real topInset: 0
+    property bool checkerboardEnabled: false
+    property var scrollBarTheme: ({})
+    property url simpleSource: ""
+    property int simpleSourceIndex: -1
+    property size simpleSourceOriginalSize: Qt.size(0, 0)
+    property int appliedSimpleSourceIndex: -1
+    property bool simpleSourceMetadataKnown: false
+    property bool sourceSizeFallbackPending: false
+
     property alias image: viewerImage
     property var textureSource: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImageBase
     property size originalSize
@@ -57,6 +73,8 @@ Item {
             && viewerImageBase.implicitWidth > 1 && viewerImageBase.implicitHeight > 1)
 
     property real zoomScale: 1.5
+    readonly property real targetZoomScale: zoomAnimation.to
+    readonly property bool zoomScrollingAnimationRunning: frameAnimation.running
     readonly property real minZoomScale: 0.005
     readonly property real maxZoomScale: 128
     property int animationDuration
@@ -75,6 +93,8 @@ Item {
     property real scrollBarsRightMargin: 0
 
     signal clicked
+    signal closeRequested
+    signal middleClickRequested
 
     onScrollBarsVisibleChanged: {
         if (scrollBarsVisible) {
@@ -180,6 +200,44 @@ Item {
         frameAnimation.y = y
         frameAnimation.scale = scale
         frameAnimation.running = x || y || scale
+    }
+
+    // ViewerWheelArea sits above this item so it can normalize trackpad
+    // navigation. An ignored wheel event is not guaranteed to continue to a
+    // lower sibling on every Qt Quick backend, so both input paths call this
+    // single copy of ViewerMode's original zoom-wheel implementation.
+    function handleZoomWheel(angleDeltaY, modifiers, buttons) {
+        if (modifiers !== Qt.ControlModifier && !(buttons & Qt.LeftButton))
+            return
+
+        let angleDelta = angleDeltaY * 1.1
+        let delta = Math.abs(angleDelta / 100)
+        if (angleDelta < 0)
+            delta = 1 / delta
+
+        zoomFitView = false
+
+        zoomAnimation.to *= delta
+        if (modifiers === Qt.ControlModifier && !(buttons & Qt.LeftButton)) {
+            xAnimation.to = flickableArea.width / 2
+                    - ((flickableArea.width / 2 - viewerImage.x) / zoomScale)
+                    * zoomAnimation.to
+            yAnimation.to = flickableArea.height / 2
+                    - ((flickableArea.height / 2 - viewerImage.y) / zoomScale)
+                    * zoomAnimation.to
+        } else {
+            xAnimation.to = viewerMouse.mouseX
+                    - imagePressedX * zoomAnimation.to
+            yAnimation.to = viewerMouse.mouseY
+                    - imagePressedY * zoomAnimation.to
+        }
+
+        xAnimation.duration = 100
+        yAnimation.duration = 100
+        zoomAnimation.duration = 100
+
+        viewportAnimation.easing = Easing.OutSine
+        viewportAnimation.restart()
     }
 
     function fitZoomScale() {
@@ -337,7 +395,7 @@ Item {
         forceShowScrollBars = true
         forceShowScrollBars = false
 
-        if (root.state === "viewer" && transitionProgress > 0) {
+        if (active && transitionProgress > 0) {
             pinchZoomOutToThumbnailsActive = true
             pinchZoomOutToThumbnailsProgress = transitionProgress
             pinchZoomOutToThumbnailsProgressed(transitionProgress)
@@ -352,7 +410,7 @@ Item {
             return
         }
 
-        if (root.state !== "viewer" || effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
+        if (!active || effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
             return
         }
 
@@ -401,6 +459,10 @@ Item {
     }
 
     function zoomToFit(skipAnimation) {
+        // Preserve a Fit request made before metadata/base texture readiness.
+        // The explicit tier handoff will apply it as soon as a usable source
+        // size arrives.
+        zoomFitView = true
         if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
             return
         }
@@ -411,36 +473,45 @@ Item {
         hbar.opacity = 1
         vbar.opacity = 1
 
-        zoomFitView = true
-
         let targetWidth = fitToHeight ? flickableArea.height * (effectiveOriginalSize.width / effectiveOriginalSize.height) :
                                                     flickableArea.width
         let targetHeight = fitToHeight ? flickableArea.height :
                                                      flickableArea.width / (effectiveOriginalSize.width / effectiveOriginalSize.height)
 
+        const targetScale = fitToHeight
+                ? flickableArea.height / effectiveOriginalSize.height
+                : flickableArea.width / effectiveOriginalSize.width
+        const targetX = flickableArea.width / 2 - targetWidth / 2
+        const targetY = flickableArea.height / 2 - targetHeight / 2
+
         if (skipAnimation) {
-            xAnimation.duration = 0
-            yAnimation.duration = 0
-            zoomAnimation.duration = 0
-        }
-        else {
+            // A zero-duration ParallelAnimation still commits on an animation
+            // tick. During a cold viewer open the viewport geometry and the
+            // decoded source tier can both change in that interval, leaving
+            // the image with the previous tier's scale/offset for a frame (or
+            // until the viewer is reopened). Apply the fitted viewport as one
+            // synchronous state change instead.
+            viewportAnimation.stop()
+            frameAnimation.running = false
+            zoomScale = targetScale
+            viewerImage.x = targetX
+            viewerImage.y = targetY
+            zoomAnimation.to = targetScale
+            xAnimation.to = targetX
+            yAnimation.to = targetY
+            return
+        } else {
             xAnimation.duration = animationDuration
             yAnimation.duration = animationDuration
             zoomAnimation.duration = animationDuration
         }
 
-        zoomAnimation.to = fitToHeight ? flickableArea.height / effectiveOriginalSize.height : flickableArea.width / effectiveOriginalSize.width
-        xAnimation.to = flickableArea.width / 2 - targetWidth / 2
-        yAnimation.to = flickableArea.height / 2 - targetHeight / 2
+        zoomAnimation.to = targetScale
+        xAnimation.to = targetX
+        yAnimation.to = targetY
 
         viewportAnimation.easing = Easing.InOutQuad
         viewportAnimation.restart()
-
-        if (skipAnimation) {
-            xAnimation.duration = animationDuration
-            yAnimation.duration = animationDuration
-            zoomAnimation.duration = animationDuration
-        }
     }
 
     function toggleZoomToFit(keepMousePosition) {
@@ -672,6 +743,7 @@ Item {
 
     function resetViewerImages() {
         delayedIdSetter.stop()
+        sourceSizeFallbackPending = false
         originalSize = Qt.size(0, 0)
         image.source = ""
         image.fromIndex = -1
@@ -697,6 +769,20 @@ Item {
         }
     }
 
+    function applyOriginalSize(nextOriginalSize) {
+        const sizeChanged = Math.abs(originalSize.width
+                                     - nextOriginalSize.width) > 0.5
+                || Math.abs(originalSize.height
+                            - nextOriginalSize.height) > 0.5
+        originalSize = nextOriginalSize
+        // Metadata and the base/fit/native tiers arrive independently on a
+        // cold open. Preserve the user's Fit intent when the authoritative
+        // size replaces a provisional size; never override an explicit zoom
+        // or pan.
+        if (sizeChanged && zoomFitView)
+            zoomToFit(true)
+    }
+
     Connections {
         target: flickableArea.viewerModel
         function onViewerReset() {
@@ -709,6 +795,8 @@ Item {
         animateRotation = false
         console.log("SET IMAGE |", imageIdUrl, "|", originalSize_, fromIndex, level)
         delayedIdSetter.stop()
+        sourceSizeFallbackPending = originalSize_.width <= 1
+                || originalSize_.height <= 1
         if (level === 0 && fromIndex !== image.fromIndex) {
             image.source = imageIdUrl
             image.fromIndex = fromIndex
@@ -758,8 +846,8 @@ Item {
                 let ry = -targetY / zoomAnimation.to
                 let rw = flickableArea.width / zoomAnimation.to
                 let rh = flickableArea.height / zoomAnimation.to
-                let ow = originalSize_.width / dpr
-                let oh = originalSize_.height / dpr
+                let ow = originalSize_.width / devicePixelRatio
+                let oh = originalSize_.height / devicePixelRatio
 
                 let origCropX, origCropY, origCropWidth, origCropHeight
                 if (rotationMode === 0) {
@@ -790,18 +878,76 @@ Item {
                 viewerImageCrop.unscaledHeight = origCropHeight
 
                 viewerImageCrop.source = imageIdUrl + "/" +
-                        Math.round(origCropX * dpr) + "," +
-                        Math.round(origCropY * dpr) + "," +
-                        Math.round(origCropWidth * dpr) + "," +
-                        Math.round(origCropHeight * dpr)
+                        Math.round(origCropX * devicePixelRatio) + "," +
+                        Math.round(origCropY * devicePixelRatio) + "," +
+                        Math.round(origCropWidth * devicePixelRatio) + "," +
+                        Math.round(origCropHeight * devicePixelRatio)
                 viewerImage2.fromIndex = fromIndex
             }
 
             delayedIdSetter.idToSet = imageIdUrl
             delayedIdSetter.restart()
         }
-        flickableArea.originalSize = Qt.size(originalSize_.width / dpr, originalSize_.height / dpr)
+        if (!sourceSizeFallbackPending) {
+            flickableArea.applyOriginalSize(Qt.size(
+                        originalSize_.width / devicePixelRatio,
+                        originalSize_.height / devicePixelRatio))
+        } else if (viewerImageBase.status === Image.Ready
+                   && viewerImageBase.sourceSize.width > 1
+                   && viewerImageBase.sourceSize.height > 1) {
+            flickableArea.applyOriginalSize(Qt.size(
+                        viewerImageBase.sourceSize.width / devicePixelRatio,
+                        viewerImageBase.sourceSize.height / devicePixelRatio))
+            sourceSizeFallbackPending = false
+        } else {
+            flickableArea.applyOriginalSize(Qt.size(0, 0))
+        }
     }
+
+    function applySimpleSource() {
+        if (simpleSource.toString() === "") {
+            resetViewerImages()
+            appliedSimpleSourceIndex = -1
+            simpleSourceMetadataKnown = false
+            return
+        }
+
+        const indexChanged = appliedSimpleSourceIndex !== simpleSourceIndex
+        if (indexChanged)
+            simpleSourceMetadataKnown = false
+        delayedIdSetter.stop()
+        sourceSizeFallbackPending = simpleSourceOriginalSize.width <= 1
+                || simpleSourceOriginalSize.height <= 1
+        viewerImage2.source = ""
+        viewerImage2.fromIndex = -1
+        viewerImageCrop.source = ""
+        viewerImageCrop.fromIndex = -1
+        viewerImage.source = simpleSource
+        viewerImage.fromIndex = simpleSourceIndex
+        viewerImage.fromLevel = 0
+        appliedSimpleSourceIndex = simpleSourceIndex
+        if (simpleSourceOriginalSize.width > 1
+                && simpleSourceOriginalSize.height > 1) {
+            const metadataBecameKnown = !simpleSourceMetadataKnown
+            const hadKnownSize = originalSize.width > 1
+                    && originalSize.height > 1
+            const nextOriginalSize = Qt.size(
+                        simpleSourceOriginalSize.width / devicePixelRatio,
+                        simpleSourceOriginalSize.height / devicePixelRatio)
+            const sizeChanged = Math.abs(originalSize.width
+                                         - nextOriginalSize.width) > 0.5
+                    || Math.abs(originalSize.height
+                                - nextOriginalSize.height) > 0.5
+            applyOriginalSize(nextOriginalSize)
+            simpleSourceMetadataKnown = true
+            if (indexChanged || metadataBecameKnown || !hadKnownSize)
+                zoomToFit(true)
+        }
+    }
+
+    onSimpleSourceChanged: applySimpleSource()
+    onSimpleSourceIndexChanged: applySimpleSource()
+    onSimpleSourceOriginalSizeChanged: applySimpleSource()
 
     Timer {
         id: delayedIdSetter
@@ -810,13 +956,15 @@ Item {
         onTriggered: viewerImage2.source = idToSet
     }
 
-    ScrollBar {
+    GalleryScrollBar {
         id: vbar
+        objectName: "galleryViewerVerticalScrollBar"
+        theme: flickableArea.scrollBarTheme
         anchors {
             right: parent.right
             rightMargin: scrollBarsRightMargin
             top: parent.top
-            topMargin: titleBar.viewerHeight
+            topMargin: flickableArea.topInset
             bottom: parent.bottom
         }
         z: 1
@@ -836,8 +984,10 @@ Item {
         }
     }
 
-    ScrollBar {
+    GalleryScrollBar {
         id: hbar
+        objectName: "galleryViewerHorizontalScrollBar"
+        theme: flickableArea.scrollBarTheme
         anchors {
             left: parent.left
             right: parent.right
@@ -924,16 +1074,34 @@ Item {
 
             Image {
                 id: viewerImageBase
+                objectName: "galleryViewerBaseImage"
                 anchors.fill: parent
                 source: viewerImage.source
                 cache: false
                 mipmap: false
                 asynchronous: false
                 visible: false
+
+                onStatusChanged: {
+                    if (status !== Image.Ready
+                            || !flickableArea.sourceSizeFallbackPending
+                            || sourceSize.width <= 1 || sourceSize.height <= 1) {
+                        return
+                    }
+                    const preserveFit = flickableArea.zoomFitView
+                    flickableArea.applyOriginalSize(Qt.size(
+                                sourceSize.width / flickableArea.devicePixelRatio,
+                                sourceSize.height / flickableArea.devicePixelRatio))
+                    flickableArea.sourceSizeFallbackPending = false
+                    flickableArea.simpleSourceMetadataKnown = false
+                    if (!preserveFit)
+                        flickableArea.fitViewerImageInViewportBounds()
+                }
             }
 
             Image {
                 id: viewerImage2
+                objectName: "galleryViewerNativeImage"
                 anchors.fill: parent
                 cache: false
                 mipmap: true
@@ -946,14 +1114,18 @@ Item {
                 id: viewerImageShader
                 anchors.fill: parent
                 property var source: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImageBase
-                property var viewportSize: Qt.size(width * dpr, height * dpr)
+                property var viewportSize: Qt.size(
+                                               width * flickableArea.devicePixelRatio,
+                                               height * flickableArea.devicePixelRatio)
                 property real sharpenAmount: zoomScale < 1 ? 1.5 : 0
-                property bool showCheckerboard: flickableArea.sourceMasonry.view.showTransparentGrid &&
-                                                flickableArea.imageTextureReady
-                property int checkerboardSize: 4 * dpr
+                property bool showCheckerboard:
+                    flickableArea.checkerboardEnabled
+                    && flickableArea.imageTextureReady
+                property int checkerboardSize:
+                    4 * flickableArea.devicePixelRatio
                 property int borderRadius: 0
 
-                fragmentShader: "qrc:/resources/shader.frag.qsb"
+                fragmentShader: "qrc:/ZoinGallery/resources/shader.frag.qsb"
 
                 Image {
                     id: viewerImageCrop
@@ -980,7 +1152,7 @@ Item {
     PinchArea {
         id: pinchZoomArea
         anchors.fill: parent
-        enabled: pinchZoomEnabled && root.state === "viewer"
+        enabled: pinchZoomEnabled && flickableArea.active
         z: 2
 
         onPinchStarted: (pinch) => {
@@ -1002,8 +1174,9 @@ Item {
 
     MouseArea {
         id: viewerMouse
+        objectName: "galleryViewerPointerArea"
         anchors.fill: parent
-        enabled: root.state === "viewer" // && zoomFitView
+        enabled: flickableArea.active // && zoomFitView
 
         acceptedButtons: Qt.AllButtons
 
@@ -1045,6 +1218,9 @@ Item {
                 }
                 else if (mouse.button === Qt.RightButton) {
                     flickableArea.toggleZoomToFit(true)
+                }
+                else if (mouse.button === Qt.MiddleButton) {
+                    flickableArea.middleClickRequested()
                 }
             }
 
@@ -1122,49 +1298,16 @@ Item {
 
         onWheel:
             (wheel) => {
-                if (wheel.modifiers === Qt.ControlModifier || (wheel.buttons & Qt.LeftButton)) {
-                    let angleDelta = wheel.angleDelta.y * 1.1
-                    let delta = Math.abs(angleDelta / 100)
-                    if (angleDelta < 0) {
-                        delta = 1 / delta
-                    }
-
-                    zoomFitView = false
-
-                    zoomAnimation.to *= delta
-                    if (wheel.modifiers === Qt.ControlModifier && !(wheel.buttons & Qt.LeftButton)) {
-                        // console.log("ZZ CENTER") //(mouse.x - viewerImage.x) / zoomScale
-                        xAnimation.to = flickableArea.width / 2 - ((flickableArea.width / 2 - viewerImage.x) / zoomScale) * zoomAnimation.to
-                        yAnimation.to = flickableArea.height / 2 - ((flickableArea.height / 2 - viewerImage.y) / zoomScale) * zoomAnimation.to
-
-                        // viewerImage.x = flickableArea.width / 2 - (imagePressedX) * zoomAnimation.to
-                        // viewerImage.y = flickableArea.height / 2 - (imagePressedY) * zoomAnimation.to
-                    }
-                    else {
-                        xAnimation.to = viewerMouse.mouseX - (imagePressedX) * zoomAnimation.to
-                        yAnimation.to = viewerMouse.mouseY - (imagePressedY) * zoomAnimation.to
-                    }
-
-
-                    // xAnimation.easing.type = slowOrPaused ? Easing.InOutCirc : Easing.OutCirc
-                    // yAnimation.easing.type = slowOrPaused ? Easing.InOutCirc : Easing.OutCirc
-                    xAnimation.duration = 100
-                    yAnimation.duration = 100
-                    zoomAnimation.duration = 100
-
-                    viewportAnimation.easing = Easing.OutSine
-                    viewportAnimation.restart()
-                }
-                else {
-                    // wheel.accepted = false
-                }
+                flickableArea.handleZoomWheel(wheel.angleDelta.y,
+                                              wheel.modifiers,
+                                              wheel.buttons)
             }
 
         onDoubleClicked:
             (mouse) => {
                 // console.log("ZZ DBL")
                 if (mouse.button === Qt.LeftButton) {
-                    root.toggleViewer()
+                    flickableArea.closeRequested()
                 }
                 if (mouse.button === Qt.LeftButton && mousePressedX === mouse.x && mousePressedY === mouse.y) {
                     flickableArea.clicked()

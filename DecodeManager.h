@@ -6,6 +6,8 @@
 #include <QQueue>
 #include <QTimer>
 
+#include <atomic>
+
 #include "CacheUsageMode.h"
 #include "ImageFile.h"
 
@@ -33,11 +35,14 @@ public:
     virtual QString path() const { return QString(); }
     virtual bool isViewerRequest() const { return false; }
     virtual bool isHighPriority() const { return false; }
+    virtual QString requestNamespace() const { return QString(); }
     virtual quint64 viewerGeneration() const { return 0; }
     virtual int viewerPriorityOrdinal() const { return -1; }
 
     void cancel();
-    bool isCanceled() const { return _isCanceled; }
+    bool isCanceled() const {
+        return _isCanceled.load(std::memory_order_acquire);
+    }
 
 
     QList<QMetaObject::Connection> connections;
@@ -46,7 +51,7 @@ signals:
     void finished(Runner *runner);
 
 private:
-    bool _isCanceled = false;
+    std::atomic_bool _isCanceled{false};
 };
 
 
@@ -54,21 +59,49 @@ class DecodeManager : public QObject {
     Q_OBJECT
 
 public:
-    explicit DecodeManager(QObject *parent = nullptr);
+    struct VersionedImageInfoRequest {
+        QString path;
+        qint64 sourceVersionToken = 0;
+    };
+
+    enum class ImageInfoCachePolicy {
+        UseRuntimePolicy,
+        ForceSource,
+    };
+
+    explicit DecodeManager(QObject *parent = nullptr, int maxThreads = 0);
     ~DecodeManager() override;
+    int workerCount() const;
     void readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView,
                         int directOpenGeneration = 0,
-                        bool highPriority = false);
+                        bool highPriority = false,
+                        const QString &requestNamespace = QString(),
+                        qint64 sourceVersionToken = 0,
+                        ImageInfoCachePolicy cachePolicy =
+                            ImageInfoCachePolicy::UseRuntimePolicy);
+    // External catalogs need one metadata batch (and therefore one final
+    // TimeToFlush marker) while retaining a different opaque version token
+    // for every path.
+    void readVersionedImagesInfo(
+        const QList<VersionedImageInfoRequest> &requests,
+        bool isFromEmbeddedView, bool highPriority = false,
+        const QString &requestNamespace = QString());
     void decodeImages(const QList<ImageDecodeRequest> &requests);
     void readFolderList(const QStringList &paths, int totalImages = -1,
-                        quint64 requestGeneration = 0);
+                        quint64 requestGeneration = 0,
+                        const QString &requestNamespace = QString());
 
-    void scan(const QString &root);
-    void scanImages(const QList<QString> &imagePaths);
+    void scan(const QString &root,
+              const QString &requestNamespace = QString());
+    void scanImages(const QList<QString> &imagePaths,
+                    const QString &requestNamespace = QString());
 
     void cancelAllDecodeRunners();
     void cancelAllRunners();
     void cancelAllDecodeViewerRunners();
+    void cancelThumbnailRequests(const QString &requestNamespace);
+    void cancelViewerRequests(const QString &requestNamespace);
+    void cancelRequests(const QString &requestNamespace);
 
     void prepareToClose();
 
@@ -91,7 +124,8 @@ signals:
                           quint64 requestGeneration);
 
     void runningTasksChanged(const QString &runningTasks, const QStringList &tasksInfo);
-    void viewerRunnerCanceled(const QString &path);
+    void viewerRunnerCanceled(const QString &path,
+                              const QString &requestNamespace);
 
 protected:
     void processQueue();
@@ -114,11 +148,24 @@ private:
                                     bool isFromEmbeddedView,
                                     const QString &lastPath,
                                     int directOpenGeneration,
-                                    bool highPriority);
+                                    bool highPriority,
+                                    const QString &requestNamespace,
+                                    qint64 sourceVersionToken);
     void onInfoNotFoundInCache(const QList<QString> &paths,
                                bool isFromEmbeddedView,
                                int directOpenGeneration = 0,
-                               bool highPriority = false);
+                               bool highPriority = false,
+                               const QString &requestNamespace = QString(),
+                               qint64 sourceVersionToken = 0);
+    void cancelDecodeRequests(const QString &requestNamespace,
+                              bool viewerRequests);
+    bool canStartRunner(Runner *runner, int compressedPayloadCount,
+                        qint64 compressedPayloadByteCount) const;
+    int compressedPayloadRunnerCount() const;
+    qint64 compressedPayloadBytes() const;
+    int viewerCompressedPayloadRunnerCount() const;
+    qint64 viewerCompressedPayloadBytes() const;
+    int compressedPayloadRunnerLimit() const;
     bool isRunnerTypeMatchesThreadType(Runner *runner, int threadType);
     void updateRunningTasksCount();
     QString runnerToString(Runner *task);
@@ -150,6 +197,21 @@ private:
     bool _runningTasksDebug = false;
     bool _isClosing = false;
     quint64 _nextViewerGeneration = 0;
+
+    // Source reads retain the complete compressed file until their decode
+    // runner completes. A count limit keeps that stage proportional to the
+    // available consumers; the byte limit prevents machines with many cores
+    // from retaining several gigabytes of large source files at once. A
+    // single oversized file is always admitted when the stage is otherwise
+    // empty so progress remains possible.
+    static constexpr qint64 MaxCompressedPayloadBytes =
+        256LL * 1024LL * 1024LL;
+    // A shared runtime can have its global payload allowance occupied by
+    // masonry/selection work exactly when the viewer asks for its current and
+    // adjacent Fit frames.  Reserve a tiny priority lane so those three reads
+    // cannot be held behind background thumbnails.  The lane has its own byte
+    // ceiling and therefore does not restore the old unbounded read-ahead.
+    static constexpr int ViewerCompressedPayloadReserve = 3;
 };
 
 #endif // DECODEMANAGER_H

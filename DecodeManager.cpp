@@ -16,6 +16,7 @@
 #include <QThread>
 
 #include <chrono>
+#include <limits>
 #include <utility>
 
 using namespace std::chrono_literals;
@@ -150,14 +151,19 @@ bool isRunnerImageInfoEmbedded(Runner *runner) {
 }
 
 
-DecodeManager::DecodeManager(QObject *parent)
+DecodeManager::DecodeManager(QObject *parent, int maxThreads)
     : QObject(parent) {
 
     _runningTasksUpdateTimer.start(100);
     connect(&_runningTasksUpdateTimer, &QTimer::timeout,
             this, &DecodeManager::updateRunningTasksCount);
 
-    const int MaxThreads = qMax(int(SpecialThreads::Last) + 1, QThread::idealThreadCount());
+    int requestedThreads = qMax(1, QThread::idealThreadCount());
+    if (maxThreads > 0) {
+        requestedThreads = qMin(requestedThreads, maxThreads);
+    }
+    const int MaxThreads =
+        qMax(int(SpecialThreads::Last) + 1, requestedThreads);
     qDebug() << "Using" << MaxThreads << "threads";
     for (int i = 0; i < MaxThreads; i++) {
         WorkerInfo info{
@@ -176,23 +182,42 @@ DecodeManager::~DecodeManager() {
     prepareToClose();
 }
 
+int DecodeManager::workerCount() const {
+    return _workers.size();
+}
+
 void DecodeManager::readImagesInfo(const QList<QString> &paths,
                                    bool isFromEmbeddedView,
                                    int directOpenGeneration,
-                                   bool highPriority) {
+                                   bool highPriority,
+                                   const QString &requestNamespace,
+                                   qint64 sourceVersionToken,
+                                   ImageInfoCachePolicy cachePolicy) {
+    if (cachePolicy == ImageInfoCachePolicy::ForceSource) {
+        // External catalogs carry a host-authoritative, nanosecond source
+        // version. PersistentImageCache is intentionally compatible with the
+        // standalone database and stores only QDateTime milliseconds, so it
+        // cannot prove that metadata belongs to that exact host version.
+        onInfoNotFoundInCache(paths, isFromEmbeddedView,
+                              directOpenGeneration, highPriority,
+                              requestNamespace, sourceVersionToken);
+        return;
+    }
     if (highPriority && sourceReadsEnabled(_imageCacheMode)) {
         // A single background cache-info runner may be validating thousands
         // of paths and cannot be preempted mid-run. Watcher-added foreground
         // files are new by definition, so read their metadata from source
         // immediately instead of waiting behind that cache batch.
         onInfoNotFoundInCache(paths, isFromEmbeddedView,
-                              directOpenGeneration, true);
+                              directOpenGeneration, true, requestNamespace,
+                              sourceVersionToken);
         return;
     }
     if (cacheReadsEnabled(_imageCacheMode)) {
         CachedImageInfoRunner *runner = new CachedImageInfoRunner(
             paths, isFromEmbeddedView, sourceReadsEnabled(_imageCacheMode),
-            directOpenGeneration, highPriority);
+            directOpenGeneration, highPriority, requestNamespace,
+            sourceVersionToken);
         runner->connections.append(
             connect(runner, &CachedImageInfoRunner::cachedImageInfoRetrieved,
                     this, &DecodeManager::onCachedImageInfoRetrieved)
@@ -209,13 +234,15 @@ void DecodeManager::readImagesInfo(const QList<QString> &paths,
     }
     else if (sourceReadsEnabled(_imageCacheMode)) {
         onInfoNotFoundInCache(paths, isFromEmbeddedView,
-                              directOpenGeneration, highPriority);
+                              directOpenGeneration, highPriority,
+                              requestNamespace, sourceVersionToken);
     }
 }
 
 void DecodeManager::onInfoNotFoundInCache(
     const QList<QString> &imagePaths, bool isFromEmbeddedView,
-    int directOpenGeneration, bool highPriority) {
+    int directOpenGeneration, bool highPriority,
+    const QString &requestNamespace, qint64 sourceVersionToken) {
     int insertIndex = _taskQueue.size();
     // Info requests from visible subviews should be first
     if (!highPriority && isFromEmbeddedView) {
@@ -231,7 +258,9 @@ void DecodeManager::onInfoNotFoundInCache(
         ImageInfoReadRunner *runner = new ImageInfoReadRunner(imagePaths[i], i == imagePaths.size() - 1,
                                                               isFromEmbeddedView, false,
                                                               directOpenGeneration,
-                                                              highPriority);
+                                                              highPriority,
+                                                              requestNamespace,
+                                                              sourceVersionToken);
         runner->connections.append(
             connect(runner, &ImageInfoReadRunner::imageInfoReady,
                     this, &DecodeManager::onImageInfoReady)
@@ -247,8 +276,58 @@ void DecodeManager::onInfoNotFoundInCache(
     processQueue();
 }
 
+void DecodeManager::readVersionedImagesInfo(
+    const QList<VersionedImageInfoRequest> &requests,
+    bool isFromEmbeddedView, bool highPriority,
+    const QString &requestNamespace) {
+    if (requests.isEmpty()) {
+        return;
+    }
+
+    int insertIndex = _taskQueue.size();
+    if (!highPriority && isFromEmbeddedView) {
+        for (insertIndex = firstBackgroundTask(_taskQueue);
+             insertIndex < _taskQueue.size(); ++insertIndex) {
+            if (_taskQueue.at(insertIndex)->type() == RunnerType::ImageInfoRead &&
+                !isRunnerImageInfoEmbedded(_taskQueue.at(insertIndex))) {
+                break;
+            }
+        }
+    }
+
+    for (int index = 0; index < requests.size(); ++index) {
+        const VersionedImageInfoRequest &request = requests.at(index);
+        auto *runner = new ImageInfoReadRunner(
+            request.path, index == requests.size() - 1,
+            isFromEmbeddedView, false, 0, highPriority,
+            requestNamespace, request.sourceVersionToken);
+        runner->connections.append(
+            connect(runner, &ImageInfoReadRunner::imageInfoReady,
+                    this, &DecodeManager::onImageInfoReady));
+        if (runner->isHighPriority()) {
+            insertAheadOfLowerPriority(_taskQueue, runner);
+        }
+        else {
+            _taskQueue.insert(insertIndex, runner);
+            ++insertIndex;
+        }
+    }
+    processQueue();
+}
+
 void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
     QList<ImageDecodeRequest> queuedRequests = requests;
+    for (ImageDecodeRequest &request : queuedRequests) {
+        // Keep the owner on both halves of the request. Read/decode/cache
+        // lookup runners use the outer field, while a later cache-store stage
+        // only receives ImageInfo.
+        if (request.requestNamespace.isEmpty()) {
+            request.requestNamespace = request.info.requestNamespace;
+        }
+        else {
+            request.info.requestNamespace = request.requestNamespace;
+        }
+    }
     bool hasNewViewerBatch = false;
     for (const ImageDecodeRequest &request : std::as_const(queuedRequests)) {
         if (request.viewerRequest && request.viewerGeneration == 0) {
@@ -345,7 +424,8 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
 }
 
 void DecodeManager::readFolderList(const QStringList &paths, int totalImages,
-                                   quint64 requestGeneration) {
+                                   quint64 requestGeneration,
+                                   const QString &requestNamespace) {
     QList<FolderInfo> results;
     QStringList notFound;
     if (cacheReadsEnabled(_fileListCacheMode)) {
@@ -364,7 +444,7 @@ void DecodeManager::readFolderList(const QStringList &paths, int totalImages,
         for (const QString &path : notFound) {
             FolderListReadRunner *runner = new FolderListReadRunner(
                 path, totalImages, cacheWritesEnabled(_fileListCacheMode),
-                requestGeneration);
+                requestGeneration, requestNamespace);
             runner->connections.append(
                 connect(runner, &FolderListReadRunner::folderListReady,
                         this, &DecodeManager::onFolderListReady)
@@ -379,22 +459,29 @@ void DecodeManager::readFolderList(const QStringList &paths, int totalImages,
     processQueue();
 }
 
-void DecodeManager::scan(const QString &root) {
+void DecodeManager::scan(const QString &root,
+                         const QString &requestNamespace) {
     if (!sourceReadsEnabled(_imageCacheMode) || !sourceReadsEnabled(_fileListCacheMode)) {
         return;
     }
-    RecursiveFolderScanner *runner = new RecursiveFolderScanner(root);
+    RecursiveFolderScanner *runner = new RecursiveFolderScanner(
+        root, requestNamespace);
     runner->connections.append(
         connect(runner, &RecursiveFolderScanner::scanImages,
-                this, &DecodeManager::scanImages)
+                this, [this, requestNamespace](const QStringList &paths) {
+                    scanImages(paths, requestNamespace);
+                })
         );
     _taskQueue.enqueue(runner);
     processQueue();
 }
 
-void DecodeManager::scanImages(const QList<QString> &imagePaths) {
+void DecodeManager::scanImages(const QList<QString> &imagePaths,
+                               const QString &requestNamespace) {
     for (int i = 0; i < imagePaths.size(); i++) {
-        ImageInfoReadRunner *runner = new ImageInfoReadRunner(imagePaths[i], false, false, true);
+        ImageInfoReadRunner *runner = new ImageInfoReadRunner(
+            imagePaths[i], false, false, true, 0, false,
+            requestNamespace);
         runner->connections.append(
             connect(runner, &ImageInfoReadRunner::imageInfoReady,
                     this, &DecodeManager::onScannerInfoReady)
@@ -413,7 +500,8 @@ void DecodeManager::cancelAllDecodeRunners() {
                 runner->cancel();
 
                 if (runner->isViewerRequest()) {
-                    emit viewerRunnerCanceled(runner->path());
+                    emit viewerRunnerCanceled(runner->path(),
+                                              runner->requestNamespace());
                 }
             }
         }
@@ -423,7 +511,8 @@ void DecodeManager::cancelAllDecodeRunners() {
         if (isRunnerDecode(_taskQueue.at(i))) {
             Runner *runner = _taskQueue.takeAt(i);
             if (runner->isViewerRequest()) {
-                emit viewerRunnerCanceled(runner->path());
+                emit viewerRunnerCanceled(runner->path(),
+                                          runner->requestNamespace());
             }
             runner->cancel();
             runner->deleteLater();
@@ -439,14 +528,16 @@ void DecodeManager::cancelAllRunners() {
             runner->cancel();
 
             if (runner->isViewerRequest()) {
-                emit viewerRunnerCanceled(runner->path());
+                emit viewerRunnerCanceled(runner->path(),
+                                          runner->requestNamespace());
             }
         }
     }
     while (!_taskQueue.isEmpty()) {
         Runner *runner = _taskQueue.dequeue();
         if (runner->isViewerRequest()) {
-            emit viewerRunnerCanceled(runner->path());
+            emit viewerRunnerCanceled(runner->path(),
+                                      runner->requestNamespace());
         }
         runner->cancel();
         runner->deleteLater();
@@ -461,7 +552,8 @@ void DecodeManager::cancelAllDecodeViewerRunners() {
                 runner->cancel();
 
                 if (runner->isViewerRequest()) {
-                    emit viewerRunnerCanceled(runner->path());
+                    emit viewerRunnerCanceled(runner->path(),
+                                              runner->requestNamespace());
                 }
             }
         }
@@ -471,12 +563,95 @@ void DecodeManager::cancelAllDecodeViewerRunners() {
         if (isRunnerDecodeViewer(_taskQueue.at(i))) {
             Runner *runner = _taskQueue.takeAt(i);
             if (runner->isViewerRequest()) {
-                emit viewerRunnerCanceled(runner->path());
+                emit viewerRunnerCanceled(runner->path(),
+                                          runner->requestNamespace());
             }
             runner->cancel();
             runner->deleteLater();
             i--;
         }
+    }
+}
+
+void DecodeManager::cancelThumbnailRequests(
+    const QString &requestNamespace) {
+    cancelDecodeRequests(requestNamespace, false);
+}
+
+void DecodeManager::cancelViewerRequests(
+    const QString &requestNamespace) {
+    cancelDecodeRequests(requestNamespace, true);
+}
+
+void DecodeManager::cancelDecodeRequests(
+    const QString &requestNamespace, bool viewerRequests) {
+    if (requestNamespace.isEmpty()) {
+        return;
+    }
+
+    const auto matches = [&requestNamespace, viewerRequests](Runner *runner) {
+        return isRunnerDecode(runner) &&
+               runner->requestNamespace() == requestNamespace &&
+               runner->isViewerRequest() == viewerRequests;
+    };
+
+    for (WorkerInfo &worker : _workers) {
+        Runner *runner = worker.runner;
+        if (!runner || !matches(runner)) {
+            continue;
+        }
+        runner->cancel();
+        if (runner->isViewerRequest()) {
+            emit viewerRunnerCanceled(runner->path(),
+                                      runner->requestNamespace());
+        }
+    }
+
+    for (int index = _taskQueue.size() - 1; index >= 0; --index) {
+        Runner *runner = _taskQueue.at(index);
+        if (!matches(runner)) {
+            continue;
+        }
+        _taskQueue.removeAt(index);
+        if (runner->isViewerRequest()) {
+            emit viewerRunnerCanceled(runner->path(),
+                                      runner->requestNamespace());
+        }
+        runner->cancel();
+        runner->deleteLater();
+    }
+
+    processQueue();
+}
+
+void DecodeManager::cancelRequests(const QString &requestNamespace) {
+    if (requestNamespace.isEmpty()) {
+        return;
+    }
+
+    for (WorkerInfo &worker : _workers) {
+        Runner *runner = worker.runner;
+        if (runner && runner->requestNamespace() == requestNamespace) {
+            runner->cancel();
+            if (runner->isViewerRequest()) {
+                emit viewerRunnerCanceled(runner->path(),
+                                          runner->requestNamespace());
+            }
+        }
+    }
+
+    for (int index = _taskQueue.size() - 1; index >= 0; --index) {
+        Runner *runner = _taskQueue.at(index);
+        if (runner->requestNamespace() != requestNamespace) {
+            continue;
+        }
+        _taskQueue.removeAt(index);
+        if (runner->isViewerRequest()) {
+            emit viewerRunnerCanceled(runner->path(),
+                                      runner->requestNamespace());
+        }
+        runner->cancel();
+        runner->deleteLater();
     }
 }
 
@@ -638,6 +813,11 @@ void DecodeManager::processQueue() {
     if (_taskQueue.isEmpty()) {
         // qDebug() << "ZZ FINISHED:" << _timer.elapsed() << "ms";
     }
+    // The read worker is the only producer for ImageDecodeRunner payloads.
+    // Capture its allowance once per scheduling pass instead of rescanning a
+    // potentially large request queue for every candidate read.
+    const int compressedPayloadCount = compressedPayloadRunnerCount();
+    const qint64 compressedPayloadByteCount = compressedPayloadBytes();
     for (int workerIndex = 0; workerIndex < _workers.size(); workerIndex++) {
         if (!_workers[workerIndex].runner) {
             if (_taskQueue.isEmpty()) {
@@ -652,11 +832,22 @@ void DecodeManager::processQueue() {
                 }
             }
             Runner *runner = nullptr;
+            bool blockedEarlierImageRead = false;
             for (int taskIndex = 0; taskIndex < _taskQueue.size(); taskIndex++) {
-                if (isRunnerTypeMatchesThreadType(_taskQueue.at(taskIndex), workerIndex)) {
-                    runner = _taskQueue.takeAt(taskIndex);
-                    break;
+                Runner *candidate = _taskQueue.at(taskIndex);
+                if (!isRunnerTypeMatchesThreadType(candidate, workerIndex)) {
+                    continue;
                 }
+                if (candidate->type() == RunnerType::ImageRead) {
+                    if (blockedEarlierImageRead ||
+                        !canStartRunner(candidate, compressedPayloadCount,
+                                        compressedPayloadByteCount)) {
+                        blockedEarlierImageRead = true;
+                        continue;
+                    }
+                }
+                runner = _taskQueue.takeAt(taskIndex);
+                break;
             }
             if (!runner) {
                 continue;
@@ -775,6 +966,7 @@ void DecodeManager::onScannerInfoReady(const ImageInfo &result) {
     ImageDecodeRequest request{
         .info = result,
         .targetSize = CACHE_IMAGE_RESOLUTION,
+        .requestNamespace = result.requestNamespace,
         .viewerRequest = false,
         .checkCache = false
     };
@@ -812,7 +1004,8 @@ void DecodeManager::onStoreInCache(const ImageDecodeRequest &request, const QByt
 void DecodeManager::onCachedImageInfoRetrieved(
     const QList<ImageInfo> &results, const QStringList &notFound,
     bool isFromEmbeddedView, const QString &lastPath,
-    int directOpenGeneration, bool highPriority) {
+    int directOpenGeneration, bool highPriority,
+    const QString &requestNamespace, qint64 sourceVersionToken) {
     if (qobject_cast<Runner *>(sender())->isCanceled()) {
         return;
     }
@@ -821,12 +1014,164 @@ void DecodeManager::onCachedImageInfoRetrieved(
 
     if (sourceReadsEnabled(_imageCacheMode)) {
         onInfoNotFoundInCache(notFound, isFromEmbeddedView,
-                              directOpenGeneration, highPriority);
+                              directOpenGeneration, highPriority,
+                              requestNamespace, sourceVersionToken);
     }
 }
 
 bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType) {
     return isRunnerInReadThread(runner) == (threadType == (int)SpecialThreads::Read);
+}
+
+int DecodeManager::compressedPayloadRunnerLimit() const {
+    // Every worker except the dedicated source-read worker can consume an
+    // ImageDecodeRunner with the current thread routing policy.
+    return qMax(1, _workers.size() - 1);
+}
+
+int DecodeManager::compressedPayloadRunnerCount() const {
+    int count = 0;
+    for (const WorkerInfo &worker : _workers) {
+        if (worker.runner &&
+            worker.runner->type() == RunnerType::ImageDecode) {
+            ++count;
+        }
+    }
+    for (Runner *runner : _taskQueue) {
+        if (runner->type() == RunnerType::ImageDecode) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+qint64 DecodeManager::compressedPayloadBytes() const {
+    qint64 bytes = 0;
+    const auto addPayload = [&bytes](Runner *runner) {
+        if (!runner || runner->type() != RunnerType::ImageDecode) {
+            return;
+        }
+        const auto *decodeRunner = static_cast<ImageDecodeRunner *>(runner);
+        const qint64 sourceBytes = decodeRunner->_imageData.data.size();
+        const qint64 previewBytes = qMax<qint64>(
+            0, decodeRunner->_imageData.previewDataSize);
+        const qint64 maxBytes = std::numeric_limits<qint64>::max();
+        if (sourceBytes > maxBytes - bytes) {
+            bytes = std::numeric_limits<qint64>::max();
+            return;
+        }
+        bytes += sourceBytes;
+        if (previewBytes > maxBytes - bytes) {
+            bytes = maxBytes;
+            return;
+        }
+        bytes += previewBytes;
+    };
+
+    for (const WorkerInfo &worker : _workers) {
+        addPayload(worker.runner);
+    }
+    for (Runner *runner : _taskQueue) {
+        addPayload(runner);
+    }
+    return bytes;
+}
+
+int DecodeManager::viewerCompressedPayloadRunnerCount() const {
+    int count = 0;
+    const auto addViewerPayload = [&count](Runner *runner) {
+        if (runner && runner->type() == RunnerType::ImageDecode &&
+            runner->isViewerRequest()) {
+            ++count;
+        }
+    };
+    for (const WorkerInfo &worker : _workers) {
+        addViewerPayload(worker.runner);
+    }
+    for (Runner *runner : _taskQueue) {
+        addViewerPayload(runner);
+    }
+    return count;
+}
+
+qint64 DecodeManager::viewerCompressedPayloadBytes() const {
+    qint64 bytes = 0;
+    const auto addViewerPayload = [&bytes](Runner *runner) {
+        if (!runner || runner->type() != RunnerType::ImageDecode ||
+            !runner->isViewerRequest()) {
+            return;
+        }
+        const auto *decodeRunner =
+            static_cast<ImageDecodeRunner *>(runner);
+        const qint64 sourceBytes = decodeRunner->_imageData.data.size();
+        const qint64 previewBytes = qMax<qint64>(
+            0, decodeRunner->_imageData.previewDataSize);
+        const qint64 maxBytes = std::numeric_limits<qint64>::max();
+        if (sourceBytes > maxBytes - bytes) {
+            bytes = maxBytes;
+            return;
+        }
+        bytes += sourceBytes;
+        if (previewBytes > maxBytes - bytes) {
+            bytes = maxBytes;
+            return;
+        }
+        bytes += previewBytes;
+    };
+    for (const WorkerInfo &worker : _workers) {
+        addViewerPayload(worker.runner);
+    }
+    for (Runner *runner : _taskQueue) {
+        addViewerPayload(runner);
+    }
+    return bytes;
+}
+
+bool DecodeManager::canStartRunner(
+    Runner *runner, int compressedPayloadCount,
+    qint64 compressedPayloadByteCount) const {
+    if (!runner || runner->type() != RunnerType::ImageRead) {
+        return true;
+    }
+
+    const auto fitsAllowance = [](int count, int countLimit,
+                                  qint64 bytes, qint64 expectedBytes) {
+        if (count >= countLimit) {
+            return false;
+        }
+        if (bytes == 0) {
+            // Always admit one source, including an oversized source or one
+            // whose metadata could not provide a reliable byte count.
+            return true;
+        }
+        if (expectedBytes < 0 || bytes >= MaxCompressedPayloadBytes) {
+            return false;
+        }
+        return expectedBytes <= MaxCompressedPayloadBytes - bytes;
+    };
+
+    const auto *readRunner = static_cast<const ImageReadRunner *>(runner);
+    const qint64 expectedBytes = readRunner->_request.info.fileSize;
+    if (fitsAllowance(compressedPayloadCount,
+                      compressedPayloadRunnerLimit(),
+                      compressedPayloadByteCount, expectedBytes)) {
+        return true;
+    }
+
+    if (!runner->isViewerRequest()) {
+        return false;
+    }
+
+    // Background thumbnails may already occupy the global allowance.  Give
+    // the ordered viewer batch an independently bounded lane for its current,
+    // previous, and next frames, matching the latency of the old dedicated
+    // viewer scheduler without bringing back unbounded compressed read-ahead.
+    const int viewerLimit = qMin(ViewerCompressedPayloadReserve,
+                                 compressedPayloadRunnerLimit());
+    const int viewerCount = viewerCompressedPayloadRunnerCount();
+    const qint64 viewerBytes = viewerCompressedPayloadBytes();
+    return fitsAllowance(viewerCount, viewerLimit,
+                         viewerBytes, expectedBytes);
 }
 
 QDebug operator<<(QDebug dbg, const RunnerType &myEnum) {
@@ -845,7 +1190,7 @@ QDebug operator<<(QDebug dbg, const RunnerType &myEnum) {
 }
 
 void Runner::cancel() {
-    _isCanceled = true;
+    _isCanceled.store(true, std::memory_order_release);
     for (auto connection : connections) {
         disconnect(connection);
     }

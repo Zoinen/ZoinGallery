@@ -29,7 +29,7 @@ permissions:
 env:
   BUILD_TYPE: RelWithDebInfo
   BUILD_NUMBER: ${{ github.run_number }}
-  QT_VERSION: 6.10.3
+  QT_VERSION: 6.11.1
   AQT_MODULES: qtshadertools
 
 jobs:
@@ -79,11 +79,11 @@ jobs:
           conan install . --build=missing \
             -s build_type="${BUILD_TYPE}" \
             -s compiler.cppstd=20 \
+            -o '&:build_standalone=True' \
             -o '&:with_qt=False' \
             -c tools.files.download:retry=5 \
             -c tools.files.download:retry_wait=10 \
-            -c "tools.cmake.cmaketoolchain:extra_variables={'CMAKE_INSTALL_LIBDIR': {'value': 'lib', 'cache': True, 'type': 'PATH', 'force': True}}" \
-            --output-folder=build
+            -c "tools.cmake.cmaketoolchain:extra_variables={'CMAKE_INSTALL_LIBDIR': {'value': 'lib', 'cache': True, 'type': 'PATH', 'force': True}}"
 
       - name: Build QWindowKit
         run: bash ci/build-qwindowkit.sh "${QT_ROOT}" "${BUILD_TYPE}"
@@ -93,12 +93,27 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/conan_toolchain.cmake" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DBUILD_TESTING=ON \
             -DZOIN_BUILD_NUMBER="${BUILD_NUMBER}" \
             -DUSE_QWK=ON \
             -DCMAKE_PREFIX_PATH="${QT_ROOT};${GITHUB_WORKSPACE}/build;${GITHUB_WORKSPACE}/build/qwindowkit-install"
 
       - name: Build ZoinGallery
         run: cmake --build build --parallel
+
+      - name: Test reusable core and QML module
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QSG_RHI_BACKEND: software
+        run: |
+          source build/conanrun.sh
+          ctest --test-dir build --output-on-failure
+
+      - name: Verify reusable module install tree
+        run: |
+          cmake --install build --prefix build/module-install
+          test -f build/module-install/lib/cmake/ZoinGallery/ZoinGalleryConfig.cmake
+          test -f build/module-install/lib/qml/ZoinGallery/qmldir
 
       - name: Smoke test
         run: bash ci/smoke-test.sh "${QT_ROOT}"
@@ -254,11 +269,11 @@ jobs:
           conan install . --build=missing \
             -s build_type="${BUILD_TYPE}" \
             -s compiler.cppstd=20 \
+            -o '&:build_standalone=True' \
             -o '&:with_qt=False' \
             -c tools.files.download:retry=5 \
             -c tools.files.download:retry_wait=10 \
-            -c "tools.cmake.cmaketoolchain:extra_variables={'CMAKE_INSTALL_LIBDIR': {'value': 'lib', 'cache': True, 'type': 'PATH', 'force': True}}" \
-            --output-folder=build
+            -c "tools.cmake.cmaketoolchain:extra_variables={'CMAKE_INSTALL_LIBDIR': {'value': 'lib', 'cache': True, 'type': 'PATH', 'force': True}}"
 
       - name: Build QWindowKit
         run: bash ci/build-qwindowkit.sh "${QT_ROOT}" "${BUILD_TYPE}"
@@ -268,12 +283,21 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/conan_toolchain.cmake" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DBUILD_TESTING=ON \
             -DZOIN_BUILD_NUMBER="${BUILD_NUMBER}" \
             -DUSE_QWK=ON \
             -DCMAKE_PREFIX_PATH="${QT_ROOT};${GITHUB_WORKSPACE}/build;${GITHUB_WORKSPACE}/build/qwindowkit-install"
 
       - name: Build ZoinGallery
         run: cmake --build build --parallel
+
+      - name: Test reusable core and QML module
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QSG_RHI_BACKEND: software
+        run: |
+          source build/conanrun.sh
+          ctest --test-dir build --output-on-failure
 
       - name: Smoke test
         run: bash ci/smoke-test.sh "${QT_ROOT}"
@@ -334,10 +358,11 @@ jobs:
           conan install . --build=missing \
             -s build_type="${BUILD_TYPE}" \
             -s compiler.cppstd=20 \
+            -s os.version=13.0 \
+            -o '&:build_standalone=True' \
             -o '&:with_qt=False' \
             -c tools.files.download:retry=5 \
-            -c tools.files.download:retry_wait=10 \
-            --output-folder=build
+            -c tools.files.download:retry_wait=10
 
       - name: Build QWindowKit
         run: bash ci/build-qwindowkit.sh "${QT_ROOT}" "${BUILD_TYPE}"
@@ -347,14 +372,23 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="${GITHUB_WORKSPACE}/build/conan_toolchain.cmake" \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DBUILD_TESTING=ON \
             -DZOIN_BUILD_NUMBER="${BUILD_NUMBER}" \
             -DUSE_QWK=ON \
             -DZOIN_MACOS_CODE_SIGN=OFF \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_PREFIX_PATH="${QT_ROOT};${GITHUB_WORKSPACE}/build;${GITHUB_WORKSPACE}/build/qwindowkit-install"
 
       - name: Build ZoinGallery
         run: cmake --build build --parallel
+
+      - name: Test reusable core and QML module
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QSG_RHI_BACKEND: software
+        run: |
+          source build/conanrun.sh
+          ctest --test-dir build --output-on-failure
 
       - name: Smoke test
         run: bash ci/smoke-test.sh "${QT_ROOT}"
@@ -441,12 +475,12 @@ jobs:
           python -c "import sys; from conan.cli.cli import main; main(sys.argv[1:])" install . --build=missing `
             -s build_type="$env:BUILD_TYPE" `
             -s compiler.cppstd=20 `
+            -o "&:build_standalone=True" `
             -o "&:with_qt=False" `
             -o "libtiff/*:lzma=False" `
             -c tools.files.download:retry=5 `
             -c tools.files.download:retry_wait=10 `
-            -c tools.cmake.cmaketoolchain:generator=Ninja `
-            --output-folder=build
+            -c tools.cmake.cmaketoolchain:generator=Ninja
 
       - name: Build QWindowKit
         shell: pwsh
@@ -458,6 +492,7 @@ jobs:
           cmake -S . -B build -G Ninja `
             -DCMAKE_TOOLCHAIN_FILE="$env:GITHUB_WORKSPACE\build\conan_toolchain.cmake" `
             -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
+            -DBUILD_TESTING=ON `
             -DZOIN_BUILD_NUMBER="$env:BUILD_NUMBER" `
             -DUSE_QWK=ON `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT;$env:GITHUB_WORKSPACE\build;$env:GITHUB_WORKSPACE\build\qwindowkit-install"
@@ -465,6 +500,13 @@ jobs:
       - name: Build ZoinGallery
         shell: pwsh
         run: cmake --build build --parallel
+
+      - name: Test reusable core and QML module
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QSG_RHI_BACKEND: software
+        run: cmd /c "call build\conanrun.bat && ctest --test-dir build --output-on-failure"
 
       - name: Prepare app artifact
         shell: pwsh
@@ -543,12 +585,12 @@ jobs:
             -s arch=armv8 `
             -s build_type="$env:BUILD_TYPE" `
             -s compiler.cppstd=20 `
+            -o "&:build_standalone=True" `
             -o "&:with_qt=False" `
             -o "libtiff/*:lzma=False" `
             -c tools.files.download:retry=5 `
             -c tools.files.download:retry_wait=10 `
-            -c tools.cmake.cmaketoolchain:generator=Ninja `
-            --output-folder=build
+            -c tools.cmake.cmaketoolchain:generator=Ninja
 
       - name: Build QWindowKit
         shell: pwsh

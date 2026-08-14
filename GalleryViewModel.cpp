@@ -131,6 +131,47 @@ QVariantList GalleryViewModel::mapToSourceRows(const QVariantList &viewRows) con
     return sourceRows;
 }
 
+QVariantList GalleryViewModel::viewerPrefetchSourceRows(
+    int currentViewRow, int imageCount) const {
+    QVariantList sourceRows;
+    if (currentViewRow < 0 || currentViewRow >= rowCount() ||
+        imageCount <= 0) {
+        return sourceRows;
+    }
+
+    sourceRows.reserve(imageCount);
+    bool hitStart = false;
+    bool hitEnd = false;
+    for (int counter = 0;
+         sourceRows.size() < imageCount && !(hitStart && hitEnd);
+         ++counter) {
+        const int viewRow = counter % 2 == 0
+            ? currentViewRow + counter / 2
+            : currentViewRow - (counter + 1) / 2;
+        if (viewRow < 0) {
+            hitStart = true;
+        }
+        if (viewRow >= rowCount()) {
+            hitEnd = true;
+        }
+        if (viewRow < 0 || viewRow >= rowCount()) {
+            continue;
+        }
+
+        const QModelIndex viewIndex = index(viewRow, 0);
+        const ImageFile *item = viewIndex
+            .data(FileListModel::ImageFileRole).value<ImageFile *>();
+        if (!item || !item->isImage()) {
+            continue;
+        }
+        const int sourceRow = mapToSourceRow(viewRow);
+        if (sourceRow >= 0) {
+            sourceRows.append(sourceRow);
+        }
+    }
+    return sourceRows;
+}
+
 QVariantList GalleryViewModel::sourceRowsForViewRange(int anchorViewRow, int targetViewRow, bool includeTarget) const {
     QVariantList sourceRows;
     if (anchorViewRow < 0 || targetViewRow < 0 || anchorViewRow >= rowCount() || targetViewRow >= rowCount()) {

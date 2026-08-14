@@ -17,6 +17,9 @@ public:
     bool isHighPriority() const override {
         return _imageData.request.highPriority;
     }
+    QString requestNamespace() const override {
+        return _imageData.request.requestNamespace;
+    }
     quint64 viewerGeneration() const override {
         return _imageData.request.viewerGeneration;
     }

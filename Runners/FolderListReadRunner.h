@@ -8,10 +8,12 @@ class FolderListReadRunner : public Runner {
 
 public:
     FolderListReadRunner(const QString &path, int totalImages,
-                         bool storeInCache, quint64 requestGeneration);
+                         bool storeInCache, quint64 requestGeneration,
+                         const QString &requestNamespace = QString());
 
     RunnerType type() override { return RunnerType::FolderListRead; }
     void run() override;
+    QString requestNamespace() const override { return _requestNamespace; }
 
 signals:
     void folderListReady(const QString &path, const QList<FileInfo> &subfiles,
@@ -27,6 +29,7 @@ private:
     bool _storeInCache;
     quint64 _cacheGeneration;
     quint64 _requestGeneration;
+    QString _requestNamespace;
 };
 
 #endif // FOLDERLISTREADRUNNER_H

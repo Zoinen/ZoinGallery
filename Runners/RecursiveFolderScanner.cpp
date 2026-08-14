@@ -8,8 +8,9 @@
 #include <QFileInfoList>
 #include <QStack>
 
-RecursiveFolderScanner::RecursiveFolderScanner(const QString &root)
-    : _root(root) {
+RecursiveFolderScanner::RecursiveFolderScanner(
+    const QString &root, const QString &requestNamespace)
+    : _root(root), _requestNamespace(requestNamespace) {
 }
 
 void RecursiveFolderScanner::run() {

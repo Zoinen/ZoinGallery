@@ -17,14 +17,14 @@ sudo apt install -y \
     libpng-dev
 ```
 
-## 2. Install Qt 6.9
+## 2. Install Qt 6.11.1
 
-Qt is not available at version 6.9 from apt. Use
+Qt is not available at version 6.11.1 from apt. Use
 [aqtinstall](https://github.com/miurahr/aqtinstall) to install it.
 
 ```bash
 pip install aqtinstall --break-system-packages
-aqt install-qt linux desktop 6.9.3 linux_gcc_64 \
+aqt install-qt linux desktop 6.11.1 linux_gcc_64 \
     --modules qtquickcontrols2 qtshadertools \
     --outputdir ~/Qt
 ```
@@ -33,10 +33,10 @@ aqt install-qt linux desktop 6.9.3 linux_gcc_64 \
 > Windows instead:
 > ```powershell
 > pip install aqtinstall
-> aqt install-qt linux desktop 6.9.3 linux_gcc_64 --modules qtquickcontrols2 qtshadertools --outputdir C:\Qt
+> aqt install-qt linux desktop 6.11.1 linux_gcc_64 --modules qtquickcontrols2 qtshadertools --outputdir C:\Qt
 > ```
 > The Linux Qt build installed this way is accessible from WSL2 at
-> `/mnt/c/Qt/6.9.3/gcc_64`.
+> `/mnt/c/Qt/6.11.1/gcc_64`.
 
 ## 3. Create the build directory and stub cmake files
 

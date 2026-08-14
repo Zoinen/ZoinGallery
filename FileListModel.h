@@ -20,6 +20,16 @@ class QSocketNotifier;
 class ThumbnailsRequestInterface {
 public:
     virtual void decodeImages(const QList<ImageDecodeRequest> &requests) = 0;
+    // Viewport-driven external sources may defer metadata until a renderer
+    // needs it. Standalone/scanning models keep their existing lifecycle via
+    // this no-op default.
+    virtual void requestImageMetadata(const QList<int> &rows,
+                                      bool highPriority,
+                                      bool catalogWide = false) {
+        Q_UNUSED(rows)
+        Q_UNUSED(highPriority)
+        Q_UNUSED(catalogWide)
+    }
     virtual void cancelAllRunners() = 0;
     virtual void cancelAllDecodeRunners() = 0;
     virtual bool preserveViewStateOnReset() const { return false; }
@@ -102,6 +112,24 @@ public:
 
     FileListModel(QSharedPointer<ProviderImageStore> providerImageStore,
                   QObject *parent = nullptr);
+    FileListModel(
+        QSharedPointer<ProviderImageStore> providerImageStore,
+        DecodeManager *sharedDecodeManager,
+        const QString &requestNamespace,
+        const QString &imageIdPrefix,
+        const QString &thumbnailProviderName,
+        const QString &asyncProviderName,
+        QObject *parent = nullptr);
+    FileListModel(
+        QSharedPointer<ProviderImageStore> providerImageStore,
+        DecodeManager *sharedDecodeManager,
+        const QString &requestNamespace,
+        const QString &imageIdPrefix,
+        const QString &thumbnailProviderName,
+        const QString &asyncProviderName,
+        qint64 viewerFitCacheByteBudget,
+        qint64 viewerNativeCacheByteBudget,
+        QObject *parent = nullptr);
     ~FileListModel() override;
 
     QHash<int, QByteArray> roleNames() const override;
@@ -114,6 +142,7 @@ public:
     int columnCount(const QModelIndex &parent) const override;
 
     void prepareToClose();
+    void shutdown();
 
     int cd(const QString &path, const QString &itemToSelect = QString());
     QString rootPath() const;
@@ -135,7 +164,17 @@ public:
     Q_INVOKABLE void openImageDirectly(const QString &path, int width = -1, int height = -1);
     QString directOpenPath() const;
     Q_INVOKABLE void requestViewer(int index, int width = -1, int height = -1); // -1 means full size
+    Q_INVOKABLE void requestViewerInOrder(
+        int index, const QVariantList &orderedSourceRows,
+        int width = -1, int height = -1);
+    Q_INVOKABLE void requestViewerAt(
+        int index, int width = -1, int height = -1);
     Q_INVOKABLE QString bestViewerImageUrlForIndex(int index) const;
+    Q_INVOKABLE QString preparedViewerImageUrlForIndex(
+        int index, int width = -1, int height = -1) const;
+    Q_INVOKABLE QSize viewerImageOriginalSizeForIndex(int index) const;
+    QList<QPair<QString, int>> viewerImageSourcesForIndex(
+        int index, const QSize &viewerSize = QSize()) const;
     QImage viewerForImageId(const QString &imageId);
     QImage fullSizeViewerForImageId(const QString &imageId);
 
@@ -305,6 +344,13 @@ private:
     };
 
     QString generateNewId();
+    void readImagesInfo(const QList<QString> &paths,
+                        bool isFromEmbeddedView,
+                        int directOpenGeneration = 0,
+                        bool highPriority = false);
+    void cancelSessionRequests();
+    bool acceptsRequestNamespace(const QString &requestNamespace) const;
+    void configureImageFile(ImageFile *item) const;
     void updateImageId(ImageFile *item);
     ImageFile *createFileItem(const QString &folderPath, const QString &fileName,
                               const QDateTime &lastModified = QDateTime(), qint64 fileSize = -1);
@@ -393,6 +439,11 @@ private:
     int _lastId;
 
     DecodeManager *_decodeManager;
+    bool _ownsDecodeManager = false;
+    QString _requestNamespace;
+    QString _imageIdPrefix;
+    QString _thumbnailProviderName = QStringLiteral("zoingallery-thumbnails");
+    QString _asyncProviderName = QStringLiteral("zoingallery-async");
 
     // Viewer
     QSharedPointer<ProviderImageStore> _providerImageStore;

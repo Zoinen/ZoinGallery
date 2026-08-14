@@ -39,7 +39,8 @@ The Conan install command used:
 conan install . --build=missing \
   -s build_type=RelWithDebInfo \
   -s compiler.cppstd=20 \
-  --output-folder=build \
+  -s os.version=13.0 \
+  -o '&:build_standalone=True' \
   -c 'tools.cmake.cmaketoolchain:extra_variables={"QT_NO_XCODE_MIN_VERSION_CHECK":"ON"}'
 ```
 
@@ -84,7 +85,7 @@ cmake -S . -B build -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE=/Users/zoin/ZoinGallery/build/conan_toolchain.cmake \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DUSE_QWK=ON \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
   -DCMAKE_PREFIX_PATH="/Users/zoin/ZoinGallery/build;/Users/zoin/ZoinGallery/build/qwindowkit-install"
 ```
 
@@ -102,13 +103,10 @@ build/bin/RelWithDebInfo/ZoinGallery.app
 
 ## macOS Notes
 
-The project previously set `CMAKE_OSX_DEPLOYMENT_TARGET` to `10.13`. With Qt
-6.11.1 and C++20, Apple libc++ exposes `std::filesystem` APIs only for macOS
-10.15 and newer, so the deployment target was raised to `10.15`.
-
-The final link emitted warnings about some Conan image libraries being built for
-a newer macOS SDK than the selected deployment target. These warnings did not
-prevent the app from building or starting.
+The project previously set `CMAKE_OSX_DEPLOYMENT_TARGET` to `10.15`. Qt 6.11.1
+itself has a macOS 13.0 deployment ABI and overrides lower targets while it is
+built. Keep `os.version=13.0` in the Conan host profile so Qt, image-codec
+dependencies, QWindowKit, and ZoinGallery all describe the same real ABI.
 
 ## Smoke Test
 

@@ -1,5 +1,11 @@
 #include "ImageFile.h"
 
+#include <QFileInfo>
+#include <QLocale>
+
+#include <algorithm>
+#include <utility>
+
 QString fileSizeToHumanReadable(qint64 size) {
     const qint64 KB = 1024;
     const qint64 MB = 1024 * KB;
@@ -66,6 +72,7 @@ void ImageFile::setFileName(const QString &fileName) {
         if (_searchText.isEmpty()) {
             emit textChanged();
         }
+        refreshDefaultDisplayFields();
     }
 }
 
@@ -84,7 +91,12 @@ bool ImageFile::imageMatchesSource(const ImageInfo &sourceInfo) const {
     // Watcher reconciliation intentionally keeps the old frame visible while
     // the replacement is decoded, so the mere presence of _image is not
     // enough to establish that equivalence.
-    return !_image.isNull() &&
+    const bool versionTokenMatches =
+        (_imageSourceInfo.sourceVersionToken == 0 &&
+         sourceInfo.sourceVersionToken == 0) ||
+        (_imageSourceInfo.sourceVersionToken != 0 &&
+         _imageSourceInfo.sourceVersionToken == sourceInfo.sourceVersionToken);
+    return !_image.isNull() && versionTokenMatches &&
            !_imageSourceInfo.path.isEmpty() &&
            _imageSourceInfo.path == sourceInfo.path &&
            _imageSourceInfo.lastModified.isValid() &&
@@ -98,7 +110,8 @@ QString ImageFile::imageIdUrl() const {
     if (_imageId.isEmpty()) {
         return "";
     }
-    return QString("image://thumbnails/") + _imageId;
+    return QStringLiteral("image://") + _imageProviderName + QLatin1Char('/') +
+           _imageId;
 }
 
 void ImageFile::setImageId(const QString &imageId) {
@@ -106,6 +119,19 @@ void ImageFile::setImageId(const QString &imageId) {
         _imageId = imageId;
         emit imageIdUrlChanged();
     }
+}
+
+QString ImageFile::imageProviderName() const {
+    return _imageProviderName;
+}
+
+void ImageFile::setImageProviderName(const QString &providerName) {
+    const QString normalized = providerName.trimmed();
+    if (normalized.isEmpty() || _imageProviderName == normalized) {
+        return;
+    }
+    _imageProviderName = normalized;
+    emit imageIdUrlChanged();
 }
 
 QSize ImageFile::fullSize() const {
@@ -127,6 +153,7 @@ void ImageFile::setIsFolder(bool isFolder) {
     if (_isFolder != isFolder) {
         _isFolder = isFolder;
         emit isFolderChanged();
+        refreshDefaultDisplayFields();
     }
 }
 
@@ -175,6 +202,98 @@ void ImageFile::setIconPath(const QString &iconPath) {
     }
 }
 
+QVariantMap ImageFile::highlightStyle() const {
+    return _highlightStyle;
+}
+
+void ImageFile::setHighlightStyle(const QVariantMap &highlightStyle) {
+    if (_highlightStyle != highlightStyle) {
+        _highlightStyle = highlightStyle;
+        emit highlightStyleChanged();
+    }
+}
+
+QVariantMap ImageFile::defaultDisplayFields() const {
+    const QFileInfo fileInfo(_fileName);
+    QString baseName = _isFolder
+        ? _fileName : fileInfo.completeBaseName();
+    if (baseName.isEmpty()) {
+        baseName = _fileName;
+    }
+    QVariantMap fields{
+        {QStringLiteral("displayBaseName"), baseName},
+        {QStringLiteral("displayExtension"),
+         _isFolder ? QString() : fileInfo.suffix()},
+        {QStringLiteral("sizeText"),
+         _info.fileSize >= 0
+             ? fileSizeToHumanReadable(_info.fileSize) : QString()},
+        {QStringLiteral("mtimeText"),
+         _info.lastModified.isValid()
+             ? QLocale().toString(_info.lastModified,
+                                  QLocale::ShortFormat)
+             : QString()},
+        {QStringLiteral("modeText"), QString()},
+    };
+    return fields;
+}
+
+void ImageFile::refreshDefaultDisplayFields() {
+    if (_displayFields.isEmpty() && _explicitDisplayFieldKeys.isEmpty()) {
+        // Standalone entries derive their fields lazily. Notify bindings but
+        // avoid constructing several temporary maps while a catalog row is
+        // still being initialized (file name, kind and metadata arrive as
+        // separate setter calls).
+        emit displayFieldsChanged();
+        return;
+    }
+    QVariantMap updated = defaultDisplayFields();
+    for (const QString &key : std::as_const(_explicitDisplayFieldKeys)) {
+        updated.insert(key, _displayFields.value(key));
+    }
+    if (_displayFields == updated) {
+        return;
+    }
+    _displayFields = std::move(updated);
+    emit displayFieldsChanged();
+}
+
+QVariantMap ImageFile::displayFields() const {
+    return _displayFields.isEmpty()
+        ? defaultDisplayFields() : _displayFields;
+}
+
+void ImageFile::setDisplayFields(const QVariantMap &displayFields) {
+    _explicitDisplayFieldKeys.clear();
+    for (auto it = displayFields.cbegin(); it != displayFields.cend(); ++it) {
+        _explicitDisplayFieldKeys.insert(it.key());
+    }
+    static const QStringList defaultKeys{
+        QStringLiteral("displayBaseName"),
+        QStringLiteral("displayExtension"),
+        QStringLiteral("sizeText"),
+        QStringLiteral("mtimeText"),
+        QStringLiteral("modeText"),
+    };
+    const bool suppliesEveryDefault = std::all_of(
+        defaultKeys.cbegin(), defaultKeys.cend(),
+        [&displayFields](const QString &key) {
+            return displayFields.contains(key);
+        });
+    QVariantMap updated = suppliesEveryDefault
+        ? displayFields : defaultDisplayFields();
+    if (!suppliesEveryDefault) {
+        for (auto it = displayFields.cbegin();
+             it != displayFields.cend(); ++it) {
+            updated.insert(it.key(), it.value());
+        }
+    }
+    if (_displayFields == updated) {
+        return;
+    }
+    _displayFields = std::move(updated);
+    emit displayFieldsChanged();
+}
+
 int ImageFile::index() const {
     return _index;
 }
@@ -215,6 +334,9 @@ void ImageFile::setInfo(const ImageInfo &info) {
     }
     if (oldFileSize != fileSize()) {
         emit fileSizeChanged();
+    }
+    if (oldLastModified != lastModified() || oldFileSize != fileSize()) {
+        refreshDefaultDisplayFields();
     }
 }
 
@@ -296,7 +418,7 @@ QVariantList ImageFile::exifList() const {
         QVariantMap title;
         title["title"] = true;
         title["text"] = dateTimeOriginal ? "Date and Time" : "Date/Time Created";
-        title["icon"] = "qrc:/resources/ExifDateTime.svg";
+        title["icon"] = "qrc:/ZoinGallery/resources/ExifDateTime.svg";
         out.append(title);
 
         QDateTime dateTime;
@@ -320,7 +442,7 @@ QVariantList ImageFile::exifList() const {
         QVariantMap title;
         title["title"] = true;
         title["text"] = "Image";
-        title["icon"] = "qrc:/resources/ExifImage.svg";
+        title["icon"] = "qrc:/ZoinGallery/resources/ExifImage.svg";
         out.append(title);
 
         QVariantMap resolution;
@@ -340,7 +462,7 @@ QVariantList ImageFile::exifList() const {
         QVariantMap title;
         title["title"] = true;
         title["text"] = "Shooting";
-        title["icon"] = "qrc:/resources/ExifShooting.svg";
+        title["icon"] = "qrc:/ZoinGallery/resources/ExifShooting.svg";
         out.append(title);
     }
     if (_info.exif.contains("ShutterSpeed")) {
@@ -378,7 +500,7 @@ QVariantList ImageFile::exifList() const {
         QVariantMap title;
         title["title"] = true;
         title["text"] = "Camera";
-        title["icon"] = "qrc:/resources/ExifCamera.svg";
+        title["icon"] = "qrc:/ZoinGallery/resources/ExifCamera.svg";
         out.append(title);
     }
     if (_info.exif.contains("Camera")) {
@@ -401,7 +523,7 @@ QVariantList ImageFile::exifList() const {
         QVariantMap title;
         title["title"] = true;
         title["text"] = "Location";
-        title["icon"] = "qrc:/resources/ExifLocation.svg";
+        title["icon"] = "qrc:/ZoinGallery/resources/ExifLocation.svg";
         out.append(title);
 
         QStringList loc = _info.exif["Location"].toString().split(",");

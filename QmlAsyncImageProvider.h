@@ -9,6 +9,8 @@
 #include <QSharedPointer>
 #include <QThreadPool>
 
+#include <functional>
+
 class AsyncImageResponseRunnable : public QObject, public QRunnable {
     Q_OBJECT
 
@@ -43,9 +45,11 @@ class QmlAsyncImageProvider : public QQuickAsyncImageProvider {
 public:
     QmlAsyncImageProvider(
         const QString &prefix,
-        QSharedPointer<ProviderImageStore> providerImageStore);
+        QSharedPointer<ProviderImageStore> providerImageStore,
+        std::function<void()> destructionCallback = {},
+        int maxThreads = 0);
     ~QmlAsyncImageProvider() override;
-    static void prepareToClose();
+    void shutdown();
     QQuickImageResponse *requestImageResponse(const QString &id, const QSize &requestedSize) override;
 
 private:
@@ -55,6 +59,7 @@ private:
     QMutex _requestMutex;
     QThreadPool _threadPool;
     bool _acceptingRequests = true;
+    std::function<void()> _destructionCallback;
 };
 
 #endif // QMLASYNCIMAGEPROVIDER_H

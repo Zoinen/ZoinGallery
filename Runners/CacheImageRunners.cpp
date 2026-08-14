@@ -2,6 +2,8 @@
 
 #include "PersistentImageCache.h"
 
+#include <utility>
+
 CachedImageRetrieveRunner::CachedImageRetrieveRunner(const ImageDecodeRequest &request, bool validateRequestVersion)
     : _request(request), _validateRequestVersion(validateRequestVersion) {
 }
@@ -33,10 +35,14 @@ void CachedImageStoreRunner::run() {
 
 CachedImageInfoRunner::CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView,
                                              bool validateSource, int directOpenGeneration,
-                                             bool highPriority)
+                                             bool highPriority,
+                                             QString requestNamespace,
+                                             qint64 sourceVersionToken)
     : _imagePaths(imagePaths), _isFromEmbeddedView(isFromEmbeddedView),
       _validateSource(validateSource), _directOpenGeneration(directOpenGeneration),
-      _highPriority(highPriority) {
+      _highPriority(highPriority),
+      _requestNamespace(std::move(requestNamespace)),
+      _sourceVersionToken(sourceVersionToken) {
 }
 
 void CachedImageInfoRunner::run() {
@@ -58,12 +64,15 @@ void CachedImageInfoRunner::run() {
         info.isFromEmbeddedView = _isFromEmbeddedView;
         info.directOpenGeneration = _directOpenGeneration;
         info.highPriority = _highPriority;
+        info.requestNamespace = _requestNamespace;
+        info.sourceVersionToken = _sourceVersionToken;
     }
 
     // qDebug() << "ZZ FINISHED CACHE RETRIEVAL" << _imagePaths.size() << ":" << t.restart() << "ms" << ", not found" << notFound;
 
     emit cachedImageInfoRetrieved(results, notFound, _isFromEmbeddedView,
                                   _imagePaths.last(), _directOpenGeneration,
-                                  _highPriority);
+                                  _highPriority, _requestNamespace,
+                                  _sourceVersionToken);
     emit finished(this);
 }

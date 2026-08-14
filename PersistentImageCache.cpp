@@ -1,6 +1,7 @@
 #include "PersistentImageCache.h"
 #include "DisplayColorSpace.h"
 #include "Decoders/WebpCodec.h"
+#include "StorageLocations.h"
 
 #include <QImage>
 #include <QFile>
@@ -8,7 +9,6 @@
 #include <QDebug>
 #include <QDir>
 #include <QMutexLocker>
-#include <QStandardPaths>
 
 #include <utility>
 
@@ -27,8 +27,9 @@ bool sourceMatchesImageInfo(const ImageInfo &imageInfo) {
 }
 
 QString cacheBasePath() {
-    const QString tempPath = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
-    return tempPath.isEmpty() ? QDir::tempPath() : tempPath;
+    const QString path = ZoinGallery::StorageLocations::cacheRoot();
+    QDir().mkpath(path);
+    return path;
 }
 
 QString cacheDbPath() {

@@ -25,6 +25,8 @@
 #include "BackgroundInstance.h"
 #include "MacApplication.h"
 #include "BuildInfo.h"
+#include <ZoinGallery/GalleryRuntime.h>
+#include <ZoinGallery/GallerySession.h>
 
 #if defined(__USE_QWK)
 #include <QWKQuick/qwkquickglobal.h>
@@ -403,6 +405,7 @@ int main(int argc, char *argv[])
     qmlRegisterRevision<QQuickWindow, 1>("ZoinGallery.MainWindow", 1, 0);
 
     QImageReader::setAllocationLimit(0);
+    ZoinGallery::GalleryRuntime::registerTypes();
 
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty(QStringLiteral("zoinVersion"), QStringLiteral(ZOIN_VERSION_DISPLAY));
@@ -416,7 +419,33 @@ int main(int argc, char *argv[])
         }
     }, Qt::QueuedConnection);
 
-    ViewerController *controller = new ViewerController(&engine);
+    ZoinGallery::RuntimeOptions galleryOptions;
+    galleryOptions.providerPrefix = QStringLiteral("zoingallery-standalone");
+    galleryOptions.storageNamespace = QStringLiteral("standalone");
+    // Before the reusable-module split standalone used QThread's ideal worker
+    // count.  Embedded f4 keeps RuntimeOptions' bounded default, but the thin
+    // standalone shell must preserve its original decode throughput.
+    galleryOptions.maxDecodeThreads = 0;
+    galleryOptions.maxImageProviderThreads = 0;
+    // The original standalone ViewerImageCache retained decoded Fit/native
+    // frames until a source/catalog clear. Keep that exact navigation reuse;
+    // embedded f4 sessions retain the bounded RuntimeOptions defaults.
+    galleryOptions.viewerFitCacheByteBudget = -1;
+    galleryOptions.viewerNativeCacheByteBudget = -1;
+    galleryOptions.persistentCache = true;
+    ZoinGallery::GalleryRuntime *galleryRuntime =
+        ZoinGallery::GalleryRuntime::install(&engine, galleryOptions);
+    ZoinGallery::GallerySession *gallerySession =
+        galleryRuntime
+            ? galleryRuntime->createSession(QStringLiteral("standalone"))
+            : nullptr;
+    if (!gallerySession) {
+        qCritical() << "Unable to create standalone gallery session";
+        return -1;
+    }
+
+    ViewerController *controller = new ViewerController(
+        &engine, *gallerySession, *galleryRuntime);
     app.setViewerController(controller);
 
 #if defined(__USE_QWK)

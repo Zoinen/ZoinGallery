@@ -1,10 +1,12 @@
 import QtQuick
 
-import QtQuick.Layouts
-import QtQuick.Controls
-
 Item {
     id: flickableArea
+
+    // Host policy is explicit so the reusable viewport does not depend on
+    // dynamically scoped shell objects.
+    property int animationDuration: 300
+    property int easingType: Easing.OutSine
 
     property alias source: viewerImageShader.source
     property size originalSize
@@ -13,6 +15,32 @@ Item {
     property real fov: 90
     property alias tilt: viewerImageShader.tilt
     property alias pan: viewerImageShader.pan
+    readonly property alias inertiaRunning: scrollAnimation.running
+
+    signal closeRequested
+    signal sphereScrollingMouseCursorRequested(bool set, bool idle,
+                                               real rotation)
+
+    // ViewerWheelArea sits above the reusable viewer so it can preserve the
+    // original horizontal image-navigation gestures.  Keep the panorama's
+    // legacy FOV calculation callable from that input layer as well as from
+    // the standalone MouseArea; both paths therefore operate on the exact
+    // same state and never synthesize a second wheel event.
+    function handleZoomWheel(angleDeltaY, modifiers, buttons) {
+        if (modifiers !== Qt.ControlModifier
+                && !(buttons & Qt.LeftButton))
+            return false
+
+        const delta = -angleDeltaY / 100
+        const minFOV = 1
+        const maxFOV = 180
+        const normalizedFOV = (fov - minFOV) / (maxFOV - minFOV)
+        const fovChange = Math.exp(
+                    delta * panoramaMouseArea.zoomSensitivity
+                    * (1 - normalizedFOV))
+        fov = Math.max(minFOV, Math.min(170, fov * fovChange))
+        return true
+    }
 
     ShaderEffect {
         id: viewerImageShader
@@ -25,107 +53,25 @@ Item {
 
         property real fov: flickableArea.fov // Field of view in degrees
         Behavior on fov {
-            NumberAnimation { duration: 300; easing.type: viewerMode.easingType }
+            NumberAnimation {
+                duration: flickableArea.animationDuration
+                easing.type: flickableArea.easingType
+            }
         }
         property real tilt: 0 // Tilt angle in degrees
         property real pan: 0 // Pan angle in degrees
         property real aspect: originalSize.height > 0 ? originalSize.width / originalSize.height : 1.0
 
-        fragmentShader: "qrc:/resources/sphere.frag.qsb"
+        fragmentShader: "qrc:/ZoinGallery/resources/sphere.frag.qsb"
     }
-
-    /*Column {
-        y: 300
-        z: 1000
-        spacing: 10
-        Row {
-            Text {
-                color: Style.text
-                text: "FOV"
-            }
-
-            Slider {
-                from: 1
-                to: 170
-                value: 90
-                onValueChanged: viewerImageShader.fov = value
-            }
-        }
-        Row {
-            Text {
-                color: Style.text
-                text: "Tilt"
-            }
-
-            Slider {
-                from: -90
-                to: 90
-                onValueChanged: viewerImageShader.tilt = value
-            }
-        }
-        Row {
-            Text {
-                color: Style.text
-                text: "Pan"
-            }
-
-            Slider {
-                from: 0
-                to: 360
-                onValueChanged: viewerImageShader.pan = value
-            }
-        }
-    }*/
-
-
-    /*MouseArea {
-        anchors.fill: parent
-        enabled: true
-        hoverEnabled: true
-
-        property real sensitivity: 0.1
-        property real lastX: 0
-        property real lastY: 0
-
-        onWheel: {
-            if (wheel.angleDelta.y > 0) {
-                fov = Math.max(1.0, fov - 5.0);
-            } else if (wheel.angleDelta.y < 0) {
-                fov = Math.min(180.0, fov + 5.0);
-            }
-        }
-
-        onPositionChanged: {
-            var deltaX = mouseX - lastX;
-            var deltaY = mouseY - lastY;
-
-            pan += deltaX * sensitivity;
-            tilt += deltaY * sensitivity;
-
-            tilt = Math.max(-90.0, Math.min(90.0, tilt));
-
-            // Reset the mouse position to the center of the screen
-            lastX = parent.width / 2;
-            lastY = parent.height / 2;
-            topLevelWindow.setMousePos(parent.mapToGlobal(Qt.point(lastX, lastY)));
-        }
-
-        onEntered: {
-            // Hide the cursor when the mouse enters the area
-            cursorShape = Qt.BlankCursor;
-        }
-
-        onExited: {
-            // Restore the cursor when the mouse leaves the area
-            cursorShape = Qt.ArrowCursor;
-        }
-    }*/
 
     MouseArea {
         id: panoramaMouseArea
+        objectName: "sphericViewerPointerArea"
         anchors.fill: parent
         enabled: true
         hoverEnabled: true
+        acceptedButtons: Qt.LeftButton
 
         property real sensitivity: 0.0025
         property real zoomSensitivity: 0.1
@@ -137,32 +83,9 @@ Item {
 
         onWheel:
             (wheel) => {
-                if (wheel.modifiers === Qt.ControlModifier || (wheel.buttons & Qt.LeftButton)) {
-                    let delta = -wheel.angleDelta.y / 100
-
-                    let minFOV = 1
-                    let maxFOV = 180
-
-                    /*                const fovChange = Math.exp(-delta * 0.1);
-
-                // Update the current FOV by multiplying with the FOV change
-                fov *= fovChange;
-
-                // Clamp the FOV within the desired range
-                fov = Math.max(1, Math.min(170, fov));*/
-
-
-                    const normalizedFOV = (fov - minFOV) / (maxFOV - minFOV);
-
-                    // Calculate the FOV change based on the wheel delta and current FOV
-                    const fovChange = Math.exp(delta * zoomSensitivity * (1 - normalizedFOV));
-
-                    // Update the current FOV by multiplying with the FOV change
-                    fov *= fovChange;
-
-                    // Clamp the FOV within the desired range
-                    fov = Math.max(minFOV, Math.min(170, fov));
-                }
+                flickableArea.handleZoomWheel(
+                            wheel.angleDelta.y,
+                            wheel.modifiers, wheel.buttons)
             }
 
         onPressed: {
@@ -175,7 +98,7 @@ Item {
             scrollSpeedY = 0;
             scrollAnimation.start();
 
-            topLevelWindow.setSphereScrollingMouseCursor(true, true)
+            flickableArea.sphereScrollingMouseCursorRequested(true, true, 0)
         }
 
         function calculateAngle(x1, y1, x2, y2) {
@@ -209,14 +132,17 @@ Item {
                     scrollSpeedX = deltaX / distance * speed * decel;
                     scrollSpeedY = deltaY / distance * speed * decel;
                 }
-                topLevelWindow.setSphereScrollingMouseCursor(true, false, calculateAngle(baseX, baseY, mouseX, mouseY) - 90)
+                flickableArea.sphereScrollingMouseCursorRequested(
+                            true, false,
+                            calculateAngle(baseX, baseY, mouseX, mouseY) - 90)
             }
         }
 
         onReleased: {
             // Smoothly transition to inertia using the current scroll speed
             scrollAnimation.inertiaMode = true;
-            topLevelWindow.setSphereScrollingMouseCursor(false)
+            flickableArea.sphereScrollingMouseCursorRequested(
+                        false, false, 0)
         }
 
         onEntered: {
@@ -231,9 +157,8 @@ Item {
 
         onDoubleClicked:
             (mouse) => {
-                console.log("ZZ2 DBL")
                 if (mouse.button === Qt.LeftButton) {
-                    root.toggleViewer()
+                    flickableArea.closeRequested()
                 }
             }
 

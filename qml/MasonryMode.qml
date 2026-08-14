@@ -4,6 +4,7 @@ import QtQuick.Controls
 import QtQuick.Effects
 
 import ZoinGallery 1.0
+import ZoinGallery.Native 1.0
 
 MouseArea {
     id: masonryView
@@ -11,6 +12,9 @@ MouseArea {
     property alias view: masonryLayout
     property alias focusProxy: quickSearchField
     property alias targetHeight: masonryLayout.targetHeight
+    property alias presentationMode: masonryLayout.presentationMode
+    property alias columnCount: masonryLayout.columnCount
+    property alias density: masonryLayout.density
     property alias masonrySpacing: masonryLayout.spacing
     property var masonryModel: galleryViewModel
     property Component masonryDelegate: BrickDelegate {}
@@ -46,6 +50,28 @@ MouseArea {
         else {
             masonryView.forceActiveFocus()
         }
+    }
+
+    function minimumDensity() {
+        if (masonryLayout.presentationMode === MasonryLayout.Columns
+                || masonryLayout.presentationMode === MasonryLayout.Details)
+            return 22
+        if (masonryLayout.presentationMode === MasonryLayout.Grid)
+            return 96
+        if (masonryLayout.presentationMode === MasonryLayout.Icons)
+            return 72
+        return 30
+    }
+
+    function maximumDensity() {
+        if (masonryLayout.presentationMode === MasonryLayout.Columns
+                || masonryLayout.presentationMode === MasonryLayout.Details)
+            return 72
+        if (masonryLayout.presentationMode === MasonryLayout.Grid)
+            return 320
+        if (masonryLayout.presentationMode === MasonryLayout.Icons)
+            return 256
+        return 500
     }
 
     function startScrolling() {
@@ -242,6 +268,7 @@ MouseArea {
 
         function onSetCurrentIndex(index) {
             masonryLayout.currentIndex = index
+            ensureColumnWindowForIndex(masonryLayout.currentIndex)
             let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
             currentItemCenterX = currentItemGeometry.x + currentItemGeometry.width / 2
             let indexGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
@@ -261,20 +288,33 @@ MouseArea {
     }
 
     function currentItemImageGeometry() {
-        let currentItemGeometry = Qt.rect(masonryLayout.currentItem.x,
-                                          masonryLayout.currentItem.y,
-                                          masonryLayout.currentItem.width,
-                                          masonryLayout.currentItem.height)
-        let spacing = masonryLayout.spacing
-        let imageGeometry = Qt.rect(currentItemGeometry.x + spacing / 2 + masonryLayout.paddingLeft,
-                                    currentItemGeometry.y + spacing / 2 - masonryLayout.contentY,
-                                    currentItemGeometry.width - spacing,
-                                    currentItemGeometry.height - spacing)
-        return imageGeometry
+        const item = masonryLayout.currentItem
+        if (!item)
+            return Qt.rect(0, 0, 0, 0)
+        let preview = item.previewRect
+        if (!preview || preview.width <= 0 || preview.height <= 0) {
+            const inset = masonryLayout.spacing / 2
+            preview = Qt.rect(inset, inset,
+                              Math.max(0, item.width - inset * 2),
+                              Math.max(0, item.height - inset * 2))
+        }
+        // Map from the actual media rectangle rather than reconstructing it
+        // from the whole brick. This keeps the viewer expansion attached to
+        // the visible thumbnail in Details/Grid/Icons and also accounts for
+        // the Details header and the scrolled viewport transform.
+        const topLeft = masonryView.mapFromItem(item, preview.x, preview.y)
+        const bottomRight = masonryView.mapFromItem(
+                    item, preview.x + preview.width,
+                    preview.y + preview.height)
+        return Qt.rect(Math.min(topLeft.x, bottomRight.x),
+                       Math.min(topLeft.y, bottomRight.y),
+                       Math.abs(bottomRight.x - topLeft.x),
+                       Math.abs(bottomRight.y - topLeft.y))
     }
 
     function setCurrentIndex(index, keepLastPosX = false, keepLastPosY = false, neverScroll = false, keepQuickSearch = false) {
         masonryLayout.currentIndex = index
+        ensureColumnWindowForIndex(masonryLayout.currentIndex)
         let currentItemGeometry = masonryLayout.indexGeometry(masonryLayout.currentIndex)
         if (!keepLastPosX) {
             currentItemCenterX = currentItemGeometry.x + currentItemGeometry.width / 2
@@ -301,6 +341,7 @@ MouseArea {
     }
 
     function ensureVisible(index) {
+        ensureColumnWindowForIndex(index)
         let indexGeometry = masonryLayout.indexGeometry(index)
         let newContentY = -1
         if (indexGeometry.y < masonryLayout.contentY) {
@@ -323,6 +364,18 @@ MouseArea {
             }
 
         }
+    }
+
+    function ensureColumnWindowForIndex(index) {
+        if (masonryLayout.presentationMode !== MasonryLayout.Columns
+                || index < 0 || index >= masonryLayout.count)
+            return
+        const geometry = masonryLayout.indexGeometry(index)
+        if (geometry.width > 0 && geometry.height > 0)
+            return
+        const top = masonryLayout.windowTopIndexForIndex(index)
+        if (top >= 0 && top !== masonryLayout.windowTopIndex)
+            masonryLayout.windowTopIndex = top
     }
 
     function hideQuickSearch() {
@@ -503,6 +556,40 @@ MouseArea {
         }
     }
 
+    function sortDetailsBy(role) {
+        if (role === "size") {
+            galleryViewModel.sortMode = galleryViewModel.sortMode === 6 ? 7 : 6
+        } else {
+            galleryViewModel.sortMode = galleryViewModel.sortMode === 0 ? 1 : 0
+        }
+    }
+
+    function collectionDirection(key) {
+        if (key === Qt.Key_Left)
+            return MasonryLayout.NavigateLeft
+        if (key === Qt.Key_Right)
+            return MasonryLayout.NavigateRight
+        if (key === Qt.Key_Up || key === Qt.Key_PageUp)
+            return MasonryLayout.NavigateUp
+        return MasonryLayout.NavigateDown
+    }
+
+    function navigateCollection(event, page) {
+        const result = masonryLayout.navigationTarget(
+                         masonryLayout.currentIndex,
+                         collectionDirection(event.key), Boolean(page))
+        if (!result || Number(result.targetIndex) < 0)
+            return false
+        const nextTop = Number(result.windowTopIndex)
+        if (nextTop >= 0 && nextTop !== masonryLayout.windowTopIndex)
+            masonryLayout.windowTopIndex = nextTop
+        setCurrentIndex(Number(result.targetIndex), false, false, false,
+                        keyboardNavigationChangesSelection(event.modifiers))
+        updateSelectionAfterKeyboardNavigation(event)
+        ensureVisible(masonryLayout.currentIndex)
+        return true
+    }
+
     property bool backspaceDisabledUntilKeyUp: false
     Keys.onPressed:
         (event) => {
@@ -551,6 +638,21 @@ MouseArea {
             }
             else if (primaryView && event.key === Qt.Key_Minus && (event.modifiers & Qt.ShiftModifier) && !quickSearchMode) {
                 selectionModel.setAllSelection(false)
+            }
+            else if (masonryLayout.presentationMode !== MasonryLayout.Masonry
+                     && !(event.modifiers
+                          & (Qt.AltModifier | Qt.ControlModifier))
+                     && (event.key === Qt.Key_Left
+                         || event.key === Qt.Key_Right
+                         || event.key === Qt.Key_Up
+                         || event.key === Qt.Key_Down)) {
+                navigateCollection(event, false)
+            }
+            else if (masonryLayout.presentationMode !== MasonryLayout.Masonry
+                     && (event.key === Qt.Key_PageUp
+                         || event.key === Qt.Key_PageDown)
+                     && !(event.modifiers & Qt.ControlModifier)) {
+                navigateCollection(event, true)
             }
             else if (event.key === Qt.Key_Left) {
                 setCurrentIndex(
@@ -763,6 +865,53 @@ MouseArea {
             }
         }
 
+    Rectangle {
+        id: collectionDetailsHeader
+        visible: masonryLayout.presentationMode === MasonryLayout.Details
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: Math.max(26, Math.min(34, masonryLayout.density))
+        color: Style.darker
+        z: 5
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: Math.max(28, masonryLayout.density) + 12
+            anchors.right: detailsSizeHeader.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            text: qsTr("Name")
+            color: Style.text
+            opacity: 0.72
+            verticalAlignment: Text.AlignVCenter
+
+            MouseArea {
+                anchors.fill: parent
+                onClicked: masonryView.sortDetailsBy("name")
+            }
+        }
+
+        Text {
+            id: detailsSizeHeader
+            anchors.right: parent.right
+            anchors.rightMargin: 20
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            width: 112
+            text: qsTr("Size")
+            color: Style.text
+            opacity: 0.72
+            horizontalAlignment: Text.AlignRight
+            verticalAlignment: Text.AlignVCenter
+
+            MouseArea {
+                anchors.fill: parent
+                onClicked: masonryView.sortDetailsBy("size")
+            }
+        }
+    }
+
     MasonryLayout {
         id: masonryLayout
         anchors {
@@ -770,7 +919,8 @@ MouseArea {
             leftMargin: masonryLayout.spacing / 2
 
             left: parent.left
-            top: parent.top
+            top: collectionDetailsHeader.visible
+                 ? collectionDetailsHeader.bottom : parent.top
             bottom: parent.bottom
             right: masonryScroll.left
             rightMargin: masonryLayout.spacing / 2
@@ -831,18 +981,21 @@ MouseArea {
 
         PinchArea {
             anchors.fill: parent
-            property int startTargetHeight: 0
+            property int startDensity: 0
 
             onPinchStarted: {
-                startTargetHeight = masonryLayout.targetHeight
+                startDensity = masonryLayout.density
             }
 
             onPinchUpdated: (pinch) => {
-                masonryLayout.targetHeight = Math.min(500, Math.max(30, startTargetHeight * pinch.scale))
+                masonryLayout.density = Math.min(
+                            masonryView.maximumDensity(),
+                            Math.max(masonryView.minimumDensity(),
+                                     startDensity * pinch.scale))
             }
 
             onPinchFinished: {
-                if (startTargetHeight != masonryLayout.targetHeight) {
+                if (startDensity != masonryLayout.density) {
                     masonryLayout.reReadAndDecodeThumbnails()
                 }
             }
@@ -872,8 +1025,14 @@ MouseArea {
         z: 20
     }
 
-    ScrollBar {
+    GalleryScrollBar {
         id: masonryScroll
+        theme: ({
+            "scrollBarHandle": Style.darker,
+            "scrollBarHandleBackgroundHovered": Style.lighter2,
+            "scrollBarHandleHovered": Style.lighter,
+            "scrollBarHandlePressed": Style.brickPressed
+        })
         anchors {
             top: masonryLayout.top
             bottom: masonryLayout.bottom
@@ -1006,14 +1165,14 @@ MouseArea {
             }
 
             SearchButton {
-                icon.source: "qrc:/resources/SearchBack.svg"
+                icon.source: "qrc:/ZoinGallery/resources/SearchBack.svg"
                 onClicked: searchNext(false)
 
                 ToolTip.text: "Previous\tShift+F3"
             }
 
             SearchButton {
-                icon.source: "qrc:/resources/SearchNext.svg"
+                icon.source: "qrc:/ZoinGallery/resources/SearchNext.svg"
                 onClicked: searchNext(true)
 
                 ToolTip.text: "Next\tF3"
@@ -1021,7 +1180,7 @@ MouseArea {
 
             SearchButton {
                 Layout.rightMargin: 8
-                icon.source: "qrc:/resources/SearchClose.svg"
+                icon.source: "qrc:/ZoinGallery/resources/SearchClose.svg"
                 onClicked: hideQuickSearch()
 
                 ToolTip.text: "Close quick search\tEsc"

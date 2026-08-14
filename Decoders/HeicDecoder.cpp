@@ -214,13 +214,21 @@ static QImage decodeHandleToQImage(heif_image_handle* handle) {
     return result;
 }
 
-// Decode a heif_image_handle to a JPEG-compressed QByteArray.
-// Alpha images are composited onto white by Qt during JPEG save.
+// Decode a heif_image_handle to a PNG-compressed QByteArray.
+// PNG is a built-in Qt image handler in the reusable package, whereas the
+// optional qjpeg plugin is not deployed by every host (including f4). Using
+// qimg.save(..., "JPEG") therefore silently discarded otherwise valid HEIC
+// embedded thumbnails in those hosts and forced an expensive full decode.
 // Returns an empty array on failure.
-static QByteArray decodeHandleToJpeg(heif_image_handle* handle) {
+static QByteArray decodeHandleToPng(heif_image_handle* handle,
+                                    QSize* decodedSize = nullptr) {
     QImage qimg = decodeHandleToQImage(handle);
     if (qimg.isNull())
         return {};
+
+    if (decodedSize) {
+        *decodedSize = qimg.size();
+    }
 
     const QColorSpace srgb(QColorSpace::SRgb);
     if (qimg.colorSpace().isValid() && qimg.colorSpace() != srgb) {
@@ -231,11 +239,13 @@ static QByteArray decodeHandleToJpeg(heif_image_handle* handle) {
     }
     qimg.setColorSpace(srgb);
 
-    QByteArray jpegBytes;
-    QBuffer buf(&jpegBytes);
+    QByteArray pngBytes;
+    QBuffer buf(&pngBytes);
     buf.open(QBuffer::WriteOnly);
-    qimg.save(&buf, "JPEG", 85);
-    return jpegBytes;
+    if (!qimg.save(&buf, "PNG")) {
+        return {};
+    }
+    return pngBytes;
 }
 
 bool HeicDecoder::readPreviewAndMime(ImageData &result) {
@@ -265,21 +275,40 @@ bool HeicDecoder::readPreviewAndMime(ImageData &result) {
         HeicHandle thumb;
         err = heif_image_handle_get_thumbnail(primary, thumbId, &thumb);
         if (err.code == heif_error_Ok) {
-            QByteArray jpegBytes = decodeHandleToJpeg(thumb);
-            if (!jpegBytes.isEmpty()) {
-                result.previewDataSize = jpegBytes.size();
+            QSize previewSize;
+            QByteArray pngBytes = decodeHandleToPng(thumb, &previewSize);
+            if (!pngBytes.isEmpty()) {
+                result.previewDataSize = pngBytes.size();
                 result.previewData = std::shared_ptr<char>(
-                    new char[jpegBytes.size()],
+                    new char[pngBytes.size()],
                     [](char* p) { delete[] p; });
-                std::memcpy(result.previewData.get(), jpegBytes.constData(), jpegBytes.size());
-                result.previewMimeType = "image/jpeg";
+                std::memcpy(result.previewData.get(), pngBytes.constData(),
+                            pngBytes.size());
+                result.previewMimeType = "image/png";
                 result.previewUsed = "HEIC thumbnail";
-                return true;
+
+                QSize requiredSize = result.request.targetSize;
+                if (!result.request.checkCache &&
+                    result.request.expandToCacheResolution) {
+                    requiredSize = expandToCacheImageResolution(requiredSize);
+                }
+                requiredSize = rotateToOrientation(
+                    requiredSize, result.request.info.orientation);
+                const bool previewCoversTarget =
+                    requiredSize.width() > 0 && requiredSize.height() > 0 &&
+                    previewSize.width() >= requiredSize.width() &&
+                    previewSize.height() >= requiredSize.height();
+                if (previewCoversTarget) {
+                    return true;
+                }
+                // Keep the embedded frame as a fallback, but also read the
+                // source. ThumbnailLoader prefers source data and will only
+                // fall back to this preview if the full HEIC decode fails.
             }
         }
     }
 
-    // No usable thumbnail — read the whole file so the pipeline can decode it.
+    // No preview covering the requested target — read the whole source.
     QFile f(result.request.info.path);
     if (!f.open(QFile::ReadOnly))
         return false;

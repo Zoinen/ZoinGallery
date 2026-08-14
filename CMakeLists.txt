@@ -1,13 +1,29 @@
-cmake_minimum_required(VERSION 3.13)
+cmake_minimum_required(VERSION 3.21)
 
 # Set CMake policy CMP0091 to NEW for Conan 2 compatibility
 if(POLICY CMP0091)
   cmake_policy(SET CMP0091 NEW)
 endif()
 
-set(CMAKE_OSX_DEPLOYMENT_TARGET "10.15" CACHE STRING "Minimum macOS deployment target")
+option(ZOIN_BUILD_STANDALONE "Build the standalone ZoinGallery application" ON)
+if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET AND
+   CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    # Qt 6.11 raises its own deployment target to macOS 13.0. Advertising a
+    # lower target here produces a mixed-ABI link while the resulting bundle
+    # still cannot run below the Qt dylibs' LC_BUILD_VERSION minimum.
+    set(_zoin_default_macos_target "13.0")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${_zoin_default_macos_target}"
+        CACHE STRING "Minimum macOS deployment target")
+endif()
 
 project(ZoinGallery VERSION 0.1.0 LANGUAGES C CXX)
+
+if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "13.0")
+    message(FATAL_ERROR
+        "Qt 6.11 requires macOS 13.0 or newer; "
+        "CMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET} would "
+        "produce a mixed-ABI bundle that cannot run on its advertised target.")
+endif()
 
 set(ZOIN_BUILD_NUMBER "$ENV{GITHUB_RUN_NUMBER}" CACHE STRING "CI build number embedded into the app.")
 if(ZOIN_BUILD_NUMBER STREQUAL "")
@@ -21,38 +37,25 @@ endif()
 
 option(USE_QWK "Use QWindowKit" ON)
 option(USE_EXIV2 "Use Exiv2 for metadata extraction" OFF)
-
-if (USE_QWK)
-    add_compile_definitions(__USE_QWK)
-endif()
-
-if (USE_EXIV2)
-    add_compile_definitions(__USE_EXIV2)
-endif()
+option(ZOIN_BUILD_BENCHMARKS
+    "Build standalone decode/performance audit tools" OFF)
 
 # Conan 2 integration - make sure this comes BEFORE any find_package calls
-if(NOT EXISTS "${CMAKE_BINARY_DIR}/conan_toolchain.cmake")
-    message(FATAL_ERROR "The file conan_toolchain.cmake doesn't exist. Please run 'conan install . --build=missing -s build_type=RelWithDebInfo --output-folder=build' first")
+if(NOT CMAKE_TOOLCHAIN_FILE AND
+   NOT EXISTS "${CMAKE_BINARY_DIR}/conan_toolchain.cmake")
+    message(FATAL_ERROR "The file conan_toolchain.cmake doesn't exist. Please run 'conan install . --build=missing -s build_type=RelWithDebInfo -o '&:build_standalone=True'' first")
 endif()
 
-# Set C++ standard after including toolchain
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/BuildInfo.h.in"
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
-include_directories(${CMAKE_CURRENT_BINARY_DIR})
-
-# Bringing back removed std::auto_ptr for msvc and clang
-add_compile_definitions(_HAS_AUTO_PTR_ETC=1)
-# Add definition to disable deprecation warnings for functions like fopen
-add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_LIBCPP_ENABLE_CXX17_REMOVED_FEATURES -D_LIBCPP_ENABLE_CXX14_REMOVED_FEATURES")
-
 find_package(QT NAMES Qt6)
-find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2 Widgets REQUIRED)
-find_package(Qt6 COMPONENTS ShaderTools)
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2 REQUIRED)
+find_package(Qt6 COMPONENTS ShaderTools REQUIRED)
+if(ZOIN_BUILD_STANDALONE)
+    find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Widgets REQUIRED)
+endif()
 include(CTest)
 if(BUILD_TESTING)
     find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Test REQUIRED)
@@ -81,7 +84,6 @@ if (NOT DEFINED WEBP_INCLUDE_DIR)
 endif()
 
 if (WEBP_INCLUDE_DIR)
-    include_directories(${WEBP_INCLUDE_DIR})
     message(STATUS "Found webp/decode.h in: ${WEBP_INCLUDE_DIR}")
 else()
     message(FATAL_ERROR "Could not find webp/decode.h header. Make sure libwebp is properly installed.")
@@ -90,7 +92,6 @@ endif()
 # Explicitly add the libjpeg-turbo include path (fix for missing turbojpeg.h)
 find_path(TURBOJPEG_INCLUDE_DIR "turbojpeg.h")
 if(TURBOJPEG_INCLUDE_DIR)
-    include_directories(${TURBOJPEG_INCLUDE_DIR})
     message(STATUS "Found turbojpeg.h in: ${TURBOJPEG_INCLUDE_DIR}")
 else()
     message(FATAL_ERROR "Could not find turbojpeg.h header. Make sure libjpeg-turbo is properly installed.")
@@ -99,27 +100,20 @@ endif()
 get_target_property(TEST_INCLUDES libjpeg-turbo::libjpeg-turbo INTERFACE_INCLUDE_DIRECTORIES)
 message(STATUS "libjpeg-turbo includes: ${TEST_INCLUDES}")
 
-if (USE_QWK)
+if (ZOIN_BUILD_STANDALONE AND USE_QWK)
     find_package(QWindowKit REQUIRED)
 endif()
 
-# Add DDS image library include path
-include_directories(${CMAKE_SOURCE_DIR}/dds_image/include)
-
-set(PROJECT_SOURCES
-    main.cpp
-    LaunchOptions.h
-    LaunchOptions.cpp
-    BackgroundInstance.h
-    BackgroundInstance.cpp
-    TrayController.h
-    TrayController.cpp
+set(ZOIN_CORE_SOURCES
     DisplayColorSpace.h
     DisplayColorSpace.cpp
     ThumbnailLoader.h
     ThumbnailLoader.cpp
-    MacApplication.h
     CacheUsageMode.h
+    StorageLocations.h
+    StorageLocations.cpp
+    PathArgument.h
+    PathArgument.cpp
     NaturalSort.h
     FileListModel.h
     FileListModel.cpp
@@ -133,16 +127,10 @@ set(PROJECT_SOURCES
     QmlImageProvider.cpp
     QmlAsyncImageProvider.h
     QmlAsyncImageProvider.cpp
-    ViewerController.h
-    ViewerController.cpp
-    QmlResourcesProvider.h
-    QmlResourcesProvider.cpp
     MasonryLayout.h
     MasonryLayout.cpp
     MasonryLayoutQuickSearch.h
     MasonryLayoutQuickSearch.cpp
-    MainWindow.h
-    MainWindow.cpp
     ViewerWheelArea.h
     ViewerWheelArea.cpp
     ViewerWheelAreaNative.h
@@ -153,7 +141,6 @@ set(PROJECT_SOURCES
     GalleryViewModel.cpp
     SelectedImagesModel.h
     SelectedImagesModel.cpp
-    DummyQWK.h
     SvgCursor.h
     SvgCursor.cpp
     PersistentImageCache.h
@@ -206,22 +193,44 @@ set(PROJECT_SOURCES
     TinyEXIF/tinyxml2.h
     Exiftool/LensDatabase.cpp
     Exiftool/LensDatabase.h
+    include/ZoinGallery/GalleryRuntime.h
+    include/ZoinGallery/GallerySession.h
+    src/embed/ExternalCatalogModel.h
+    src/embed/ExternalCatalogModel.cpp
+    src/embed/ThumbnailMemoryCache.h
+    src/embed/ThumbnailMemoryCache.cpp
+    src/embed/LocalFilesystemSource.h
+    src/embed/LocalFilesystemSource.cpp
+    src/embed/GalleryRuntime.cpp
+    src/embed/GallerySession.cpp
+)
+
+set(ZOIN_STANDALONE_SOURCES
+    main.cpp
+    LaunchOptions.h
+    LaunchOptions.cpp
+    QmlResourcesProvider.h
+    QmlResourcesProvider.cpp
+    BackgroundInstance.h
+    BackgroundInstance.cpp
+    TrayController.h
+    TrayController.cpp
+    MacApplication.h
+    ViewerController.h
+    ViewerController.cpp
+    MainWindow.h
+    MainWindow.cpp
+    DummyQWK.h
 )
 
 if(USE_EXIV2)
-    list(APPEND PROJECT_SOURCES
+    list(APPEND ZOIN_CORE_SOURCES
         exiv2/Preview.h
         exiv2/Preview.cpp
         Decoders/Exiv2Decoder.cpp
         Decoders/Exiv2Decoder.h
     )
 endif()
-
-include_directories(${CMAKE_SOURCE_DIR}/TinyEXIF)
-
-#if(CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Debug)
-#    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DQT_QML_DEBUG ")
-#endif()
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -236,32 +245,76 @@ if(APPLE)
     set(ICON_FILENAME ZoinGallery.icns)
     set(ICON_PATH ${CMAKE_CURRENT_SOURCE_DIR}/resources/${ICON_FILENAME})
     set(RESOURCE_FILES ${ICON_PATH})
-    list(APPEND PROJECT_SOURCES
+    list(APPEND ZOIN_CORE_SOURCES
         DisplayColorSpace_mac.mm
-        MacApplication_mac.mm
         ViewerWheelAreaNative_mac.mm
     )
+    list(APPEND ZOIN_STANDALONE_SOURCES MacApplication_mac.mm)
     option(ZOIN_MACOS_CODE_SIGN "Code sign the macOS app bundle after building" ON)
     set(ZOIN_MACOS_CODE_SIGN_IDENTITY "ZoinGallery Local Code Signing" CACHE STRING "Code signing identity for macOS builds. Set empty to skip signing.")
     mark_as_advanced(ZOIN_MACOS_CODE_SIGN_IDENTITY)
 endif()
 
-add_executable(ZoinGallery WIN32 MACOSX_BUNDLE ${PROJECT_SOURCES} ${RESOURCE_FILES})
-target_compile_definitions(ZoinGallery PRIVATE
-    ZOIN_APP_VERSION="${PROJECT_VERSION}"
-    ZOIN_BUILD_NUMBER="${ZOIN_BUILD_NUMBER}"
-    ZOIN_VERSION_DISPLAY="${ZOIN_VERSION_DISPLAY}")
+add_library(ZoinGalleryCore STATIC ${ZOIN_CORE_SOURCES})
+add_library(ZoinGallery::Core ALIAS ZoinGalleryCore)
+set_target_properties(ZoinGalleryCore PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    CXX_EXTENSIONS OFF
+    EXPORT_NAME Core)
+target_compile_features(ZoinGalleryCore PUBLIC cxx_std_20)
+target_compile_definitions(ZoinGalleryCore PRIVATE
+    _HAS_AUTO_PTR_ETC=1
+    _CRT_SECURE_NO_WARNINGS
+    _LIBCPP_ENABLE_CXX17_REMOVED_FEATURES
+    _LIBCPP_ENABLE_CXX14_REMOVED_FEATURES)
+if(BUILD_TESTING)
+    target_compile_definitions(ZoinGalleryCore PRIVATE
+        ZOIN_ENABLE_SELECTION_CACHE_TESTS=1)
+endif()
+if(USE_EXIV2)
+    target_compile_definitions(ZoinGalleryCore PRIVATE __USE_EXIV2)
+endif()
+target_include_directories(ZoinGalleryCore
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/dds_image/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/TinyEXIF
+        ${WEBP_INCLUDE_DIR}
+        ${TURBOJPEG_INCLUDE_DIR})
 
-set_target_properties(${PROJECT_NAME}
-    PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>"
-)
+add_library(ZoinGalleryQml SHARED)
+add_library(ZoinGallery::Qml ALIAS ZoinGalleryQml)
+set_target_properties(ZoinGalleryQml PROPERTIES EXPORT_NAME Qml)
+target_compile_features(ZoinGalleryQml PRIVATE cxx_std_20)
+set_target_properties(ZoinGalleryQml PROPERTIES CXX_EXTENSIONS OFF)
+target_link_libraries(ZoinGalleryQml PUBLIC ZoinGallery::Core)
+
+if(ZOIN_BUILD_STANDALONE)
+    add_executable(ZoinGallery WIN32 MACOSX_BUNDLE
+        ${ZOIN_STANDALONE_SOURCES} ${RESOURCE_FILES})
+    target_compile_features(ZoinGallery PRIVATE cxx_std_20)
+    target_compile_definitions(ZoinGallery PRIVATE
+        ZOIN_APP_VERSION="${PROJECT_VERSION}"
+        ZOIN_BUILD_NUMBER="${ZOIN_BUILD_NUMBER}"
+        ZOIN_VERSION_DISPLAY="${ZOIN_VERSION_DISPLAY}")
+    if(USE_QWK)
+        target_compile_definitions(ZoinGallery PRIVATE __USE_QWK)
+    endif()
+    target_include_directories(ZoinGallery PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
+    set_target_properties(ZoinGallery PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/$<CONFIG>")
+endif()
 
 if(BUILD_TESTING)
     add_executable(ZoinGallerySelectionTests
         tests/PersistentSelectionCacheTest.cpp
-        PersistentSelectionCache.h
-        PersistentSelectionCache.cpp
     )
     target_compile_definitions(ZoinGallerySelectionTests PRIVATE
         ZOIN_ENABLE_SELECTION_CACHE_TESTS=1
@@ -270,58 +323,243 @@ if(BUILD_TESTING)
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_link_libraries(ZoinGallerySelectionTests PRIVATE
-        Qt${QT_VERSION_MAJOR}::Core
+        ZoinGallery::Core
         Qt${QT_VERSION_MAJOR}::Test
     )
     add_test(NAME PersistentSelectionCacheTest COMMAND ZoinGallerySelectionTests)
 
     add_executable(ZoinGalleryViewerCacheTests
         tests/ViewerImageCacheTest.cpp
-        ImageFile.h
-        ImageFile.cpp
-        ProviderImageStore.h
-        ProviderImageStore.cpp
-        ViewerImageCache.h
-        ViewerImageCache.cpp
     )
     target_include_directories(ZoinGalleryViewerCacheTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_link_libraries(ZoinGalleryViewerCacheTests PRIVATE
-        Qt${QT_VERSION_MAJOR}::Core
-        Qt${QT_VERSION_MAJOR}::Gui
+        ZoinGallery::Core
         Qt${QT_VERSION_MAJOR}::Test
     )
     add_test(NAME ViewerImageCacheTest COMMAND ZoinGalleryViewerCacheTests)
+
+    add_executable(ZoinGalleryThumbnailMemoryCacheTests
+        tests/ThumbnailMemoryCacheTest.cpp)
+    target_include_directories(ZoinGalleryThumbnailMemoryCacheTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryThumbnailMemoryCacheTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME ThumbnailMemoryCacheTest
+        COMMAND ZoinGalleryThumbnailMemoryCacheTests)
+
+    add_executable(ZoinGalleryDecodeLifecycleTests
+        tests/DecodeLifecycleTest.cpp
+    )
+    target_include_directories(ZoinGalleryDecodeLifecycleTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(ZoinGalleryDecodeLifecycleTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test
+    )
+    add_test(NAME DecodeLifecycleTest COMMAND ZoinGalleryDecodeLifecycleTests)
+
+    add_executable(ZoinGallerySessionTests
+        tests/GallerySessionTest.cpp)
+    target_compile_definitions(ZoinGallerySessionTests PRIVATE
+        ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(ZoinGallerySessionTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGallerySessionTests PRIVATE
+        ZoinGallery::Core
+        ZoinGallery::Qml
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GallerySessionTest COMMAND ZoinGallerySessionTests)
+    set_tests_properties(GallerySessionTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(ZoinGalleryQmlInteractionTests
+        tests/GalleryQmlInteractionTest.cpp)
+    target_compile_definitions(ZoinGalleryQmlInteractionTests PRIVATE
+        ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(ZoinGalleryQmlInteractionTests PRIVATE
+        ZoinGallery::Core
+        ZoinGallery::Qml
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GalleryQmlInteractionTest
+        COMMAND ZoinGalleryQmlInteractionTests)
+    set_tests_properties(GalleryQmlInteractionTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(ZoinGalleryReusableViewerPrimitivesTests
+        tests/ReusableViewerPrimitivesTest.cpp)
+    target_compile_definitions(ZoinGalleryReusableViewerPrimitivesTests PRIVATE
+        ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(ZoinGalleryReusableViewerPrimitivesTests PRIVATE
+        ZoinGallery::Qml
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME ReusableViewerPrimitivesTest
+        COMMAND ZoinGalleryReusableViewerPrimitivesTests)
+    set_tests_properties(ReusableViewerPrimitivesTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software")
+
+    add_executable(ZoinGalleryPanelGestureTests
+        tests/GalleryPanelGestureTest.cpp)
+    target_compile_definitions(ZoinGalleryPanelGestureTests PRIVATE
+        ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(ZoinGalleryPanelGestureTests PRIVATE
+        ZoinGallery::Core
+        ZoinGallery::Qml
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GalleryPanelGestureTest
+        COMMAND ZoinGalleryPanelGestureTests)
+    set_tests_properties(GalleryPanelGestureTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    add_executable(ZoinGalleryMasonryLayoutModesTests
+        tests/MasonryLayoutModesTest.cpp)
+    target_compile_definitions(ZoinGalleryMasonryLayoutModesTests PRIVATE
+        ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(ZoinGalleryMasonryLayoutModesTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryMasonryLayoutModesTests PRIVATE
+        ZoinGallery::Core
+        ZoinGallery::Qml
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME MasonryLayoutModesTest
+        COMMAND ZoinGalleryMasonryLayoutModesTests)
+    set_tests_properties(MasonryLayoutModesTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software")
+
+    if(ZOIN_BUILD_STANDALONE)
+        set(ZOIN_STANDALONE_SMOKE_SOURCES
+            tests/StandaloneShellSmokeTest.cpp
+            MainWindow.h
+            MainWindow.cpp
+            ViewerController.h
+            ViewerController.cpp
+            QmlResourcesProvider.h
+            QmlResourcesProvider.cpp
+            BackgroundInstance.h
+            BackgroundInstance.cpp
+            TrayController.h
+            TrayController.cpp
+            MacApplication.h
+            DummyQWK.h)
+        if(APPLE)
+            list(APPEND ZOIN_STANDALONE_SMOKE_SOURCES MacApplication_mac.mm)
+        endif()
+
+        add_executable(ZoinGalleryStandaloneShellSmokeTests
+            ${ZOIN_STANDALONE_SMOKE_SOURCES})
+        target_compile_definitions(ZoinGalleryStandaloneShellSmokeTests PRIVATE
+            ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+        target_include_directories(ZoinGalleryStandaloneShellSmokeTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${CMAKE_CURRENT_BINARY_DIR}
+            ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        target_link_libraries(ZoinGalleryStandaloneShellSmokeTests PRIVATE
+            ZoinGallery::Core
+            ZoinGallery::Qml
+            Qt${QT_VERSION_MAJOR}::Test
+            Qt${QT_VERSION_MAJOR}::Widgets)
+        if(WIN32)
+            target_link_libraries(ZoinGalleryStandaloneShellSmokeTests PRIVATE
+                Dwmapi.lib)
+        endif()
+        if(APPLE)
+            target_link_libraries(ZoinGalleryStandaloneShellSmokeTests PRIVATE
+                "-framework AppKit" "-framework CoreServices")
+        endif()
+
+        add_test(NAME StandaloneShellSmokeTest
+            COMMAND ZoinGalleryStandaloneShellSmokeTests)
+        set_tests_properties(StandaloneShellSmokeTest PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software")
+    endif()
 endif()
 
-set_source_files_properties(ZGStyle/Style.qml PROPERTIES
-    QT_QML_SINGLETON_TYPE TRUE
-)
+if(ZOIN_BUILD_BENCHMARKS)
+    add_executable(ZoinGalleryDecodeBenchmark
+        tests/StandaloneDecodeBenchmark.cpp)
+    target_compile_definitions(ZoinGalleryDecodeBenchmark PRIVATE
+        ZOIN_BENCH_HAS_WORKER_COUNT=1)
+    target_include_directories(ZoinGalleryDecodeBenchmark PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryDecodeBenchmark PRIVATE
+        ZoinGallery::Core)
 
-set_source_files_properties(qml/AppSettings.qml PROPERTIES
-    QT_QML_SINGLETON_TYPE TRUE
-)
+    # Dynamic-property/invokable access deliberately keeps this scaffold
+    # source-compatible while the reusable layout API evolves. It exercises
+    # the real QML module and renderer with a synthetic 10k-entry catalog.
+    add_executable(ZoinGalleryLayoutInteractionBenchmark
+        tests/LayoutInteractionBenchmark.cpp)
+    target_compile_definitions(ZoinGalleryLayoutInteractionBenchmark PRIVATE
+        ZOIN_BENCH_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(ZoinGalleryLayoutInteractionBenchmark PRIVATE
+        ZoinGallery::Core
+        ZoinGallery::Qml
+        Qt${QT_VERSION_MAJOR}::Qml
+        Qt${QT_VERSION_MAJOR}::Quick)
+endif()
+
+set(ZOIN_QML_FILES
+    qml/GalleryPanel.qml
+    qml/GalleryEntryDelegate.qml
+    qml/GalleryViewer.qml
+    qml/FlickableZoomable.qml
+    qml/GalleryScrollBar.qml
+    qml/SphericViewer.qml
+    qml/PathControl.qml
+    ZGStyle/Style.qml
+    ZGStyle/TextField.qml)
+set(ZOIN_QML_RESOURCES)
+
+set_source_files_properties(ZGStyle/Style.qml PROPERTIES
+    QT_QML_SINGLETON_TYPE TRUE)
+
+if(ZOIN_BUILD_STANDALONE)
+    set_source_files_properties(qml/AppSettings.qml PROPERTIES
+        QT_QML_SINGLETON_TYPE TRUE)
+    list(APPEND ZOIN_QML_FILES
+        qml/main.qml
+        qml/AppSettings.qml
+        qml/SettingsDialog.qml
+        qml/MasonryMode.qml
+        qml/SelectedImagesPanel.qml
+        qml/BrickDelegate.qml
+        qml/ViewerMode.qml
+        qml/RoundCorners.qml
+        qml/CacheViewer.qml
+        qml/TitleButton.qml
+        ZGStyle/ScrollBar.qml
+        ZGStyle/Slider.qml
+        ZGStyle/Button.qml
+        ZGStyle/ToolTip.qml
+        ZGStyle/Menu.qml
+        ZGStyle/MenuItem.qml
+        ZGStyle/MenuSeparator.qml
+        ZGStyle/TabBar.qml
+        ZGStyle/TabButton.qml
+        ZGStyle/Label.qml)
+    list(APPEND ZOIN_QML_RESOURCES ZGStyle/qmldir)
+
+endif()
 
 if(WIN32)
     set(SHADER_GLSL_FLAGS NOGLSL)
 else()
     set(SHADER_GLSL_FLAGS GLSL "150,300es")
 endif()
-
-qt_add_shaders(ZoinGallery
+qt_add_shaders(ZoinGalleryQml zoin_gallery_shaders
     BATCHABLE
     ${SHADER_GLSL_FLAGS}
-    PREFIX
-        "/"
+    PREFIX "/ZoinGallery"
     FILES
         "resources/shader.frag"
         "resources/sphere.frag"
-        "resources/outline.frag"
-)
+        "resources/outline.frag")
 
-qt_add_resources(ZoinGallery
-    PREFIX "/"
+qt_add_resources(ZoinGalleryQml zoin_gallery_assets
+    PREFIX "/ZoinGallery"
     FILES
         resources/ThumbnailsShadow.png
         resources/ThumbnailsShadow@2x.png
@@ -364,8 +602,7 @@ qt_add_resources(ZoinGallery
         resources/SelectionCheck.svg
         resources/Copy.svg
         resources/PanelClose.svg
-        resources/ZoinGallery.ico
-)
+        resources/ZoinGallery.ico)
 
 # Enable QML Language Server configuration generation
 set(QT_QML_GENERATE_QMLLS_INI ON)
@@ -373,57 +610,67 @@ set(QT_QML_GENERATE_QMLLS_INI ON)
 # Set QTP0004 policy to NEW to generate qmldir files for each directory with QML files
 qt_policy(SET QTP0004 NEW)
 
-qt6_add_qml_module(ZoinGallery
+qt6_add_qml_module(ZoinGalleryQml
     URI ZoinGallery
     VERSION 1.0
     RESOURCE_PREFIX /
-    QML_FILES
-        qml/main.qml
-        qml/AppSettings.qml
-        qml/SettingsDialog.qml
-        qml/MasonryMode.qml
-        qml/SelectedImagesPanel.qml
-        qml/PathControl.qml
-        qml/BrickDelegate.qml
-        qml/ViewerMode.qml
-        qml/RoundCorners.qml
-        qml/FlickableZoomable.qml
-        qml/SphericViewer.qml
-        qml/CacheViewer.qml
-        qml/TitleButton.qml
-        ZGStyle/Style.qml
-        ZGStyle/ScrollBar.qml
-        ZGStyle/Slider.qml
-        ZGStyle/Button.qml
-        ZGStyle/TextField.qml
-        ZGStyle/ToolTip.qml
-        ZGStyle/Menu.qml
-        ZGStyle/MenuItem.qml
-        ZGStyle/MenuSeparator.qml
-        ZGStyle/TabBar.qml
-        ZGStyle/TabButton.qml
-        ZGStyle/Label.qml
-    RESOURCES
-        ZGStyle/qmldir
+    OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery"
+    INSTALLED_PLUGIN_TARGET ZoinGallery::ZoinGalleryQmlplugin
+    INSTALLED_QMLDIR_PATH "lib/qml/ZoinGallery/qmldir"
+    QML_FILES ${ZOIN_QML_FILES}
+    RESOURCES ${ZOIN_QML_RESOURCES}
     )
 
-if (USE_QWK)
-    target_link_libraries(ZoinGallery PUBLIC QWindowKit::Quick)
+if(TARGET ZoinGalleryQmlplugin)
+    add_library(ZoinGallery::ZoinGalleryQmlplugin ALIAS
+        ZoinGalleryQmlplugin)
+endif()
+
+if(ZOIN_BUILD_STANDALONE AND TARGET ZoinGalleryQmlplugin)
+    add_dependencies(ZoinGallery ZoinGalleryQmlplugin)
+endif()
+if(TARGET ZoinGallerySessionTests AND TARGET ZoinGalleryQmlplugin)
+    add_dependencies(ZoinGallerySessionTests ZoinGalleryQmlplugin)
+endif()
+if(TARGET ZoinGalleryPanelGestureTests AND TARGET ZoinGalleryQmlplugin)
+    add_dependencies(ZoinGalleryPanelGestureTests ZoinGalleryQmlplugin)
+endif()
+if(TARGET ZoinGalleryMasonryLayoutModesTests AND
+   TARGET ZoinGalleryQmlplugin)
+    add_dependencies(ZoinGalleryMasonryLayoutModesTests
+        ZoinGalleryQmlplugin)
+endif()
+if(TARGET ZoinGalleryReusableViewerPrimitivesTests AND
+   TARGET ZoinGalleryQmlplugin)
+    add_dependencies(ZoinGalleryReusableViewerPrimitivesTests
+        ZoinGalleryQmlplugin)
+endif()
+if(TARGET ZoinGalleryStandaloneShellSmokeTests AND TARGET ZoinGalleryQmlplugin)
+    add_dependencies(ZoinGalleryStandaloneShellSmokeTests
+        ZoinGalleryQmlplugin)
+endif()
+if(TARGET ZoinGalleryLayoutInteractionBenchmark AND
+   TARGET ZoinGalleryQmlplugin)
+    add_dependencies(ZoinGalleryLayoutInteractionBenchmark
+        ZoinGalleryQmlplugin)
+endif()
+
+if (ZOIN_BUILD_STANDALONE AND USE_QWK)
+    target_link_libraries(ZoinGallery PRIVATE QWindowKit::Quick)
 endif()
 
 # Link Dwmapi.lib on Windows
-if (WIN32)
+if (WIN32 AND ZOIN_BUILD_STANDALONE)
     target_link_libraries(ZoinGallery PRIVATE Dwmapi.lib)
 endif()
 
 # Link with Conan 2 packages
-target_link_libraries(ZoinGallery PRIVATE 
+target_link_libraries(ZoinGalleryCore PUBLIC
     Qt${QT_VERSION_MAJOR}::Core 
     Qt${QT_VERSION_MAJOR}::Quick
     Qt${QT_VERSION_MAJOR}::Concurrent 
     Qt${QT_VERSION_MAJOR}::Svg 
     Qt${QT_VERSION_MAJOR}::QuickControls2
-    Qt${QT_VERSION_MAJOR}::Widgets
     TIFF::TIFF
     tiffxx
     libraw::libraw
@@ -434,6 +681,17 @@ target_link_libraries(ZoinGallery PRIVATE
     WebP::webp
     WebP::webpdemux
 )
+target_link_libraries(ZoinGalleryQml PRIVATE
+    Qt${QT_VERSION_MAJOR}::Qml
+    Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::QuickControls2)
+
+if(ZOIN_BUILD_STANDALONE)
+    target_link_libraries(ZoinGallery PRIVATE
+        ZoinGallery::Core
+        ZoinGallery::Qml
+        Qt${QT_VERSION_MAJOR}::Widgets)
+endif()
 
 # Remove the hardcoded library paths
 # Add specific library paths if the targets don't work
@@ -443,10 +701,10 @@ if(NOT TARGET TIFF::TIFF OR NOT TARGET libraw::libraw OR NOT TARGET PNG::PNG
 endif()
 
 if(USE_EXIV2)
-    target_link_libraries(ZoinGallery PRIVATE exiv2::exiv2)
+    target_link_libraries(ZoinGalleryCore PUBLIC exiv2::exiv2)
 endif()
 
-if(APPLE)
+if(APPLE AND ZOIN_BUILD_STANDALONE)
     set(MACOSX_BUNDLE_ICON_FILE ${ICON_FILENAME})
     set_source_files_properties(${ICON_PATH} PROPERTIES
         MACOSX_PACKAGE_LOCATION "Resources")
@@ -458,7 +716,7 @@ if(APPLE)
     find_package(Qt6 ${QT_REQUIRED_VERSION} COMPONENTS Core)
     get_target_property(_qmake_executable Qt6::qmake IMPORTED_LOCATION)
     get_filename_component(_qt_bin_dir "${_qmake_executable}" DIRECTORY)
-    target_link_options(${PROJECT_NAME} PRIVATE
+    target_link_options(ZoinGallery PRIVATE
         "-Wl,-rpath,${_qt_bin_dir}/../lib/,-rpath,@loader_path/../Frameworks,-rpath,@executable_path/../,-rpath,@executable_path/../Frameworks"
         )
     target_link_libraries(ZoinGallery PRIVATE "-framework AppKit" "-framework CoreServices")
@@ -496,3 +754,69 @@ if(APPLE)
         endif()
     endif()
 endif()
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+install(TARGETS ZoinGalleryCore ZoinGalleryQml
+    EXPORT ZoinGalleryTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+if(TARGET ZoinGalleryQmlplugin)
+    install(TARGETS ZoinGalleryQmlplugin
+        EXPORT ZoinGalleryTargets
+        RUNTIME DESTINATION "${CMAKE_INSTALL_LIBDIR}/qml/ZoinGallery"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/qml/ZoinGallery"
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}/qml/ZoinGallery")
+endif()
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery/"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/qml/ZoinGallery"
+    FILES_MATCHING
+        PATTERN "qmldir"
+        PATTERN "*.qml"
+        PATTERN "*.qmltypes")
+install(DIRECTORY resources/
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/qml/ZoinGallery/resources"
+    FILES_MATCHING
+        PATTERN "*.frag"
+        PATTERN "*.svg"
+        PATTERN "*.png"
+        PATTERN "*.ico")
+
+# Conan editable consumers resolve this build-tree package directly. Keeping
+# it beside an exported targets file makes the editable and installed package
+# expose the same target names and QML metadata.
+set(_zoin_build_config_dir
+    "${CMAKE_CURRENT_BINARY_DIR}/cmake/ZoinGallery")
+file(MAKE_DIRECTORY "${_zoin_build_config_dir}")
+export(EXPORT ZoinGalleryTargets
+    FILE "${_zoin_build_config_dir}/ZoinGalleryTargets.cmake"
+    NAMESPACE ZoinGallery::)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ZoinGalleryBuildTreeConfig.cmake.in"
+    "${_zoin_build_config_dir}/ZoinGalleryConfig.cmake"
+    @ONLY)
+
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ZoinGalleryConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/ZoinGalleryConfig.cmake"
+    INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/ZoinGallery")
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/ZoinGalleryConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
+write_basic_package_version_file(
+    "${_zoin_build_config_dir}/ZoinGalleryConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
+
+install(EXPORT ZoinGalleryTargets
+    FILE ZoinGalleryTargets.cmake
+    NAMESPACE ZoinGallery::
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/ZoinGallery")
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/ZoinGalleryConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/ZoinGalleryConfigVersion.cmake"
+    DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/ZoinGallery")

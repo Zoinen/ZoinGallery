@@ -604,8 +604,13 @@ qt_add_resources(ZoinGalleryQml zoin_gallery_assets
         resources/PanelClose.svg
         resources/ZoinGallery.ico)
 
-# Enable QML Language Server configuration generation
-set(QT_QML_GENERATE_QMLLS_INI ON)
+# A standalone checkout may keep Qt Creator's language-server metadata beside
+# the sources. When embedded as a submodule, generating that file would dirty
+# the parent repository after every configure.
+option(ZOIN_GENERATE_QMLLS_INI
+    "Generate .qmlls.ini in the ZoinGallery source tree"
+    ${PROJECT_IS_TOP_LEVEL})
+set(QT_QML_GENERATE_QMLLS_INI ${ZOIN_GENERATE_QMLLS_INI})
 
 # Set QTP0004 policy to NEW to generate qmldir files for each directory with QML files
 qt_policy(SET QTP0004 NEW)

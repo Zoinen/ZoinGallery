@@ -60,10 +60,10 @@ It was configured, built, and installed locally:
 
 ```sh
 cmake -S build/qwindowkit-src -B build/qwindowkit-build -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=/Users/zoin/ZoinGallery/build/conan_toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/build/conan_toolchain.cmake" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_PREFIX_PATH=/Users/zoin/ZoinGallery/build \
-  -DCMAKE_INSTALL_PREFIX=/Users/zoin/ZoinGallery/build/qwindowkit-install \
+  -DCMAKE_PREFIX_PATH="$PWD/build" \
+  -DCMAKE_INSTALL_PREFIX="$PWD/build/qwindowkit-install" \
   -DQWINDOWKIT_BUILD_QUICK=TRUE \
   -DQWINDOWKIT_BUILD_WIDGETS=FALSE \
   -DQWINDOWKIT_BUILD_EXAMPLES=FALSE \
@@ -82,11 +82,11 @@ Configure the app with Conan and QWindowKit on `CMAKE_PREFIX_PATH`:
 
 ```sh
 cmake -S . -B build -G Ninja \
-  -DCMAKE_TOOLCHAIN_FILE=/Users/zoin/ZoinGallery/build/conan_toolchain.cmake \
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/build/conan_toolchain.cmake" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DUSE_QWK=ON \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
-  -DCMAKE_PREFIX_PATH="/Users/zoin/ZoinGallery/build;/Users/zoin/ZoinGallery/build/qwindowkit-install"
+  -DCMAKE_PREFIX_PATH="$PWD/build;$PWD/build/qwindowkit-install"
 ```
 
 Build:

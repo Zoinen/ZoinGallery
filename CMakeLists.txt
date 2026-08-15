@@ -510,7 +510,11 @@ set(ZOIN_QML_FILES
     qml/SphericViewer.qml
     qml/PathControl.qml
     ZGStyle/Style.qml
-    ZGStyle/TextField.qml)
+    ZGStyle/TextField.qml
+    ZGStyle/ToolTip.qml
+    ZGStyle/Menu.qml
+    ZGStyle/MenuItem.qml
+    ZGStyle/MenuSeparator.qml)
 set(ZOIN_QML_RESOURCES)
 
 set_source_files_properties(ZGStyle/Style.qml PROPERTIES
@@ -533,10 +537,6 @@ if(ZOIN_BUILD_STANDALONE)
         ZGStyle/ScrollBar.qml
         ZGStyle/Slider.qml
         ZGStyle/Button.qml
-        ZGStyle/ToolTip.qml
-        ZGStyle/Menu.qml
-        ZGStyle/MenuItem.qml
-        ZGStyle/MenuSeparator.qml
         ZGStyle/TabBar.qml
         ZGStyle/TabButton.qml
         ZGStyle/Label.qml)

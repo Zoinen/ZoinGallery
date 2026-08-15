@@ -55,6 +55,16 @@ FocusScope {
     // authoritative cursor for the new path arrives. Keep Details unpainted
     // for that short transaction so it never exposes the top rows first.
     property bool pathViewportPlacementPending: false
+    // applyExternalCatalog can remap a cursor with the same stable ID before
+    // it announces the replacement catalog. That remap is provisional until
+    // the host applies its authoritative state, so it must not complete the
+    // path-placement transaction synchronously.
+    property bool pathViewportCatalogReady: true
+    // Benchmark instrumentation is deliberately opt-in.  Normal Gallery
+    // navigation must not allocate diagnostic maps on every cursor change.
+    // Embedders can enable this and forward benchmarkStage without coupling
+    // the reusable panel to a particular tracing backend.
+    property bool benchmarkTracingEnabled: false
     property bool presentationSwitchPending: false
     property real presentationSwitchCursorViewportY: Number.NaN
     property int thumbnailPinchStartHeight: 0
@@ -141,6 +151,7 @@ FocusScope {
     signal selectionRequested(string mode, var entryIds)
     signal densityChangeRequested(string mode, real density, bool finalChange)
     signal sortRequested(string sortMode, bool contextMenu)
+    signal benchmarkStage(string stage, var metadata)
 
     readonly property color backgroundColor:
         theme && theme.panelBackground !== undefined
@@ -186,6 +197,74 @@ FocusScope {
             return fallback
         const value = Number(metrics[name])
         return isFinite(value) ? value : fallback
+    }
+
+    // Return one self-contained placement snapshot so a real-application
+    // benchmark can correlate model/path changes with the exact viewport
+    // geometry that was visible to the reusable panel at that boundary.
+    function benchmarkState(extra) {
+        const count = galleryLayout ? galleryLayout.count : 0
+        const index = session ? session.currentIndex : -1
+        const geometry = galleryLayout && index >= 0 && index < count
+                ? galleryLayout.indexGeometry(index)
+                : Qt.rect(0, 0, 0, 0)
+        const geometryValid = geometry.width > 0 && geometry.height > 0
+        const horizontal = presentationMode === "columns"
+        const viewportExtent = galleryLayout
+                ? (horizontal ? galleryLayout.width : galleryLayout.height) : 0
+        const contentExtent = galleryLayout ? galleryLayout.contentHeight : 0
+        const maximum = Math.max(0, contentExtent - viewportExtent)
+        const itemCenter = geometryValid
+                ? (horizontal ? geometry.x + geometry.width / 2
+                              : geometry.y + geometry.height / 2) : -1
+        const target = geometryValid && viewportExtent > 0
+                ? Math.max(0, Math.min(maximum,
+                                      itemCenter - viewportExtent / 2)) : -1
+        const contentY = galleryLayout ? galleryLayout.contentY : 0
+        const placementMatchesTarget = count === 0
+                || (target >= 0 && Math.abs(contentY - target) <= 0.51)
+        var result = {
+            "currentPath": session ? String(session.currentPath || "") : "",
+            "catalogRevision": session
+                    ? Number(session.catalogRevision || 0) : 0,
+            "currentIndex": index,
+            "cursorEntryId": session
+                    ? String(session.cursorEntryId || "") : "",
+            "presentationMode": String(presentationMode || ""),
+            "nativePresentationMode": galleryLayout
+                    ? Number(galleryLayout.presentationMode) : -1,
+            "count": count,
+            "contentY": contentY,
+            "contentHeight": contentExtent,
+            "viewportWidth": galleryLayout ? galleryLayout.width : 0,
+            "viewportHeight": galleryLayout ? galleryLayout.height : 0,
+            "viewportExtent": viewportExtent,
+            "maximumContentY": maximum,
+            "targetContentY": target,
+            "placementMatchesTarget": placementMatchesTarget,
+            "pathViewportPlacementPending": pathViewportPlacementPending,
+            "placementTimerRunning": pathViewportPlacementTimer
+                    ? pathViewportPlacementTimer.running : false,
+            "geometryValid": geometryValid,
+            "cursorX": geometry.x,
+            "cursorY": geometry.y,
+            "cursorWidth": geometry.width,
+            "cursorHeight": geometry.height,
+            "cursorViewportCenterDelta": geometryValid
+                    ? itemCenter - contentY - viewportExtent / 2 : 0
+        }
+        if (extra) {
+            const keys = Object.keys(extra)
+            for (let keyIndex = 0; keyIndex < keys.length; ++keyIndex)
+                result[keys[keyIndex]] = extra[keys[keyIndex]]
+        }
+        return result
+    }
+
+    function traceBenchmarkStage(stage, extra) {
+        if (!benchmarkTracingEnabled)
+            return
+        benchmarkStage(stage, benchmarkState(extra || ({})))
     }
 
     readonly property real detailsRowInset:
@@ -625,19 +704,40 @@ FocusScope {
     }
 
     function centerCurrentForPathChange() {
-        if (!pathViewportPlacementPending || !session)
+        traceBenchmarkStage("placement.center.attempt", {})
+        if (!pathViewportPlacementPending || !session) {
+            traceBenchmarkStage("placement.center.result", {
+                "success": false,
+                "reason": !session ? "missing-session" : "not-pending"
+            })
             return false
+        }
         if (galleryLayout.count === 0) {
+            pathViewportPlacementTimer.stop()
             pathViewportPlacementPending = false
+            traceBenchmarkStage("placement.center.result", {
+                "success": true,
+                "reason": "empty-catalog"
+            })
             return true
         }
         const index = session.currentIndex
         if (index < 0 || index >= galleryLayout.count
-                || galleryLayout.height <= 0)
+                || galleryLayout.height <= 0) {
+            traceBenchmarkStage("placement.center.result", {
+                "success": false,
+                "reason": "waiting-for-index-or-viewport"
+            })
             return false
+        }
         const geometry = galleryLayout.indexGeometry(index)
-        if (geometry.width <= 0 || geometry.height <= 0)
+        if (geometry.width <= 0 || geometry.height <= 0) {
+            traceBenchmarkStage("placement.center.result", {
+                "success": false,
+                "reason": "waiting-for-geometry"
+            })
             return false
+        }
         const horizontal = presentationMode === "columns"
         const viewportExtent = horizontal
                 ? galleryLayout.width : galleryLayout.height
@@ -649,16 +749,31 @@ FocusScope {
         const target = Math.max(0, Math.min(
                     maximum, itemCenter - viewportExtent / 2))
         setPanelContentY(target, true)
+        pathViewportPlacementTimer.stop()
         pathViewportPlacementPending = false
         visualCursorIndex = index
         pendingVisualCursorIndex = -1
         resetCurrentItemCenter(index)
+        traceBenchmarkStage("placement.center.result", {
+            "success": Math.abs(galleryLayout.contentY - target) <= 0.51,
+            "reason": "centered",
+            "requestedContentY": target,
+            "appliedContentY": galleryLayout.contentY
+        })
         return true
     }
 
-    function schedulePathViewportPlacement() {
-        if (pathViewportPlacementPending)
+    function schedulePathViewportPlacement(reason) {
+        if (pathViewportPlacementPending) {
+            traceBenchmarkStage("placement.timer.scheduled", {
+                "reason": String(reason || "unspecified")
+            })
             pathViewportPlacementTimer.restart()
+        } else {
+            traceBenchmarkStage("placement.timer.skipped", {
+                "reason": String(reason || "not-pending")
+            })
+        }
     }
 
     Timer {
@@ -666,7 +781,10 @@ FocusScope {
         objectName: "galleryPathViewportPlacementTimer"
         interval: 0
         repeat: false
-        onTriggered: root.centerCurrentForPathChange()
+        onTriggered: {
+            root.traceBenchmarkStage("placement.timer.triggered", {})
+            root.centerCurrentForPathChange()
+        }
     }
 
     Timer {
@@ -2104,6 +2222,7 @@ FocusScope {
         iconLabelFont: root.iconLabelFont
 
         onLayoutReset: {
+            root.traceBenchmarkStage("layout.reset", {})
             root.resetMasonryPageSequence()
             if (root.cursorChromeTransitionActive)
                 cursorChromeLayoutRetargetTimer.restart()
@@ -2117,11 +2236,12 @@ FocusScope {
             if (root.presentationSwitchPending)
                 presentationSwitchTimer.restart()
             else if (root.pathViewportPlacementPending)
-                root.schedulePathViewportPlacement()
+                root.schedulePathViewportPlacement("layout-reset")
             else if (!root.densityViewportTransaction)
                 root.scheduleViewportUpdate(false)
         }
         onCountChanged: {
+            root.traceBenchmarkStage("layout.count.changed", {})
             root.cancelCursorChromeTransition()
             root.resetCurrentItemCenter(root.session
                                         ? root.session.currentIndex : -1)
@@ -2131,18 +2251,23 @@ FocusScope {
                         root.session ? root.session.currentIndex : -1,
                         root.visualCursorIndex)
             if (root.pathViewportPlacementPending)
-                root.schedulePathViewportPlacement()
+                root.schedulePathViewportPlacement("count-changed")
             else
                 root.scheduleViewportUpdate(false)
         }
         onContentHeightChanged: {
+            root.traceBenchmarkStage("layout.content-height.changed", {})
             root.resetMasonryPageSequence()
             if (root.pathViewportPlacementPending)
-                root.schedulePathViewportPlacement()
+                root.schedulePathViewportPlacement("content-height-changed")
             else if (!root.densityViewportTransaction)
                 root.scheduleViewportUpdate(false)
         }
-        onContentYChanged: root.updateVisualCursorForViewport()
+        onContentYChanged: {
+            root.updateVisualCursorForViewport()
+            if (root.pathViewportPlacementPending)
+                root.traceBenchmarkStage("layout.content-y.changed", {})
+        }
         onWidthChanged: {
             root.resetMasonryPageSequence()
             if (width > 0 && count > 0)
@@ -2693,6 +2818,8 @@ FocusScope {
     Connections {
         target: root.session
         function onCatalogRevisionChanged() {
+            root.traceBenchmarkStage("session.catalog.changed", {})
+            root.pathViewportCatalogReady = true
             root.clearPendingKeyboardSelection()
             root.cancelCursorChromeTransition()
             // Persistent host sessions can outlive (and be populated after)
@@ -2704,7 +2831,7 @@ FocusScope {
             root.selectionAnchorIndex = root.session.currentIndex
             root.coordinateVisualCursor(root.session.currentIndex,
                                         root.visualCursorIndex)
-            root.schedulePathViewportPlacement()
+            root.schedulePathViewportPlacement("catalog-revision-changed")
         }
         function onSelectionRevisionChanged() {
             root.reconcileAcknowledgedKeyboardSelection()
@@ -2713,26 +2840,39 @@ FocusScope {
                 Qt.callLater(root.commitPendingKeyboardSelection)
         }
         function onCurrentIndexChanged() {
+            root.traceBenchmarkStage("session.index.changed", {})
             if (!root.localCursorNavigation) {
                 const previousVisualIndex = root.visualCursorIndex
                 root.resetCurrentItemCenter(root.session.currentIndex)
                 root.selectionAnchorIndex = root.session.currentIndex
                 root.coordinateVisualCursor(root.session.currentIndex,
                                             previousVisualIndex)
-                if (root.pathViewportPlacementPending)
-                    root.schedulePathViewportPlacement()
-                else
+                if (root.pathViewportPlacementPending) {
+                    // Details geometry is commonly valid by the time the
+                    // authoritative cursor arrives. Center in this signal
+                    // turn so the first visible paint uses the destination;
+                    // keep the zero-delay timer when the catalog transaction
+                    // or layout is still settling.
+                    if (!root.pathViewportCatalogReady
+                            || !root.centerCurrentForPathChange())
+                        root.schedulePathViewportPlacement(
+                                    "current-index-changed")
+                } else {
                     root.scheduleViewportUpdate(true)
+                }
             }
         }
         function onCurrentPathChanged() {
+            root.traceBenchmarkStage("session.path.changed", {})
             root.pathViewportPlacementPending =
                     root.presentationMode === "details"
+            root.pathViewportCatalogReady =
+                    !root.pathViewportPlacementPending
             if (root.pathViewportPlacementPending) {
                 viewportUpdateTimer.stop()
                 root.viewportUpdatePendingAfterScroll = false
                 root.viewportUpdateEnsuresCursor = false
-                root.schedulePathViewportPlacement()
+                root.schedulePathViewportPlacement("current-path-changed")
             }
             root.resetCurrentItemCenter(root.session.currentIndex)
             root.selectionAnchorIndex = root.session.currentIndex
@@ -2746,7 +2886,11 @@ FocusScope {
         }
     }
 
+    onPathViewportPlacementPendingChanged:
+        traceBenchmarkStage("placement.pending.changed", {})
+
     onSessionChanged: {
+        traceBenchmarkStage("session.changed", {})
         clearPendingKeyboardSelection()
         cancelCursorChromeTransition()
         cursorCommitTimer.stop()

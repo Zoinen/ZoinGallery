@@ -474,7 +474,14 @@ private slots:
         QVERIFY(session->applyExternalState(
             QStringLiteral("second-50"), 50, {}, 2));
 
-        QTRY_VERIFY(!panel->property("pathViewportPlacementPending").toBool());
+        // The Details layout already has valid geometry, so the authoritative
+        // index completes placement synchronously without an extra event-loop
+        // or frame boundary.
+        QVERIFY(!panel->property("pathViewportPlacementPending").toBool());
+        auto *placementTimer = panel->findChild<QObject *>(
+            QStringLiteral("galleryPathViewportPlacementTimer"));
+        QVERIFY(placementTimer);
+        QVERIFY(!placementTimer->property("running").toBool());
         QCOMPARE(layout->opacity(), qreal(1));
         QVERIFY(!scrollAnimation->property("running").toBool());
         const QRectF geometry = indexGeometry(layout, 50);
@@ -487,6 +494,80 @@ private slots:
                      - layout->property("contentY").toReal()) < 0.51);
         QCOMPARE(session->panelViewportCursorEntryId(),
                  QStringLiteral("second-50"));
+
+        runtime->shutdown();
+    }
+
+    void detailsPathChangeWaitsThroughOverlappingIdRemap() {
+        QVariantList firstCatalog;
+        QVariantList secondCatalog;
+        for (int index = 0; index < 80; ++index) {
+            firstCatalog.append(folderEntry(
+                QStringLiteral("shared-%1").arg(index), index,
+                QStringLiteral("/first/folder-%1").arg(index)));
+            const int reorderedId = index == 5 ? 50
+                                  : index == 50 ? 5 : index;
+            secondCatalog.append(folderEntry(
+                QStringLiteral("shared-%1").arg(reorderedId), index,
+                QStringLiteral("/second/folder-%1").arg(reorderedId)));
+        }
+
+        QQuickView view;
+        view.resize(340, 230);
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("details-overlapping-id-remap"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(firstCatalog, 1, {
+            {QStringLiteral("currentPath"), QStringLiteral("/first")},
+        }));
+        QVERIFY(session->applyExternalState(
+            QStringLiteral("shared-50"), 50, {}, 1));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("testSession"), session);
+
+        QObject *panel = createPanel(view);
+        QVERIFY(panel);
+        panel->setProperty("presentationMode", QStringLiteral("details"));
+        panel->setProperty("density", 30.0);
+        auto *layout = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryMasonryLayout"));
+        auto *placementTimer = panel->findChild<QObject *>(
+            QStringLiteral("galleryPathViewportPlacementTimer"));
+        QVERIFY(layout);
+        QVERIFY(placementTimer);
+        view.show();
+        QTRY_VERIFY(!panel->property("presentationSwitchPending").toBool());
+        QTRY_COMPARE(layout->property("count").toInt(), 80);
+
+        QVERIFY(session->applyExternalCatalog(secondCatalog, 2, {
+            {QStringLiteral("currentPath"), QStringLiteral("/second")},
+        }));
+        QCOMPARE(session->currentIndex(), 5);
+        QCOMPARE(session->cursorEntryId(), QStringLiteral("shared-50"));
+        // The shared ID remaps before catalogRevisionChanged. It is not the
+        // host's authoritative destination and must leave the replacement
+        // hidden with its zero-delay fallback still armed.
+        QVERIFY(panel->property("pathViewportPlacementPending").toBool());
+        QVERIFY(panel->property("pathViewportCatalogReady").toBool());
+        QVERIFY(placementTimer->property("running").toBool());
+        QCOMPARE(layout->opacity(), qreal(0));
+
+        QVERIFY(session->applyExternalState(
+            QStringLiteral("shared-70"), 70, {}, 2));
+        QVERIFY(!panel->property("pathViewportPlacementPending").toBool());
+        QVERIFY(!placementTimer->property("running").toBool());
+        QCOMPARE(layout->opacity(), qreal(1));
+        const QRectF geometry = indexGeometry(layout, 70);
+        QVERIFY(geometry.isValid());
+        const qreal viewportCenter = layout->property("height").toReal() / 2;
+        const qreal cursorCenter = geometry.center().y()
+            - layout->property("contentY").toReal();
+        QVERIFY(qAbs(cursorCenter - viewportCenter) < 0.51);
+        QCOMPARE(session->panelViewportCursorEntryId(),
+                 QStringLiteral("shared-70"));
 
         runtime->shutdown();
     }

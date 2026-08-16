@@ -763,6 +763,41 @@ FocusScope {
         return true
     }
 
+    function restoreRememberedViewportForPathChange() {
+        if (!pathViewportPlacementPending || !session
+                || !pathViewportCatalogReady
+                || typeof session.panelViewportStateAvailable === "undefined"
+                || !session.panelViewportStateAvailable)
+            return false
+        if (galleryLayout.height <= 0)
+            return false
+        const maximum = Math.max(
+                    0, galleryLayout.contentHeight - galleryLayout.height)
+        const target = Math.max(
+                    0, Math.min(maximum, session.panelScrollOffset))
+        setPanelContentY(target, false)
+        pathViewportPlacementTimer.stop()
+        pathViewportPlacementPending = false
+        visualCursorIndex = session.currentIndex
+        pendingVisualCursorIndex = -1
+        resetCurrentItemCenter(visualCursorIndex)
+        traceBenchmarkStage("placement.center.result", {
+            "success": true,
+            "reason": "restored-path-viewport",
+            "requestedContentY": target,
+            "appliedContentY": galleryLayout.contentY
+        })
+        return true
+    }
+
+    function placeViewportForPathChange() {
+        if (!pathViewportCatalogReady)
+            return false
+        if (restoreRememberedViewportForPathChange())
+            return true
+        return centerCurrentForPathChange()
+    }
+
     function schedulePathViewportPlacement(reason) {
         if (pathViewportPlacementPending) {
             traceBenchmarkStage("placement.timer.scheduled", {
@@ -783,7 +818,7 @@ FocusScope {
         repeat: false
         onTriggered: {
             root.traceBenchmarkStage("placement.timer.triggered", {})
-            root.centerCurrentForPathChange()
+            root.placeViewportForPathChange()
         }
     }
 
@@ -2819,7 +2854,8 @@ FocusScope {
         target: root.session
         function onCatalogRevisionChanged() {
             root.traceBenchmarkStage("session.catalog.changed", {})
-            root.pathViewportCatalogReady = true
+            root.pathViewportCatalogReady = typeof root.session.catalogReady
+                    === "undefined" || root.session.catalogReady
             root.clearPendingKeyboardSelection()
             root.cancelCursorChromeTransition()
             // Persistent host sessions can outlive (and be populated after)
@@ -2853,8 +2889,7 @@ FocusScope {
                     // turn so the first visible paint uses the destination;
                     // keep the zero-delay timer when the catalog transaction
                     // or layout is still settling.
-                    if (!root.pathViewportCatalogReady
-                            || !root.centerCurrentForPathChange())
+                    if (!root.placeViewportForPathChange())
                         root.schedulePathViewportPlacement(
                                     "current-index-changed")
                 } else {
@@ -2868,6 +2903,8 @@ FocusScope {
                     root.presentationMode === "details"
             root.pathViewportCatalogReady =
                     !root.pathViewportPlacementPending
+                    || typeof root.session.catalogReady === "undefined"
+                    || root.session.catalogReady
             if (root.pathViewportPlacementPending) {
                 viewportUpdateTimer.stop()
                 root.viewportUpdatePendingAfterScroll = false
@@ -2876,6 +2913,14 @@ FocusScope {
             }
             root.resetCurrentItemCenter(root.session.currentIndex)
             root.selectionAnchorIndex = root.session.currentIndex
+        }
+        function onCatalogReadyChanged() {
+            root.pathViewportCatalogReady = root.session.catalogReady
+            if (root.pathViewportPlacementPending
+                    && root.pathViewportCatalogReady
+                    && !root.placeViewportForPathChange()) {
+                root.schedulePathViewportPlacement("catalog-ready-changed")
+            }
         }
         function onPanelScrollOffsetChanged() {
             if (!root.restoringScrollOffset

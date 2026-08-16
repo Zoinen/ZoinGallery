@@ -231,9 +231,7 @@ FocusScope {
     readonly property color requestedBackgroundColor:
         theme && theme.viewerBackground !== undefined
         ? theme.viewerBackground : "#090a0c"
-    readonly property color backgroundColor:
-        Qt.rgba(requestedBackgroundColor.r, requestedBackgroundColor.g,
-                requestedBackgroundColor.b, 1)
+    readonly property color backgroundColor: requestedBackgroundColor
     readonly property color foregroundColor:
         theme && theme.text !== undefined ? theme.text : "#f3f4f6"
 
@@ -1467,9 +1465,9 @@ FocusScope {
         objectName: "galleryViewerBackground"
         anchors.fill: parent
         color: root.backgroundColor
-        // ViewerMode fades this surface against the still-opaque thumbnails
-        // surface underneath.  Pinch close uses its own raw gesture progress;
-        // the image rectangle itself uses OutSine below.
+        // ViewerMode fades this surface against the thumbnails surface
+        // underneath. Embedded hosts may deliberately supply a transparent
+        // background so the shared window material remains visible.
         opacity: root.surfaceProgress
         visible: !root.customContent && opacity > 0
     }

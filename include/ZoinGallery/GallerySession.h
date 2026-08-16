@@ -31,12 +31,15 @@ class GallerySession final : public QObject {
     Q_PROPERTY(int currentIndex READ currentIndex WRITE setCurrentIndex NOTIFY currentIndexChanged)
     Q_PROPERTY(QString cursorEntryId READ cursorEntryId NOTIFY currentIndexChanged)
     Q_PROPERTY(qulonglong catalogRevision READ catalogRevision NOTIFY catalogRevisionChanged)
+    Q_PROPERTY(bool catalogReady READ catalogReady NOTIFY catalogReadyChanged)
     Q_PROPERTY(qulonglong selectionRevision READ selectionRevision NOTIFY selectionRevisionChanged)
     Q_PROPERTY(qreal panelScrollOffset READ panelScrollOffset WRITE setPanelScrollOffset
                NOTIFY panelScrollOffsetChanged)
     Q_PROPERTY(QString panelViewportCursorEntryId READ panelViewportCursorEntryId
                WRITE setPanelViewportCursorEntryId
                NOTIFY panelViewportCursorEntryIdChanged)
+    Q_PROPERTY(bool panelViewportStateAvailable READ panelViewportStateAvailable
+               NOTIFY panelViewportStateAvailableChanged)
     Q_PROPERTY(QString thumbnailProviderName READ thumbnailProviderName CONSTANT)
     Q_PROPERTY(bool viewerOpen READ viewerOpen WRITE setViewerOpen NOTIFY viewerOpenChanged)
     Q_PROPERTY(QUrl viewerSource READ viewerSource NOTIFY viewerSourceChanged)
@@ -74,11 +77,13 @@ public:
     void setCurrentIndex(int index);
     QString cursorEntryId() const;
     qulonglong catalogRevision() const;
+    bool catalogReady() const;
     qulonglong selectionRevision() const;
     qreal panelScrollOffset() const;
     void setPanelScrollOffset(qreal offset);
     QString panelViewportCursorEntryId() const;
     void setPanelViewportCursorEntryId(const QString &entryId);
+    bool panelViewportStateAvailable() const;
     QString thumbnailProviderName() const;
     bool viewerOpen() const;
     void setViewerOpen(bool open);
@@ -93,6 +98,7 @@ public:
     Q_INVOKABLE bool applyExternalCatalog(
         const QVariantList &entries, qulonglong catalogRevision,
         const QVariantMap &options = QVariantMap());
+    Q_INVOKABLE void setExternalCatalogReady(bool ready);
     Q_INVOKABLE bool applyExternalAppearance(
         const QVariantList &entries, qulonglong highlightRevision);
     Q_INVOKABLE bool applyExternalState(
@@ -144,9 +150,11 @@ signals:
     void currentPathChanged();
     void currentIndexChanged();
     void catalogRevisionChanged();
+    void catalogReadyChanged();
     void selectionRevisionChanged();
     void panelScrollOffsetChanged();
     void panelViewportCursorEntryIdChanged();
+    void panelViewportStateAvailableChanged();
     void viewerOpenChanged();
     void viewerSourceChanged();
     void viewerSourceAtChanged(int index);
@@ -169,6 +177,8 @@ private:
                    qint64 viewerNativeCacheByteBudget,
                    QObject *parent);
     void sanitizeViewerPreviousStateForCatalog();
+    void restorePanelViewportStateForPath(const QString &path);
+    void rememberPanelViewportStateForCurrentPath();
     Private *d;
 };
 

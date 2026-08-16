@@ -464,15 +464,29 @@ private slots:
         QTRY_VERIFY(!panel->property("presentationSwitchPending").toBool());
         QTRY_COMPARE(layout->property("count").toInt(), 80);
 
-        QVERIFY(session->applyExternalCatalog(secondCatalog, 2, {
+        const qreal rememberedFirstContentY = 180;
+        layout->setProperty("contentY", rememberedFirstContentY);
+        session->setPanelScrollOffset(rememberedFirstContentY);
+        session->setPanelViewportCursorEntryId(QStringLiteral("first-0"));
+
+        // A cache miss publishes a small provisional catalog while the VFS
+        // read is in flight. It must remain hidden instead of flashing an
+        // almost-empty panel.
+        QVERIFY(session->applyExternalCatalog(
+            QVariantList{secondCatalog.constFirst()}, 2, {
             {QStringLiteral("currentPath"), QStringLiteral("/second")},
+            {QStringLiteral("catalogProvisional"), true},
         }));
-        // The replacement model must not expose its initial contentY=0 frame
-        // while the matching authoritative cursor is still being applied.
         QVERIFY(panel->property("pathViewportPlacementPending").toBool());
         QCOMPARE(layout->opacity(), qreal(0));
+
+        QVERIFY(session->applyExternalCatalog(secondCatalog, 3, {
+            {QStringLiteral("currentPath"), QStringLiteral("/second")},
+            {QStringLiteral("deferCatalogReady"), true},
+        }));
         QVERIFY(session->applyExternalState(
-            QStringLiteral("second-50"), 50, {}, 2));
+            QStringLiteral("second-50"), 50, {}, 3));
+        session->setExternalCatalogReady(true);
 
         // The Details layout already has valid geometry, so the authoritative
         // index completes placement synchronously without an extra event-loop
@@ -494,6 +508,23 @@ private slots:
                      - layout->property("contentY").toReal()) < 0.51);
         QCOMPARE(session->panelViewportCursorEntryId(),
                  QStringLiteral("second-50"));
+
+        // Returning to a directory restores its exact session viewport. The
+        // selected child may change, but the previously visible top remains
+        // stable instead of being centered again.
+        QVERIFY(session->applyExternalCatalog(firstCatalog, 4, {
+            {QStringLiteral("currentPath"), QStringLiteral("/first")},
+            {QStringLiteral("deferCatalogReady"), true},
+        }));
+        QVERIFY(session->applyExternalState(
+            QStringLiteral("first-40"), 40, {}, 4));
+        session->setExternalCatalogReady(true);
+        QVERIFY(!panel->property("pathViewportPlacementPending").toBool());
+        QCOMPARE(layout->opacity(), qreal(1));
+        QVERIFY(qAbs(layout->property("contentY").toReal()
+                     - rememberedFirstContentY) < 0.51);
+        QCOMPARE(session->panelViewportCursorEntryId(),
+                 QStringLiteral("first-0"));
 
         runtime->shutdown();
     }
@@ -544,6 +575,7 @@ private slots:
 
         QVERIFY(session->applyExternalCatalog(secondCatalog, 2, {
             {QStringLiteral("currentPath"), QStringLiteral("/second")},
+            {QStringLiteral("deferCatalogReady"), true},
         }));
         QCOMPARE(session->currentIndex(), 5);
         QCOMPARE(session->cursorEntryId(), QStringLiteral("shared-50"));
@@ -551,12 +583,13 @@ private slots:
         // host's authoritative destination and must leave the replacement
         // hidden with its zero-delay fallback still armed.
         QVERIFY(panel->property("pathViewportPlacementPending").toBool());
-        QVERIFY(panel->property("pathViewportCatalogReady").toBool());
+        QVERIFY(!panel->property("pathViewportCatalogReady").toBool());
         QVERIFY(placementTimer->property("running").toBool());
         QCOMPARE(layout->opacity(), qreal(0));
 
         QVERIFY(session->applyExternalState(
             QStringLiteral("shared-70"), 70, {}, 2));
+        session->setExternalCatalogReady(true);
         QVERIFY(!panel->property("pathViewportPlacementPending").toBool());
         QVERIFY(!placementTimer->property("running").toBool());
         QCOMPARE(layout->opacity(), qreal(1));

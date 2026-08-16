@@ -9,12 +9,18 @@
 #include "ThumbnailMemoryCache.h"
 
 #include <QAbstractItemModel>
+#include <QHash>
 #include <QSet>
 
 namespace ZoinGallery {
 
 class GallerySession::Private {
 public:
+    struct PanelViewportState {
+        qreal scrollOffset = 0;
+        QString cursorEntryId;
+    };
+
     QString sessionId;
     SourceKind sourceKind = ExternalCatalogSource;
     QString thumbnailProviderName;
@@ -23,10 +29,14 @@ public:
     QString currentPath;
     QString stableCursorEntryId;
     qulonglong catalogRevision = 0;
+    bool catalogReady = true;
     qulonglong highlightRevision = 0;
     qulonglong selectionRevision = 0;
     qreal panelScrollOffset = 0;
     QString panelViewportCursorEntryId;
+    QHash<QString, PanelViewportState> panelViewportStates;
+    bool panelViewportStateAvailable = false;
+    bool applyingPanelViewportState = false;
     int currentIndex = -1;
     bool viewerOpen = false;
     QString viewerPreviousEntryId;
@@ -92,8 +102,7 @@ GallerySession::GallerySession(
                 if (d->currentPath != path) {
                     d->currentPath = path;
                     clearViewerPreviousState(true);
-                    setPanelScrollOffset(0);
-                    setPanelViewportCursorEntryId(QString());
+                    restorePanelViewportStateForPath(path);
                     emit currentPathChanged();
                 }
             });
@@ -203,6 +212,10 @@ qulonglong GallerySession::catalogRevision() const {
     return d->catalogRevision;
 }
 
+bool GallerySession::catalogReady() const {
+    return d->catalogReady;
+}
+
 qulonglong GallerySession::selectionRevision() const {
     return d->selectionRevision;
 }
@@ -218,6 +231,7 @@ void GallerySession::setPanelScrollOffset(qreal offset) {
     }
     d->panelScrollOffset = bounded;
     emit panelScrollOffsetChanged();
+    rememberPanelViewportStateForCurrentPath();
 }
 
 QString GallerySession::panelViewportCursorEntryId() const {
@@ -230,6 +244,46 @@ void GallerySession::setPanelViewportCursorEntryId(const QString &entryId) {
     }
     d->panelViewportCursorEntryId = entryId;
     emit panelViewportCursorEntryIdChanged();
+    rememberPanelViewportStateForCurrentPath();
+}
+
+bool GallerySession::panelViewportStateAvailable() const {
+    return d->panelViewportStateAvailable;
+}
+
+void GallerySession::rememberPanelViewportStateForCurrentPath() {
+    if (d->applyingPanelViewportState || d->currentPath.isEmpty()) {
+        return;
+    }
+    constexpr qsizetype MaxRememberedPanelViewports = 512;
+    if (!d->panelViewportStates.contains(d->currentPath)
+        && d->panelViewportStates.size() >= MaxRememberedPanelViewports) {
+        d->panelViewportStates.erase(d->panelViewportStates.begin());
+    }
+    d->panelViewportStates.insert(d->currentPath, {
+        d->panelScrollOffset,
+        d->panelViewportCursorEntryId,
+    });
+    if (!d->panelViewportStateAvailable) {
+        d->panelViewportStateAvailable = true;
+        emit panelViewportStateAvailableChanged();
+    }
+}
+
+void GallerySession::restorePanelViewportStateForPath(const QString &path) {
+    const auto state = d->panelViewportStates.constFind(path);
+    const bool available = state != d->panelViewportStates.cend();
+    const qreal nextOffset = available ? state->scrollOffset : 0;
+    const QString nextCursor = available ? state->cursorEntryId : QString();
+
+    d->applyingPanelViewportState = true;
+    setPanelScrollOffset(nextOffset);
+    setPanelViewportCursorEntryId(nextCursor);
+    d->applyingPanelViewportState = false;
+    if (d->panelViewportStateAvailable != available) {
+        d->panelViewportStateAvailable = available;
+        emit panelViewportStateAvailableChanged();
+    }
 }
 
 QString GallerySession::thumbnailProviderName() const {
@@ -305,22 +359,38 @@ bool GallerySession::applyExternalCatalog(
         return false;
     }
 
+    const bool requestedCatalogReady =
+        !options.value(QStringLiteral("catalogProvisional")).toBool()
+        && !options.value(QStringLiteral("deferCatalogReady")).toBool();
+
     const bool carriesPath = options.contains(QStringLiteral("currentPath"))
         || options.contains(QStringLiteral("path"));
+    bool pathChanged = false;
     if (carriesPath) {
         const QString path = options.value(
             QStringLiteral("currentPath"), options.value(QStringLiteral("path")))
             .toString();
         if (d->currentPath != path) {
+            pathChanged = true;
+            // A path replacement is never paint-ready until its model and
+            // remapped cursor have been installed, even when the host sends
+            // the authoritative catalog in the same call.
+            if (d->catalogReady) {
+                d->catalogReady = false;
+                emit catalogReadyChanged();
+            }
             d->currentPath = path;
             clearViewerPreviousState(true);
-            setPanelScrollOffset(0);
-            setPanelViewportCursorEntryId(QString());
+            restorePanelViewportStateForPath(path);
             emit currentPathChanged();
         }
     }
 
-    if (revision == d->catalogRevision && revision != 0) {
+    if (!pathChanged && revision == d->catalogRevision && revision != 0) {
+        if (d->catalogReady != requestedCatalogReady) {
+            d->catalogReady = requestedCatalogReady;
+            emit catalogReadyChanged();
+        }
         return true;
     }
 
@@ -334,8 +404,23 @@ bool GallerySession::applyExternalCatalog(
     const int remapped = d->external->rowForEntryId(previousCursorId);
     setCurrentIndex(remapped >= 0 ? remapped : previousIndex);
     sanitizeViewerPreviousStateForCatalog();
+    const bool readyChanged = d->catalogReady != requestedCatalogReady;
+    if (readyChanged) {
+        d->catalogReady = requestedCatalogReady;
+    }
     emit catalogRevisionChanged();
+    if (readyChanged) {
+        emit catalogReadyChanged();
+    }
     return true;
+}
+
+void GallerySession::setExternalCatalogReady(bool ready) {
+    if (d->shutdown || !d->external || d->catalogReady == ready) {
+        return;
+    }
+    d->catalogReady = ready;
+    emit catalogReadyChanged();
 }
 
 bool GallerySession::applyExternalState(
@@ -680,16 +765,19 @@ void GallerySession::resetExternalSource() {
     d->currentIndex = -1;
     d->stableCursorEntryId.clear();
     d->catalogRevision = 0;
+    const bool catalogWasReady = d->catalogReady;
+    d->catalogReady = true;
     d->highlightRevision = 0;
     d->selectionRevision = 0;
     clearViewerPreviousState(true);
-    setPanelScrollOffset(0);
-    setPanelViewportCursorEntryId(QString());
+    d->panelViewportStates.clear();
+    restorePanelViewportStateForPath(QString());
     setViewerOpen(false);
 
     if (hadPath) emit currentPathChanged();
     if (hadCursor) emit currentIndexChanged();
     if (hadCatalogRevision) emit catalogRevisionChanged();
+    if (!catalogWasReady) emit catalogReadyChanged();
     if (hadSelectionRevision) emit selectionRevisionChanged();
 }
 

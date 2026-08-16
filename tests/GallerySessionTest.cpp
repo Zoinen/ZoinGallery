@@ -681,12 +681,38 @@ private slots:
         QVERIFY(session->applyExternalCatalog(
             reordered, 12,
             {{QStringLiteral("currentPath"),
-              QStringLiteral("/virtual/gallery-session-test/other")}}));
+              QStringLiteral("/virtual/gallery-session-test/other")},
+             {QStringLiteral("catalogProvisional"), true}}));
+        QVERIFY(!session->catalogReady());
         QCOMPARE(session->panelScrollOffset(), qreal(0));
         QVERIFY(session->panelViewportCursorEntryId().isEmpty());
+        QVERIFY(!session->panelViewportStateAvailable());
 
         session->setPanelScrollOffset(73);
         session->setPanelViewportCursorEntryId(QStringLiteral("c"));
+        QVERIFY(session->panelViewportStateAvailable());
+        QVERIFY(session->applyExternalCatalog(
+            reordered, 13,
+            {{QStringLiteral("currentPath"),
+              QStringLiteral("/virtual/gallery-session-test/other")}}));
+        QVERIFY(session->catalogReady());
+
+        QVERIFY(session->applyExternalCatalog(
+            reordered, 14,
+            {{QStringLiteral("currentPath"),
+              QStringLiteral("/virtual/gallery-session-test")}}));
+        QCOMPARE(session->panelScrollOffset(), qreal(91.5));
+        QCOMPARE(session->panelViewportCursorEntryId(), QStringLiteral("c"));
+        QVERIFY(session->panelViewportStateAvailable());
+
+        QVERIFY(session->applyExternalCatalog(
+            reordered, 15,
+            {{QStringLiteral("currentPath"),
+              QStringLiteral("/virtual/gallery-session-test/other")}}));
+        QCOMPARE(session->panelScrollOffset(), qreal(73));
+        QCOMPARE(session->panelViewportCursorEntryId(), QStringLiteral("c"));
+        QVERIFY(session->panelViewportStateAvailable());
+
         session->resetExternalSource();
         QCOMPARE(session->panelScrollOffset(), qreal(0));
         QVERIFY(session->panelViewportCursorEntryId().isEmpty());

@@ -114,6 +114,7 @@ private slots:
                     anchors.fill: parent
                     session: transitionSession
                     sourcePanel: sourcePanel
+                    theme: ({ "viewerBackground": "transparent" })
                     animationDuration: 300
                     onCloseCompleted: parent.closeCount++
                 }
@@ -232,6 +233,7 @@ private slots:
                     anchors.fill: parent
                     session: testSession
                     sourcePanel: sourcePanel
+                    theme: ({ "viewerBackground": "transparent" })
                     animationDuration: 100
                     onCloseCompleted: parent.closeCount++
                 }
@@ -265,6 +267,8 @@ private slots:
         QVERIFY(sourcePanel);
         QVERIFY(verticalScrollBar);
         QVERIFY(horizontalScrollBar);
+        QCOMPARE(viewerBackground->property("color").value<QColor>().alphaF(),
+                 0.0);
 
         QTRY_COMPARE_WITH_TIMEOUT(
             viewer->property("transitionProgress").toReal(), 1.0, 1000);

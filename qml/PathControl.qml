@@ -16,9 +16,15 @@ Item {
     // allowing embedded hosts to share their own chrome and content grid.
     property bool backgroundOnHoverOnly: false
     property real leadingInset: 15
-	// Hosts may align breadcrumb labels with their ordinary UI typography
-	// without changing the editable path field or standalone defaults.
-	property real breadcrumbFontPixelSize: 14
+    // Hosts may align breadcrumb labels with their ordinary UI typography
+    // without changing the editable path field or standalone defaults.
+    property real breadcrumbFontPixelSize: 14
+    property color pathTextColor: Style.text
+    property color pathHoveredColor: Style.pathBackgroundHovered
+    property color pathItemHoveredColor: Style.pathItemHovered
+    property color pathItemPressedColor: Style.pathItemPressed
+    property url localDriveIconSource: "qrc:/ZoinGallery/resources/DriveIcon.svg"
+    property url networkDriveIconSource: "qrc:/ZoinGallery/resources/NetworkDriveIcon.svg"
     property bool isNetworkDrive: text.startsWith("//")
     property string textNetworkFixed: isNetworkDrive ? text.slice(2) : text
     property var breadcrumbs: (textNetworkFixed.endsWith("/") ? textNetworkFixed.slice(0, -1) : textNetworkFixed).split("/")
@@ -62,7 +68,7 @@ Item {
         }
         height: 32
         color: pathMouse.containsMouse
-               ? Style.pathBackgroundHovered
+               ? pathRoot.pathHoveredColor
                : (backgroundOnHoverOnly ? "transparent"
                                         : Style.pathBackground)
         radius: 4
@@ -111,7 +117,11 @@ Item {
             anchors.centerIn: parent
             width: parent.width
             height: 24
-            color: folderMouse.containsMouse ? (folderMouse.pressed ? Style.pathItemPressed : Style.pathItemHovered) : "transparent"
+            color: folderMouse.containsMouse
+                   ? (folderMouse.pressed
+                      ? pathRoot.pathItemPressedColor
+                      : pathRoot.pathItemHoveredColor)
+                   : "transparent"
             radius: 4
         }
 
@@ -122,8 +132,8 @@ Item {
 
             Text {
                 id: folderText
-                color: Style.text
-				font.pixelSize: pathRoot.breadcrumbFontPixelSize
+                color: pathRoot.pathTextColor
+                font.pixelSize: pathRoot.breadcrumbFontPixelSize
                 renderType: Text.NativeRendering
             }
 
@@ -136,7 +146,7 @@ Item {
                 opacity: 0.5
 
                 icon.source: "qrc:/ZoinGallery/resources/PathSeparator.svg"
-                icon.color: Style.text
+                icon.color: pathRoot.pathTextColor
             }
         }
 
@@ -163,16 +173,21 @@ Item {
             Layout.preferredWidth: 24
             Layout.preferredHeight: parent.height
 
-            Image {
+            IconLabel {
+                width: 18
+                height: 18
                 anchors {
                     verticalCenter: parent.verticalCenter
                     right: parent.right
                     rightMargin: 7
                 }
 
-                source: isNetworkDrive ? "qrc:/ZoinGallery/resources/NetworkDriveIcon.svg" : "qrc:/ZoinGallery/resources/DriveIcon.svg"
-                sourceSize.width: 18
-                sourceSize.height: 18
+                icon.source: isNetworkDrive
+                             ? pathRoot.networkDriveIconSource
+                             : pathRoot.localDriveIconSource
+                icon.width: 18
+                icon.height: 18
+                icon.color: pathRoot.pathTextColor
             }
         }
 
@@ -278,7 +293,7 @@ Item {
         leftPadding: 7
         rightPadding: 10
         hasBackground: false
-        color: Style.text
+        color: pathRoot.pathTextColor
 
         onFocusChanged: {
             if (!focus && pathField.focusReason !== Qt.PopupFocusReason) {

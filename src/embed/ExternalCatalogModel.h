@@ -152,7 +152,8 @@ private:
     bool adoptCachedThumbnail(int row);
     void attachThumbnail(int row, const QString &providerId);
     void detachThumbnail(Entry &entry);
-    bool catalogMatches(const QVariantList &values) const;
+    bool catalogMatches(const QVariantList &values,
+                        bool *carriesAppearance) const;
     void clearPublishedImage(Entry &entry);
     void requestImageMetadataForRow(int row, bool highPriority);
     void scheduleMetadataPump();

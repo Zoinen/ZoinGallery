@@ -9,7 +9,6 @@
 #include "QmlAsyncImageProvider.h"
 #include "QmlImageProvider.h"
 #include "StorageLocations.h"
-#include "ThumbnailLoader.h"
 #include "ThumbnailMemoryCache.h"
 #include "ViewerWheelArea.h"
 
@@ -78,9 +77,10 @@ GalleryRuntime *GalleryRuntime::install(
     }
 
     registerTypes();
-    // Decoder registration is explicit so embedding never depends on a
-    // standalone executable's static initialization order.
-    ThumbnailLoader::init();
+    // Decoder registration and image-plugin enumeration are lazy. An idle
+    // embedded gallery does not need to load every image format plugin on the
+    // application's startup path; the first catalog/decode request performs
+    // the thread-safe initialization instead.
     auto *runtime = new GalleryRuntime(engine, options);
     engine->setProperty(RuntimePropertyName,
                         QVariant::fromValue(static_cast<QObject *>(runtime)));

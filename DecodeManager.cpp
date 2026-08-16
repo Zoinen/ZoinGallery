@@ -164,7 +164,8 @@ DecodeManager::DecodeManager(QObject *parent, int maxThreads)
     }
     const int MaxThreads =
         qMax(int(SpecialThreads::Last) + 1, requestedThreads);
-    qDebug() << "Using" << MaxThreads << "threads";
+    qDebug() << "Configured" << MaxThreads
+             << "decode workers (started on demand)";
     for (int i = 0; i < MaxThreads; i++) {
         WorkerInfo info{
             .thread = new QThread(this),
@@ -172,9 +173,6 @@ DecodeManager::DecodeManager(QObject *parent, int maxThreads)
         };
 
         _workers.append(info);
-
-        info.thread->start();
-        // info.thread->setPriority(QThread::IdlePriority);
     }
 }
 
@@ -859,6 +857,14 @@ void DecodeManager::processQueue() {
 
             connect(runner, &Runner::finished,
                     this, &DecodeManager::onRunnerFinished);
+            // Constructing a runtime must not fan out one operating-system
+            // thread per logical CPU before there is decode work. Starting a
+            // worker after its first runner has been assigned preserves the
+            // configured parallelism while keeping an idle embedded gallery
+            // effectively thread-free during application startup.
+            if (!_workers[workerIndex].thread->isRunning()) {
+                _workers[workerIndex].thread->start();
+            }
             QMetaObject::invokeMethod(runner, &Runner::run, Qt::QueuedConnection);
         }
     }

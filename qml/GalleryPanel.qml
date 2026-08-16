@@ -7,9 +7,9 @@ import ZoinGallery.Native 1.0
 FocusScope {
     id: root
     // Masonry delegates are intentionally recycled beyond the viewport.
-    // Embedded hosts place status/chrome immediately beside this item, so
-    // keep both painting and pointer delivery inside the panel boundary.
-    clip: true
+    // Clip them at the viewport itself. The root deliberately permits the
+    // scrollbar to extend into an embedding host's reserved trailing inset.
+    clip: false
 
     property var session
     property var theme: ({})
@@ -2222,6 +2222,7 @@ FocusScope {
     MasonryLayout {
         id: galleryLayout
         objectName: "galleryMasonryLayout"
+        clip: true
         persistSettings: false
         visible: !root.customContent
         enabled: !root.customContent
@@ -2230,12 +2231,11 @@ FocusScope {
             left: parent.left
             top: detailsHeader.visible ? detailsHeader.bottom : parent.top
             bottom: parent.bottom
-            // The classic Details list paints rows below an overlay scrollbar
-            // and uses the whole viewport width. Other presentations retain
-            // their established breathing room and reserved scrollbar lane.
-            right: root.presentationMode === "details"
-                   || root.presentationMode === "columns"
-                   ? parent.right : galleryScroll.left
+            // The viewport width is invariant. The vertical scrollbar is an
+            // overlay in the trailing-side breathing room, so a catalog
+            // crossing the scroll threshold never reflows tiles or changes
+            // the effective panel width.
+            right: parent.right
             leftMargin: root.presentationMode === "details" ? 0 : 6
             topMargin: root.presentationMode === "details" ? 0 : 6
             bottomMargin: root.presentationMode === "details" ? 0 : 6
@@ -2604,6 +2604,10 @@ FocusScope {
         anchors.top: galleryLayout.top
         anchors.bottom: galleryLayout.bottom
         anchors.right: parent.right
+        // f4 embeds the Gallery inside an 8px panel inset. Let the overlay
+        // occupy that reserved trailing lane instead of leaving another
+        // apparent padding strip to the right of the scrollbar.
+        anchors.rightMargin: -8
         z: 10
         visible: !root.customContent && root.presentationMode !== "columns"
                  && galleryLayout.needScroll

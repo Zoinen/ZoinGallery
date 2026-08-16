@@ -37,6 +37,75 @@ class ReusableViewerPrimitivesTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void pathControlAcceptsNativeWindowsSeparators() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+
+            Item {
+                id: testRoot
+                width: 640
+                height: 80
+                property string navigatedPath
+
+                PathControl {
+                    id: pathControl
+                    objectName: "pathControl"
+                    anchors.fill: parent
+                    windowsPathSeparators: true
+                    text: "C:\\Users\\Alice\\Pictures"
+                    navigationHandler: function(path) {
+                        testRoot.navigatedPath = path
+                    }
+                }
+            }
+        )QML", QStringLiteral("WindowsPathControl.qml"));
+        QVERIFY(root);
+        auto *pathControl = root->findChild<QQuickItem *>(
+            QStringLiteral("pathControl"));
+        QVERIFY(pathControl);
+
+        QCOMPARE(pathControl->property("normalizedText").toString(),
+                 QStringLiteral("C:/Users/Alice/Pictures"));
+        QCOMPARE(pathControl->property("breadcrumbs").toList(),
+                 QVariantList({QStringLiteral("C:"), QStringLiteral("Users"),
+                               QStringLiteral("Alice"),
+                               QStringLiteral("Pictures")}));
+
+        pathControl->setProperty("editMode", true);
+        QCoreApplication::processEvents();
+        QObject *pathField = root->findChild<QObject *>(
+            QStringLiteral("pathField"));
+        QVERIFY(pathField);
+        QCOMPARE(pathField->property("text").toString(),
+                 QStringLiteral("C:\\Users\\Alice\\Pictures"));
+
+        pathField->setProperty("text", QStringLiteral("D:\\Media\\Photos"));
+        QVERIFY(QMetaObject::invokeMethod(pathField, "accept"));
+        QCOMPARE(root->property("navigatedPath").toString(),
+                 QStringLiteral("D:/Media/Photos"));
+
+        pathControl->setProperty(
+            "text", QStringLiteral("\\\\server\\share\\folder"));
+        QCoreApplication::processEvents();
+        QCOMPARE(pathControl->property("normalizedText").toString(),
+                 QStringLiteral("//server/share/folder"));
+        QCOMPARE(pathControl->property("isNetworkDrive").toBool(), true);
+        QCOMPARE(pathControl->property("breadcrumbs").toList(),
+                 QVariantList({QStringLiteral("server"),
+                               QStringLiteral("share"),
+                               QStringLiteral("folder")}));
+
+        QVERIFY(QMetaObject::invokeMethod(
+            pathControl, "folderClicked",
+            Q_ARG(QVariant, QStringLiteral("share/folder"))));
+        QCOMPARE(root->property("navigatedPath").toString(),
+                 QStringLiteral("//server/share/folder"));
+    }
+
     void coldTierSizeChangeKeepsAnAtomicFittedViewport() {
         QQuickView view;
         view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));

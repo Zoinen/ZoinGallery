@@ -25,17 +25,20 @@ Item {
     property color pathItemPressedColor: Style.pathItemPressed
     property url localDriveIconSource: "qrc:/ZoinGallery/resources/DriveIcon.svg"
     property url networkDriveIconSource: "qrc:/ZoinGallery/resources/NetworkDriveIcon.svg"
-    property bool isNetworkDrive: text.startsWith("//")
-    property string textNetworkFixed: isNetworkDrive ? text.slice(2) : text
+    // Standalone ZoinGallery supplies canonical '/' paths, while embedded
+    // Windows hosts can naturally expose native '\\' paths. Accept both forms
+    // before building breadcrumbs and keep '/' as the navigation contract.
+    property bool windowsPathSeparators: Qt.platform.os === "windows"
+    readonly property string normalizedText:
+        windowsPathSeparators ? text.replace(/\\/g, "/") : text
+    property bool isNetworkDrive: normalizedText.startsWith("//")
+    property string textNetworkFixed:
+        isNetworkDrive ? normalizedText.slice(2) : normalizedText
     property var breadcrumbs: (textNetworkFixed.endsWith("/") ? textNetworkFixed.slice(0, -1) : textNetworkFixed).split("/")
 
-    function replaceAll(str, find, replace) {
-        return str.replace(new RegExp(find, 'g'), replace);
-    }
-
     function updatePathField() {
-        if (Qt.platform.os === "windows") {
-            pathField.text = replaceAll(pathRoot.text, "/", "\\")
+        if (windowsPathSeparators) {
+            pathField.text = normalizedText.replace(/\//g, "\\")
         }
         else {
             pathField.text = pathRoot.text
@@ -85,7 +88,8 @@ Item {
     }
 
     function folderClicked(path) {
-        navigateTo(rootFolder.text + "/" + path)
+        const basePath = (isNetworkDrive ? "//" : "") + rootFolder.text
+        navigateTo(basePath + "/" + path)
     }
 
     MouseArea {
@@ -280,6 +284,7 @@ Item {
 
     ZGS.TextField {
         id: pathField
+        objectName: "pathField"
         anchors {
             left: fixedPart.right
             top: parent.top
@@ -304,8 +309,8 @@ Item {
         Keys.onEscapePressed: editMode = false
 
         function accept() {
-            if (Qt.platform.os === "windows") {
-                pathRoot.navigateTo(replaceAll(pathField.text, "\\\\", "/"))
+            if (windowsPathSeparators) {
+                pathRoot.navigateTo(pathField.text.replace(/\\/g, "/"))
             }
             else {
                 pathRoot.navigateTo(pathField.text)

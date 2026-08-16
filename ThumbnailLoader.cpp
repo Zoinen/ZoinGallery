@@ -15,11 +15,6 @@
 
 #include <memory>
 
-//static const QStringList VectorImageExtensions = {"svg", "wmf", "emf"};
-//static const QStringList ImageQtExtensions = {"bmp", "png", "gif", "jp2", "jpc", "tga", "ico", "cur", "ppm", "pgm", "pbm", "svg", "wmf", "emf", "webp", "heic"};
-
-QStringList ThumbnailLoader::ImageQtExtensions;
-
 void ThumbnailLoader::init() {
     // Just to fully instantiate it here
     supportedFormats();
@@ -176,8 +171,10 @@ QImage ThumbnailLoader::rotateAndFlip(const QImage &image, ExifOrientation orien
 }
 
 QStringList ThumbnailLoader::supportedFormats() {
-    static QStringList formats;
-    if (formats.isEmpty()) {
+    // Function-local static initialization is serialized by C++. This keeps
+    // plugin discovery lazy without allowing two first decode requests to
+    // race while publishing the shared extension table.
+    static const QStringList formats = [] {
         QSet<QString> formatsSet;
         for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
             const auto decoder = ImageDecoderFactory::createDecoder(i);
@@ -189,9 +186,10 @@ QStringList ThumbnailLoader::supportedFormats() {
                 formatsSet.insert(QString("*.%1").arg(extension));
             }
         }
-        formats = QList(formatsSet.begin(), formatsSet.end());
-        qDebug() << "All supported formats:" << formats;
-    }
+        const QStringList result(formatsSet.begin(), formatsSet.end());
+        qDebug() << "All supported formats:" << result;
+        return result;
+    }();
     return formats;
 }
 

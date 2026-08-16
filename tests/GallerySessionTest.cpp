@@ -727,6 +727,75 @@ private slots:
         QVERIFY(!QCoreApplication::closingDown());
     }
 
+    void batchesExternalAppearanceChanges() {
+        QQmlEngine engine;
+        ZoinGallery::GalleryRuntime *runtime =
+            ZoinGallery::GalleryRuntime::install(&engine);
+        QVERIFY(runtime);
+        ZoinGallery::GallerySession *session =
+            runtime->createExternalSession(
+                QStringLiteral("appearance-batch"));
+        QVERIFY(session);
+
+        constexpr int entryCount = 128;
+        const QVariantMap initialStyle{
+            {QStringLiteral("icon"),
+             QStringLiteral("qrc:/custom/initial.svg")},
+        };
+        QVariantList catalog;
+        catalog.reserve(entryCount);
+        for (int row = 0; row < entryCount; ++row) {
+            QVariantMap value = entry(
+                QStringLiteral("appearance-%1").arg(row), row,
+                QStringLiteral("appearance-%1.txt").arg(row));
+            value.insert(QStringLiteral("highlightStyle"), initialStyle);
+            catalog.append(value);
+        }
+
+        QSignalSpy resetSpy(session->model(),
+                            &QAbstractItemModel::modelReset);
+        QSignalSpy changedSpy(session->model(),
+                              &QAbstractItemModel::dataChanged);
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        QCOMPARE(resetSpy.size(), 1);
+        QCOMPARE(changedSpy.size(), 0);
+        QCOMPARE(session->highlightStyleAt(64), initialStyle);
+
+        const QVariantMap updatedStyle{
+            {QStringLiteral("icon"),
+             QStringLiteral("qrc:/custom/updated.svg")},
+            {QStringLiteral("normal"), QVariantMap{
+                 {QStringLiteral("foreground"),
+                  QStringLiteral("#abcdef")},
+             }},
+        };
+        QVariantList appearance;
+        appearance.reserve(entryCount);
+        for (int row = 0; row < entryCount; ++row) {
+            appearance.append(QVariantMap{
+                {QStringLiteral("entryId"),
+                 QStringLiteral("appearance-%1").arg(row)},
+                {QStringLiteral("highlightStyle"), updatedStyle},
+            });
+        }
+
+        QVERIFY(session->applyExternalAppearance(appearance, 2));
+        QCOMPARE(changedSpy.size(), 1);
+        const QList<QVariant> arguments = changedSpy.constFirst();
+        QCOMPARE(arguments.at(0).value<QModelIndex>().row(), 0);
+        QCOMPARE(arguments.at(1).value<QModelIndex>().row(),
+                 entryCount - 1);
+        const QList<int> roles = arguments.at(2).value<QList<int>>();
+        QVERIFY(roles.contains(FileListModel::ImageFileRole));
+
+        // Replaying an equivalent semantic snapshot is a no-op for both the
+        // item properties and the model observers.
+        QVERIFY(session->applyExternalAppearance(appearance, 2));
+        QCOMPARE(changedSpy.size(), 1);
+
+        runtime->shutdown();
+    }
+
     void preservesPreviousIdentityAcrossCatalogDiffsAndViewerReloads() {
         QQmlEngine engine;
         engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));

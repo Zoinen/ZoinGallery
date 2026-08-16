@@ -88,6 +88,14 @@ QString normalizedThumbnailTransformKey(const QString &transformKey) {
     return thumbnailTransformKey(request);
 }
 
+QString defaultIconPath(bool directory, bool image) {
+    return directory
+        ? QStringLiteral("qrc:/ZoinGallery/resources/FolderIcon.svg")
+        : image
+            ? QStringLiteral("qrc:/ZoinGallery/resources/ImageIcon.svg")
+            : QStringLiteral("qrc:/ZoinGallery/resources/FileIcon.svg");
+}
+
 } // namespace
 
 ExternalCatalogModel::ExternalCatalogModel(
@@ -219,7 +227,10 @@ QHash<int, QByteArray> ExternalCatalogModel::roleNames() const {
 }
 
 bool ExternalCatalogModel::catalogMatches(
-    const QVariantList &values) const {
+    const QVariantList &values, bool *carriesAppearance) const {
+    if (carriesAppearance) {
+        *carriesAppearance = false;
+    }
     if (values.size() != _entries.size()) {
         return false;
     }
@@ -227,6 +238,10 @@ bool ExternalCatalogModel::catalogMatches(
     QSet<QString> seenIds;
     for (int row = 0; row < values.size(); ++row) {
         const QVariantMap map = values.at(row).toMap();
+        if (carriesAppearance
+            && map.contains(QStringLiteral("highlightStyle"))) {
+            *carriesAppearance = true;
+        }
         const Entry &current = _entries.at(row);
         const int sourceIndex =
             map.value(QStringLiteral("index"), row).toInt();
@@ -276,8 +291,9 @@ bool ExternalCatalogModel::applyCatalog(const QVariantList &values) {
     // that Gallery does not consume (for example IsCached). Advance the
     // session revision without tearing down identical image objects, queued
     // work, textures, or viewer state.
-    if (catalogMatches(values)) {
-        return true;
+    bool hasAppearance = false;
+    if (catalogMatches(values, &hasAppearance)) {
+        return !hasAppearance || applyAppearance(values);
     }
 
     const QString activeViewerEntryId = _viewerEntryId;
@@ -369,12 +385,18 @@ bool ExternalCatalogModel::applyCatalog(const QVariantList &values) {
         entry.item->setIndex(row);
         entry.item->setIsFolder(entry.directory);
         entry.item->setIsImage(entry.image);
-        entry.item->setIconPath(
-            entry.directory
-                ? QStringLiteral("qrc:/ZoinGallery/resources/FolderIcon.svg")
-                : entry.image
-                    ? QStringLiteral("qrc:/ZoinGallery/resources/ImageIcon.svg")
-                    : QStringLiteral("qrc:/ZoinGallery/resources/FileIcon.svg"));
+        QString iconPath = defaultIconPath(entry.directory, entry.image);
+        if (map.contains(QStringLiteral("highlightStyle"))) {
+            const QVariantMap style = map.value(
+                QStringLiteral("highlightStyle")).toMap();
+            entry.item->setHighlightStyle(style);
+            const QString styledIcon = style.value(
+                QStringLiteral("icon")).toString();
+            if (!styledIcon.isEmpty()) {
+                iconPath = styledIcon;
+            }
+        }
+        entry.item->setIconPath(iconPath);
         entry.item->setIsSelected(entry.selected);
         entry.item->setImageProviderName(_thumbnailProviderName);
 
@@ -466,6 +488,8 @@ bool ExternalCatalogModel::applyAppearance(const QVariantList &values) {
     if (_shutdown) {
         return false;
     }
+    QList<int> changedRows;
+    changedRows.reserve(values.size());
     for (const QVariant &value : values) {
         const QVariantMap map = value.toMap();
         const int row = rowForEntryId(map.value(QStringLiteral("entryId")).toString());
@@ -475,15 +499,36 @@ bool ExternalCatalogModel::applyAppearance(const QVariantList &values) {
         Entry &entry = _entries[row];
         const QVariantMap style = map.value(QStringLiteral("highlightStyle")).toMap();
         const QString styledIcon = style.value(QStringLiteral("icon")).toString();
-        const QString fallbackIcon = entry.directory
-            ? QStringLiteral("qrc:/ZoinGallery/resources/FolderIcon.svg")
-            : entry.image
-                ? QStringLiteral("qrc:/ZoinGallery/resources/ImageIcon.svg")
-                : QStringLiteral("qrc:/ZoinGallery/resources/FileIcon.svg");
+        const QString fallbackIcon = defaultIconPath(
+            entry.directory, entry.image);
+        const QString iconPath = styledIcon.isEmpty()
+            ? fallbackIcon : styledIcon;
+        if (entry.item->highlightStyle() == style
+            && entry.item->iconPath() == iconPath) {
+            continue;
+        }
         entry.item->setHighlightStyle(style);
-        entry.item->setIconPath(styledIcon.isEmpty() ? fallbackIcon : styledIcon);
-        const QModelIndex changed = index(row, 0);
-        emit dataChanged(changed, changed,
+        entry.item->setIconPath(iconPath);
+        changedRows.append(row);
+    }
+
+    // Host appearance snapshots normally cover the whole catalog. Emitting
+    // one signal per row made every QML proxy/layout observer repeat its own
+    // work thousands of times. Preserve precise ranges for sparse updates,
+    // but collapse adjacent changed rows into one notification.
+    std::sort(changedRows.begin(), changedRows.end());
+    changedRows.erase(std::unique(changedRows.begin(), changedRows.end()),
+                      changedRows.end());
+    for (qsizetype offset = 0; offset < changedRows.size();) {
+        const int first = changedRows.at(offset);
+        int last = first;
+        ++offset;
+        while (offset < changedRows.size()
+               && changedRows.at(offset) == last + 1) {
+            last = changedRows.at(offset);
+            ++offset;
+        }
+        emit dataChanged(index(first, 0), index(last, 0),
                          {FileListModel::ImageFileRole});
     }
     return true;

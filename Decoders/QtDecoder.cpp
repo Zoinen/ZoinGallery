@@ -6,15 +6,16 @@
 
 REGISTER_DECODER_DEFINITION(QtDecoder)
 
-QStringList QtDecoder::_formats;
-
-QtDecoder::QtDecoder() {
-    if (_formats.isEmpty()) {
+const QStringList &QtDecoder::formats() {
+    static const QStringList supported = [] {
+        QStringList result;
         for (QByteArray arr : QImageReader::supportedImageFormats()) {
-            _formats.append(QString::fromLatin1(arr));
+            result.append(QString::fromLatin1(arr));
         }
-        qDebug() << "Qt plugin formats:" << _formats;
-    }
+        qDebug() << "Qt plugin formats:" << result;
+        return result;
+    }();
+    return supported;
 }
 
 ExifOrientation mapQtTransformationToExifOrientation(QImageIOHandler::Transformations transformation) {
@@ -52,7 +53,7 @@ bool QtDecoder::readMetadata(ImageInfo& result) {
 }
 
 QStringList QtDecoder::supportedFormats() {
-    return _formats;
+    return formats();
 }
 
 QImage QtDecoder::decode(const QString& mimeType, const QByteArray &data, QSize targetSize) {

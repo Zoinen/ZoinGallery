@@ -13,6 +13,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 #include <thread>
@@ -55,11 +56,23 @@ private slots:
             DecodeManager automatic(nullptr, 0);
             QCOMPARE(automatic.workerCount(),
                      qMax(reservedMinimum, ideal));
+            const QList<QThread *> workers =
+                automatic.findChildren<QThread *>();
+            QCOMPARE(workers.size(), automatic.workerCount());
+            QVERIFY(std::none_of(
+                workers.cbegin(), workers.cend(),
+                [](const QThread *worker) { return worker->isRunning(); }));
         }
         {
             DecodeManager bounded(nullptr, 4);
             QCOMPARE(bounded.workerCount(),
                      qMax(reservedMinimum, qMin(ideal, 4)));
+            const QList<QThread *> workers =
+                bounded.findChildren<QThread *>();
+            QCOMPARE(workers.size(), bounded.workerCount());
+            QVERIFY(std::none_of(
+                workers.cbegin(), workers.cend(),
+                [](const QThread *worker) { return worker->isRunning(); }));
         }
     }
 

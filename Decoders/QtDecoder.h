@@ -7,7 +7,7 @@ class QtDecoder : public ImageDecoderInterface {
     REGISTER_DECODER_DECLARATION(QtDecoder, -100)
 
 public:
-    QtDecoder();
+    QtDecoder() = default;
     QStringList supportedFormats() override;
 
     bool readMetadata(ImageInfo& result) override;
@@ -15,7 +15,7 @@ public:
     QImage decode(const QString& mimeType, const QByteArray& data, QSize targetSize) override;
 
 private:
-    static QStringList _formats;
+    static const QStringList &formats();
 };
 
 #endif // QTIMAGEDECODER_H

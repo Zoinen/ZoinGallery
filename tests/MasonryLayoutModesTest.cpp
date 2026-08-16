@@ -21,6 +21,7 @@
 #include <QQuickView>
 #include <QSGRendererInterface>
 #include <QTemporaryDir>
+#include <QUrlQuery>
 #include <QtTest>
 
 #include <cmath>
@@ -3710,6 +3711,57 @@ private slots:
                  1); // Image.PreserveAspectFit
         QCOMPARE(sourceColourIcon->metaObject()->indexOfProperty("color"),
                  -1);
+        auto *emptyThumbnail = findItem(
+            QStringLiteral("galleryThumbnail-0"));
+        auto *previewBackdrop = findItem(
+            QStringLiteral("galleryThumbnailBackdrop-0"));
+        QVERIFY(emptyThumbnail && previewBackdrop);
+        QVERIFY(!emptyThumbnail->isVisible());
+        QVERIFY(previewBackdrop->isVisible());
+        QCOMPARE(previewBackdrop->parentItem(),
+                 sourceColourIcon->parentItem());
+        const auto previewChildren = previewBackdrop->parentItem()->childItems();
+        QVERIFY(previewChildren.indexOf(previewBackdrop)
+                < previewChildren.indexOf(sourceColourIcon));
+
+        // The empty thumbnail layer used to remain visible because its `url`
+        // property was compared directly with a string. Its black loading
+        // backdrop sat above full-colour icons and multiplied every RGB
+        // channel by 0.8 (0.7 with the dark system colour scheme). The card
+        // remains visible now, but its earlier sibling position keeps the
+        // opaque source-colour pixels untouched.
+        QTest::qWait(100);
+        const QImage sourceColourFrame = view.grabWindow();
+        QVERIFY(!sourceColourFrame.isNull());
+        const QPointF sceneSample = sourceColourIcon->mapToScene(QPointF(
+            sourceColourIcon->width() * 0.25,
+            sourceColourIcon->height() * 0.5));
+        const qreal frameDpr = qreal(sourceColourFrame.width()) / view.width();
+        const QPoint frameSample(qRound(sceneSample.x() * frameDpr),
+                                 qRound(sceneSample.y() * frameDpr));
+        QVERIFY(sourceColourFrame.rect().contains(frameSample));
+        const QColor renderedSourceColour = sourceColourFrame.pixelColor(
+            frameSample);
+        QVERIFY2(qAbs(renderedSourceColour.red() - 241) <= 1
+                 && qAbs(renderedSourceColour.green() - 42) <= 1
+                 && qAbs(renderedSourceColour.blue() - 83) <= 1,
+                 qPrintable(renderedSourceColour.name(QColor::HexArgb)));
+
+        auto *sourceColourBrick = sourceColourIcon->parentItem()
+            ? sourceColourIcon->parentItem()->parentItem() : nullptr;
+        QVERIFY(sourceColourBrick);
+        QVariant sizedRoute;
+        QVERIFY(QMetaObject::invokeMethod(
+            sourceColourBrick, "sourceColorIconAtSize",
+            Q_RETURN_ARG(QVariant, sizedRoute),
+            Q_ARG(QVariant, QVariant(QStringLiteral(
+                "image://f4-icons/file/LQ?size=128&dpr=2&revision=1"))),
+            Q_ARG(QVariant, QVariant(16.0))));
+        const QUrlQuery sizedQuery(QUrl(sizedRoute.toString()));
+        QCOMPARE(sizedQuery.queryItemValue(QStringLiteral("size")),
+                 QStringLiteral("16"));
+        QCOMPARE(sizedQuery.queryItemValue(QStringLiteral("dpr")),
+                 QStringLiteral("1"));
 
         panel->setProperty("presentationMode", QStringLiteral("details"));
         QTRY_VERIFY_WITH_TIMEOUT(
@@ -4007,6 +4059,51 @@ private slots:
         QCOMPARE(runtime->thumbnailCachePendingRequestCount(), qsizetype(0));
         QCOMPARE(runtime->thumbnailCacheMissCount(), quint64(0));
         QCOMPARE(runtime->thumbnailCacheStoreCount(), quint64(0));
+    }
+
+    void verticalScrollBarDoesNotChangeViewportWidth() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("stable-scrollbar-lane"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(1), 1));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("stableScrollbarLaneSession"),
+            QStringLiteral("grid"));
+        QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        auto *scrollBar = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryPanelScrollBar"));
+        QVERIFY(panelItem && layout && scrollBar);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 1, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!scrollBar->isVisible(), 3000);
+
+        const qreal widthWithoutScrollBar = layout->width();
+        const qreal leftInset = layout->x();
+        const qreal rightInset = panelItem->width()
+            - layout->x() - layout->width();
+        QCOMPARE(leftInset, 6.0);
+        QCOMPARE(rightInset, leftInset);
+
+        QVERIFY(session->applyExternalCatalog(plainCatalog(200), 2));
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 200, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(scrollBar->isVisible(), 3000);
+        QCOMPARE(layout->x(), leftInset);
+        QCOMPARE(layout->width(), widthWithoutScrollBar);
+        QCOMPARE(panelItem->width() - layout->x() - layout->width(),
+                 rightInset);
+        QCOMPARE(scrollBar->x() + scrollBar->width(),
+                 panelItem->width() + 8.0);
+
+        runtime->shutdown();
     }
 };
 

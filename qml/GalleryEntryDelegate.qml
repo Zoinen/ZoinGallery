@@ -124,6 +124,26 @@ BrickItem {
         return path >= 0 && value.indexOf("/lucide/", path) === path
     }
 
+    // f4 supplies one model icon URL that can be reused by every Gallery
+    // presentation. Native Windows icon resources contain separately drawn
+    // small frames; rendering the model's 128-DIP Gallery frame into a 16-DIP
+    // Details slot makes those icons noticeably darker and softer than
+    // Explorer. Retarget only image-provider file routes to the live visual
+    // size. Ordinary files/qrc URLs and Lucide routes remain untouched.
+    function sourceColorIconAtSize(source, logicalSize) {
+        let value = source ? source.toString() : ""
+        if (value.indexOf("image://") !== 0
+                || value.indexOf("/file/") < 0
+                || value.indexOf("size=") < 0)
+            return value
+
+        const size = Math.max(1, Math.round(Number(logicalSize) || 1))
+        const dpr = Math.max(0.5, Number(renderDpr) || 1)
+        value = value.replace(/([?&])size=[^&]*/, "$1size=" + size)
+        value = value.replace(/([?&])dpr=[^&]*/, "$1dpr=" + dpr)
+        return value
+    }
+
     Rectangle {
         id: selectionSurface
         objectName: "gallerySelectionSurface-" + brick.viewIndex
@@ -258,7 +278,9 @@ BrickItem {
                 anchors.centerIn: parent
                 width: brick.panelRoot.detailsIconSize
                 height: brick.panelRoot.detailsIconSize
-                source: brick.model ? brick.model.iconPath : ""
+                source: brick.sourceColorIconAtSize(
+                    brick.model ? brick.model.iconPath : "",
+                    brick.panelRoot.detailsIconSize)
                 fillMode: Image.PreserveAspectFit
                 smooth: true
                 cache: false
@@ -358,6 +380,24 @@ BrickItem {
                                   : brick.effectivePreviewRect.height
         clip: true
 
+        Rectangle {
+            id: previewBackdrop
+            objectName: "galleryThumbnailBackdrop-" + brick.viewIndex
+            anchors.fill: parent
+            radius: 4
+            color: Qt.styleHints.colorScheme === Qt.Dark
+                   ? Qt.rgba(0, 0, 0, 0.3)
+                   : Qt.rgba(0, 0, 0, 0.2)
+            // The card is presentation chrome, not part of the thumbnail.
+            // Keep it below both fallback icon renderers so an empty image
+            // URL can never dim an opaque native/system icon again.
+            visible: (brick.masonryMode || brick.gridMode)
+                     && thumbnailSource.status !== Image.Ready
+                     && !(brick.panelRoot.viewerTransitionActive
+                          && brick.panelRoot.viewerTransitionEntryId
+                             === brick.entryId)
+        }
+
         IconLabel {
             id: fallbackIcon
             objectName: brick.detailsMode ? ""
@@ -408,7 +448,8 @@ BrickItem {
             anchors.centerIn: parent
             width: fallbackIcon.width
             height: fallbackIcon.height
-            source: fallbackIcon.source
+            source: brick.sourceColorIconAtSize(
+                fallbackIcon.source, width)
             fillMode: Image.PreserveAspectFit
             smooth: true
             cache: false
@@ -447,7 +488,10 @@ BrickItem {
             height: Math.round(parent.height * brick.renderDpr)
                     / brick.renderDpr
             property url source: brick.model ? brick.model.imageIdUrl : ""
-            visible: source !== ""
+            // `source` is a url value. Strictly comparing that object with a
+            // string makes even an empty URL look non-empty, leaving the dark
+            // loading backdrop above ordinary file/folder icons.
+            visible: source.toString() !== ""
                      && !(brick.panelRoot.viewerTransitionActive
                           && brick.panelRoot.viewerTransitionEntryId
                              === brick.entryId)
@@ -457,23 +501,6 @@ BrickItem {
             // standalone ImageView, the source stays hidden and feeds the
             // unsharp-mask, checkerboard and rounded-corner shader. Each mode
             // retains its established Crop/Fit policy below.
-            Rectangle {
-                objectName: "galleryThumbnailBackdrop-" + brick.viewIndex
-                readonly property bool enabledForPresentation:
-                    brick.masonryMode || brick.gridMode
-                anchors.fill: parent
-                radius: 4
-                color: Qt.styleHints.colorScheme === Qt.Dark
-                       ? Qt.rgba(0, 0, 0, 0.3)
-                       : Qt.rgba(0, 0, 0, 0.2)
-                // Compact Columns/Details slots must remain visually clean:
-                // no card/checkerboard layer underneath their small icon or
-                // preview.  Larger image-centric presentations retain the
-                // loading backdrop and transparency affordance.
-                visible: enabledForPresentation
-                         && thumbnailSource.status !== Image.Ready
-            }
-
             Image {
                 id: thumbnailSource
                 objectName: "galleryThumbnailImage-" + brick.viewIndex

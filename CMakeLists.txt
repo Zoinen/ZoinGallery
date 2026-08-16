@@ -286,7 +286,11 @@ target_include_directories(ZoinGalleryCore
         ${WEBP_INCLUDE_DIR}
         ${TURBOJPEG_INCLUDE_DIR})
 
-add_library(ZoinGalleryQml SHARED)
+if(BUILD_SHARED_LIBS)
+    add_library(ZoinGalleryQml SHARED)
+else()
+    add_library(ZoinGalleryQml STATIC)
+endif()
 add_library(ZoinGallery::Qml ALIAS ZoinGalleryQml)
 set_target_properties(ZoinGalleryQml PROPERTIES EXPORT_NAME Qml)
 target_compile_features(ZoinGalleryQml PRIVATE cxx_std_20)
@@ -509,7 +513,9 @@ set(ZOIN_QML_FILES
     qml/GalleryScrollBar.qml
     qml/SphericViewer.qml
     qml/PathControl.qml
+    qml/TitleButton.qml
     ZGStyle/Style.qml
+    ZGStyle/Button.qml
     ZGStyle/TextField.qml
     ZGStyle/ToolTip.qml
     ZGStyle/Menu.qml
@@ -533,10 +539,8 @@ if(ZOIN_BUILD_STANDALONE)
         qml/ViewerMode.qml
         qml/RoundCorners.qml
         qml/CacheViewer.qml
-        qml/TitleButton.qml
         ZGStyle/ScrollBar.qml
         ZGStyle/Slider.qml
-        ZGStyle/Button.qml
         ZGStyle/TabBar.qml
         ZGStyle/TabButton.qml
         ZGStyle/Label.qml)
@@ -760,6 +764,9 @@ if(APPLE AND ZOIN_BUILD_STANDALONE)
     endif()
 endif()
 
+option(ZOIN_ENABLE_INSTALL "Generate ZoinGallery package installation rules" ON)
+
+if(ZOIN_ENABLE_INSTALL)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -825,3 +832,4 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/ZoinGalleryConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/ZoinGalleryConfigVersion.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/ZoinGallery")
+endif()

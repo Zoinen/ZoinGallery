@@ -53,7 +53,7 @@ QStringList WebpDecoder::supportedFormats() {
 }
 
 bool WebpDecoder::readMetadata(ImageInfo &result) {
-    if (!isFormatSupported(result.path)) {
+    if (!isFormatSupported(result.formatHint())) {
         return false;
     }
 
@@ -87,7 +87,7 @@ bool WebpDecoder::readMetadata(ImageInfo &result) {
 }
 
 bool WebpDecoder::readPreviewAndMime(ImageData &result) {
-    if (!isFormatSupported(result.request.info.path)) {
+    if (!isFormatSupported(result.request.info.formatHint())) {
         return false;
     }
 

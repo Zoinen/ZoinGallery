@@ -1660,7 +1660,7 @@ void MasonryLayout::updateProperties(bool animate) {
                         if (isEmbedded() && dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()->fileName() == "2015.07.09 Каланча") {
                             qDebug() << "ANIMATE" << i << dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem() <<
                                 roundRect(_bricks[i].item->geometry()) << roundRect(_bricks[i].geometry()) <<
-                                _bricks[i].image->info().path;
+                                _bricks[i].image->info().sourceIdentity();
                         }
                     }
                     _bricks[i].item->setGeometry(
@@ -1780,7 +1780,7 @@ void MasonryLayout::planThumbnailForIndex(
     const ImageInfo info = image->info();
     const QString transformKey = previewTransformKey();
     const bool sameSource =
-        brick.lastPlannedSourcePath == info.path &&
+        brick.lastPlannedSourcePath == info.sourceIdentity() &&
         brick.lastPlannedModified == info.lastModified &&
         brick.lastPlannedFileSize == info.fileSize &&
         brick.lastPlannedVersionToken == info.sourceVersionToken;
@@ -1793,7 +1793,7 @@ void MasonryLayout::planThumbnailForIndex(
                                   const QSize &plannedSize) {
         brick.lastPlannedTargetSize = plannedSize;
         brick.lastPlannedTransformKey = transformKey;
-        brick.lastPlannedSourcePath = info.path;
+        brick.lastPlannedSourcePath = info.sourceIdentity();
         brick.lastPlannedModified = info.lastModified;
         brick.lastPlannedFileSize = info.fileSize;
         brick.lastPlannedVersionToken = info.sourceVersionToken;
@@ -1979,8 +1979,8 @@ void MasonryLayout::planViewportThumbnails(
         QSet<QString> keys;
         keys.reserve(requests.size());
         for (const ImageDecodeRequest &request : requests) {
-            keys.insert(request.info.path + QChar(0x1f) +
-                        QString::number(request.info.sourceVersionToken) +
+            keys.insert(request.info.sourceIdentity() + QChar(0x1f) +
+                        request.info.sourceVersionToken +
                         QChar(0x1f) +
                         QString::number(request.info.fileSize) +
                         QChar(0x1f) +

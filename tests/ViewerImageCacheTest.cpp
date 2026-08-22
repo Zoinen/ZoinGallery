@@ -575,6 +575,37 @@ private slots:
                  QColor(31, 191, 79));
     }
 
+    void authoritativeDerivedCacheSatisfiesExactFitPlan() {
+        const QSize originalSize(4000, 3000);
+        const QSize viewportSize(1000, 750);
+
+        ImageFile item;
+        configureImage(item, QStringLiteral("derived-fit.png"),
+                       originalSize);
+        const QList<ImageFile *> items{&item};
+
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        ViewerImageCache cache(QStringLiteral("derived-fit-"), store);
+        const ViewerImageCache::RequestPlan firstPlan =
+            cache.planRequest(items, 0, viewportSize, 1);
+        QCOMPARE(firstPlan.decodeRequests.size(), 1);
+        const ImageDecodeRequest request = firstPlan.decodeRequests.first();
+
+        QImage derived(request.targetSize, QImage::Format_RGBA8888);
+        derived.fill(QColor(47, 127, 223));
+        DecodedImageInfo derivedInfo;
+        derivedInfo.decoderUsed = QStringLiteral("derived-cache");
+        derivedInfo.isFromCache = true;
+        derivedInfo.isAuthoritativeDerivedCache = true;
+        QVERIFY(cache.storeDecodedImage(request, derived, derivedInfo).accepted);
+
+        const ViewerImageCache::RequestPlan repeatPlan =
+            cache.planRequest(items, 0, viewportSize, 1);
+        QCOMPARE(repeatPlan.cachedImages.size(), 1);
+        QVERIFY(repeatPlan.decodeRequests.isEmpty());
+        QVERIFY(!cache.needsDecode(request));
+    }
+
     void equalSizeSourceDecodeReplacesCachedLossyFullSizeEntry() {
         const QSize originalSize(640, 480);
         const QSize viewportSize(2048, 1536);
@@ -758,7 +789,7 @@ private slots:
         info.lastModified = QDateTime::fromMSecsSinceEpoch(
             firstVersion / 1'000'000);
         info.fileSize = 4096;
-        info.sourceVersionToken = firstVersion;
+        info.sourceVersionToken = QString::number(firstVersion);
         item.setInfo(info);
 
         const QList<ImageFile *> items{&item};
@@ -780,7 +811,7 @@ private slots:
         QVERIFY(firstStored.url.contains(
             QStringLiteral("v%1-s4096-").arg(firstVersion)));
 
-        info.sourceVersionToken = secondVersion;
+        info.sourceVersionToken = QString::number(secondVersion);
         // QDateTime and file size intentionally remain identical.
         item.setInfo(info);
         const ViewerImageCache::RequestPlan refreshedPlan =
@@ -791,7 +822,7 @@ private slots:
         QCOMPARE(refreshedPlan.decodeRequests.size(), 1);
         QCOMPARE(refreshedPlan.decodeRequests.first()
                      .info.sourceVersionToken,
-                 secondVersion);
+                 QString::number(secondVersion));
 
         QImage refreshedFrame(
             refreshedPlan.decodeRequests.first().targetSize,
@@ -808,7 +839,7 @@ private slots:
         QVERIFY(store->snapshot(imageIdFromUrl(firstStored.url)).isNull());
         QCOMPARE(cache.entryForPath(item.fullPath(), false)
                      .sourceVersionToken,
-                 secondVersion);
+                 QString::number(secondVersion));
     }
 
     void knownSourceVersionRefreshesEntryStoredWithoutVersion() {

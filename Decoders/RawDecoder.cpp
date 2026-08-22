@@ -131,7 +131,7 @@ QStringList RawDecoder::supportedFormats() {
 
 #include <QElapsedTimer>
 bool RawDecoder::readMetadata(ImageInfo &result) {
-    if (!isFormatSupported(result.path)) {
+    if (!isFormatSupported(result.formatHint())) {
         return false;
     }
 
@@ -161,7 +161,7 @@ bool RawDecoder::readMetadata(ImageInfo &result) {
 }
 
 bool RawDecoder::readPreviewAndMime(ImageData &result) {
-    if (!isFormatSupported(result.request.info.path)) {
+    if (!isFormatSupported(result.request.info.formatHint())) {
         return false;
     }
 

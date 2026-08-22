@@ -2,12 +2,14 @@
 #define ZOINGALLERY_EXTERNALCATALOGMODEL_H
 
 #include "FileListModel.h"
+#include "ImageProbe.h"
 
 #include <QAbstractListModel>
 #include <QHash>
 #include <QSharedPointer>
 #include <QSet>
 #include <QStringList>
+#include <QTimer>
 #include <QVariantList>
 
 class DecodeManager;
@@ -86,6 +88,9 @@ public:
     quint64 metadataSubmittedBatchCount() const;
     static constexpr qsizetype metadataRequestLimit() { return 64; }
     static constexpr qsizetype metadataRefillLowWatermark() { return 32; }
+    static constexpr qsizetype probeRequestLimit() { return 32; }
+    static constexpr qsizetype probeRefillLowWatermark() { return 16; }
+    static constexpr qsizetype catalogFitRequestLimit() { return 8; }
 
     void decodeImages(const QList<ImageDecodeRequest> &requests) override;
     void requestImageMetadata(const QList<int> &rows,
@@ -105,6 +110,8 @@ private:
         QString id;
         int sourceIndex = -1;
         QString name;
+        ImageSourceDescriptor source;
+        QString contentVersion;
         QString localPath;
         bool directory = false;
         bool image = false;
@@ -130,33 +137,71 @@ private:
         QString admittedTransformKey;
     };
 
+    struct BackgroundMetadataRetry {
+        QString sourceIdentity;
+        QString contentVersion;
+        QString resourceId;
+        qint64 notBeforeMs = 0;
+    };
+
+    struct BackgroundDecodeRetry {
+        ImageDecodeRequest request;
+        qint64 notBeforeMs = 0;
+    };
+
     void handleImageInfo(const ImageInfo &info);
+    void handleImageProbe(const ImageProbeResult &result);
     void handleImageReady(const ImageDecodeRequest &request,
                           const QImage &image,
                           const DecodedImageInfo &decodedInfo);
+    void handleImageReadFailed(const ImageDecodeRequest &request);
     void handleThumbnailFrameAvailable(const QString &sourceIdentity,
-                                       qint64 versionToken,
+                                       const QString &versionToken,
                                        qint64 sourceFileSize,
                                        const QSize &requestedSize,
                                        const QString &transformKey,
                                        const QString &providerId);
     void handleThumbnailFrameEvicted(const QString &providerId);
     void handleThumbnailRequestReleased(const QString &sourceIdentity,
-                                        qint64 versionToken,
+                                        const QString &versionToken,
                                         qint64 sourceFileSize,
                                         const QSize &requestedSize,
                                         const QString &transformKey,
                                         bool retryWaiters);
     void releaseFailedThumbnailRequest(
-        const ImageDecodeRequest &request);
+        const ImageDecodeRequest &request, bool retryWaiters = false);
+    void scheduleSourceDecodeRetry(const ImageDecodeRequest &request);
     bool adoptCachedThumbnail(int row);
     void attachThumbnail(int row, const QString &providerId);
     void detachThumbnail(Entry &entry);
     bool catalogMatches(const QVariantList &values) const;
     void clearPublishedImage(Entry &entry);
     void requestImageMetadataForRow(int row, bool highPriority);
+    void enqueueProbeRows(const QList<int> &rows, bool highPriority);
+    void scheduleProbePump();
+    void pumpProbeRequests();
+    void resetProgressivePipeline();
+    bool probeResolvedFor(const Entry &entry) const;
+    bool probeBarrierReached() const;
+    void beginCatalogFitPass();
+    void scheduleCatalogFitPump();
+    void pumpCatalogFitRequests();
+    ImageDecodeRequest catalogFitRequestForRow(int row) const;
+    void stabilizeViewerFitRequest(ImageDecodeRequest &request) const;
+    void completeCatalogFitRequest(const ImageDecodeRequest &request);
+    bool viewerFitWindowReady(int row, int count,
+                              const QSize &viewportSize) const;
+    void tryScheduleDeferredNative();
+    void finishDeferredNativeDwell();
+    void invalidateNativeDwell();
     void scheduleMetadataPump();
     void pumpMetadataRequests();
+    void scheduleMetadataRetry(const QString &sourceIdentity,
+                               const QString &contentVersion,
+                               const QString &resourceId,
+                               bool background);
+    void scheduleBackgroundRetryWake();
+    void processBackgroundRetries();
     void resetMetadataPlanner();
     void scheduleViewerDecode();
     void scheduleViewerDecodeAt(int row, const QSize &viewportSize,
@@ -178,10 +223,10 @@ private:
     ViewerImageCache _viewerImageCache;
     QList<Entry> _entries;
     QHash<QString, int> _idToRow;
-    QHash<QString, int> _pathToRow;
+    QHash<QString, int> _sourceToRow;
     QMultiHash<QString, QString> _sourceEntryIds;
     QMultiHash<QString, QString> _providerEntryIds;
-    QHash<QString, qint64> _metadataPendingVersions;
+    QHash<QString, QString> _metadataPendingVersions;
     QSet<QString> _metadataResolvedPaths;
     QList<int> _metadataVisibleRows;
     QList<int> _metadataOverscanRows;
@@ -192,14 +237,46 @@ private:
     quint64 _metadataSubmittedBatches = 0;
     bool _catalogMetadataRequested = false;
     bool _metadataPumpScheduled = false;
+    QHash<QString, int> _metadataRetryAttempts;
+    QSet<QString> _metadataRetryScheduled;
+    QHash<QString, BackgroundMetadataRetry> _backgroundMetadataRetries;
+    QHash<QString, QString> _probePendingVersions;
+    QHash<QString, QString> _probeResolvedVersions;
+    QSet<QString> _probeRetryableSources;
+    QHash<QString, int> _probeRetryAttempts;
+    QHash<QString, qint64> _probeRetryNotBeforeMs;
+    QList<int> _probeVisibleRows;
+    QList<int> _probeOverscanRows;
+    QList<int> _probeUrgentRows;
+    int _catalogProbeCursor = 0;
+    bool _catalogProbeRequested = false;
+    bool _probePumpScheduled = false;
+    bool _probePassComplete = false;
+    QList<int> _catalogFitRows;
+    QSet<QString> _catalogFitPendingKeys;
+    QSet<QString> _catalogFitResolvedSources;
+    QSet<QString> _catalogFitWaitingMetadata;
+    bool _catalogFitStarted = false;
+    bool _catalogFitPumpScheduled = false;
     int _cursorRow = -1;
     quint64 _nextImageSerial = 0;
     QString _viewerEntryId;
     QSize _viewerViewportSize;
+    QSize _lastViewerFitViewportSize = QSize(1920, 1080);
+    QString _deferredNativeEntryId;
+    QTimer _nativeDwellTimer;
+    quint64 _nativeDwellGeneration = 0;
+    quint64 _scheduledNativeDwellGeneration = 0;
+    QString _scheduledNativeDwellEntryId;
+    QSize _scheduledNativeDwellFitViewportSize;
     QString _lastViewerImageUrl;
     QHash<QString, ViewerPlan> _viewerPlans;
     QSet<QString> _pendingViewerRequests;
     QHash<QString, PendingThumbnailRequest> _pendingThumbnailRequests;
+    QHash<QString, int> _sourceDecodeRetryAttempts;
+    QSet<QString> _sourceDecodeRetryScheduled;
+    QHash<QString, BackgroundDecodeRetry> _backgroundDecodeRetries;
+    QTimer _backgroundRetryTimer;
     bool _shutdown = false;
 };
 

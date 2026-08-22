@@ -9,6 +9,7 @@
 #include "QmlAsyncImageProvider.h"
 #include "QmlImageProvider.h"
 #include "StorageLocations.h"
+#include "SharedImageSourceProvider.h"
 #include "ThumbnailLoader.h"
 #include "ThumbnailMemoryCache.h"
 #include "ViewerWheelArea.h"
@@ -61,6 +62,7 @@ public:
     QString asyncProviderName;
     QSharedPointer<ProviderImageStore> store;
     QSharedPointer<ThumbnailMemoryCache> thumbnailCache;
+    QSharedPointer<ImageSourceProvider> imageSourceProvider;
     DecodeManager *decodeManager = nullptr;
     QmlAsyncImageProvider *asyncProvider = nullptr; // owned by QQmlEngine
     QList<QPointer<GallerySession>> sessions;
@@ -139,13 +141,22 @@ GalleryRuntime::GalleryRuntime(
     d->store = QSharedPointer<ProviderImageStore>::create();
     d->thumbnailCache = QSharedPointer<ThumbnailMemoryCache>::create(
         d->store, d->options.thumbnailCacheByteBudget);
+    QSharedPointer<ImageSourceProvider> configuredProvider =
+        d->options.imageSourceProvider;
+    if (!configuredProvider) {
+        configuredProvider =
+            QSharedPointer<LocalImageSourceProvider>::create();
+    }
+    d->imageSourceProvider =
+        QSharedPointer<SharedImageSourceProvider>::create(
+            std::move(configuredProvider));
 
     // DecodeManager treats a non-positive limit as "use the platform's ideal
     // thread count".  Keep that sentinel intact: the standalone shell uses it
     // to retain the pre-module decode parallelism, while embedded hosts can
     // still supply an explicit bounded limit.
     d->decodeManager = new DecodeManager(
-        this, d->options.maxDecodeThreads);
+        this, d->options.maxDecodeThreads, d->imageSourceProvider);
     if (d->options.persistentCache) {
         QSettings settings;
         d->decodeManager->setImageCacheMode(cacheUsageModeFromInt(

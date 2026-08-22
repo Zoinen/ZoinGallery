@@ -17,7 +17,7 @@ QStringList PngDecoder::supportedFormats() {
 }
 
 bool PngDecoder::readMetadata(ImageInfo &result) {
-    if (!isFormatSupported(result.path)) {
+    if (!isFormatSupported(result.formatHint())) {
         return false;
     }
 
@@ -70,7 +70,7 @@ bool PngDecoder::readMetadata(ImageInfo &result) {
 }
 
 bool PngDecoder::readPreviewAndMime(ImageData &result) {
-    if (!isFormatSupported(result.request.info.path)) {
+    if (!isFormatSupported(result.request.info.formatHint())) {
         return false;
     }
 

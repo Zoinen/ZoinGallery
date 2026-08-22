@@ -27,6 +27,9 @@ public:
         SourceIndexRole,
         LocalPathRole,
         VersionTokenRole,
+        EntryNameRole,
+        KnownImageSizeRole,
+        VisualSnapshotRole,
     };
 
     explicit ExternalCatalogModel(
@@ -44,7 +47,10 @@ public:
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
 
-    bool applyCatalog(const QVariantList &entries);
+    bool applyCatalog(const QVariantList &entries,
+                      bool metadataDeferred = false,
+                      bool checkEquivalentCatalog = true);
+    bool applyMetadata(const QVariantList &entries);
     bool applyAppearance(const QVariantList &entries);
     bool applyState(const QString &cursorEntryId, int cursorIndex,
                     const QStringList &selectedEntryIds,
@@ -57,6 +63,7 @@ public:
     bool isDirectoryAt(int row) const;
     int sourceIndexAt(int row) const;
     QSize imageOriginalSizeAt(int row) const;
+    QVariantMap highlightStyleAt(int row) const;
     int rowForEntryId(const QString &entryId) const;
     int cursorRow() const;
     void ensurePreviews();
@@ -113,6 +120,11 @@ private:
         qint64 size = -1;
         QString sourceIdentity;
         QVariantMap displayFields;
+        QVariantMap highlightStyle;
+        QString iconPath;
+        bool metadataDeferred = false;
+        ImageInfo imageInfo;
+        QSize originalSize;
         QString thumbnailProviderId;
         QSize thumbnailRequestedSize;
         QString thumbnailTransformKey;
@@ -153,7 +165,12 @@ private:
     void attachThumbnail(int row, const QString &providerId);
     void detachThumbnail(Entry &entry);
     bool catalogMatches(const QVariantList &values,
-                        bool *carriesAppearance) const;
+                        bool *carriesAppearance,
+                        bool metadataDeferred) const;
+    ImageFile *ensureItem(int row) const;
+    QVariantMap visualSnapshot(int row) const;
+    void retireItemAfterReset(ImageFile *item);
+    void deleteRetiredItems();
     void clearPublishedImage(Entry &entry);
     void requestImageMetadataForRow(int row, bool highPriority);
     void scheduleMetadataPump();
@@ -163,7 +180,7 @@ private:
     void scheduleViewerDecodeAt(int row, const QSize &viewportSize,
                                 int prefetchCount);
     QList<int> viewerCandidateRows(int row, int count) const;
-    QList<ImageFile *> viewerItems() const;
+    QList<ImageFile *> viewerItems(int centerRow, int prefetchCount) const;
     void notifyViewerImageUrlChanged();
     QString viewerRequestKey(const ImageDecodeRequest &request) const;
     QString thumbnailRequestKey(const ImageDecodeRequest &request) const;
@@ -178,6 +195,10 @@ private:
     DecodeManager *_decodeManager = nullptr; // owned by GalleryRuntime
     ViewerImageCache _viewerImageCache;
     QList<Entry> _entries;
+    // Removed visible rows must outlive begin/endResetModel so retained QML
+    // delegates can rebind directly from old to new. They are deleted on the
+    // next event-loop turn, or synchronously during shutdown/destruction.
+    QSet<ImageFile *> _retiredItems;
     QHash<QString, int> _idToRow;
     QHash<QString, int> _pathToRow;
     QMultiHash<QString, QString> _sourceEntryIds;
@@ -185,6 +206,7 @@ private:
     QHash<QString, qint64> _metadataPendingVersions;
     QSet<QString> _metadataResolvedPaths;
     QList<int> _metadataVisibleRows;
+    QSet<int> _metadataLastVisibleRows;
     QList<int> _metadataOverscanRows;
     QList<int> _metadataUrgentRows;
     QList<int> _metadataAdHocRows;

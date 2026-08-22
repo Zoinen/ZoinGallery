@@ -218,6 +218,17 @@ public:
     QVariantMap displayFields() const;
     void setDisplayFields(const QVariantMap &displayFields);
 
+    // Initializes a newly-created external-catalog row without emitting the
+    // dozen property notifications that no observer can consume before the
+    // enclosing model reset completes.
+    void initializeExternalCatalogRow(
+        const QString &folderPath, const QString &fileName, int index,
+        bool isFolder, bool isImage, const QString &iconPath, bool isSelected,
+        const QString &imageProviderName, const ImageInfo &info,
+        const QVariantMap &highlightStyle,
+        const QVariantMap &displayFields,
+        bool deferDisplayMetadata = false);
+
 signals:
     void fullPathChanged();
     void nestingInfoChanged();

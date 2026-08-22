@@ -89,7 +89,8 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
         if (index >= items.size()) {
             hitEnd = true;
         }
-        if (index < 0 || index >= items.size() || !items[index]->isImage()) {
+        if (index < 0 || index >= items.size() || !items[index]
+            || !items[index]->isImage()) {
             continue;
         }
 

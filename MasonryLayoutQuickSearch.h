@@ -37,6 +37,7 @@ public:
 
     const QString &matchesInfo() const;
 
+    void updateItemText(int index);
     void updateItemsText();
 
 signals:

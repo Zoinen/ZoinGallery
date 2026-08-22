@@ -64,33 +64,49 @@ bool MasonryLayoutQuickSearch::indexMatches(int index, const QString &search) {
     if (index < 0 || index > masonryLayout()->_bricks.size() - 1) {
         return false;
     }
-    return masonryLayout()->_bricks[index].image->fileName().contains(search, Qt::CaseInsensitive);
+    return masonryLayout()->indexText(index).contains(
+        search, Qt::CaseInsensitive);
 }
 
 void MasonryLayoutQuickSearch::updateItemsText() {
-    for (int i = 0; i < masonryLayout()->_model->rowCount(); i++) {
-        ImageFile *imageFile = masonryLayout()->_model->index(i, 0).data(FileListModel::ImageFileRole).value<ImageFile *>();
-        if (!imageFile) {
-            continue;
-        }
-        if (!_mask.isEmpty()) {
-            int matchStart = imageFile->fileName().indexOf(_mask, 0, Qt::CaseInsensitive);
-            if (matchStart != -1) {
-                QString matchedText = imageFile->fileName();
-                matchedText.insert(matchStart + _mask.size(), "</font>");
-                QString color = (i == masonryLayout()->_currentIndex ? "#ff9632" : "#ffff00");
-                matchedText.insert(matchStart, QString("<font color=\"#000000\" style=\"background-color: %1;\">").arg(color));
-                imageFile->setSearchText(matchedText);
-            }
-            else {
-                imageFile->setSearchText(imageFile->fileName());
-            }
-
-        }
-        else {
-            imageFile->setSearchText(QString());
-        }
+    // Search matching uses the lightweight per-row name. Apply rich-text
+    // highlighting only to ImageFile facades that already exist; requesting
+    // ImageFileRole here used to materialize an entire large catalog on every
+    // repeated cursor move while a mask was active.
+    for (int i = 0; i < masonryLayout()->_bricks.size(); ++i) {
+        updateItemText(i);
     }
+}
+
+void MasonryLayoutQuickSearch::updateItemText(int index) {
+    if (index < 0 || index >= masonryLayout()->_bricks.size()) {
+        return;
+    }
+    ImageFile *imageFile = masonryLayout()->_bricks[index].image;
+    if (!imageFile) {
+        return;
+    }
+    if (_mask.isEmpty()) {
+        imageFile->setSearchText(QString());
+        return;
+    }
+
+    const int matchStart = imageFile->fileName().indexOf(
+        _mask, 0, Qt::CaseInsensitive);
+    if (matchStart < 0) {
+        imageFile->setSearchText(imageFile->fileName());
+        return;
+    }
+    QString matchedText = imageFile->fileName();
+    matchedText.insert(matchStart + _mask.size(), "</font>");
+    const QString color = index == masonryLayout()->_currentIndex
+        ? QStringLiteral("#ff9632") : QStringLiteral("#ffff00");
+    matchedText.insert(
+        matchStart,
+        QStringLiteral(
+            "<font color=\"#000000\" style=\"background-color: %1;\">")
+            .arg(color));
+    imageFile->setSearchText(matchedText);
 }
 
 MasonryLayout *MasonryLayoutQuickSearch::masonryLayout() {

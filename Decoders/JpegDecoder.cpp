@@ -101,7 +101,7 @@ QSize getJPEGSize(const uchar* mappedFile, qint64 fileSize)
 
 
 bool JpegDecoder::readMetadata(ImageInfo &result) {
-    if (!isFormatSupported(result.path)) {
+    if (!isFormatSupported(result.formatHint())) {
         return false;
     }
 

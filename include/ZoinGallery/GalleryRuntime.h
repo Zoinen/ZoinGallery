@@ -2,7 +2,10 @@
 #define ZOINGALLERY_GALLERYRUNTIME_H
 
 #include <QObject>
+#include <QSharedPointer>
 #include <QString>
+
+#include <ZoinGallery/ImageSourceProvider.h>
 
 class QQmlEngine;
 
@@ -39,6 +42,10 @@ struct RuntimeOptions {
     // historical retain-until-clear behavior. Embedded hosts should keep
     // both values non-negative so stale plans and excess frames are bounded.
     bool persistentCache = false;
+    // Shared source access for external catalogs. When omitted, resourceId is
+    // interpreted as a local path by LocalImageSourceProvider. Calls happen
+    // synchronously on decode workers and may overlap across sessions.
+    QSharedPointer<ImageSourceProvider> imageSourceProvider;
 };
 
 class GalleryRuntime final : public QObject {

@@ -5,6 +5,7 @@
 #include <QMutex>
 #include <QObject>
 #include <QSharedPointer>
+#include <QSet>
 #include <QSize>
 #include <QString>
 #include <QStringList>
@@ -60,29 +61,30 @@ public:
 
     AcquireResult acquire(
         const QString &ownerId, const QString &sourceIdentity,
-        qint64 versionToken, qint64 sourceFileSize,
+        const QString &versionToken, qint64 sourceFileSize,
         const QSize &targetSize,
         const QString &transformKey =
             QString::fromLatin1(DefaultTransformKey));
     Handle lookup(
-        const QString &sourceIdentity, qint64 versionToken,
+        const QString &sourceIdentity, const QString &versionToken,
         qint64 sourceFileSize, const QSize &targetSize,
         const QString &transformKey =
             QString::fromLatin1(DefaultTransformKey));
     Handle storeDecoded(
         const QString &ownerId, const QString &sourceIdentity,
-        qint64 versionToken, qint64 sourceFileSize,
+        const QString &versionToken, qint64 sourceFileSize,
         const QSize &requestedSize, const QString &transformKey,
         const QImage &image);
-
     void releaseRequest(
         const QString &ownerId, const QString &sourceIdentity,
-        qint64 versionToken, qint64 sourceFileSize,
+        const QString &versionToken, qint64 sourceFileSize,
         const QSize &targetSize,
         const QString &transformKey =
             QString::fromLatin1(DefaultTransformKey),
         bool retryWaiters = true);
     void cancelRequests(const QString &ownerId);
+    void cancelRequests(const QString &ownerId,
+                        const QSet<QString> &sourceIdentities);
     void clear();
 
     qint64 byteBudget() const;
@@ -97,13 +99,13 @@ public:
 
 signals:
     void frameAvailable(const QString &sourceIdentity,
-                        qint64 versionToken, qint64 sourceFileSize,
+                        const QString &versionToken, qint64 sourceFileSize,
                         const QSize &requestedSize,
                         const QString &transformKey,
                         const QString &providerId);
     void frameEvicted(const QString &providerId);
     void requestReleased(const QString &sourceIdentity,
-                         qint64 versionToken, qint64 sourceFileSize,
+                         const QString &versionToken, qint64 sourceFileSize,
                          const QSize &requestedSize,
                          const QString &transformKey,
                          bool retryWaiters);
@@ -120,7 +122,7 @@ private:
     struct PendingEntry {
         QString sourceKey;
         QString sourceIdentity;
-        qint64 versionToken = 0;
+        QString versionToken;
         qint64 sourceFileSize = -1;
         QSize targetSize;
         QString transformKey;
@@ -129,7 +131,7 @@ private:
 
     static QString normalizedTransformKey(const QString &transformKey);
     static QString sourceKey(const QString &sourceIdentity,
-                             qint64 versionToken,
+                             const QString &versionToken,
                              qint64 sourceFileSize,
                              const QString &transformKey);
     static QString frameKey(const QString &sourceKey,
@@ -146,7 +148,7 @@ private:
                                          const QSize &targetSize) const;
     QString nextProviderIdLocked(const QString &ownerId,
                                  const QString &sourceKey,
-                                 qint64 versionToken,
+                                 const QString &versionToken,
                                  qint64 sourceFileSize,
                                  const QSize &decodedSize);
     QStringList pruneLocked();

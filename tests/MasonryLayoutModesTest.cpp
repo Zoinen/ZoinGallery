@@ -3007,7 +3007,7 @@ private slots:
         info.lastModified = QDateTime::fromMSecsSinceEpoch(
             sourceVersion / 1'000'000, QTimeZone::UTC);
         info.fileSize = templateInfo.size();
-        info.sourceVersionToken = sourceVersion;
+        info.sourceVersionToken = QString::number(sourceVersion);
         info.imageSize = source.size();
         info.orientation = ExifOrientation::Horizontal;
         info.requestNamespace = session->sessionId();

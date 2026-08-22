@@ -20,7 +20,7 @@ void ThumbnailLoader::init() {
     supportedFormats();
 }
 
-void ThumbnailLoader::readMetadata(ImageInfo &result) {
+bool ThumbnailLoader::readMetadata(ImageInfo &result) {
     const QFileInfo fileInfo(result.path);
     if (!result.lastModified.isValid()) {
         result.lastModified = fileInfo.lastModified();
@@ -29,9 +29,11 @@ void ThumbnailLoader::readMetadata(ImageInfo &result) {
         result.fileSize = fileInfo.size();
     }
 
+    bool metadataRead = false;
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
         const auto decoder = ImageDecoderFactory::createDecoder(i);
         if (decoder && decoder->readMetadata(result)) {
+            metadataRead = true;
             break;
         }
     }
@@ -41,6 +43,7 @@ void ThumbnailLoader::readMetadata(ImageInfo &result) {
     if (!result.exif.contains("DateTime")) {
         result.exif["DateTimeCreated"] = fileInfo.birthTime();
     }
+    return metadataRead;
 }
 
 bool ThumbnailLoader::readImage(ImageData &result) {
@@ -53,12 +56,16 @@ bool ThumbnailLoader::readImage(ImageData &result) {
         }
     }
     if (result.mimeType.isEmpty()) {
-        result.mimeType = QMimeDatabase().mimeTypeForFile(result.request.info.path).name();
-        if (isExtensionMatch(result.request.info.path, {"psd", "psb"})) {
+        result.mimeType = result.request.info.source.mimeType;
+    }
+    if (result.mimeType.isEmpty()) {
+        result.mimeType = QMimeDatabase().mimeTypeForFile(
+            result.request.info.formatHint()).name();
+        if (isExtensionMatch(result.request.info.formatHint(), {"psd", "psb"})) {
             result.mimeType = "psd";
-        } else if (isExtensionMatch(result.request.info.path, {"dds"})) {
+        } else if (isExtensionMatch(result.request.info.formatHint(), {"dds"})) {
             result.mimeType = "image/vnd.ms-dds";
-        } else if (isExtensionMatch(result.request.info.path, {"webp"})) {
+        } else if (isExtensionMatch(result.request.info.formatHint(), {"webp"})) {
             result.mimeType = "image/webp";
         }
     }

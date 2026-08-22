@@ -11,14 +11,23 @@ public:
                         int directOpenGeneration = 0,
                         bool highPriority = false,
                         QString requestNamespace = QString(),
-                        qint64 sourceVersionToken = 0);
+                        QString sourceVersionToken = QString(),
+                        ZoinGallery::ImageSourceDescriptor source = {},
+                        QSharedPointer<ZoinGallery::ImageSourceProvider> provider = {},
+                        bool readDerivedMetadataCache = true,
+                        bool writeDerivedMetadataCache = true);
 
     RunnerType type() override { return RunnerType::ImageInfoRead; }
     void run() override;
+    QString path() const override {
+        return _source.isValid() ? _source.runtimeIdentity() : _path;
+    }
 
     bool isEmbeddedRequest() const;
     bool isHighPriority() const override { return _highPriority; }
     QString requestNamespace() const override { return _requestNamespace; }
+    QSharedPointer<ZoinGallery::ImageSourceCancellation>
+    sourceCancellation() const override { return _cancellation; }
 
 signals:
     void imageInfoReady(const ImageInfo &result);
@@ -33,7 +42,12 @@ private:
     int _directOpenGeneration;
     bool _highPriority;
     QString _requestNamespace;
-    qint64 _sourceVersionToken = 0;
+    QString _sourceVersionToken;
+    ZoinGallery::ImageSourceDescriptor _source;
+    QSharedPointer<ZoinGallery::ImageSourceProvider> _provider;
+    QSharedPointer<ZoinGallery::ImageSourceCancellation> _cancellation;
+    bool _readDerivedMetadataCache = true;
+    bool _writeDerivedMetadataCache = true;
 };
 
 #endif // IMAGEINFOREADRUNNER_H

@@ -43,7 +43,7 @@ QStringList Exiv2Decoder::supportedFormats() {
 }
 
 bool Exiv2Decoder::readMetadata(ImageInfo &result) {
-    if (!isFormatSupported(result.path)) {
+    if (!isFormatSupported(result.formatHint())) {
         return false;
     }
 
@@ -63,7 +63,7 @@ bool Exiv2Decoder::readMetadata(ImageInfo &result) {
         assert(image.get() != 0);
         image->readMetadata();
         result.orientation = readOrientationFromExif(image.get());
-        if (isExtensionMatch(result.path, JpegExtensions)) {
+        if (isExtensionMatch(result.formatHint(), JpegExtensions)) {
             result.imageSize = QSize(image->pixelWidth(), image->pixelHeight());
         }
         else {
@@ -81,7 +81,7 @@ bool Exiv2Decoder::readMetadata(ImageInfo &result) {
 }
 
 bool Exiv2Decoder::readPreviewAndMime(ImageData &result) {
-    if (!isFormatSupported(result.request.info.path)) {
+    if (!isFormatSupported(result.request.info.formatHint())) {
         return false;
     }
 
@@ -106,7 +106,8 @@ bool Exiv2Decoder::readPreviewAndMime(ImageData &result) {
 
         // Blacklisting second thumbnail in cr2 since it's a weird tif with very dark image
         int ignoreThumbnailAt = -1;
-        if (result.request.info.path.endsWith(".cr2", Qt::CaseInsensitive)) {
+        if (result.request.info.formatHint().endsWith(
+                ".cr2", Qt::CaseInsensitive)) {
             ignoreThumbnailAt = 2;
         }
         bool largerImageAvailable = false;

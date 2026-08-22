@@ -314,7 +314,7 @@ private:
         QString lastPlannedSourcePath;
         QDateTime lastPlannedModified;
         qint64 lastPlannedFileSize = -1;
-        qint64 lastPlannedVersionToken = 0;
+        QString lastPlannedVersionToken;
 
         QRectF geometry() const;
         QSize thumbnailSize(int spacing) const;

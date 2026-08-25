@@ -32,9 +32,9 @@ MouseArea {
     signal fileDropFailed(string title, string message)
 
     // <Scrolling>
-    property bool scrollingStarted: false
-    property var scrollingStartedAtY
-    property bool scrollingMode: false
+    property alias scrollingStarted: scrollingController.scrollingStarted
+    property alias scrollingStartedAtY: scrollingController.startCoordinate
+    property alias scrollingMode: scrollingController.scrollingMode
     property bool quickSearchMode: false
 
     property bool disableAnimation: false
@@ -75,23 +75,11 @@ MouseArea {
     }
 
     function startScrolling() {
-        scrollingStarted = false
-        scrollingMode = true
-        scrollingStartedAtY = masonryView.mouseY
-        scrollingAnimation.start()
-        masonryLayout.setScrollingMode(true)
+        scrollingController.start()
     }
 
     function endScrolling() {
-        scrollingStarted = false
-        scrollingMode = false
-        // This immediately stops behavior animation
-        masonryLayout.contentY += 0.01
-        masonryLayout.contentY -= 0.01
-
-        scrollingAnimation.stop()
-        masonryLayout.setScrollingMode(false)
-
+        scrollingController.end()
         hideHovered = false
     }
 
@@ -177,35 +165,17 @@ MouseArea {
         }
     }
 
-    FrameAnimation {
-        id: scrollingAnimation
-        onTriggered: {
-            let distance = masonryView.mouseY - scrollingStartedAtY
-            distance = Math.min(Math.max(0, distance - 25), distance + 25)
-            let totalHeight = topLevelWindow.availableScreenHeight()
-            let fraction = Math.abs(distance) / (totalHeight - 25)
-            if (fraction > 0) {
-                fraction += 0.05
-            }
-
-            let speed = frameTime * 30
-            let increment = (Math.pow(fraction, 3) * totalHeight) * speed * 2
-            masonryLayout.contentY += increment * (distance < 0 ? -1 : 1)
-
-            if (distance !== 0 && !scrollingStarted) {
-                scrollingStarted = true
-                hideHovered = true
-            }
-
-            if (distance > 0) {
-                masonryLayout.setScrollingMode(true, 1)
-            }
-            else if (distance < 0) {
-                masonryLayout.setScrollingMode(true, -1)
-            }
-            else {
-                masonryLayout.setScrollingMode(true)
-            }
+    AutoScrollController {
+        id: scrollingController
+        objectName: "masonryScrollingController"
+        layout: masonryLayout
+        pointerSource: masonryView
+        scrollExtent: topLevelWindow
+                     ? topLevelWindow.availableScreenHeight()
+                     : masonryView.height
+        onScrollingStartedChanged: {
+            if (scrollingStarted)
+                masonryView.hideHovered = true
         }
     }
 

@@ -20,6 +20,7 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQuickImageProvider>
 #include <QQuickView>
 #include <QSGRendererInterface>
 #include <QTemporaryDir>
@@ -81,6 +82,25 @@ QVariantList prefixedCatalog(const QString &prefix, int count) {
     }
     return result;
 }
+
+class CompactIconProvider final : public QQuickImageProvider {
+public:
+    CompactIconProvider()
+        : QQuickImageProvider(QQuickImageProvider::Image) {}
+
+    QImage requestImage(const QString &,
+                        QSize *size,
+                        const QSize &requestedSize) override {
+        const QSize imageSize = requestedSize.isValid()
+            ? requestedSize : QSize(16, 16);
+        if (size) {
+            *size = imageSize;
+        }
+        QImage image(imageSize, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        return image;
+    }
+};
 
 QObject *createPanel(QQuickView &view, QObject *session,
                      const QString &contextName,
@@ -190,6 +210,132 @@ class MasonryLayoutModesTest : public QObject {
 private slots:
     void initTestCase() {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    }
+
+    void panelThemeColorsUpdateLiveAfterConstruction() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("live-panel-theme"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(80), 1));
+        session->setCurrentIndex(1);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("livePanelThemeSession"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(layout);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 3000);
+
+        const QVariantMap firstTheme{
+            {QStringLiteral("panelBackground"),
+             QStringLiteral("#101112")},
+            {QStringLiteral("text"), QStringLiteral("#202122")},
+            {QStringLiteral("cursor"), QStringLiteral("#303132")},
+            {QStringLiteral("cardCursorBorder"),
+             QStringLiteral("#404142")},
+            {QStringLiteral("itemBackground"),
+             QStringLiteral("#505152")},
+            {QStringLiteral("directoryBackground"),
+             QStringLiteral("#606162")},
+            {QStringLiteral("itemHover"), QStringLiteral("#707172")},
+            {QStringLiteral("labelBackground"),
+             QStringLiteral("#80737475")},
+            {QStringLiteral("previewBackdrop"),
+             QStringLiteral("#90767778")},
+            {QStringLiteral("scrollBarHandle"),
+             QStringLiteral("#808182")},
+            {QStringLiteral("scrollBarTrackHovered"),
+             QStringLiteral("#909192")},
+        };
+        QVERIFY(panel->setProperty("theme", firstTheme));
+
+        QQuickItem *cursorSurface = nullptr;
+        QQuickItem *plainSurface = nullptr;
+        QQuickItem *previewBackdrop = nullptr;
+        QQuickItem *scrollBar = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (cursorSurface = panel->findChild<QQuickItem *>(
+                 QStringLiteral("gallerySelectionSurface-0"))),
+            3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (plainSurface = panel->findChild<QQuickItem *>(
+                 QStringLiteral("gallerySelectionSurface-1"))),
+            3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (previewBackdrop = panel->findChild<QQuickItem *>(
+                 QStringLiteral("galleryThumbnailBackdrop-0"))),
+            3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (scrollBar = panel->findChild<QQuickItem *>(
+                 QStringLiteral("galleryPanelScrollBar"))),
+            3000);
+
+        QCOMPARE(panel->property("backgroundColor").value<QColor>(),
+                 QColor(QStringLiteral("#101112")));
+        QCOMPARE(panel->property("foregroundColor").value<QColor>(),
+                 QColor(QStringLiteral("#202122")));
+        QCOMPARE(cursorSurface->property("color").value<QColor>(),
+                 QColor(QStringLiteral("#303132")));
+        QCOMPARE(cursorSurface->property("visualBorderColor").value<QColor>(),
+                 QColor(QStringLiteral("#404142")));
+        QCOMPARE(plainSurface->property("color").value<QColor>(),
+                 QColor(QStringLiteral("#505152")));
+        QCOMPARE(previewBackdrop->property("color").value<QColor>(),
+                 QColor(QStringLiteral("#90767778")));
+        QCOMPARE(scrollBar->property("handleColor").value<QColor>(),
+                 QColor(QStringLiteral("#808182")));
+        QCOMPARE(scrollBar->property("trackHoveredColor").value<QColor>(),
+                 QColor(QStringLiteral("#909192")));
+
+        const QVariantMap secondTheme{
+            {QStringLiteral("panelBackground"),
+             QStringLiteral("#111213")},
+            {QStringLiteral("text"), QStringLiteral("#212223")},
+            {QStringLiteral("cursor"), QStringLiteral("#313233")},
+            {QStringLiteral("cardCursorBorder"),
+             QStringLiteral("#414243")},
+            {QStringLiteral("itemBackground"),
+             QStringLiteral("#515253")},
+            {QStringLiteral("directoryBackground"),
+             QStringLiteral("#616263")},
+            {QStringLiteral("itemHover"), QStringLiteral("#717273")},
+            {QStringLiteral("labelBackground"),
+             QStringLiteral("#81747576")},
+            {QStringLiteral("previewBackdrop"),
+             QStringLiteral("#91777879")},
+            {QStringLiteral("scrollBarHandle"),
+             QStringLiteral("#818283")},
+            {QStringLiteral("scrollBarTrackHovered"),
+             QStringLiteral("#919293")},
+        };
+        QVERIFY(panel->setProperty("theme", secondTheme));
+
+        QTRY_COMPARE_WITH_TIMEOUT(
+            cursorSurface->property("color").value<QColor>(),
+            QColor(QStringLiteral("#313233")), 3000);
+        QCOMPARE(cursorSurface->property("visualBorderColor").value<QColor>(),
+                 QColor(QStringLiteral("#414243")));
+        QCOMPARE(plainSurface->property("color").value<QColor>(),
+                 QColor(QStringLiteral("#515253")));
+        QCOMPARE(previewBackdrop->property("color").value<QColor>(),
+                 QColor(QStringLiteral("#91777879")));
+        QCOMPARE(scrollBar->property("handleColor").value<QColor>(),
+                 QColor(QStringLiteral("#818283")));
+        QCOMPARE(scrollBar->property("trackHoveredColor").value<QColor>(),
+                 QColor(QStringLiteral("#919293")));
+        QCOMPARE(panel->findChild<QQuickItem *>(
+                     QStringLiteral("gallerySelectionSurface-0")),
+                 cursorSurface);
+        QCOMPARE(panel->findChild<QQuickItem *>(
+                     QStringLiteral("galleryPanelScrollBar")),
+                 scrollBar);
     }
 
     void geometryAndNavigationAreModeOwnedAndDeterministic() {
@@ -2153,6 +2299,269 @@ private slots:
         runtime->shutdown();
     }
 
+    void settledCursorUsesPhysicalPixelGridButAnimationsStaySmooth() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 2;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("cursor-physical-pixel-grid"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(80), 1));
+        session->setCurrentIndex(0);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("pixelGridSession"),
+            QStringLiteral("masonry"));
+        QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(panelItem);
+        QVERIFY(layout);
+        panel->setProperty("devicePixelRatio", 1.75);
+        // Include a fractional ancestor offset: snapping only the delegate's
+        // local coordinates would still leave its rendered edges between
+        // physical pixels in this case.
+        panelItem->setX(0.2);
+        panelItem->setY(0.3);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            panel->property("visualCursorIndex").toInt(), 0, 5000);
+
+        auto *surface = findVisualItem(
+            panelItem, QStringLiteral("gallerySelectionSurface-0"));
+        QTRY_VERIFY_WITH_TIMEOUT(surface, 5000);
+        auto *brick = qobject_cast<BrickItem *>(surface->parentItem());
+        QVERIFY(brick);
+
+        constexpr qreal dpr = 1.75;
+        const auto onPhysicalPixel = [dpr](qreal logicalCoordinate) {
+            return qAbs(logicalCoordinate * dpr
+                        - qRound(logicalCoordinate * dpr)) < 0.001;
+        };
+        const auto cursorEdgesAreAligned = [&]() {
+            const QPointF topLeft = surface->mapToScene(QPointF(0, 0));
+            const QPointF bottomRight = surface->mapToScene(
+                QPointF(surface->width(), surface->height()));
+            return onPhysicalPixel(topLeft.x())
+                && onPhysicalPixel(topLeft.y())
+                && onPhysicalPixel(bottomRight.x())
+                && onPhysicalPixel(bottomRight.y());
+        };
+
+        QTRY_VERIFY_WITH_TIMEOUT(
+            surface->property("pixelAlignedCursorGeometry").toBool(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(cursorEdgesAreAligned(), 3000);
+        QVERIFY(surface->property("visualBorderPixelAligned").toBool());
+        QVERIFY(surface->antialiasing());
+        QCOMPARE(surface->property("visualBorderWidth").toReal(), 1.0);
+        QVERIFY(qAbs(surface->x() - 2.0) > 0.01
+                || qAbs(surface->y() - 2.0) > 0.01);
+
+        QObject *chromeAnimation = panel->findChild<QObject *>(
+            QStringLiteral("galleryCursorChromeGeometryAnimation"));
+        QVERIFY(chromeAnimation);
+        const QRectF startRect(11.13, 14.27, 100.37, 80.19);
+        const QRectF targetRect(74.61, 63.44, 117.83, 92.57);
+        QVariant started;
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "startCursorChromeGeometry", Qt::DirectConnection,
+            Q_RETURN_ARG(QVariant, started),
+            Q_ARG(QVariant, QVariant::fromValue(startRect)),
+            Q_ARG(QVariant, QVariant::fromValue(targetRect)),
+            Q_ARG(QVariant, QVariant(0))));
+        QVERIFY(started.toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(chromeAnimation->property("running").toBool(),
+                                 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !surface->property("pixelAlignedCursorGeometry").toBool(), 1000);
+        QVERIFY(surface->property("visualBorderPixelAligned").toBool());
+        QVERIFY(surface->antialiasing());
+        QVERIFY(qAbs(surface->x() - 2.0) < 0.001);
+        QVERIFY(qAbs(surface->y() - 2.0) < 0.001);
+
+        auto *animatedBorder = findVisualItem(
+            panelItem, QStringLiteral("galleryCursorChromeBorder"));
+        QVERIFY(animatedBorder);
+        QVERIFY(animatedBorder->property(
+                    "visualBorderPixelAligned").toBool());
+        QVERIFY(animatedBorder->antialiasing());
+
+        // The independent animation keeps its exact fractional endpoints;
+        // only the delegate that replaces it after settling is quantized.
+        QCOMPARE(panel->property("cursorChromeRect").toRectF(), startRect);
+        QCOMPARE(panel->property("cursorChromeTargetRect").toRectF(),
+                 targetRect);
+        const QPointF animatedTopLeft = layout->mapToScene(
+            startRect.topLeft());
+        QVERIFY(!onPhysicalPixel(animatedTopLeft.x())
+                || !onPhysicalPixel(animatedTopLeft.y()));
+
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "cancelCursorChromeTransition", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            surface->property("pixelAlignedCursorGeometry").toBool(), 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(cursorEdgesAreAligned(), 1000);
+        QVERIFY(surface->property("visualBorderPixelAligned").toBool());
+        QVERIFY(surface->antialiasing());
+
+        const QRectF animatedBrickGeometry(
+            brick->x() + 13.37, brick->y() + 7.19,
+            brick->width() + 4.25, brick->height() + 3.75);
+        brick->setGeometry(animatedBrickGeometry, true, false);
+        QTRY_VERIFY_WITH_TIMEOUT(brick->geometryAnimationRunning(), 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !surface->property("pixelAlignedCursorGeometry").toBool(), 1000);
+        QVERIFY(surface->property("visualBorderPixelAligned").toBool());
+        QVERIFY(surface->antialiasing());
+        QVERIFY(qAbs(surface->x() - 2.0) < 0.001);
+        QCOMPARE(surface->property("visualBorderWidth").toReal(), 1.0);
+        QTRY_VERIFY_WITH_TIMEOUT(!brick->geometryAnimationRunning(), 1500);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            surface->property("pixelAlignedCursorGeometry").toBool(), 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(cursorEdgesAreAligned(), 1000);
+        QVERIFY(surface->property("visualBorderPixelAligned").toBool());
+        QVERIFY(surface->antialiasing());
+
+        runtime->shutdown();
+    }
+
+    void settledDetailsCursorRendersSolidPhysicalBorderPixels() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 2;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("details-cursor-raster-grid"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(20), 1));
+        session->setCurrentIndex(1);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("detailsCursorRasterSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(panelItem);
+        QVERIFY(layout);
+        const qreal renderDpr = view.devicePixelRatio();
+        QVERIFY(renderDpr > 0);
+        panel->setProperty("devicePixelRatio", renderDpr);
+        // Keep the sampled vertical edge away from the window/panel clip so
+        // antialiasing outside the Rectangle cannot be discarded by clipping.
+        layout->setPaddingLeft(24.0);
+        layout->setPaddingRight(24.0);
+        panel->setProperty("showDetailsHeader", false);
+        panel->setProperty("theme", QVariantMap{
+            {QStringLiteral("cursorBackground"),
+             QStringLiteral("#18456e")},
+            {QStringLiteral("cursorBorder"), QStringLiteral("#1d5888")},
+        });
+        panelItem->setX(0.2);
+        panelItem->setY(0.3);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 20, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            panel->property("visualCursorIndex").toInt(), 1, 5000);
+
+        auto *surface = findVisualItem(
+            panelItem, QStringLiteral("gallerySelectionSurface-1"));
+        QTRY_VERIFY_WITH_TIMEOUT(surface, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            surface->property("pixelAlignedCursorGeometry").toBool(), 3000);
+        QVERIFY(surface->property("visualBorderPixelAligned").toBool());
+        QVERIFY(surface->antialiasing());
+        QTRY_VERIFY_WITH_TIMEOUT(surface->width() > 20
+                                 && surface->height() > 8, 3000);
+
+        view.update();
+        QTest::qWait(50);
+        const QImage raster = view.grabWindow().convertToFormat(
+            QImage::Format_RGBA8888);
+        QVERIFY(!raster.isNull());
+        QVERIFY(raster.width() > 20 && raster.height() > 8);
+        const qreal rasterScale = qreal(raster.width()) / qreal(view.width());
+        QVERIFY2(qAbs(rasterScale - renderDpr) < 0.01,
+                 qPrintable(QStringLiteral(
+                     "grab=%1x%2 view=%3x%4 scale=%5 windowDpr=%6")
+                     .arg(raster.width()).arg(raster.height())
+                     .arg(view.width()).arg(view.height())
+                     .arg(rasterScale).arg(view.devicePixelRatio())));
+
+        const QColor border = surface->property(
+            "visualBorderColor").value<QColor>();
+        const QColor fill = surface->property("color").value<QColor>();
+        QVERIFY(border.isValid());
+        QVERIFY(fill.isValid());
+        QVERIFY(border != fill);
+        const auto closeColor = [](const QColor &actual,
+                                   const QColor &expected) {
+            constexpr int tolerance = 2;
+            return qAbs(actual.red() - expected.red()) <= tolerance
+                && qAbs(actual.green() - expected.green()) <= tolerance
+                && qAbs(actual.blue() - expected.blue()) <= tolerance
+                && qAbs(actual.alpha() - expected.alpha()) <= tolerance;
+        };
+        const QPointF surfaceTopLeft = surface->mapToScene(QPointF(0, 0));
+        const int surfaceTop = qRound(surfaceTopLeft.y() * rasterScale);
+        const int sampleX = qRound(
+            (surfaceTopLeft.x() + surface->width() / 2) * rasterScale);
+        const int borderPixels = qMax(
+            1, qRound(surface->property("visualBorderWidth").toReal()
+                      * renderDpr));
+
+        const int surfaceLeft = qRound(surfaceTopLeft.x() * rasterScale);
+        const int sampleY = qRound(
+            (surfaceTopLeft.y() + surface->height() / 2) * rasterScale);
+        QVERIFY(surfaceLeft >= 0
+                && surfaceLeft + borderPixels < raster.width());
+        QVERIFY(sampleY >= 0 && sampleY < raster.height());
+        for (int x = 0; x < borderPixels; ++x) {
+            const QColor actual = raster.pixelColor(surfaceLeft + x, sampleY);
+            QVERIFY2(closeColor(actual, border),
+                     qPrintable(QStringLiteral(
+                         "left border pixel %1 is %2, expected solid %3")
+                         .arg(x).arg(actual.name(QColor::HexArgb),
+                                     border.name(QColor::HexArgb))));
+        }
+        const QColor firstHorizontalFill = raster.pixelColor(
+            surfaceLeft + borderPixels, sampleY);
+        QVERIFY2(closeColor(firstHorizontalFill, fill),
+                 qPrintable(QStringLiteral(
+                     "first horizontal fill pixel is %1, expected solid %2")
+                     .arg(firstHorizontalFill.name(QColor::HexArgb),
+                          fill.name(QColor::HexArgb))));
+
+        QVERIFY(surfaceTop >= 0
+                && surfaceTop + borderPixels < raster.height());
+        QVERIFY(sampleX >= 0 && sampleX < raster.width());
+        for (int y = 0; y < borderPixels; ++y) {
+            const QColor actual = raster.pixelColor(sampleX, surfaceTop + y);
+            QVERIFY2(closeColor(actual, border),
+                     qPrintable(QStringLiteral(
+                         "border pixel %1 is %2, expected solid %3")
+                         .arg(y).arg(actual.name(QColor::HexArgb),
+                                     border.name(QColor::HexArgb))));
+        }
+        const QColor firstFill = raster.pixelColor(
+            sampleX, surfaceTop + borderPixels);
+        QVERIFY2(closeColor(firstFill, fill),
+                 qPrintable(QStringLiteral(
+                     "first fill pixel is %1, expected solid %2")
+                     .arg(firstFill.name(QColor::HexArgb),
+                          fill.name(QColor::HexArgb))));
+
+        runtime->shutdown();
+    }
+
     void cursorHighlightRemainsVisibleDuringRevealNavigation() {
         QQuickView view;
         ZoinGallery::RuntimeOptions options;
@@ -2920,6 +3329,71 @@ private slots:
                 layout->overscanIndexes().size());
     }
 
+    void svgThumbnailsUseTheCurrentPhysicalPreviewResolution() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString svgPath = directory.filePath(
+            QStringLiteral("vector-thumbnail.svg"));
+        QFile svgFile(svgPath);
+        QVERIFY(svgFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        const QByteArray svg = R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect width="24" height="24" fill="#4f9bd8"/><circle cx="12" cy="12" r="7" fill="#f4d35e"/></svg>)SVG";
+        QCOMPARE(svgFile.write(svg), qint64(svg.size()));
+        svgFile.close();
+
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 1;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("svg-thumbnail-resolution"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(
+            {catalogEntry(0, svgPath)}, 1));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("svgThumbnailSession"),
+            QStringLiteral("grid"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", 1.75);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(layout);
+        layout->setDensity(180);
+
+        auto *thumbnail = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryThumbnail-0"));
+        auto *thumbnailImage = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryThumbnailImage-0"));
+        auto *thumbnailShader = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryThumbnailShader-0"));
+        QVERIFY(thumbnail && thumbnailImage && thumbnailShader);
+        QTRY_VERIFY_WITH_TIMEOUT(thumbnail->isVisible(), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(thumbnailImage->property("status").toInt(),
+                                  1, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(thumbnailShader->isVisible(), 10000);
+
+        const QSizeF physicalViewport = thumbnailShader->property(
+            "viewportSize").toSizeF();
+        const qreal decodedWidth = thumbnailImage->implicitWidth();
+        const qreal decodedHeight = thumbnailImage->implicitHeight();
+        QVERIFY2(decodedWidth > 24 && decodedHeight > 24,
+                 qPrintable(QStringLiteral(
+                     "SVG was decoded at %1x%2 instead of the panel preview")
+                         .arg(decodedWidth).arg(decodedHeight)));
+        QVERIFY2(decodedWidth >= physicalViewport.width() - 2.0
+                 && decodedHeight >= physicalViewport.height() - 2.0,
+                 qPrintable(QStringLiteral(
+                     "decoded SVG %1x%2 does not cover physical preview %3x%4")
+                         .arg(decodedWidth).arg(decodedHeight)
+                         .arg(physicalViewport.width())
+                         .arg(physicalViewport.height())));
+
+        runtime->shutdown();
+    }
+
     void sparseExternalMetadataCompletionPublishesThumbnailWithoutViewportChange() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -3623,6 +4097,9 @@ private slots:
         for (const QString &mode : {QStringLiteral("columns"),
                                     QStringLiteral("details")}) {
             QQuickView view;
+            view.engine()->addImageProvider(
+                QStringLiteral("compact-icons"),
+                new CompactIconProvider);
             ZoinGallery::RuntimeOptions options;
             options.persistentCache = false;
             auto *runtime = ZoinGallery::GalleryRuntime::install(
@@ -3660,6 +4137,33 @@ private slots:
                          QUrl(QStringLiteral(
                              "qrc:/F4QtHost/icons/lucide/folder.svg")));
             }
+
+            // Large Lucide model routes are provider-rasterized for the
+            // image-centric Gallery modes. Compact modes must request a new
+            // frame for their actual 16-DIP slot; scaling the 128-DIP texture
+            // down would discard one-physical-pixel strokes at fractional
+            // DPRs when nearest-neighbour sampling is active.
+            panel->setProperty("devicePixelRatio", 1.75);
+            QVERIFY(session->applyExternalAppearance({QVariantMap{
+                {QStringLiteral("entryId"),
+                 QStringLiteral("layout-entry-0")},
+                {QStringLiteral("highlightStyle"), QVariantMap{
+                     {QStringLiteral("icon"), QStringLiteral(
+                         "image://compact-icons/lucide/ZmlsZQ"
+                         "?size=128&dpr=2&revision=1")},
+                 }},
+            }}, 2));
+            QTRY_COMPARE_WITH_TIMEOUT(
+                icon->property("source").toUrl().scheme(),
+                QStringLiteral("image"), 3000);
+            const QUrlQuery compactQuery(icon->property("source").toUrl());
+            QCOMPARE(compactQuery.queryItemValue(QStringLiteral("size")),
+                     QStringLiteral("16"));
+            QCOMPARE(compactQuery.queryItemValue(QStringLiteral("dpr")),
+                     QStringLiteral("1.75"));
+            QCOMPARE(QColor(compactQuery.queryItemValue(
+                         QStringLiteral("color"))),
+                     icon->property("effectiveIconColor").value<QColor>());
         }
     }
 
@@ -3779,12 +4283,14 @@ private slots:
             Q_RETURN_ARG(QVariant, sizedRoute),
             Q_ARG(QVariant, QVariant(QStringLiteral(
                 "image://f4-icons/file/LQ?size=128&dpr=2&revision=1"))),
-            Q_ARG(QVariant, QVariant(16.0))));
+            Q_ARG(QVariant, QVariant(16.0)),
+            Q_ARG(QVariant, QVariant())));
         const QUrlQuery sizedQuery(QUrl(sizedRoute.toString()));
         QCOMPARE(sizedQuery.queryItemValue(QStringLiteral("size")),
                  QStringLiteral("16"));
         QCOMPARE(sizedQuery.queryItemValue(QStringLiteral("dpr")),
                  QStringLiteral("1"));
+        QVERIFY(!sizedQuery.hasQueryItem(QStringLiteral("color")));
 
         panel->setProperty("presentationMode", QStringLiteral("details"));
         QTRY_VERIFY_WITH_TIMEOUT(
@@ -4780,6 +5286,51 @@ private slots:
                  rightInset);
         QCOMPARE(scrollBar->x() + scrollBar->width(),
                  panelItem->width() + 8.0);
+
+        runtime->shutdown();
+    }
+
+    void horizontalScrollBarIsFlushWithPanelBottom() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("horizontal-scrollbar-lane"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(200), 1));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("horizontalScrollbarLaneSession"),
+            QStringLiteral("columns"));
+        QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        auto *scrollBar = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryPanelColumnsScrollBar"));
+        QVERIFY(panelItem && layout && scrollBar);
+
+        QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
+                                  MasonryLayout::Columns, 3000);
+        for (const int columnCount : {2, 3}) {
+            panel->setProperty("columnCount", columnCount);
+            QTRY_COMPARE_WITH_TIMEOUT(layout->columnCount(), columnCount,
+                                      3000);
+            QTRY_VERIFY_WITH_TIMEOUT(scrollBar->isVisible(), 3000);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                qAbs(scrollBar->mapToItem(
+                         panelItem, QPointF(0, scrollBar->height())).y()
+                     - panelItem->height()) < 0.01,
+                3000);
+
+            // The viewport still owns its six-pixel tile inset; the scrollbar
+            // is deliberately outside that inset and flush with the panel.
+            QVERIFY(qAbs(panelItem->height()
+                         - (layout->y() + layout->height()) - 6.0) < 0.01);
+        }
 
         runtime->shutdown();
     }

@@ -134,7 +134,7 @@ BrickItem {
            : (highlightForegroundValue !== ""
               ? highlightForeground : panelRoot.mutedColor))
     readonly property color highlightLabelBackground:
-        highlightBackgroundValue || "#aa101216"
+        highlightBackgroundValue || panelRoot.labelBackgroundColor
     readonly property rect effectivePreviewRect: {
         if (detailsMode) {
             return Qt.rect(panelRoot.detailsRowInset,
@@ -194,14 +194,16 @@ BrickItem {
 
     // f4 supplies one model icon URL that can be reused by every Gallery
     // presentation. Native Windows icon resources contain separately drawn
-    // small frames; rendering the model's 128-DIP Gallery frame into a 16-DIP
-    // Details slot makes those icons noticeably darker and softer than
-    // Explorer. Retarget only image-provider file routes to the live visual
-    // size. Ordinary files/qrc URLs and Lucide routes remain untouched.
-    function sourceColorIconAtSize(source, logicalSize) {
+    // small frames, while large Lucide routes are already rasterized by the
+    // provider. Rendering either 128-DIP frame into a 16-DIP compact slot can
+    // lose single-physical-pixel detail completely. Retarget supported image
+    // provider routes to the live visual size; ordinary file/qrc URLs remain
+    // untouched.
+    function sourceColorIconAtSize(source, logicalSize, tint) {
         let value = source ? source.toString() : ""
         if (value.indexOf("image://") !== 0
-                || value.indexOf("/file/") < 0
+                || (value.indexOf("/file/") < 0
+                    && value.indexOf("/lucide/") < 0)
                 || value.indexOf("size=") < 0)
             return value
 
@@ -209,6 +211,19 @@ BrickItem {
         const dpr = Math.max(0.5, Number(renderDpr) || 1)
         value = value.replace(/([?&])size=[^&]*/, "$1size=" + size)
         value = value.replace(/([?&])dpr=[^&]*/, "$1dpr=" + dpr)
+        // Only monochrome Lucide routes are masks. Native/system file routes
+        // may be multicolour and must never receive a tint query.
+        if (value.indexOf("/lucide/") >= 0 && tint !== undefined
+                && tint !== null) {
+            const encodedTint = encodeURIComponent(String(tint))
+            if (/([?&])color=/.test(value)) {
+                value = value.replace(/([?&])color=[^&]*/,
+                                      "$1color=" + encodedTint)
+            } else {
+                value += (value.indexOf("?") >= 0 ? "&" : "?")
+                        + "color=" + encodedTint
+            }
+        }
         return value
     }
 
@@ -217,22 +232,61 @@ BrickItem {
         objectName: "gallerySelectionSurface-" + brick.viewIndex
         readonly property real visualBorderWidth: border.width
         readonly property color visualBorderColor: border.color
+        readonly property bool visualBorderPixelAligned: border.pixelAligned
         readonly property real surfaceInset: brick.detailsMode ? 0
                                               : (brick.columnsMode ? 1 : 2)
-        x: surfaceInset
-        y: surfaceInset
-        width: Math.max(0, parent.width - surfaceInset * 2)
+        readonly property rect nominalSurfaceRect: Qt.rect(
+            surfaceInset, surfaceInset,
+            Math.max(0, parent.width - surfaceInset * 2),
+            brick.iconsMode
+                ? Math.max(0, Math.min(parent.height - surfaceInset * 2,
+                    gridLabel.y + gridLabel.contentHeight + 3
+                    - surfaceInset))
+                : Math.max(0, parent.height - surfaceInset * 2))
+        // Quantize only the settled cursor. Applying the correction while its
+        // independent chrome, viewport, or owning brick is animating would
+        // turn smooth fractional motion into physical-pixel stair steps.
+        readonly property bool pixelAlignedCursorGeometry:
+            brick.current && brick.panelRoot.showCursor
+            && !brick.panelRoot.cursorPixelAlignmentSuspended
+            && !brick.geometryAnimationRunning
+        readonly property rect visualSurfaceRect:
+            pixelAlignedCursorGeometry
+            ? brick.panelRoot.alignViewportItemRectToDevicePixels(
+                  brick, nominalSurfaceRect)
+            : nominalSurfaceRect
+        readonly property real nominalBorderWidth: {
+            if (brick.cursorChromeExposesUnderlay)
+                return 0
+            // Compact presentations communicate persistent selection through
+            // the marked foreground only. Keep the thin border exclusively
+            // for the transient keyboard cursor; a selected non-current row
+            // must not acquire the large coloured card outline used by the
+            // image-centric presentations.
+            if (brick.detailsMode || brick.columnsMode) {
+                return brick.current && brick.panelRoot.showCursor
+                        && !brick.cursorChromeSuppressed ? 1 : 0
+            }
+            if (brick.selected)
+                return 3
+            return brick.current && brick.panelRoot.showCursor
+                    && !brick.cursorChromeSuppressed ? 1 : 0
+        }
+        x: visualSurfaceRect.x
+        y: visualSurfaceRect.y
+        width: visualSurfaceRect.width
         // Icons rows share the tallest brick's layout stride, but a short
         // filename must not inherit the empty label space required by a
         // neighbour with several wrapped lines. Keep hit testing/navigation
         // on the full row geometry and size only the painted selection chrome
         // to this brick's actual preview + rendered text content.
-        height: brick.iconsMode
-                ? Math.max(0, Math.min(parent.height - surfaceInset * 2,
-                    gridLabel.y + gridLabel.contentHeight + 3
-                    - surfaceInset))
-                : Math.max(0, parent.height - surfaceInset * 2)
+        height: visualSurfaceRect.height
         radius: brick.columnsMode || brick.detailsMode ? 4 : 6
+        // Keep rounded corners smooth in every state. Settled straight edges
+        // get their crispness from scene-space geometry snapping and Qt's
+        // pixel-aligned border, not from disabling antialiasing for the whole
+        // rounded rectangle.
+        antialiasing: true
         color: {
             if (brick.cursorChromeExposesUnderlay)
                 return "transparent"
@@ -257,38 +311,26 @@ BrickItem {
             if (brick.selected)
                 return "transparent"
             if (brickPointer.containsMouse && !brick.iconsMode)
-                return Qt.lighter(brick.panelRoot.backgroundColor, 1.25)
+                return brick.panelRoot.itemHoverColor
             if (brick.masonryMode || brick.gridMode)
-                return Qt.lighter(brick.panelRoot.backgroundColor,
-                                  brick.effectiveModel
-                                  && brick.effectiveModel.isFolder ? 1.20 : 1.09)
+                return brick.effectiveModel && brick.effectiveModel.isFolder
+                        ? brick.panelRoot.directoryBackgroundColor
+                        : brick.panelRoot.itemBackgroundColor
             return "transparent"
         }
-        border.width: {
-            if (brick.cursorChromeExposesUnderlay)
-                return 0
-            // Compact presentations communicate persistent selection through
-            // the marked foreground only.  Keep the thin border exclusively
-            // for the transient keyboard cursor; a selected non-current row
-            // must not acquire the large coloured card outline used by the
-            // image-centric presentations.
-            if (brick.detailsMode || brick.columnsMode) {
-                return brick.current && brick.panelRoot.showCursor
-                        && !brick.cursorChromeSuppressed ? 1 : 0
-            }
-            if (brick.selected)
-                return 3
-            return brick.current && brick.panelRoot.showCursor
-                    && !brick.cursorChromeSuppressed ? 1 : 0
-        }
+        border.width: nominalBorderWidth
+        // Always let Qt round the rendered stroke after applying the actual
+        // window DPR. Cursor geometry may remain fractional during animation;
+        // this property quantizes only the physical border width.
+        border.pixelAligned: true
         border.color: brick.detailsMode
             ? brick.panelRoot.cursorBorderColor
             : (brick.columnsMode
-               ? Qt.lighter(brick.panelRoot.cursorColor, 1.35)
+               ? brick.panelRoot.cardCursorBorderColor
                : (brick.selected
                ? brick.panelRoot.selectionColor
                : (brick.current && brick.panelRoot.showCursor
-                  ? Qt.lighter(brick.panelRoot.cursorColor, 1.35)
+                  ? brick.panelRoot.cardCursorBorderColor
                   : brick.panelRoot.selectionColor)))
     }
 
@@ -315,7 +357,7 @@ BrickItem {
             Layout.preferredWidth: brick.panelRoot.detailsIconSlotSize
             Layout.preferredHeight: brick.panelRoot.detailsIconSlotSize
 
-            IconLabel {
+            Image {
                 id: detailsFallbackIcon
                 objectName: brick.detailsMode ? "galleryFallbackIcon-"
                                                 + brick.viewIndex : ""
@@ -323,6 +365,7 @@ BrickItem {
                     brick.fallbackIconColor
                 width: brick.panelRoot.detailsIconSize
                 height: brick.panelRoot.detailsIconSize
+                smooth: false
                 anchors.centerIn: parent
                 readonly property url modelIconSource:
                     brick.effectiveModel
@@ -348,14 +391,14 @@ BrickItem {
                     && !(brick.panelRoot.viewerTransitionActive
                           && brick.panelRoot.viewerTransitionEntryId
                              === brick.entryId))
-                icon.source: brick.detailsMode && lucideSource
-                             ? modelIconSource
+                source: brick.detailsMode && lucideSource
+                             ? brick.sourceColorIconAtSize(
+                                   modelIconSource,
+                                   brick.panelRoot.detailsIconSize,
+                                   effectiveIconColor)
                              : (brick.detailsMode && systemFileSource
                                 ? brick.systemFileFallbackSource(
                                       brick.panelRoot.detailsIconSize) : "")
-                icon.width: brick.panelRoot.detailsIconSize
-                icon.height: brick.panelRoot.detailsIconSize
-                icon.color: effectiveIconColor
             }
 
             Image {
@@ -371,7 +414,7 @@ BrickItem {
                               brick.panelRoot.detailsIconSize)
                         : ""
                 fillMode: Image.PreserveAspectFit
-                smooth: true
+                smooth: false
                 // Native Windows shell icon extraction can take tens or
                 // hundreds of milliseconds for a metadata batch. Never run
                 // an image-provider request on the GUI/input thread.
@@ -492,9 +535,7 @@ BrickItem {
                 brick.masonryMode || brick.gridMode
             anchors.fill: parent
             radius: 4
-            color: Qt.styleHints.colorScheme === Qt.Dark
-                   ? Qt.rgba(0, 0, 0, 0.3)
-                   : Qt.rgba(0, 0, 0, 0.2)
+            color: brick.panelRoot.previewBackdropColor
             // The card is presentation chrome, not part of the thumbnail.
             // Keep it below both fallback icon renderers so an empty image
             // URL can never dim an opaque native/system icon again.
@@ -505,7 +546,7 @@ BrickItem {
                              === brick.entryId)
         }
 
-        IconLabel {
+        Image {
             id: fallbackIcon
             objectName: brick.detailsMode ? ""
                                          : "galleryFallbackIcon-"
@@ -531,10 +572,11 @@ BrickItem {
                 brick.isLucideIconSource(modelIconSource)
             readonly property bool systemFileSource:
                 brick.isSystemFileIconSource(modelIconSource)
-            property url source: lucideSource ? modelIconSource
-                                                : (systemFileSource
-                                                   ? brick.systemFileFallbackSource(
-                                                         width) : "")
+            source: lucideSource
+                    ? brick.sourceColorIconAtSize(
+                          modelIconSource, width, effectiveIconColor)
+                    : (systemFileSource
+                       ? brick.systemFileFallbackSource(width) : "")
             anchors.centerIn: parent
             width: brick.detailsMode || brick.columnsMode
                    ? Math.min(parent.width, brick.panelRoot.detailsIconSize)
@@ -543,10 +585,7 @@ BrickItem {
                    : Math.max(0, Math.min(parent.width, parent.height)
                               * 0.55)
             height: width
-            icon.source: source
-            icon.width: width
-            icon.height: height
-            icon.color: effectiveIconColor
+            smooth: false
             opacity: brick.detailsMode || brick.columnsMode ? 1 : 0.78
             visible: !brick.detailsMode
                       && (lucideSource || (systemFileSource
@@ -578,7 +617,7 @@ BrickItem {
                           fallbackIcon.modelIconSource, width)
                     : ""
             fillMode: Image.PreserveAspectFit
-            smooth: true
+            smooth: false
             // Keep system/native icon lookup out of the GUI thread. The
             // fallback remains visible while the asynchronous result loads.
             asynchronous: true
@@ -703,13 +742,15 @@ BrickItem {
                 property size viewportSize: Qt.size(
                     width * brick.renderDpr,
                     height * brick.renderDpr)
-                property real sharpenAmount: 1.5
+                property real sharpenAmount:
+                    brick.masonryMode || brick.gridMode ? 1.5 : 0
                 property bool showCheckerboard:
                     brick.masonryMode || brick.gridMode
                 property int checkerboardSize:
                     4 * brick.renderDpr
                 property real borderRadius:
-                    4.1 * brick.renderDpr
+                    (brick.masonryMode || brick.gridMode)
+                    ? 4.1 * brick.renderDpr : 0
 
                 fragmentShader:
                     "qrc:/ZoinGallery/resources/shader.frag.qsb"
@@ -931,7 +972,10 @@ BrickItem {
         id: brickPointer
         objectName: "galleryBrickPointer-" + brick.viewIndex
         anchors.fill: parent
-        acceptedButtons: Qt.AllButtons
+        // Middle-button input belongs to GalleryPanel's shared wheel
+        // contract. Let it bubble to the panel-level GUI auto-scroll or
+        // console-forwarding surface instead of turning it into a tile click.
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         hoverEnabled: true
         preventStealing: true
         onPressed: mouse => {

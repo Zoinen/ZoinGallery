@@ -28,6 +28,12 @@ FocusScope {
     // The public string API keeps embedders independent from the native enum
     // while the underlying renderer remains a single reusable C++ type.
     property string presentationMode: "masonry"
+    // GUI mode owns smooth wheel scrolling and the reusable middle-button
+    // auto-scroll gesture. The host can opt into the terminal contract.
+    property string mouseWheelMode: "gui"
+    property alias scrollingStarted: mouseAutoScroll.scrollingStarted
+    property alias scrollingStartedAtY: mouseAutoScroll.startCoordinate
+    property alias scrollingMode: mouseAutoScroll.scrollingMode
     property int columnCount: 2
     property var columnSchema: []
     // A host may keep its own column header outside the reusable viewport.
@@ -181,6 +187,48 @@ FocusScope {
     readonly property rect cursorChromeTargetRect:
         Qt.rect(cursorChromeTargetX, cursorChromeTargetY,
                 cursorChromeTargetWidth, cursorChromeTargetHeight)
+    // A settled cursor is snapped in scene coordinates, not merely inside its
+    // delegate: at fractional DPRs an integer delegate coordinate can still
+    // land between physical pixels once the panel and viewport offsets are
+    // included. Keep the live viewport origin observable so recycled
+    // delegates update their correction after scrolling or panel relayout.
+    readonly property point cursorPixelGridViewportOrigin: {
+        // mapToItem() itself is not a bindable property. Read the relevant
+        // item coordinates explicitly so moving this panel re-evaluates the
+        // scene-space origin as well.
+        const dependencyX = root.x + root.width
+                + galleryLayout.x + galleryLayout.width
+        const dependencyY = root.y + root.height
+                + galleryLayout.y + galleryLayout.height
+        const sceneOrigin = galleryLayout.mapToItem(
+            null, dependencyX * 0, dependencyY * 0)
+        return Qt.point(
+            sceneOrigin.x + galleryLayout.paddingLeft
+                - (presentationMode === "columns"
+                   ? galleryLayout.contentY : 0),
+            sceneOrigin.y - (presentationMode === "columns"
+                             ? 0 : galleryLayout.contentY))
+    }
+    readonly property bool cursorPixelAlignmentSuspended:
+        cursorChromeTransitionActive || panelScrollAnimation.running
+
+    function alignViewportItemRectToDevicePixels(item, rect) {
+        if (!item || !rect)
+            return rect
+        const dpr = Math.max(0.01, Number(devicePixelRatio) || 1)
+        const origin = cursorPixelGridViewportOrigin
+        const itemSceneX = origin.x + item.x
+        const itemSceneY = origin.y + item.y
+        const left = Math.round((itemSceneX + rect.x) * dpr) / dpr
+        const top = Math.round((itemSceneY + rect.y) * dpr) / dpr
+        const right = Math.round(
+            (itemSceneX + rect.x + rect.width) * dpr) / dpr
+        const bottom = Math.round(
+            (itemSceneY + rect.y + rect.height) * dpr) / dpr
+        return Qt.rect(left - itemSceneX, top - itemSceneY,
+                       Math.max(0, right - left),
+                       Math.max(0, bottom - top))
+    }
     // The full-area viewer sets these while its image is animating to or from
     // the active tile.  Only the tile image is suppressed; panel chrome,
     // selection, and labels remain stable underneath the transition.
@@ -206,6 +254,10 @@ FocusScope {
     signal sortRequested(string sortMode, bool contextMenu)
     signal benchmarkStage(string stage, var metadata)
     signal metadataVisibleRangeChanged(int firstRow, int lastRow)
+    signal consoleWheelRequested(real x, real y, int angleDeltaY,
+                                 int modifiers)
+    signal consoleMouseButtonRequested(real x, real y, int button, bool down,
+                                       int modifiers)
 
     readonly property color backgroundColor:
         theme && theme.panelBackground !== undefined
@@ -227,6 +279,9 @@ FocusScope {
     readonly property color cursorBorderColor:
         theme && theme.cursorBorder !== undefined
             ? theme.cursorBorder : Qt.lighter(cursorColor, 1.35)
+    readonly property color cardCursorBorderColor:
+        theme && theme.cardCursorBorder !== undefined
+            ? theme.cardCursorBorder : Qt.lighter(cursorColor, 1.35)
     readonly property color markedBackgroundColor:
         theme && theme.markedBackground !== undefined
             ? theme.markedBackground : selectionColor
@@ -239,6 +294,23 @@ FocusScope {
     readonly property color folderIconColor:
         theme && theme.folderIcon !== undefined
             ? theme.folderIcon : mutedColor
+    readonly property color itemBackgroundColor:
+        theme && theme.itemBackground !== undefined
+            ? theme.itemBackground : Qt.lighter(backgroundColor, 1.09)
+    readonly property color directoryBackgroundColor:
+        theme && theme.directoryBackground !== undefined
+            ? theme.directoryBackground : Qt.lighter(backgroundColor, 1.20)
+    readonly property color itemHoverColor:
+        theme && theme.itemHover !== undefined
+            ? theme.itemHover : Qt.lighter(backgroundColor, 1.25)
+    readonly property color labelBackgroundColor:
+        theme && theme.labelBackground !== undefined
+            ? theme.labelBackground : "#aa101216"
+    readonly property color previewBackdropColor:
+        theme && theme.previewBackdrop !== undefined
+            ? theme.previewBackdrop
+            : (Qt.styleHints.colorScheme === Qt.Dark
+               ? Qt.rgba(0, 0, 0, 0.3) : Qt.rgba(0, 0, 0, 0.2))
     readonly property color separatorColor:
         theme && theme.separator !== undefined
             ? theme.separator : Qt.rgba(1, 1, 1, 0.12)
@@ -643,21 +715,11 @@ FocusScope {
         const previousIndex = session.currentIndex
         forceActiveFocus()
 
-        if ((button & Qt.MiddleButton) !== 0) {
-            const previousVisualIndex = visualCursorIndex
-            selectionAnchorIndex = viewIndex
-            localCursorNavigation = true
-            selectIndex(viewIndex, true)
-            localCursorNavigation = false
-            ensureCurrentVisible()
-            resetCurrentItemCenter(viewIndex)
-            coordinateVisualCursor(viewIndex, previousVisualIndex)
-            if (interruptedKeyboardScroll) {
-                session.panelScrollOffset = galleryLayout.contentY
-                session.panelViewportCursorEntryId = session.cursorEntryId
-            }
+        // Middle-button ownership lives on galleryMiddleButtonArea. Keep a
+        // defensive guard here for embedders with a legacy delegate so a
+        // middle click can never fall back to tile selection.
+        if ((button & Qt.MiddleButton) !== 0)
             return
-        }
 
         const previousVisualIndex = visualCursorIndex
         localCursorNavigation = true
@@ -683,6 +745,8 @@ FocusScope {
             finishKeyboardShiftSelection()
 
         if ((button & Qt.RightButton) !== 0) {
+            if (scrollingMode)
+                mouseAutoScroll.end()
             selectionAnchorIndex = viewIndex
             const ids = selectionIds(viewIndex, viewIndex)
             if (ids.length > 0)
@@ -780,16 +844,18 @@ FocusScope {
         viewportUpdateEnsuresCursor = false
         viewportUpdateSuppressAnimation = false
         viewportUpdatePendingAfterScroll = false
+        const viewportExtent = presentationMode === "columns"
+                ? galleryLayout.width : galleryLayout.height
         const maximum = Math.max(
-                    0, galleryLayout.contentHeight - galleryLayout.height)
+                    0, galleryLayout.contentHeight - viewportExtent)
         const target = Math.max(
                     0, Math.min(maximum, targetY))
         const compactRows = presentationMode === "columns"
                 || presentationMode === "details"
-        if (compactRows) {
-            // Compact file-list presentations intentionally follow the
-            // classic panel contract: viewport changes are immediate.  Do
-            // not run (or leave behind) the large-preview reveal animation.
+        if (compactRows && keyboardReveal) {
+            // Keyboard/path placement in compact rows remains an immediate
+            // reveal. Wheel input, however, must use the same animation as
+            // Masonry so every presentation has one GUI scrolling contract.
             setPanelContentY(target, true)
             return target
         }
@@ -805,6 +871,38 @@ FocusScope {
                 ? panelScrollAnimation.to : galleryLayout.contentY
         return animatePanelScrollTo(plannedContentY + deltaY,
                                     quickScroll, keyboardReveal)
+    }
+
+    function handlePanelMiddlePress(x, y, modifiers) {
+        if (mouseWheelMode === "console") {
+            consoleMouseButtonRequested(x, y, Qt.MiddleButton, true,
+                                        modifiers)
+            return
+        }
+        if (scrollingMode) {
+            mouseAutoScroll.end()
+        } else {
+            resetGridPageLattice()
+            resetMasonryPageSequence()
+            cancelCursorChromeTransition()
+            // A wheel step may still be easing toward its endpoint. The
+            // middle gesture owns contentY exclusively once it starts.
+            panelScrollAnimation.stop()
+            mouseAutoScroll.start()
+        }
+    }
+
+    function handlePanelMiddleRelease(x, y, modifiers) {
+        if (mouseWheelMode === "console") {
+            consoleMouseButtonRequested(x, y, Qt.MiddleButton, false,
+                                        modifiers)
+            return
+        }
+        // A release after the pointer actually moved ends the gesture. A
+        // stationary middle click deliberately leaves auto-scroll armed,
+        // exactly like the original MasonryMode toggle.
+        if (scrollingStarted)
+            mouseAutoScroll.end()
     }
 
     function handlePanelWheel(pixelDeltaY, angleDeltaY, modifiers,
@@ -836,6 +934,18 @@ FocusScope {
             scrollBy(-delta, macPlatform)
         }
         return true
+    }
+
+    onMouseWheelModeChanged: {
+        if (mouseWheelMode !== "gui" && scrollingMode)
+            mouseAutoScroll.end()
+    }
+
+    onScrollingModeChanged: {
+        if (!scrollingMode && session) {
+            session.panelScrollOffset = galleryLayout.contentY
+            session.panelViewportCursorEntryId = session.cursorEntryId
+        }
     }
 
     function beginThumbnailPinch() {
@@ -1457,7 +1567,7 @@ FocusScope {
         if (presentationMode !== "details") {
             return {
                 fill: cursorColor,
-                border: Qt.lighter(cursorColor, 1.35),
+                border: cardCursorBorderColor,
                 borderWidth: 1,
                 radius: cursorChromeModeRadius()
             }
@@ -2624,6 +2734,7 @@ FocusScope {
             width: root.cursorChromeWidth
             height: root.cursorChromeHeight
             radius: root.cursorChromeRadius
+            antialiasing: true
             color: root.cursorChromeFillColor
         }
     }
@@ -2637,13 +2748,17 @@ FocusScope {
         visible: root.cursorChromeTransitionActive && root.showCursor
         Rectangle {
             objectName: "galleryCursorChromeBorder"
+            readonly property bool visualBorderPixelAligned:
+                border.pixelAligned
             x: root.cursorChromeX
             y: root.cursorChromeY
             width: root.cursorChromeWidth
             height: root.cursorChromeHeight
             radius: root.cursorChromeRadius
+            antialiasing: true
             color: "transparent"
             border.width: root.cursorChromeBorderWidth
+            border.pixelAligned: true
             border.color: root.cursorChromeBorderColor
         }
     }
@@ -2767,11 +2882,58 @@ FocusScope {
         acceptedButtons: Qt.NoButton
         enabled: !root.customContent
         onWheel: wheel => {
-            root.handlePanelWheel(wheel.pixelDelta.y, wheel.angleDelta.y,
-                                  wheel.modifiers, wheel.pixelDelta.x,
-                                  wheel.angleDelta.x)
+            if (root.mouseWheelMode === "console") {
+                // The console contract is deliberately angle-step based. The
+                // hidden VtuiGridItem performs the same 120-unit remainder
+                // conversion as native terminal input.
+                root.consoleWheelRequested(wheel.x, wheel.y,
+                                           wheel.angleDelta.y,
+                                           wheel.modifiers)
+            } else {
+                root.handlePanelWheel(wheel.pixelDelta.y, wheel.angleDelta.y,
+                                      wheel.modifiers, wheel.pixelDelta.x,
+                                      wheel.angleDelta.x)
+            }
             wheel.accepted = true
         }
+    }
+
+    MouseArea {
+        id: galleryMiddleButtonArea
+        objectName: "galleryMiddleButtonArea"
+        anchors.fill: parent
+        acceptedButtons: Qt.MiddleButton
+        enabled: !root.customContent
+        hoverEnabled: true
+
+        onPressed: mouse => {
+            root.handlePanelMiddlePress(mouse.x, mouse.y, mouse.modifiers)
+            mouse.accepted = true
+        }
+        onReleased: mouse => {
+            root.handlePanelMiddleRelease(mouse.x, mouse.y,
+                                          mouse.modifiers)
+            mouse.accepted = true
+        }
+        onCanceled: {
+            if (root.mouseWheelMode === "console") {
+                root.consoleMouseButtonRequested(
+                    mouseX, mouseY, Qt.MiddleButton, false, Qt.NoModifier)
+            } else if (root.scrollingStarted) {
+                mouseAutoScroll.end()
+            }
+        }
+    }
+
+    AutoScrollController {
+        id: mouseAutoScroll
+        objectName: "galleryMouseAutoScrollController"
+        layout: galleryLayout
+        pointerSource: galleryMiddleButtonArea
+        horizontal: root.presentationMode === "columns"
+        scrollExtent: root.Window.window
+                     ? root.Window.window.height
+                     : (horizontal ? galleryLayout.width : galleryLayout.height)
     }
 
     PinchArea {
@@ -2980,7 +3142,10 @@ FocusScope {
         theme: root.theme
         anchors.left: galleryLayout.left
         anchors.right: galleryLayout.right
-        anchors.bottom: galleryLayout.bottom
+        // The viewport keeps a six-pixel breathing room around its tiles.
+        // The horizontal scrollbar is panel chrome, so it must bridge that
+        // inset and sit directly on the panel's bottom edge.
+        anchors.bottom: parent.bottom
         z: 10
         height: visible ? 16 : 0
         visible: !root.customContent && root.presentationMode === "columns"

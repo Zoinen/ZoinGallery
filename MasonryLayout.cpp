@@ -3,6 +3,7 @@
 #include "MasonryLayoutQuickSearch.h"
 #include "SvgCursor.h"
 
+#include <QAbstractAnimation>
 #include <QParallelAnimationGroup>
 #include <QPropertyAnimation>
 #include <QPropertyAnimation>
@@ -11,6 +12,7 @@
 #include <QQmlProperty>
 #include <QQuickWindow>
 #include <QDir>
+#include <QFileInfo>
 #include <QElapsedTimer>
 #include <QSettings>
 #include <QMap>
@@ -37,6 +39,12 @@ static bool modelRequestsViewStatePreservation(QAbstractItemModel *model) {
     const auto *requestModel =
         dynamic_cast<const ThumbnailsRequestInterface *>(model);
     return requestModel && requestModel->preserveViewStateOnReset();
+}
+
+bool isScalableVectorImage(const ImageInfo &info) {
+    const QString suffix = QFileInfo(info.path).suffix();
+    return suffix.compare(QStringLiteral("svg"), Qt::CaseInsensitive) == 0
+        || suffix.compare(QStringLiteral("svgz"), Qt::CaseInsensitive) == 0;
 }
 
 namespace {
@@ -2100,10 +2108,17 @@ QSize MasonryLayout::previewDecodeTargetSize(
     // PreserveAspectFit, so decode the smallest aspect-preserving frame that
     // covers that fitted surface instead of the old Grid crop tier.
     qreal scale = qMin(horizontalScale, verticalScale);
-    // Thumbnail decoders never need to synthesize pixels. If the native
-    // image is smaller than the preview, publish native dimensions and let
-    // the scene graph perform the unavoidable display upscale.
-    scale = qBound<qreal>(0, scale, 1.0);
+    // Raster thumbnails never need synthesized pixels: if the native image
+    // is smaller than the preview, publish native dimensions and let the
+    // scene graph perform the unavoidable display upscale. SVG metadata is
+    // different: its width/height is only the authoring viewport (commonly
+    // 16 or 24 px), not a native pixel limit. Clamping SVG here used to
+    // publish a tiny raster which was then enlarged by QML in every panel
+    // mode. Keep the requested physical preview size for scalable vectors.
+    if (!isScalableVectorImage(brick.image->info())) {
+        scale = qMin<qreal>(scale, 1.0);
+    }
+    scale = qMax<qreal>(0, scale);
     if (scale <= 0) {
         return {};
     }
@@ -4289,6 +4304,16 @@ BrickItem::BrickItem(QQuickItem *parent)
     _heightAnimation->setDuration(animationDuration);
     _heightAnimation->setEasingCurve(QEasingCurve::InOutQuad);
     _geometryAnimationGroup->addAnimation(_heightAnimation);
+
+    connect(_geometryAnimationGroup, &QAbstractAnimation::stateChanged,
+            this, [this](QAbstractAnimation::State current,
+                         QAbstractAnimation::State previous) {
+        const bool isRunning = current == QAbstractAnimation::Running;
+        const bool wasRunning = previous == QAbstractAnimation::Running;
+        if (isRunning != wasRunning) {
+            emit geometryAnimationRunningChanged();
+        }
+    });
 }
 
 void BrickItem::setRowColumn(int row, int column) {
@@ -4343,6 +4368,11 @@ QVariantMap BrickItem::visualRow() const {
 
 bool BrickItem::visualFacadeReady() const {
     return _visualFacadeReady;
+}
+
+bool BrickItem::geometryAnimationRunning() const {
+    return _geometryAnimationGroup
+        && _geometryAnimationGroup->state() == QAbstractAnimation::Running;
 }
 
 QObject *BrickItem::visualModel() const {

@@ -158,6 +158,8 @@ class BrickItem : public QQuickItem {
     Q_PROPERTY(QObject *visualModel READ visualModel CONSTANT)
     Q_PROPERTY(bool visualFacadeReady READ visualFacadeReady
                NOTIFY visualFacadeReadyChanged)
+    Q_PROPERTY(bool geometryAnimationRunning READ geometryAnimationRunning
+               NOTIFY geometryAnimationRunningChanged)
 public:
     BrickItem(QQuickItem *parent = nullptr);
 
@@ -173,6 +175,7 @@ public:
     QVariantMap visualRow() const;
     QObject *visualModel() const;
     bool visualFacadeReady() const;
+    bool geometryAnimationRunning() const;
     void stopGeometryAnimation();
 
     int row() const;
@@ -184,6 +187,7 @@ signals:
     void iconLabelTextChanged();
     void visualRowChanged();
     void visualFacadeReadyChanged();
+    void geometryAnimationRunningChanged();
 
 protected:
 #if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)

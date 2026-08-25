@@ -378,7 +378,7 @@ if(BUILD_TESTING)
         Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME GallerySessionTest COMMAND ZoinGallerySessionTests)
     set_tests_properties(GallerySessionTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
     add_executable(ZoinGalleryQmlInteractionTests
         tests/GalleryQmlInteractionTest.cpp)
@@ -391,7 +391,7 @@ if(BUILD_TESTING)
     add_test(NAME GalleryQmlInteractionTest
         COMMAND ZoinGalleryQmlInteractionTests)
     set_tests_properties(GalleryQmlInteractionTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
     add_executable(ZoinGalleryReusableViewerPrimitivesTests
         tests/ReusableViewerPrimitivesTest.cpp)
@@ -403,7 +403,7 @@ if(BUILD_TESTING)
     add_test(NAME ReusableViewerPrimitivesTest
         COMMAND ZoinGalleryReusableViewerPrimitivesTests)
     set_tests_properties(ReusableViewerPrimitivesTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic")
 
     add_executable(ZoinGalleryPanelGestureTests
         tests/GalleryPanelGestureTest.cpp)
@@ -416,7 +416,7 @@ if(BUILD_TESTING)
     add_test(NAME GalleryPanelGestureTest
         COMMAND ZoinGalleryPanelGestureTests)
     set_tests_properties(GalleryPanelGestureTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
     add_executable(ZoinGalleryMasonryLayoutModesTests
         tests/MasonryLayoutModesTest.cpp)
@@ -431,7 +431,7 @@ if(BUILD_TESTING)
     add_test(NAME MasonryLayoutModesTest
         COMMAND ZoinGalleryMasonryLayoutModesTests)
     set_tests_properties(MasonryLayoutModesTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic")
 
     if(ZOIN_BUILD_STANDALONE)
         set(ZOIN_STANDALONE_SMOKE_SOURCES
@@ -506,6 +506,7 @@ if(ZOIN_BUILD_BENCHMARKS)
 endif()
 
 set(ZOIN_QML_FILES
+    qml/AutoScrollController.qml
     qml/GalleryPanel.qml
     qml/GalleryEntryDelegate.qml
     qml/GalleryViewer.qml

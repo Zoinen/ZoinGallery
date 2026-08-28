@@ -93,11 +93,12 @@ QVariantMap catalogDisplayFields(const QVariantMap &map,
         return displayFields(map);
     }
     QVariantMap fields = map.value(QStringLiteral("displayFields")).toMap();
-    // The first-frame contract carries only the two name presentation fields.
-    // Read those directly instead of probing every deferred metadata key for
-    // every row. Missing values render empty until the exact metadata chunk.
+    // Hidden state is authoritative in the base directory phase and affects
+    // first-frame opacity. Keep it alongside the two name presentation fields;
+    // every genuinely deferred field stays absent until its exact chunk.
     for (const QString &key : {QStringLiteral("displayBaseName"),
-                               QStringLiteral("displayExtension")}) {
+                               QStringLiteral("displayExtension"),
+                               QStringLiteral("isHidden")}) {
         const auto value = map.constFind(key);
         if (value != map.cend() && !fields.contains(key)) {
             fields.insert(key, *value);

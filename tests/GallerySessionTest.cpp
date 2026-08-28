@@ -848,6 +848,7 @@ private slots:
             {QStringLiteral("path"), QStringLiteral("/virtual/first.png")},
             {QStringLiteral("isDir"), false},
             {QStringLiteral("isImage"), true},
+            {QStringLiteral("isHidden"), true},
             {QStringLiteral("displayBaseName"), QStringLiteral("first")},
             {QStringLiteral("displayExtension"), QStringLiteral("png")},
         };
@@ -876,6 +877,8 @@ private slots:
         ImageFile *firstItem = qvariant_cast<ImageFile *>(
             session->model()->data(session->model()->index(0, 0), itemRole));
         QVERIFY(firstItem);
+        QVERIFY(firstItem->displayFields().value(
+                    QStringLiteral("isHidden")).toBool());
         QCOMPARE(session->model()->data(session->model()->index(0, 0), sizeRole)
                      .toLongLong(),
                  qint64(-1));
@@ -896,7 +899,6 @@ private slots:
             {QStringLiteral("sizeText"), QStringLiteral("8 KB")},
             {QStringLiteral("mtimeText"), QStringLiteral("now")},
             {QStringLiteral("modeText"), QStringLiteral("rw-r--r--")},
-            {QStringLiteral("isHidden"), false},
             {QStringLiteral("highlightStyle"), style},
         };
 
@@ -921,6 +923,8 @@ private slots:
         QCOMPARE(firstItem->displayFields().value(
                      QStringLiteral("sizeText")).toString(),
                  QStringLiteral("8 KB"));
+        QVERIFY(firstItem->displayFields().value(
+                    QStringLiteral("isHidden")).toBool());
         QCOMPARE(firstItem->highlightStyle(), style);
         QCOMPARE(firstItem->iconPath(), QStringLiteral("qrc:/custom/png.svg"));
         QVERIFY(firstItem->lastModified().isValid());

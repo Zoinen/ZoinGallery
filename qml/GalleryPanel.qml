@@ -1064,6 +1064,22 @@ FocusScope {
         presentationSwitchTimer.restart()
     }
 
+    // Embedders may own presentation chrome (for example f4's Details
+    // header) outside this component. Bracket the complete semantic update so
+    // native mode, density, insets and the resulting anchored viewport size
+    // produce one layout revision and one paintable state.
+    function beginPresentationStateUpdate(switchingMode) {
+        if (switchingMode)
+            beginPresentationSwitch()
+        galleryLayout.beginLayoutUpdate()
+    }
+
+    function endPresentationStateUpdate(publishVisibleRange) {
+        galleryLayout.endLayoutUpdate()
+        if (publishVisibleRange)
+            publishMetadataVisibleRange()
+    }
+
     function restoreScrollOffset() {
         if (!session || galleryLayout.contentHeight <= 0)
             return false

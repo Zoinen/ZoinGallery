@@ -213,9 +213,17 @@ void MasonryLayout::componentComplete() {
     QQuickItem::componentComplete();
 
     connect(this, &MasonryLayout::widthChanged,
-            this, [this]() { rewrap(); });
+            this, [this]() { requestRewrap(); });
 
     connect(this, &MasonryLayout::heightChanged, this, [&] () {
+        if (_layoutUpdateDepth > 0) {
+            // The outer f4 Details header changes this height in the same
+            // transaction as presentationMode/density. Recompute against the
+            // final viewport once instead of laying out the outgoing mode.
+            _layoutUpdateNeedsScrollRefresh = true;
+            requestRewrap(false);
+            return;
+        }
         if (_presentationMode == Columns) {
             rewrap(false);
             updateNeedScroll();
@@ -3839,48 +3847,97 @@ MasonryLayout::PresentationMode MasonryLayout::presentationMode() const {
     return _presentationMode;
 }
 
-void MasonryLayout::setPresentationMode(PresentationMode mode) {
-    const int normalizedValue = qBound(
-        static_cast<int>(Masonry), static_cast<int>(mode),
-        static_cast<int>(Icons));
-    mode = static_cast<PresentationMode>(normalizedValue);
-    if (_presentationMode == mode) {
+void MasonryLayout::requestRewrap(bool animate) {
+    if (_layoutUpdateDepth > 0) {
+        _layoutUpdateNeedsRewrap = true;
+        // One non-animated participant makes the whole atomic commit
+        // non-animated. Presentation switches always take this path.
+        _layoutUpdateAnimate = _layoutUpdateAnimate && animate;
         return;
     }
-    qreal previousCurrentViewportY = 0;
-    bool previousCurrentWasVisible = false;
-    if (_currentIndex >= 0 && _currentIndex < _bricks.size()) {
-        const QRectF previousGeometry = indexGeometry(_currentIndex);
-        previousCurrentWasVisible = previousGeometry.isValid() &&
-            !previousGeometry.isEmpty() &&
-            previousGeometry.top() < _contentY + height() &&
-            previousGeometry.bottom() > _contentY;
-        if (previousCurrentWasVisible) {
-            previousCurrentViewportY =
-                previousGeometry.top() - _contentY;
-        }
+    rewrap(animate);
+}
+
+void MasonryLayout::capturePresentationViewportAnchor(
+    qreal *viewportY, bool *wasVisible) const {
+    if (!viewportY || !wasVisible) {
+        return;
     }
-    _presentationMode = mode;
-    _density = _modeDensities[normalizedValue];
-    _targetHeight = qRound(_density);
-    _currentLoadingRow.clear();
-    _scheduledThumbnailIndexes.clear();
-    _scheduledThumbnailRequestKeys.clear();
-    _lastThumbnailViewportIndexes.clear();
-    _windowTopIndex = qBound(
-        0, _topItem, maximumWindowTopIndex());
-    if (_presentationMode == Columns && _currentIndex >= 0) {
-        _windowTopIndex = windowTopIndexForIndex(_currentIndex);
+    *viewportY = 0;
+    *wasVisible = false;
+    if (_currentIndex < 0 || _currentIndex >= _bricks.size()) {
+        return;
     }
-    if (_persistSettings && !isEmbedded()) {
-        QSettings settings;
-        settings.setValue(QStringLiteral("layout/presentationMode"),
-                          normalizedValue);
+    const QRectF geometry = indexGeometry(_currentIndex);
+    *wasVisible = geometry.isValid() && !geometry.isEmpty()
+        && geometry.top() < _contentY + height()
+        && geometry.bottom() > _contentY;
+    if (*wasVisible) {
+        *viewportY = geometry.top() - _contentY;
     }
-    emit presentationModeChanged();
-    emit densityChanged();
-    emit targetExtentChanged();
-    emit targetHeightChanged();
+}
+
+void MasonryLayout::beginLayoutUpdate() {
+    if (_layoutUpdateDepth++ > 0) {
+        return;
+    }
+    _layoutUpdateNeedsRewrap = false;
+    _layoutUpdateAnimate = true;
+    _layoutUpdateNeedsPositionViewport = false;
+    _layoutUpdateNeedsScrollRefresh = false;
+    _layoutUpdatePresentationModeChanged = false;
+    capturePresentationViewportAnchor(
+        &_layoutUpdateCurrentViewportY,
+        &_layoutUpdateCurrentWasVisible);
+}
+
+void MasonryLayout::endLayoutUpdate() {
+    if (_layoutUpdateDepth <= 0) {
+        return;
+    }
+    if (--_layoutUpdateDepth > 0) {
+        return;
+    }
+
+    const bool needsRewrap = _layoutUpdateNeedsRewrap;
+    const bool animate = _layoutUpdateAnimate;
+    const bool needsPositionViewport =
+        _layoutUpdateNeedsPositionViewport;
+    const bool needsScrollRefresh = _layoutUpdateNeedsScrollRefresh;
+    const bool presentationModeChanged =
+        _layoutUpdatePresentationModeChanged;
+    const qreal previousCurrentViewportY =
+        _layoutUpdateCurrentViewportY;
+    const bool previousCurrentWasVisible =
+        _layoutUpdateCurrentWasVisible;
+
+    _layoutUpdateNeedsRewrap = false;
+    _layoutUpdateAnimate = true;
+    _layoutUpdateNeedsPositionViewport = false;
+    _layoutUpdateNeedsScrollRefresh = false;
+    _layoutUpdatePresentationModeChanged = false;
+
+    if (needsPositionViewport) {
+        positionViewport();
+    }
+    if (presentationModeChanged) {
+        // setDensity() may have requested a same-mode viewport anchor after
+        // setPresentationMode(). A cross-mode switch owns the stronger
+        // current-item viewport contract below.
+        _preserveViewportAnchorForNextRewrap = false;
+        completePresentationModeChange(previousCurrentViewportY,
+                                       previousCurrentWasVisible);
+    }
+    else if (needsRewrap) {
+        rewrap(animate);
+    }
+    if (needsScrollRefresh) {
+        updateNeedScroll();
+    }
+}
+
+void MasonryLayout::completePresentationModeChange(
+    qreal previousCurrentViewportY, bool previousCurrentWasVisible) {
     if (_model && (_presentationMode == Details
                    || (_presentationMode != Masonry && !isEmbedded()))) {
         dynamic_cast<ThumbnailsRequestInterface *>(_model)
@@ -3897,10 +3954,10 @@ void MasonryLayout::setPresentationMode(PresentationMode mode) {
         const QRectF currentGeometry = indexGeometry(_currentIndex);
         if (currentGeometry.isValid() && !currentGeometry.isEmpty()) {
             qreal targetY = _contentY;
-            if (_presentationMode != Columns &&
-                previousCurrentWasVisible) {
-                const qreal desired = currentGeometry.top() -
-                    previousCurrentViewportY;
+            if (_presentationMode != Columns
+                && previousCurrentWasVisible) {
+                const qreal desired = currentGeometry.top()
+                    - previousCurrentViewportY;
                 const qreal minimumForVisibility =
                     currentGeometry.bottom() - height();
                 targetY = qBound(
@@ -3932,6 +3989,50 @@ void MasonryLayout::setPresentationMode(PresentationMode mode) {
     }
 }
 
+void MasonryLayout::setPresentationMode(PresentationMode mode) {
+    const int normalizedValue = qBound(
+        static_cast<int>(Masonry), static_cast<int>(mode),
+        static_cast<int>(Icons));
+    mode = static_cast<PresentationMode>(normalizedValue);
+    if (_presentationMode == mode) {
+        return;
+    }
+    qreal previousCurrentViewportY = _layoutUpdateCurrentViewportY;
+    bool previousCurrentWasVisible = _layoutUpdateCurrentWasVisible;
+    if (_layoutUpdateDepth == 0) {
+        capturePresentationViewportAnchor(
+            &previousCurrentViewportY, &previousCurrentWasVisible);
+    }
+    _presentationMode = mode;
+    _density = _modeDensities[normalizedValue];
+    _targetHeight = qRound(_density);
+    _currentLoadingRow.clear();
+    _scheduledThumbnailIndexes.clear();
+    _scheduledThumbnailRequestKeys.clear();
+    _lastThumbnailViewportIndexes.clear();
+    _windowTopIndex = qBound(
+        0, _topItem, maximumWindowTopIndex());
+    if (_presentationMode == Columns && _currentIndex >= 0) {
+        _windowTopIndex = windowTopIndexForIndex(_currentIndex);
+    }
+    if (_persistSettings && !isEmbedded()) {
+        QSettings settings;
+        settings.setValue(QStringLiteral("layout/presentationMode"),
+                          normalizedValue);
+    }
+    emit presentationModeChanged();
+    emit densityChanged();
+    emit targetExtentChanged();
+    emit targetHeightChanged();
+    if (_layoutUpdateDepth > 0) {
+        _layoutUpdatePresentationModeChanged = true;
+        requestRewrap(false);
+        return;
+    }
+    completePresentationModeChange(previousCurrentViewportY,
+                                   previousCurrentWasVisible);
+}
+
 int MasonryLayout::columnCount() const {
     return _columnCount;
 }
@@ -3951,7 +4052,7 @@ void MasonryLayout::setColumnCount(int columnCount) {
     if (_presentationMode == Columns) {
         _windowTopIndex = qBound(
             0, _windowTopIndex, maximumWindowTopIndex());
-        rewrap(false);
+        requestRewrap(false);
     }
 }
 
@@ -3988,7 +4089,7 @@ void MasonryLayout::setDensity(qreal density) {
                               _targetHeight);
         }
     }
-    rewrap();
+    requestRewrap();
     emit densityChanged();
     emit targetExtentChanged();
     if (previousTargetHeight != _targetHeight) {
@@ -4673,7 +4774,7 @@ void MasonryLayout::setSpacing(int newSpacing) {
         return;
     _spacing = newSpacing;
     emit spacingChanged();
-    rewrap(false);
+    requestRewrap(false);
 }
 
 QQuickItem *MasonryLayout::currentItem() const {
@@ -4727,7 +4828,7 @@ void MasonryLayout::setListView(bool isListView) {
             }
         }
     }
-    rewrap();
+    requestRewrap();
 
     emit listViewChanged();
 }
@@ -4801,8 +4902,13 @@ void MasonryLayout::setPaddingLeft(qreal newPaddingLeft) {
     if (qFuzzyCompare(_paddingLeft, newPaddingLeft))
         return;
     _paddingLeft = newPaddingLeft;
-    positionViewport();
-    rewrap();
+    if (_layoutUpdateDepth > 0) {
+        _layoutUpdateNeedsPositionViewport = true;
+    }
+    else {
+        positionViewport();
+    }
+    requestRewrap();
     emit paddingLeftChanged();
 }
 
@@ -4814,7 +4920,7 @@ void MasonryLayout::setPaddingRight(qreal newPaddingRight) {
     if (qFuzzyCompare(_paddingRight, newPaddingRight))
         return;
     _paddingRight = newPaddingRight;
-    rewrap();
+    requestRewrap();
     emit paddingRightChanged();
 }
 
@@ -4828,7 +4934,7 @@ void MasonryLayout::setPaddingTop(qreal newPaddingTop) {
 
     _paddingTop = newPaddingTop;
     _topItemOffset = _paddingTop;
-    rewrap();
+    requestRewrap();
     emit paddingTopChanged();
 }
 
@@ -4840,7 +4946,7 @@ void MasonryLayout::setPaddingBottom(qreal newPaddingBottom) {
     if (qFuzzyCompare(_paddingBottom, newPaddingBottom))
         return;
     _paddingBottom = newPaddingBottom;
-    rewrap();
+    requestRewrap();
     emit paddingBottomChanged();
 }
 

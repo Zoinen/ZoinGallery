@@ -315,6 +315,12 @@ public:
     Q_INVOKABLE void zoomOut();
 
     Q_INVOKABLE void setScrollingMode(bool scrollingMode, int direction = 0);
+    // A presentation switch changes the native strategy, density, insets and
+    // often the anchored viewport geometry in one semantic operation.  Hosts
+    // can bracket those declarative writes so every setter is committed by
+    // one final rewrap instead of exposing intermediate layouts.
+    Q_INVOKABLE void beginLayoutUpdate();
+    Q_INVOKABLE void endLayoutUpdate();
 
     PresentationMode presentationMode() const;
     void setPresentationMode(PresentationMode mode);
@@ -507,6 +513,11 @@ private:
     BrickItem *createComponent();
 
     bool isEmbedded() const;
+    void requestRewrap(bool animate = true);
+    void capturePresentationViewportAnchor(qreal *viewportY,
+                                           bool *wasVisible) const;
+    void completePresentationModeChange(qreal previousCurrentViewportY,
+                                        bool previousCurrentWasVisible);
     void rewrap(bool animate = true);
     void calcFixedLayout();
     void rebuildLayoutBands();
@@ -659,6 +670,14 @@ private:
     qreal _density = 150.0;
     int _windowTopIndex = 0;
     bool _preserveViewportAnchorForNextRewrap = false;
+    int _layoutUpdateDepth = 0;
+    bool _layoutUpdateNeedsRewrap = false;
+    bool _layoutUpdateAnimate = true;
+    bool _layoutUpdateNeedsPositionViewport = false;
+    bool _layoutUpdateNeedsScrollRefresh = false;
+    bool _layoutUpdatePresentationModeChanged = false;
+    qreal _layoutUpdateCurrentViewportY = 0;
+    bool _layoutUpdateCurrentWasVisible = false;
     qreal _modeDensities[5] = {150.0, 30.0, 30.0, 160.0, 128.0};
     qreal _contentY;
     qreal _contentHeight;

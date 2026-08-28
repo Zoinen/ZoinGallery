@@ -167,10 +167,13 @@ QQuickItem *findVisualItem(QQuickItem *root, const QString &objectName) {
     return nullptr;
 }
 
-bool invokeEnsureCurrentVisible(QObject *panel, bool animate = false) {
+bool invokeEnsureCurrentVisible(
+        QObject *panel, bool animate = false,
+        const QVariant &keyboardRevealDirection = QVariant()) {
     return QMetaObject::invokeMethod(
         panel, "ensureCurrentVisible", Qt::DirectConnection,
-        Q_ARG(QVariant, QVariant(animate)));
+        Q_ARG(QVariant, QVariant(animate)),
+        Q_ARG(QVariant, keyboardRevealDirection));
 }
 
 bool indexIntersectsViewport(const MasonryLayout *layout, int index) {
@@ -604,6 +607,306 @@ private slots:
         navigation = layout->navigationTarget(
             12, MasonryLayout::NavigateRight);
         QCOMPARE(navigation.value(QStringLiteral("targetIndex")).toInt(), 13);
+    }
+
+    void keyboardRevealKeepsCompactLeadingEdgesAligned() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 2;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("keyboard-leading-edge-alignment"));
+        QVERIFY(session);
+        constexpr int entryCount = 240;
+        QVERIFY(session->applyExternalCatalog(plainCatalog(entryCount), 1));
+        session->setCurrentIndex(0);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("keyboardAlignmentSession"),
+            QStringLiteral("columns"));
+        QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(panelItem && layout);
+
+        // At 1.75 DPR the resulting 631.5 logical-pixel canvas is 1105.125
+        // physical pixels wide. Its integral 1105-pixel span leaves exactly
+        // one physical remainder pixel for both two and three columns.
+        panelItem->setWidth(643.5);
+        panelItem->setHeight(360);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), entryCount, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
+                                  MasonryLayout::Columns, 3000);
+        constexpr qreal testDpr = 1.75;
+        layout->setDevicePixelRatio(testDpr);
+
+        panelItem->forceActiveFocus();
+        view.requestActivate();
+        QVERIFY(panelItem->hasActiveFocus());
+
+        const auto delegateForIndex = [&](int index) -> QQuickItem * {
+            const auto *surface = findVisualItem(
+                panelItem,
+                QStringLiteral("gallerySelectionSurface-%1").arg(index));
+            return surface ? surface->parentItem() : nullptr;
+        };
+        const auto sendKey = [&](Qt::Key key) {
+            QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+            QCoreApplication::sendEvent(&view, &press);
+            QVERIFY(press.isAccepted());
+            QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+            QCoreApplication::sendEvent(&view, &release);
+            QVERIFY(release.isAccepted());
+            QCoreApplication::processEvents();
+        };
+
+        // The viewport width is intentionally not divisible by either two or
+        // three, and the fractional DPR makes logical-pixel rounding
+        // insufficient. Every delegate and every scroll step must share one
+        // exact physical-pixel stride.
+        for (const int columns : {2, 3}) {
+            panel->setProperty("presentationMode", QStringLiteral("columns"));
+            layout->setDensity(30);
+            layout->setColumnCount(columns);
+            layout->setWindowTopIndex(0);
+            layout->setContentY(0);
+            session->setCurrentIndex(0);
+            QCoreApplication::processEvents();
+            QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
+                                      MasonryLayout::Columns, 3000);
+            QTRY_VERIFY_WITH_TIMEOUT(layout->contentY() < 0.01, 3000);
+
+            const int rows = qMax(
+                1, int(std::floor((layout->height()
+                    - layout->paddingTop() - layout->paddingBottom())
+                    / layout->density())));
+            QVERIFY(rows > 1);
+            const qreal stride = layout->columnStride();
+            QVERIFY(stride > 0);
+            QVERIFY(qAbs(stride * testDpr
+                         - qRound(stride * testDpr)) < 0.0001);
+            for (int column = 0; column < columns; ++column) {
+                QQuickItem *columnDelegate = nullptr;
+                QTRY_VERIFY_WITH_TIMEOUT(
+                    (columnDelegate = delegateForIndex(column * rows))
+                        != nullptr,
+                    3000);
+                QVERIFY(qAbs(columnDelegate->x() - column * stride)
+                        < 0.0001);
+                QVERIFY(qAbs(columnDelegate->width() - stride) < 0.0001);
+            }
+            QQuickItem *first = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (first = delegateForIndex(0)) != nullptr, 3000);
+            const qreal firstColumnX = first->x() - layout->contentY();
+
+            // Move into the first column which was not initially visible.
+            // The new leftmost column is index rows after the viewport moves
+            // by one column.
+            for (int step = 0; step < columns; ++step)
+                sendKey(Qt::Key_Right);
+            QCOMPARE(session->currentIndex(), columns * rows);
+            QQuickItem *newLeft = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (newLeft = delegateForIndex(rows)) != nullptr, 3000);
+            QVERIFY(qAbs(newLeft->width() - stride) < 0.0001);
+            QVERIFY2(
+                qAbs(newLeft->x() - layout->contentY() - firstColumnX)
+                    < 0.01,
+                qPrintable(QStringLiteral(
+                    "%1 columns: left edge drifted: first=%2 new=%3 "
+                    "contentY=%4")
+                    .arg(columns)
+                    .arg(firstColumnX)
+                    .arg(newLeft->x() - layout->contentY())
+                    .arg(layout->contentY())));
+
+            // The reverse keyboard reveal must return to the same origin.
+            for (int step = 0; step < columns; ++step)
+                sendKey(Qt::Key_Left);
+            QVERIFY(qAbs(layout->contentY()) < 0.01);
+            QQuickItem *returnedFirst = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (returnedFirst = delegateForIndex(0)) != nullptr, 3000);
+            QVERIFY(qAbs(returnedFirst->x() - layout->contentY()
+                         - firstColumnX) < 0.01);
+
+            // The terminal clamp must stay on the same column lattice too.
+            // contentHeight used to omit the viewport's trailing remainder,
+            // making the last screen stop one physical pixel before the exact
+            // stride and shifting every visible delegate to the right.
+            const qreal physicalCanvas = std::floor(
+                (layout->width() - layout->paddingLeft()
+                 - layout->paddingRight()) * testDpr + 0.000001);
+            const qreal physicalRemainder = physicalCanvas
+                - columns * stride * testDpr;
+            QVERIFY(physicalRemainder > 0.5);
+            const int totalColumns = (entryCount + rows - 1) / rows;
+            const int terminalLeftColumn = qMax(0, totalColumns - columns);
+            const int terminalLeftIndex = terminalLeftColumn * rows;
+
+            sendKey(Qt::Key_End);
+            QCOMPARE(session->currentIndex(), entryCount - 1);
+            QQuickItem *terminalLeft = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (terminalLeft = delegateForIndex(terminalLeftIndex)) != nullptr,
+                3000);
+            QVERIFY2(qAbs(layout->contentY()
+                          - terminalLeftColumn * stride) < 0.0001,
+                     qPrintable(QStringLiteral(
+                         "%1 columns: terminal offset left the lattice: "
+                         "contentY=%2 expected=%3 remainderPhysical=%4")
+                         .arg(columns)
+                         .arg(layout->contentY())
+                         .arg(terminalLeftColumn * stride)
+                         .arg(physicalRemainder)));
+            QVERIFY2(qAbs(terminalLeft->x() - layout->contentY()
+                          - firstColumnX) < 0.0001,
+                     qPrintable(QStringLiteral(
+                         "%1 columns: terminal left edge drifted: first=%2 "
+                         "terminal=%3")
+                         .arg(columns)
+                         .arg(firstColumnX)
+                         .arg(terminalLeft->x() - layout->contentY())));
+
+            sendKey(Qt::Key_Home);
+            QCOMPARE(session->currentIndex(), 0);
+            QVERIFY(qAbs(layout->contentY()) < 0.0001);
+        }
+
+        // Details keeps its native fractional row extent. Keyboard reveal
+        // must move by complete row pitches so the new top row has exactly
+        // the same screen Y as row zero at the top of the list.
+        view.hide();
+        QQuickView detailsView;
+        auto *detailsRuntime = ZoinGallery::GalleryRuntime::install(
+            detailsView.engine(), options);
+        QVERIFY(detailsRuntime);
+        auto *detailsSession = detailsRuntime->createExternalSession(
+            QStringLiteral("keyboard-leading-edge-details"));
+        QVERIFY(detailsSession);
+        QVERIFY(detailsSession->applyExternalCatalog(
+            plainCatalog(entryCount), 1));
+        detailsSession->setCurrentIndex(0);
+        QObject *detailsPanel = createPanel(
+            detailsView, detailsSession,
+            QStringLiteral("keyboardAlignmentDetailsSession"),
+            QStringLiteral("details"));
+        QVERIFY(detailsPanel);
+        auto *detailsPanelItem = qobject_cast<QQuickItem *>(detailsPanel);
+        auto *detailsLayout = detailsPanel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(detailsPanelItem && detailsLayout);
+        detailsPanelItem->setWidth(641);
+        detailsPanelItem->setHeight(360);
+        detailsPanel->setProperty("showDetailsHeader", false);
+        detailsLayout->setDensity(24.2);
+        detailsLayout->setPaddingTop(2.75);
+        detailsLayout->setPaddingBottom(1.5);
+        QTRY_COMPARE_WITH_TIMEOUT(detailsLayout->presentationMode(),
+                                  MasonryLayout::Details, 3000);
+        detailsPanelItem->forceActiveFocus();
+        detailsView.requestActivate();
+        QTRY_VERIFY_WITH_TIMEOUT(detailsPanelItem->hasActiveFocus(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(detailsLayout->contentY() < 0.01, 3000);
+        const auto detailsDelegateForIndex = [&](int index) -> QQuickItem * {
+            const auto *surface = findVisualItem(
+                detailsPanelItem,
+                QStringLiteral("gallerySelectionSurface-%1").arg(index));
+            return surface ? surface->parentItem() : nullptr;
+        };
+        const auto sendDetailsKey = [&](Qt::Key key) {
+            QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+            QCoreApplication::sendEvent(&detailsView, &press);
+            QVERIFY(press.isAccepted());
+            QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+            QCoreApplication::sendEvent(&detailsView, &release);
+            QVERIFY(release.isAccepted());
+            QCoreApplication::processEvents();
+        };
+        QQuickItem *firstRow = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (firstRow = detailsDelegateForIndex(0)) != nullptr, 3000);
+        const qreal firstRowY = firstRow->y() - detailsLayout->contentY();
+
+        int firstOffscreenRow = 1;
+        while (firstOffscreenRow < entryCount
+               && detailsLayout->indexGeometry(firstOffscreenRow).bottom()
+                      <= detailsLayout->height() + 0.01)
+            ++firstOffscreenRow;
+        QVERIFY(firstOffscreenRow > 1);
+        for (int step = 0; step < firstOffscreenRow; ++step)
+            sendDetailsKey(Qt::Key_Down);
+        QCOMPARE(detailsSession->currentIndex(), firstOffscreenRow);
+
+        QQuickItem *newTopRow = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (newTopRow = detailsDelegateForIndex(1)) != nullptr, 3000);
+        QVERIFY2(
+            qAbs(newTopRow->y() - detailsLayout->contentY() - firstRowY)
+                < 0.01,
+            qPrintable(QStringLiteral(
+                "details: top row drifted: first=%1 new=%2 contentY=%3")
+                .arg(firstRowY)
+                .arg(newTopRow->y() - detailsLayout->contentY())
+                .arg(detailsLayout->contentY())));
+
+        for (int step = 0; step < firstOffscreenRow; ++step)
+            sendDetailsKey(Qt::Key_Up);
+        QVERIFY(qAbs(detailsLayout->contentY()) < 0.01);
+        QQuickItem *returnedFirstRow = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (returnedFirstRow = detailsDelegateForIndex(0)) != nullptr, 3000);
+        QVERIFY(qAbs(returnedFirstRow->y() - detailsLayout->contentY()
+                     - firstRowY) < 0.01);
+
+        // The terminal clamp must land on the row lattice as well.  A
+        // fractional viewport remainder used to shorten maximum contentY,
+        // leaving the top row of the final screen lower than row zero.
+        const qreal usableDetailsHeight = detailsLayout->height()
+            - detailsLayout->paddingTop() - detailsLayout->paddingBottom();
+        const int fullVisibleRows = qMax(
+            1, int(std::floor(usableDetailsHeight
+                              / detailsLayout->density())));
+        const qreal trailingRowRemainder = usableDetailsHeight
+            - fullVisibleRows * detailsLayout->density();
+        QVERIFY(trailingRowRemainder > 0.01);
+        const int terminalTopIndex = qMax(0, entryCount - fullVisibleRows);
+
+        sendDetailsKey(Qt::Key_End);
+        QCOMPARE(detailsSession->currentIndex(), entryCount - 1);
+        QQuickItem *terminalTopRow = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (terminalTopRow = detailsDelegateForIndex(terminalTopIndex))
+                != nullptr,
+            3000);
+        QVERIFY2(
+            qAbs(detailsLayout->contentY()
+                 - terminalTopIndex * detailsLayout->density()) < 0.0001,
+            qPrintable(QStringLiteral(
+                "details: terminal offset left the row lattice: "
+                "contentY=%1 expected=%2 remainder=%3")
+                .arg(detailsLayout->contentY())
+                .arg(terminalTopIndex * detailsLayout->density())
+                .arg(trailingRowRemainder)));
+        QVERIFY2(
+            qAbs(terminalTopRow->y() - detailsLayout->contentY()
+                 - firstRowY) < 0.0001,
+            qPrintable(QStringLiteral(
+                "details: terminal top row drifted: first=%1 terminal=%2")
+                .arg(firstRowY)
+                .arg(terminalTopRow->y() - detailsLayout->contentY())));
+
+        sendDetailsKey(Qt::Key_Home);
+        QCOMPARE(detailsSession->currentIndex(), 0);
+        QVERIFY(qAbs(detailsLayout->contentY()) < 0.0001);
+
+        detailsRuntime->shutdown();
+        runtime->shutdown();
     }
 
     void iconRowsGrowForWrappedFourLineMiddleElidedLabels() {
@@ -3161,8 +3464,7 @@ private slots:
             1, int(std::floor((layout->height()
                 - layout->paddingTop() - layout->paddingBottom())
                 / layout->density())));
-        const qreal threeColumnWidth = (layout->width()
-                - layout->paddingLeft() - layout->paddingRight()) / 3.0;
+        const qreal threeColumnOffset = layout->columnStride();
         for (int visibleColumn = 1; visibleColumn <= 2; ++visibleColumn) {
             sendKey(QEvent::KeyPress, Qt::Key_Right);
             QCOMPARE(session->currentIndex(),
@@ -3174,7 +3476,7 @@ private slots:
         }
         sendKey(QEvent::KeyPress, Qt::Key_Right);
         QCOMPARE(session->currentIndex(), 3 * threeColumnRows);
-        QVERIFY(qAbs(layout->contentY() - threeColumnWidth) < 0.01);
+        QVERIFY(qAbs(layout->contentY() - threeColumnOffset) < 0.01);
         assertColumnsAtomic(session->currentIndex(),
                             QStringLiteral("columns edge Right"));
         sendKey(QEvent::KeyRelease, Qt::Key_Right);
@@ -4338,8 +4640,18 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), entryCount, 3000);
         QTRY_VERIFY_WITH_TIMEOUT(
             qAbs(layout->density() - rowExtent) < 0.0001, 3000);
+        const qreal usableViewportHeight = layout->height()
+            - layout->paddingTop() - layout->paddingBottom();
+        const int completeVisibleRows = qMax(
+            1, int(std::floor(usableViewportHeight / rowExtent
+                              + 0.000000001)));
+        const qreal trailingViewportRemainder = qMax<qreal>(
+            0, usableViewportHeight - completeVisibleRows * rowExtent);
+        const qreal expectedContentHeight = layout->paddingTop()
+            + entryCount * rowExtent + trailingViewportRemainder
+            + layout->paddingBottom();
         QTRY_VERIFY_WITH_TIMEOUT(
-            qAbs(layout->contentHeight() - entryCount * rowExtent) < 0.0001,
+            qAbs(layout->contentHeight() - expectedContentHeight) < 0.0001,
             3000);
 
         // Check both the strategy geometry and the instantiated QQuickItem.
@@ -5199,7 +5511,7 @@ private slots:
             QTRY_COMPARE_WITH_TIMEOUT(
                 metrics->property("currentIndex").toInt(), cursor, 3000);
         }
-        QVERIFY(invokeEnsureCurrentVisible(panel, false));
+        QVERIFY(invokeEnsureCurrentVisible(panel, false, QVariant(1)));
         const qreal exactEndpoint = qMax<qreal>(
             0, layout->contentHeight() - layout->height());
         QTRY_VERIFY_WITH_TIMEOUT(
@@ -5229,7 +5541,19 @@ private slots:
         QVERIFY2(metricDelegateCount() <= 64,
                  qPrintable(QStringLiteral("metric delegates=%1")
                                 .arg(metricDelegateCount())));
-        QCOMPARE(layout->contentHeight(), qreal(242'000));
+        const qreal largeUsableViewportHeight = layout->height()
+            - layout->paddingTop() - layout->paddingBottom();
+        const int largeCompleteVisibleRows = qMax(
+            1, int(std::floor(largeUsableViewportHeight / layout->density()
+                              + 0.000000001)));
+        const qreal largeTrailingViewportRemainder = qMax<qreal>(
+            0, largeUsableViewportHeight
+                - largeCompleteVisibleRows * layout->density());
+        const qreal largeExpectedContentHeight = layout->paddingTop()
+            + 10'000 * layout->density() + largeTrailingViewportRemainder
+            + layout->paddingBottom();
+        QVERIFY(qAbs(layout->contentHeight() - largeExpectedContentHeight)
+                < 0.0001);
         const auto materializedCount = [&]() {
             return externalModel->findChildren<ImageFile *>(
                 QString(), Qt::FindDirectChildrenOnly).size();

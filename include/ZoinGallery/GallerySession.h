@@ -111,6 +111,14 @@ public:
     Q_INVOKABLE bool applyExternalState(
         const QString &cursorEntryId, int cursorIndex,
         const QStringList &selectedEntryIds, qulonglong selectionRevision);
+    // Applies cursor state and a sparse selection overlay without scanning the
+    // immutable external catalog. baseSelectionRevision must exactly match
+    // the currently installed state; the operation is all-or-nothing.
+    Q_INVOKABLE bool applyExternalStateDelta(
+        const QString &cursorEntryId, int cursorIndex,
+        const QVariantList &selectionChanges,
+        qulonglong baseSelectionRevision,
+        qulonglong selectionRevision);
 
     // Compatibility convenience for hosts that carry the path separately.
     Q_INVOKABLE bool applySnapshot(

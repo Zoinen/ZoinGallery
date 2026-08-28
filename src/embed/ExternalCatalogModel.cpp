@@ -988,16 +988,17 @@ bool ExternalCatalogModel::applyMetadata(const QVariantList &values) {
                && changedRows.at(offset) == last + 1) {
             last = changedRows.at(offset++);
         }
-         emit dataChanged(index(first, 0), index(last, 0),
+        emit dataChanged(index(first, 0), index(last, 0),
                           {FileListModel::ImageFileRole,
                            FileListModel::ImageIdUrlRole,
                            FileListModel::IsImageRole,
                            FileListModel::ImageFullSizeRole,
-                          FileListModel::LastModifiedRole,
+                           FileListModel::LastModifiedRole,
                            FileListModel::FileSizeRole,
                            LocalPathRole,
                            VersionTokenRole,
-                           KnownImageSizeRole});
+                           KnownImageSizeRole,
+                           VisualSnapshotRole});
     }
     if (viewerSourceInvalidated) {
         notifyViewerImageUrlChanged();
@@ -1087,6 +1088,85 @@ bool ExternalCatalogModel::applyState(
             emit dataChanged(index(firstChanged), index(lastChanged),
                              {FileListModel::SelectedRole});
         }
+    }
+
+    int newCursor = rowForEntryId(cursorEntryId);
+    if (newCursor < 0 && validRow(cursorIndex)) {
+        newCursor = cursorIndex;
+    }
+    if (newCursor < 0 && !_entries.isEmpty()) {
+        newCursor = 0;
+    }
+    _cursorRow = newCursor;
+    return true;
+}
+
+bool ExternalCatalogModel::applyStateDelta(
+    const QString &cursorEntryId, int cursorIndex,
+    const QVariantList &selectionChanges) {
+    if (_shutdown) {
+        return false;
+    }
+
+    QList<QPair<int, bool>> validatedChanges;
+    validatedChanges.reserve(selectionChanges.size());
+    QSet<int> changedRows;
+    for (const QVariant &changeValue : selectionChanges) {
+        if (changeValue.metaType().id() != QMetaType::QVariantMap) {
+            return false;
+        }
+        const QVariantMap change = changeValue.toMap();
+        if (change.size() != 3
+            || !change.contains(QStringLiteral("index"))
+            || !change.contains(QStringLiteral("entryId"))
+            || !change.contains(QStringLiteral("selected"))) {
+            return false;
+        }
+        bool indexOK = false;
+        const int sourceIndex = change.value(QStringLiteral("index"))
+                                    .toInt(&indexOK);
+        const QVariant entryIdValue = change.value(
+            QStringLiteral("entryId"));
+        const QVariant selectedValue = change.value(
+            QStringLiteral("selected"));
+        const QString entryId = entryIdValue.toString();
+        const int row = rowForEntryId(entryId);
+        if (!indexOK || entryIdValue.metaType().id() != QMetaType::QString
+            || entryId.isEmpty()
+            || selectedValue.metaType().id() != QMetaType::Bool
+            || !validRow(row) || _entries.at(row).sourceIndex != sourceIndex
+            || changedRows.contains(row)) {
+            return false;
+        }
+        changedRows.insert(row);
+        validatedChanges.push_back({row, selectedValue.toBool()});
+    }
+
+    QList<int> updatedRows;
+    updatedRows.reserve(validatedChanges.size());
+    for (const auto &[row, selected] : validatedChanges) {
+        Entry &entry = _entries[row];
+        if (entry.selected == selected) {
+            continue;
+        }
+        entry.selected = selected;
+        if (entry.item) {
+            entry.item->setIsSelected(selected);
+        }
+        updatedRows.push_back(row);
+    }
+    std::sort(updatedRows.begin(), updatedRows.end());
+    for (qsizetype offset = 0; offset < updatedRows.size();) {
+        const int first = updatedRows.at(offset);
+        int last = first;
+        ++offset;
+        while (offset < updatedRows.size()
+               && updatedRows.at(offset) == last + 1) {
+            last = updatedRows.at(offset);
+            ++offset;
+        }
+        emit dataChanged(index(first), index(last),
+                         {FileListModel::SelectedRole});
     }
 
     int newCursor = rowForEntryId(cursorEntryId);

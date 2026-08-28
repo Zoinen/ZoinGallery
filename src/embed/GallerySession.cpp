@@ -498,6 +498,29 @@ bool GallerySession::applyExternalMetadata(
     return true;
 }
 
+bool GallerySession::applyExternalStateDelta(
+    const QString &entryId, int cursorIndex,
+    const QVariantList &selectionChanges,
+    qulonglong baseSelectionRevision, qulonglong revision) {
+    if (d->shutdown || !d->external
+        || baseSelectionRevision != d->selectionRevision
+        || revision < baseSelectionRevision
+        || (!selectionChanges.isEmpty()
+            && revision == baseSelectionRevision)) {
+        return false;
+    }
+    if (!d->external->applyStateDelta(entryId, cursorIndex,
+                                      selectionChanges)) {
+        return false;
+    }
+    setCurrentIndex(d->external->cursorRow());
+    if (d->selectionRevision != revision) {
+        d->selectionRevision = revision;
+        emit selectionRevisionChanged();
+    }
+    return true;
+}
+
 bool GallerySession::applySnapshot(
     const QString &path, const QVariantList &entries,
     qulonglong catalogRevision, qulonglong selectionRevision) {

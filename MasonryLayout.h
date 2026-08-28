@@ -304,6 +304,10 @@ public:
         qreal plannedContentY, qreal rowViewportY, int direction,
         qreal preferredDistance) const;
     Q_INVOKABLE int windowTopIndexForIndex(int index) const;
+    // Exact logical-pixel pitch used by the fixed Columns strip. Exposing
+    // the layout-owned value keeps keyboard viewport quantization on the same
+    // device-pixel lattice as delegate geometry.
+    Q_INVOKABLE qreal columnStride() const;
 
     Q_INVOKABLE void preserveCurrentItemPositionForNextModelReset();
     Q_INVOKABLE void reReadAndDecodeThumbnails();

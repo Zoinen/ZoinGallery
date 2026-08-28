@@ -984,6 +984,29 @@ int MasonryLayout::rowsPerColumn() const {
         usableHeight / qMax<qreal>(1.0, effectiveTargetExtent()))));
 }
 
+qreal MasonryLayout::columnStride() const {
+    const int columns = effectiveColumnCount();
+    const qreal canvasWidth = qMax<qreal>(
+        0, width() - _paddingLeft - _paddingRight);
+    if (columns <= 0 || canvasWidth <= 0) {
+        return 0;
+    }
+
+    // Equal mathematical thirds do not generally land on device pixels.
+    // Rounding each QRectF independently then produces alternating widths
+    // and one-pixel phase changes while the viewport moves. Choose one
+    // integral physical-pixel pitch for every column instead. Any remainder
+    // (at most columnCount-1 pixels) stays at the far right of the canvas, so
+    // all cells and all horizontal scroll steps remain strictly identical.
+    const qreal dpr = qMax<qreal>(0.01, devicePixelRatio());
+    const qreal physicalCanvas = std::floor(canvasWidth * dpr + 0.000001);
+    const qreal physicalStride = std::floor(physicalCanvas / columns);
+    if (physicalStride < 1) {
+        return canvasWidth / columns;
+    }
+    return physicalStride / dpr;
+}
+
 int MasonryLayout::maximumWindowTopIndex() const {
     if (_presentationMode != Columns) {
         return 0;
@@ -995,9 +1018,7 @@ int MasonryLayout::maximumWindowTopIndex() const {
 
 qreal MasonryLayout::contentYForWindowTopIndex(int index) const {
     const int rows = rowsPerColumn();
-    const qreal canvasWidth = qMax<qreal>(
-        0, width() - _paddingLeft - _paddingRight);
-    const qreal cellWidth = canvasWidth / effectiveColumnCount();
+    const qreal cellWidth = columnStride();
     const int firstColumn = qBound(0, index, maximumWindowTopIndex()) / rows;
     return qBound<qreal>(0, firstColumn * cellWidth,
                          maximumContentOffset());
@@ -1005,9 +1026,7 @@ qreal MasonryLayout::contentYForWindowTopIndex(int index) const {
 
 int MasonryLayout::windowTopIndexForContentY(qreal contentY) const {
     const int rows = rowsPerColumn();
-    const qreal canvasWidth = qMax<qreal>(
-        0, width() - _paddingLeft - _paddingRight);
-    const qreal cellWidth = canvasWidth / effectiveColumnCount();
+    const qreal cellWidth = columnStride();
     if (cellWidth <= 0) {
         return 0;
     }
@@ -1067,8 +1086,7 @@ void MasonryLayout::calcFixedLayout() {
         // The configured count controls how many columns fit in the viewport;
         // it does not divide the catalog into atomic virtual pages.
         const int rows = rowsPerColumn();
-        const qreal cellWidth = columns > 0
-            ? canvasWidth / columns : canvasWidth;
+        const qreal cellWidth = columnStride();
         for (int index = 0; index < _bricks.size(); ++index) {
             MasonryBrick &brick = _bricks[index];
             const int rowInColumn = index % rows;
@@ -1335,16 +1353,42 @@ void MasonryLayout::rewrap(bool animate) {
             const int rows = rowsPerColumn();
             const int totalColumns = rows > 0
                 ? (_bricks.size() + rows - 1) / rows : 0;
-            setContentHeight(_paddingLeft + totalColumns
-                             * (qMax<qreal>(0, width() - _paddingLeft
-                                           - _paddingRight) / columns)
-                             + _paddingRight);
+            const qreal stride = columnStride();
+            const qreal canvasWidth = qMax<qreal>(
+                0, width() - _paddingLeft - _paddingRight);
+            const qreal trailingCanvasRemainder = qMax<qreal>(
+                0, canvasWidth - columns * stride);
+            // The integral physical-pixel stride can leave one or two pixels
+            // after the visible columns. Keep that remainder at the trailing
+            // edge of the horizontal content too. Otherwise
+            // contentHeight-width shortens the terminal offset by precisely
+            // the remainder and shifts the whole last screen to the right.
+            setContentHeight(_paddingLeft + totalColumns * stride
+                             + trailingCanvasRemainder + _paddingRight);
         }
         else {
             virtualRows = columns > 0
                 ? (_bricks.size() + columns - 1) / columns : 0;
         }
-        if (_presentationMode != Icons && _presentationMode != Columns) {
+        if (_presentationMode == Details) {
+            const qreal usableViewportHeight = qMax<qreal>(
+                0, height() - _paddingTop - _paddingBottom);
+            const int completeVisibleRows = int(std::floor(
+                usableViewportHeight / extent + 0.000000001));
+            const qreal trailingViewportRemainder = completeVisibleRows > 0
+                ? qMax<qreal>(
+                    0, usableViewportHeight - completeVisibleRows * extent)
+                : 0;
+
+            // Keep the terminal scroll position on the same row lattice as
+            // every keyboard reveal. Without the viewport's fractional row
+            // remainder at the trailing edge, contentHeight-height clamps
+            // the final screen between two rows and shifts its top row down.
+            setContentHeight(_paddingTop + virtualRows * extent
+                             + trailingViewportRemainder + _paddingBottom);
+        }
+        else if (_presentationMode != Icons
+                 && _presentationMode != Columns) {
             setContentHeight(_paddingTop + virtualRows * extent +
                              _paddingBottom);
         }
@@ -1832,13 +1876,13 @@ void MasonryLayout::updateProperties(bool animate) {
                 phaseStartedNs = now;
             }
 
-            // The classic Details view deliberately derives a fractional row
-            // extent from the host font metrics (for example 24.2 logical
-            // pixels in f4).  Snapping each row independently makes that
-            // fractional phase accumulate as visible drift.  Other modes keep
-            // their established pixel-snapped delegate geometry.
+            // Details derives a fractional row extent from host font metrics.
+            // Columns derives one integral *physical*-pixel stride, which can
+            // likewise be fractional in logical coordinates at a non-integer
+            // DPR. Snapping either QRectF independently would reintroduce the
+            // cumulative phase drift these layouts are designed to avoid.
             const bool preserveFractionalGeometry =
-                _presentationMode == Details;
+                _presentationMode == Details || _presentationMode == Columns;
             const bool geometryDiffers = preserveFractionalGeometry
                 ? _bricks[i].item->geometry() != _bricks[i].geometry()
                 : roundRect(_bricks[i].item->geometry()) !=
@@ -3756,6 +3800,11 @@ void MasonryLayout::setDevicePixelRatio(qreal value) {
     }
     _devicePixelRatioOverride = normalized;
     emit devicePixelRatioChanged();
+    if (_presentationMode == Columns) {
+        // Columns geometry is expressed on the device-pixel lattice. Moving
+        // the window between screens therefore changes its logical stride.
+        rewrap(false);
+    }
     reReadAndDecodeThumbnails();
 }
 

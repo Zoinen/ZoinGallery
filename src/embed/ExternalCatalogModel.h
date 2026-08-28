@@ -55,6 +55,8 @@ public:
     bool applyState(const QString &cursorEntryId, int cursorIndex,
                     const QStringList &selectedEntryIds,
                     bool updateSelection = true);
+    bool applyStateDelta(const QString &cursorEntryId, int cursorIndex,
+                         const QVariantList &selectionChanges);
 
     QString entryIdAt(int row) const;
     QString entryNameAt(int row) const;

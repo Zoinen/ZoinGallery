@@ -534,6 +534,101 @@ private slots:
         runtime->shutdown();
     }
 
+    void panelKeepsVerticalInsetsInsideScrollableTileContent() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath =
+            directory.filePath(QStringLiteral("content-padding-tile.png"));
+        QVERIFY(writeImage(imagePath, QSize(320, 240), Qt::cyan));
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("qml-panel-content-padding"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(
+            {imageEntry(QStringLiteral("entry-0"), 0, imagePath)}, 1));
+        QVERIFY(session->applyExternalState(
+            QStringLiteral("entry-0"), 0, {}, 1));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("testSession"), session);
+
+        QObject *rootObject = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryPanel {
+                objectName: "panel"
+                width: 320
+                height: 220
+                thumbnailHeight: 90
+                session: testSession
+            }
+        )QML", QStringLiteral("GalleryPanelContentPadding.qml"));
+        QVERIFY(rootObject);
+        view.show();
+
+        auto *panel = qobject_cast<QQuickItem *>(rootObject);
+        auto *layout = rootObject->findChild<QQuickItem *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(panel);
+        QVERIFY(layout);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->property("count").toInt(), 1, 5000);
+
+        constexpr qreal inset = 6.0;
+        const QStringList modes{
+            QStringLiteral("masonry"),
+            QStringLiteral("grid"),
+            QStringLiteral("icons"),
+        };
+        for (const QString &mode : modes) {
+            rootObject->setProperty("presentationMode", mode);
+            layout->setProperty("contentY", 0.0);
+
+            QTRY_VERIFY_WITH_TIMEOUT(qAbs(layout->y()) < 0.01, 3000);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                qAbs(layout->height() - panel->height()) < 0.01, 3000);
+            QTRY_COMPARE_WITH_TIMEOUT(
+                layout->property("paddingTop").toReal(), inset, 3000);
+            QTRY_COMPARE_WITH_TIMEOUT(
+                layout->property("paddingBottom").toReal(), inset, 3000);
+
+            QQuickItem *pointer = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (pointer = rootObject->findChild<QQuickItem *>(
+                     QStringLiteral("galleryBrickPointer-0"))) != nullptr,
+                5000);
+            QQuickItem *const tile = pointer->parentItem();
+            QVERIFY(tile);
+            QTRY_VERIFY_WITH_TIMEOUT(qAbs(tile->y() - inset) < 0.01, 3000);
+            QTRY_VERIFY_WITH_TIMEOUT(tile->height() > 0.0, 3000);
+
+            const qreal tileBottom = tile->y() + tile->height();
+            const qreal contentHeight =
+                layout->property("contentHeight").toReal();
+            QVERIFY2(qAbs(contentHeight - tileBottom - inset) < 1.01,
+                     qPrintable(QStringLiteral(
+                         "%1 content bottom spacing is %2, expected %3")
+                         .arg(mode)
+                         .arg(contentHeight - tileBottom)
+                         .arg(inset)));
+        }
+
+        // Columns retains its existing viewport-margin contract.
+        rootObject->setProperty("presentationMode", QStringLiteral("columns"));
+        QTRY_VERIFY_WITH_TIMEOUT(qAbs(layout->y() - inset) < 0.01, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            qAbs(layout->height() - (panel->height() - inset * 2)) < 0.01,
+            3000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            layout->property("paddingTop").toReal(), 0.0, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            layout->property("paddingBottom").toReal(), 0.0, 3000);
+
+        runtime->shutdown();
+    }
+
     void panelPointerSelectionRevealsPartiallyVisibleTile() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

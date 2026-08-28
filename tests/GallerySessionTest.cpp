@@ -657,6 +657,42 @@ private slots:
             QStringLiteral("c"), 2, {QStringLiteral("a")}, 20));
         QCOMPARE(cursorOnlyDataChanges.size(), 0);
 
+        QSignalSpy sparseSelectionChanges(
+            session->model(), &QAbstractItemModel::dataChanged);
+        const QVariantList delta{
+            QVariantMap{{QStringLiteral("index"), 8},
+                        {QStringLiteral("entryId"), QStringLiteral("b")},
+                        {QStringLiteral("selected"), true}},
+            QVariantMap{{QStringLiteral("index"), 3},
+                        {QStringLiteral("entryId"), QStringLiteral("a")},
+                        {QStringLiteral("selected"), false}},
+        };
+        QVERIFY(session->applyExternalStateDelta(
+            QStringLiteral("c"), 2, delta, 20, 21));
+        QCOMPARE(session->selectionRevision(), qulonglong(21));
+        QCOMPARE(session->currentIndex(), 2);
+        QVERIFY(session->isSelectedAt(0));
+        QVERIFY(!session->isSelectedAt(1));
+        QCOMPARE(sparseSelectionChanges.size(), 1);
+
+        // Revision mismatch and one invalid identity both reject the complete
+        // operation; the valid first row must not be changed partially.
+        QVERIFY(!session->applyExternalStateDelta(
+            QStringLiteral("c"), 2, delta, 20, 22));
+        const QVariantList invalidDelta{
+            QVariantMap{{QStringLiteral("index"), 8},
+                        {QStringLiteral("entryId"), QStringLiteral("b")},
+                        {QStringLiteral("selected"), false}},
+            QVariantMap{{QStringLiteral("index"), 999},
+                        {QStringLiteral("entryId"), QStringLiteral("c")},
+                        {QStringLiteral("selected"), true}},
+        };
+        QVERIFY(!session->applyExternalStateDelta(
+            QStringLiteral("c"), 2, invalidDelta, 21, 22));
+        QCOMPARE(session->selectionRevision(), qulonglong(21));
+        QVERIFY(session->isSelectedAt(0));
+        QVERIFY(!session->isSelectedAt(1));
+
         QSignalSpy viewportCursorChanges(
             session,
             &ZoinGallery::GallerySession::panelViewportCursorEntryIdChanged);
@@ -889,6 +925,11 @@ private slots:
         QCOMPARE(firstItem->iconPath(), QStringLiteral("qrc:/custom/png.svg"));
         QVERIFY(firstItem->lastModified().isValid());
         QCOMPARE(changedSpy.size(), 1);
+        const QList<int> metadataRoles =
+            changedSpy.constFirst().at(2).value<QList<int>>();
+        QVERIFY(metadataRoles.contains(FileListModel::FileSizeRole));
+        QVERIFY(metadataRoles.contains(
+            ZoinGallery::ExternalCatalogModel::VisualSnapshotRole));
 
         const QVariantMap secondMetadata{
             {QStringLiteral("entryId"), QStringLiteral("second")},

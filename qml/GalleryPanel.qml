@@ -13,6 +13,10 @@ FocusScope {
 
     property var session
     property var theme: ({})
+    // Embedders can replace or suppress the standalone gallery wording while
+    // retaining the same authoritative zero-row condition.
+    property bool emptyStateEnabled: true
+    property string emptyStateText: qsTr("No previewable entries")
     // Embedders may supply the exact rune span selected by their own quick
     // search implementation for each stable entry ID. Keeping this separate
     // from the catalog lets every keystroke repaint labels without resetting
@@ -46,6 +50,10 @@ FocusScope {
     property alias thumbnailHeight: galleryLayout.targetHeight
     property alias density: galleryLayout.density
     property bool autoFocus: true
+    // Embedders which retain hidden panel viewports can disable brick
+    // geometry interpolation while those viewports absorb deferred metadata.
+    // Standalone Gallery keeps its established animated resizing by default.
+    property bool animateLayoutChanges: true
     property int selectionAnchorIndex: -1
     // A left button press starts a drag-cursor gesture: holding the button
     // and moving over other tiles just carries the cursor with the pointer,
@@ -833,7 +841,46 @@ FocusScope {
             finishKeyboardShiftSelection()
     }
 
-    function animatePanelScrollTo(targetY, quickScroll, keyboardReveal) {
+    // Fixed compact modes use two different coordinate systems for their
+    // content. Columns delegates are pixel-snapped by BrickItem, while
+    // Details deliberately keeps its fractional row pitch. A keyboard reveal
+    // therefore has to land on the corresponding visual lattice; a raw
+    // minimal reveal leaves a half-pixel phase behind after every boundary.
+    function keyboardAlignedContentY(value, direction) {
+        const revealDirection = Number(direction)
+        const target = Number(value)
+        if (!Number.isFinite(target)
+                || !Number.isFinite(revealDirection)
+                || revealDirection === 0)
+            return value
+
+        const epsilon = 0.000001
+        if (presentationMode === "columns") {
+            const columnWidth = Number(galleryLayout.columnStride())
+            if (!(columnWidth > 0))
+                return value
+            const coordinate = target / columnWidth
+            const column = revealDirection < 0
+                    ? Math.floor(coordinate + epsilon)
+                    : Math.ceil(coordinate - epsilon)
+            return column * columnWidth
+        }
+
+        if (presentationMode === "details") {
+            const rowExtent = Math.max(1, Number(galleryLayout.density))
+            const coordinate = target / rowExtent
+            const row = revealDirection < 0
+                    ? Math.floor(coordinate + epsilon)
+                    : Math.ceil(coordinate - epsilon)
+            // Details rows start at paddingTop, so a row's screen Y matches
+            // row zero precisely when contentY is an integer row pitch.
+            return row * rowExtent
+        }
+        return value
+    }
+
+    function animatePanelScrollTo(targetY, quickScroll, keyboardReveal,
+                                  keyboardRevealDirection) {
         if (!keyboardReveal)
             cancelCursorChromeTransition()
         // An embedded session can queue a zero-delay offset restoration while
@@ -848,8 +895,11 @@ FocusScope {
                 ? galleryLayout.width : galleryLayout.height
         const maximum = Math.max(
                     0, galleryLayout.contentHeight - viewportExtent)
-        const target = Math.max(
-                    0, Math.min(maximum, targetY))
+        let target = Number(targetY)
+        if (keyboardReveal)
+            target = keyboardAlignedContentY(target,
+                                              keyboardRevealDirection)
+        target = Math.max(0, Math.min(maximum, target))
         const compactRows = presentationMode === "columns"
                 || presentationMode === "details"
         if (compactRows && keyboardReveal) {
@@ -866,11 +916,13 @@ FocusScope {
         return target
     }
 
-    function scrollBy(deltaY, quickScroll, keyboardReveal) {
+    function scrollBy(deltaY, quickScroll, keyboardReveal,
+                      keyboardRevealDirection) {
         const plannedContentY = panelScrollAnimation.running
                 ? panelScrollAnimation.to : galleryLayout.contentY
         return animatePanelScrollTo(plannedContentY + deltaY,
-                                    quickScroll, keyboardReveal)
+                                    quickScroll, keyboardReveal,
+                                    keyboardRevealDirection)
     }
 
     function handlePanelMiddlePress(x, y, modifiers) {
@@ -1792,7 +1844,7 @@ FocusScope {
 
     function moveCursor(index, preserveSelectionAnchor,
                         preserveHorizontalAnchor, deferCursorCommit,
-                        preserveVerticalAnchor) {
+                        preserveVerticalAnchor, keyboardRevealDirection) {
         if (!session || galleryLayout.count === 0)
             return
         const bounded = Math.max(0, Math.min(galleryLayout.count - 1, index))
@@ -1809,7 +1861,7 @@ FocusScope {
         // interior PageUp/PageDown. Every ordinary move (including Up/Down,
         // which preserves only X) reveals the item and adopts its resulting Y.
         if (!preserveVerticalAnchor) {
-            ensureCurrentVisible()
+            ensureCurrentVisible(undefined, keyboardRevealDirection)
             resetCurrentItemCenterY(bounded)
         }
         coordinateVisualCursor(bounded, previousVisualIndex)
@@ -1818,7 +1870,8 @@ FocusScope {
     function moveCursorWithSelection(index, togglePrevious,
                                      preserveHorizontalAnchor,
                                      deferCursorCommit,
-                                     preserveVerticalAnchor) {
+                                     preserveVerticalAnchor,
+                                     keyboardRevealDirection) {
         if (!session || galleryLayout.count === 0)
             return
         const previousIndex = session.currentIndex
@@ -1831,13 +1884,14 @@ FocusScope {
             if (!preserveHorizontalAnchor)
                 resetCurrentItemCenterX(previousIndex)
             if (!preserveVerticalAnchor) {
-                ensureCurrentVisible()
+                ensureCurrentVisible(undefined, keyboardRevealDirection)
                 resetCurrentItemCenterY(previousIndex)
             }
             return
         }
         moveCursor(bounded, togglePrevious, preserveHorizontalAnchor,
-                   deferCursorCommit, preserveVerticalAnchor)
+                   deferCursorCommit, preserveVerticalAnchor,
+                   keyboardRevealDirection)
         if (togglePrevious)
             updateKeyboardShiftSelection(bounded)
     }
@@ -2297,13 +2351,23 @@ FocusScope {
         const deltaY = galleryLayout.height - galleryLayout.height / 8
         const futureContentY = panelScrollAnimation.running
                 ? panelScrollAnimation.to : galleryLayout.contentY
+        const maximum = Math.max(
+                    0, galleryLayout.contentHeight - galleryLayout.height)
+        const rawPageContentY = direction < 0
+                ? Math.max(0, futureContentY - deltaY)
+                : Math.min(maximum, futureContentY + deltaY)
+        // Details may quantize the page destination to its row lattice. Pick
+        // the cursor from that same destination, otherwise a row selected at
+        // the raw page probe can end up exactly outside the aligned viewport.
+        const pageContentY = presentationMode === "details"
+                ? keyboardAlignedContentY(rawPageContentY, direction)
+                : rawPageContentY
+        const pageY = pageContentY + currentItemCenterY
         const currentIndex = session.currentIndex
         let targetIndex = currentIndex
         let hitEdge = false
 
         if (direction < 0) {
-            const pageY = Math.max(0, futureContentY - deltaY)
-                    + currentItemCenterY
             targetIndex = galleryLayout.indexAt(currentItemCenterX, pageY)
             if (targetIndex === -1)
                 targetIndex = 0
@@ -2315,10 +2379,6 @@ FocusScope {
                     targetIndex = 0
             }
         } else {
-            const maximum = Math.max(
-                    0, galleryLayout.contentHeight - galleryLayout.height)
-            const pageY = Math.min(maximum, futureContentY + deltaY)
-                    + currentItemCenterY
             targetIndex = galleryLayout.indexAt(currentItemCenterX, pageY)
             if (targetIndex === -1)
                 targetIndex = galleryLayout.count - 1
@@ -2342,11 +2402,11 @@ FocusScope {
 
         moveCursorWithSelection(targetIndex, togglePrevious,
                                 !hitEdge, deferCursorCommit, !hitEdge)
-        scrollBy(direction * deltaY, false, true)
+        scrollBy(direction * deltaY, false, true, direction)
         return targetIndex
     }
 
-    function ensureCurrentVisible(animateScroll) {
+    function ensureCurrentVisible(animateScroll, keyboardRevealDirection) {
         if (!session || galleryLayout.count === 0
                 || session.currentIndex < 0 || galleryLayout.height <= 0)
             return
@@ -2392,6 +2452,8 @@ FocusScope {
                                  - (presentationMode === "columns"
                                     ? galleryLayout.width
                                     : galleryLayout.height))
+        targetY = keyboardAlignedContentY(targetY,
+                                          keyboardRevealDirection)
         targetY = Math.max(0, Math.min(maximum, targetY))
         const compactRows = presentationMode === "columns"
                 || presentationMode === "details"
@@ -2596,6 +2658,10 @@ FocusScope {
     MasonryLayout {
         id: galleryLayout
         objectName: "galleryMasonryLayout"
+        readonly property bool verticalInsetBelongsToContent:
+            root.presentationMode === "masonry"
+            || root.presentationMode === "grid"
+            || root.presentationMode === "icons"
         clip: true
         persistSettings: false
         visible: !root.customContent
@@ -2611,10 +2677,18 @@ FocusScope {
             // the effective panel width.
             right: parent.right
             leftMargin: root.presentationMode === "details" ? 0 : 6
-            topMargin: root.presentationMode === "details" ? 0 : 6
-            bottomMargin: root.presentationMode === "details" ? 0 : 6
+            topMargin: root.presentationMode === "details"
+                       || galleryLayout.verticalInsetBelongsToContent ? 0 : 6
+            bottomMargin: root.presentationMode === "details"
+                          || galleryLayout.verticalInsetBelongsToContent ? 0 : 6
             rightMargin: root.presentationMode === "details" ? 0 : 6
         }
+        // Masonry, Grid and Icons own a vertically scrollable catalog. Keep
+        // their viewport at the full panel height and put the breathing room
+        // into content geometry so it precedes the first tile and follows the
+        // last one at the scroll endpoint.
+        paddingTop: verticalInsetBelongsToContent ? 6 : 0
+        paddingBottom: verticalInsetBelongsToContent ? 6 : 0
         model: root.session ? root.session.model : null
         currentIndex: root.session ? root.session.currentIndex : -1
         presentationMode: root.nativePresentationMode()
@@ -2625,7 +2699,8 @@ FocusScope {
         // Mode changes are atomic. The host applies the mode and then that
         // mode's saved density in one turn; allowing the second rewrap to
         // animate makes recycled tiles visibly fly between layouts.
-        animateResizing: !root.presentationSwitchPending
+        animateResizing: root.animateLayoutChanges
+                         && !root.presentationSwitchPending
                          && !root.pathViewportPlacementPending
         devicePixelRatio: root.devicePixelRatio
         iconLabelFont: root.iconLabelFont
@@ -2870,9 +2945,9 @@ FocusScope {
 
     Label {
         anchors.centerIn: parent
-        visible: !root.customContent &&
+        visible: root.emptyStateEnabled && !root.customContent &&
                  (!root.session || galleryLayout.count === 0)
-        text: qsTr("No previewable entries")
+        text: root.emptyStateText
         color: root.mutedColor
     }
 
@@ -3208,13 +3283,19 @@ FocusScope {
             const index = root.navigationTargetForKey(event.key, false)
             if (index >= 0) {
                 chromeTargetIndex = index
+                const keyboardRevealDirection = event.key === Qt.Key_Left
+                        || event.key === Qt.Key_Up ? -1 : 1
                 root.moveCursorWithSelection(
                             index, shiftSelection,
                             event.key === Qt.Key_Up || event.key === Qt.Key_Down,
-                            deferCursorCommit)
+                            deferCursorCommit, false,
+                            keyboardRevealDirection)
             } else if (shiftSelection) {
                 root.moveCursorWithSelection(root.session.currentIndex, true,
-                                             true, false)
+                                             true, false, false,
+                                             event.key === Qt.Key_Left
+                                             || event.key === Qt.Key_Up
+                                             ? -1 : 1)
             }
             event.accepted = true
         } else if (page) {
@@ -3227,11 +3308,13 @@ FocusScope {
                     // Columns owns a discrete virtual page/window rather than
                     // a continuous vertical viewport.
                     root.moveCursorWithSelection(index, shiftSelection, false,
-                                                 deferCursorCommit, false)
+                                                 deferCursorCommit, false,
+                                                 direction)
                 }
             } else {
-                // Details/Icons retain the original raw 7/8-page choreography.
-                // Grid quantizes it to fixed row strides; Masonry chooses real
+                // Details/Icons retain the original 7/8-page choreography;
+                // Details aligns its destination to the row lattice. Grid
+                // quantizes to fixed row strides; Masonry chooses real
                 // variable-height row-band boundaries. All paths preserve the
                 // persistent X/Y probe and keep selection, cursor chrome and
                 // the exact planned viewport destination coupled.
@@ -3242,9 +3325,12 @@ FocusScope {
         } else if (edge) {
             chromeTargetIndex = event.key === Qt.Key_Home
                     ? 0 : galleryLayout.count - 1
+            const keyboardRevealDirection = event.key === Qt.Key_Home
+                    ? -1 : 1
             root.moveCursorWithSelection(
                         chromeTargetIndex,
-                        shiftSelection, false, deferCursorCommit)
+                        shiftSelection, false, deferCursorCommit, false,
+                        keyboardRevealDirection)
             event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.cancelCursorChromeTransition()
@@ -3262,7 +3348,7 @@ FocusScope {
             // Match the f4/Far panel contract: Insert marks the current item
             // and advances, while Space only toggles in place.
             if (event.key === Qt.Key_Insert && currentIndex + 1 < galleryLayout.count)
-                root.moveCursor(currentIndex + 1, false, false, false)
+                root.moveCursor(currentIndex + 1, false, false, false, false, 1)
             event.accepted = true
         } else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
             root.cancelCursorChromeTransition()

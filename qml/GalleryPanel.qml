@@ -13,6 +13,15 @@ FocusScope {
 
     property var session
     property var theme: ({})
+    // Embedders can replace or suppress the standalone gallery wording while
+    // retaining the same authoritative zero-row condition.
+    property bool emptyStateEnabled: true
+    property string emptyStateText: qsTr("No previewable entries")
+    // Embedders may supply the exact rune span selected by their own quick
+    // search implementation for each stable entry ID. Keeping this separate
+    // from the catalog lets every keystroke repaint labels without resetting
+    // the native model or its viewport.
+    property var quickSearchMatches: ({})
     // Geometry supplied by an embedding shell.  Keeping these values
     // explicit lets the reusable Details renderer match an existing file
     // list without reaching into that shell's context properties.
@@ -23,6 +32,12 @@ FocusScope {
     // The public string API keeps embedders independent from the native enum
     // while the underlying renderer remains a single reusable C++ type.
     property string presentationMode: "masonry"
+    // GUI mode owns smooth wheel scrolling and the reusable middle-button
+    // auto-scroll gesture. The host can opt into the terminal contract.
+    property string mouseWheelMode: "gui"
+    property alias scrollingStarted: mouseAutoScroll.scrollingStarted
+    property alias scrollingStartedAtY: mouseAutoScroll.startCoordinate
+    property alias scrollingMode: mouseAutoScroll.scrollingMode
     property int columnCount: 2
     property var columnSchema: []
     // A host may keep its own column header outside the reusable viewport.
@@ -35,7 +50,18 @@ FocusScope {
     property alias thumbnailHeight: galleryLayout.targetHeight
     property alias density: galleryLayout.density
     property bool autoFocus: true
+    // Embedders which retain hidden panel viewports can disable brick
+    // geometry interpolation while those viewports absorb deferred metadata.
+    // Standalone Gallery keeps its established animated resizing by default.
+    property bool animateLayoutChanges: true
     property int selectionAnchorIndex: -1
+    // A left button press starts a drag-cursor gesture: holding the button
+    // and moving over other tiles just carries the cursor with the pointer,
+    // without touching selection (mirrors a plain click, which also only
+    // moves the cursor). Right button drag instead paints the selection —
+    // see keyboardShiftSelectionActive below, which that gesture reuses.
+    property bool dragCursorActive: false
+    property int dragCursorLastIndex: -1
     // Shift+navigation is a local transaction. Sending selection and cursor
     // actions for every autorepeat makes the semantic host trail the painted
     // cursor, so preview one add/remove range here and batch it on physical
@@ -50,6 +76,13 @@ FocusScope {
     property int keyboardShiftSelectionLast: -1
     property bool restoringScrollOffset: false
     property bool viewportUpdateEnsuresCursor: false
+    // Masonry/Icons/Columns take the generic ensureCursor reveal path (not
+    // Details' dedicated path-placement flow) on a folder change too, since
+    // that path only special-cases Details. Set alongside
+    // viewportUpdateEnsuresCursor so the deferred reveal can tell "new
+    // folder's initial cursor" apart from an ordinary same-folder cursor
+    // move and jump instead of animating.
+    property bool viewportUpdateSuppressAnimation: false
     property bool viewportUpdatePendingAfterScroll: false
     // A directory replacement resets the model and its contentY before the
     // authoritative cursor for the new path arrives. Keep Details unpainted
@@ -70,6 +103,38 @@ FocusScope {
     property int thumbnailPinchStartHeight: 0
     property bool densityViewportTransaction: false
     property bool suppressScrollAnimationPersistence: false
+    // The Details scrollbar uses a hidden ListView only to reproduce Qt's
+    // fractional-row extent. Populating its delegates during modelReset adds
+    // pure auxiliary work to the input-to-first-frame path, so publish the
+    // proxy count after the new catalog has painted (with a bounded fallback
+    // for windowless/offscreen embedders).
+    property int detailsMetricCount: 0
+    property int detailsMetricTargetCount: 0
+    property bool detailsMetricAwaitingFrame: false
+    function deferDetailsMetricPopulation() {
+        const target = !customContent && presentationMode === "details"
+                ? galleryLayout.count : 0
+        detailsMetricTargetCount = target
+        if (target <= 0) {
+            detailsMetricAwaitingFrame = false
+            detailsMetricCount = 0
+            detailsMetricFallback.stop()
+            return
+        }
+        detailsMetricAwaitingFrame = true
+        detailsMetricFallback.restart()
+        if (root.Window.window)
+            root.Window.window.update()
+    }
+    function publishDeferredDetailsMetrics() {
+        if (!detailsMetricAwaitingFrame)
+            return
+        detailsMetricAwaitingFrame = false
+        detailsMetricFallback.stop()
+        detailsMetricCount = detailsMetricTargetCount
+        detailsScrollMetrics.applySourceCurrentIndex()
+        detailsScrollMetrics.syncContentY()
+    }
     property bool localCursorNavigation: false
     property bool cursorCommitPending: false
     property bool cursorCommitAfterScroll: false
@@ -130,6 +195,48 @@ FocusScope {
     readonly property rect cursorChromeTargetRect:
         Qt.rect(cursorChromeTargetX, cursorChromeTargetY,
                 cursorChromeTargetWidth, cursorChromeTargetHeight)
+    // A settled cursor is snapped in scene coordinates, not merely inside its
+    // delegate: at fractional DPRs an integer delegate coordinate can still
+    // land between physical pixels once the panel and viewport offsets are
+    // included. Keep the live viewport origin observable so recycled
+    // delegates update their correction after scrolling or panel relayout.
+    readonly property point cursorPixelGridViewportOrigin: {
+        // mapToItem() itself is not a bindable property. Read the relevant
+        // item coordinates explicitly so moving this panel re-evaluates the
+        // scene-space origin as well.
+        const dependencyX = root.x + root.width
+                + galleryLayout.x + galleryLayout.width
+        const dependencyY = root.y + root.height
+                + galleryLayout.y + galleryLayout.height
+        const sceneOrigin = galleryLayout.mapToItem(
+            null, dependencyX * 0, dependencyY * 0)
+        return Qt.point(
+            sceneOrigin.x + galleryLayout.paddingLeft
+                - (presentationMode === "columns"
+                   ? galleryLayout.contentY : 0),
+            sceneOrigin.y - (presentationMode === "columns"
+                             ? 0 : galleryLayout.contentY))
+    }
+    readonly property bool cursorPixelAlignmentSuspended:
+        cursorChromeTransitionActive || panelScrollAnimation.running
+
+    function alignViewportItemRectToDevicePixels(item, rect) {
+        if (!item || !rect)
+            return rect
+        const dpr = Math.max(0.01, Number(devicePixelRatio) || 1)
+        const origin = cursorPixelGridViewportOrigin
+        const itemSceneX = origin.x + item.x
+        const itemSceneY = origin.y + item.y
+        const left = Math.round((itemSceneX + rect.x) * dpr) / dpr
+        const top = Math.round((itemSceneY + rect.y) * dpr) / dpr
+        const right = Math.round(
+            (itemSceneX + rect.x + rect.width) * dpr) / dpr
+        const bottom = Math.round(
+            (itemSceneY + rect.y + rect.height) * dpr) / dpr
+        return Qt.rect(left - itemSceneX, top - itemSceneY,
+                       Math.max(0, right - left),
+                       Math.max(0, bottom - top))
+    }
     // The full-area viewer sets these while its image is animating to or from
     // the active tile.  Only the tile image is suppressed; panel chrome,
     // selection, and labels remain stable underneath the transition.
@@ -147,17 +254,27 @@ FocusScope {
     // the desired cursor so it can mask older authoritative scenes, while the
     // expensive semantic round-trip may wait until repeat stops.
     signal cursorRequested(string entryId, int index, bool deferCommit)
-    signal openRequested(string entryId, int index, bool isImage)
+    signal openRequested(string entryId, int index, bool isImage,
+                         bool autoRepeat)
     signal selectionRequested(string mode, var entryIds)
     signal densityChangeRequested(string mode, real density, bool finalChange)
+
     signal sortRequested(string sortMode, bool contextMenu)
     signal benchmarkStage(string stage, var metadata)
+    signal metadataVisibleRangeChanged(int firstRow, int lastRow)
+    signal consoleWheelRequested(real x, real y, int angleDeltaY,
+                                 int modifiers)
+    signal consoleMouseButtonRequested(real x, real y, int button, bool down,
+                                       int modifiers)
 
     readonly property color backgroundColor:
         theme && theme.panelBackground !== undefined
             ? theme.panelBackground : "#17191d"
     readonly property color foregroundColor:
         theme && theme.text !== undefined ? theme.text : "#e8eaed"
+    property color quickSearchMatchColor:
+        theme && theme.quickSearchMatch !== undefined
+            ? theme.quickSearchMatch : foregroundColor
     readonly property color mutedColor:
         theme && theme.mutedText !== undefined ? theme.mutedText : "#aeb4bc"
     readonly property color cursorColor:
@@ -170,6 +287,9 @@ FocusScope {
     readonly property color cursorBorderColor:
         theme && theme.cursorBorder !== undefined
             ? theme.cursorBorder : Qt.lighter(cursorColor, 1.35)
+    readonly property color cardCursorBorderColor:
+        theme && theme.cardCursorBorder !== undefined
+            ? theme.cardCursorBorder : Qt.lighter(cursorColor, 1.35)
     readonly property color markedBackgroundColor:
         theme && theme.markedBackground !== undefined
             ? theme.markedBackground : selectionColor
@@ -182,6 +302,23 @@ FocusScope {
     readonly property color folderIconColor:
         theme && theme.folderIcon !== undefined
             ? theme.folderIcon : mutedColor
+    readonly property color itemBackgroundColor:
+        theme && theme.itemBackground !== undefined
+            ? theme.itemBackground : Qt.lighter(backgroundColor, 1.09)
+    readonly property color directoryBackgroundColor:
+        theme && theme.directoryBackground !== undefined
+            ? theme.directoryBackground : Qt.lighter(backgroundColor, 1.20)
+    readonly property color itemHoverColor:
+        theme && theme.itemHover !== undefined
+            ? theme.itemHover : Qt.lighter(backgroundColor, 1.25)
+    readonly property color labelBackgroundColor:
+        theme && theme.labelBackground !== undefined
+            ? theme.labelBackground : "#aa101216"
+    readonly property color previewBackdropColor:
+        theme && theme.previewBackdrop !== undefined
+            ? theme.previewBackdrop
+            : (Qt.styleHints.colorScheme === Qt.Dark
+               ? Qt.rgba(0, 0, 0, 0.3) : Qt.rgba(0, 0, 0, 0.2))
     readonly property color separatorColor:
         theme && theme.separator !== undefined
             ? theme.separator : Qt.rgba(1, 1, 1, 0.12)
@@ -192,11 +329,128 @@ FocusScope {
         theme && theme.controlHover !== undefined
             ? theme.controlHover : Qt.lighter(backgroundColor, 1.25)
 
+    function styledTextEscape(value) {
+        return String(value === undefined || value === null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+    }
+
+    // Go publishes matcher offsets in runes while JavaScript indexes UTF-16
+    // code units. Split surrogate pairs explicitly so non-BMP filenames keep
+    // the same highlighted glyphs in both renderers.
+    function codePoints(value) {
+        const text = String(value === undefined || value === null ? "" : value)
+        const result = []
+        for (let index = 0; index < text.length;) {
+            const first = text.charCodeAt(index)
+            let width = 1
+            if (first >= 0xd800 && first <= 0xdbff
+                    && index + 1 < text.length) {
+                const second = text.charCodeAt(index + 1)
+                if (second >= 0xdc00 && second <= 0xdfff)
+                    width = 2
+            }
+            result.push(text.substr(index, width))
+            index += width
+        }
+        return result
+    }
+
+    function codePointLength(value) {
+        return codePoints(value).length
+    }
+
+    function quickSearchMatch(entryId) {
+        if (!quickSearchMatches || !entryId)
+            return null
+        const match = quickSearchMatches[String(entryId)]
+        if (!match)
+            return null
+        const start = Number(match.start)
+        const length = Number(match.length)
+        if (!Number.isInteger(start) || start < 0
+                || !Number.isInteger(length) || length <= 0)
+            return null
+        return { "start": start, "length": length }
+    }
+
+    // sourceRuneOffset locates a displayed fragment (for example a separately
+    // aligned extension) within the complete filename matched by the host.
+    function quickSearchStyledText(value, entryId, sourceRuneOffset) {
+        const characters = codePoints(value)
+        const offset = Math.max(0, Number(sourceRuneOffset) || 0)
+        const match = quickSearchMatch(entryId)
+        if (!match)
+            return characters.join("")
+
+        const localStart = Math.max(0, match.start - offset)
+        const localEnd = Math.min(characters.length,
+                                  match.start + match.length - offset)
+        if (localStart >= localEnd)
+            return styledTextEscape(characters.join(""))
+
+        const prefix = styledTextEscape(
+            characters.slice(0, localStart).join(""))
+        const highlighted = styledTextEscape(
+            characters.slice(localStart, localEnd).join(""))
+        const suffix = styledTextEscape(
+            characters.slice(localEnd).join(""))
+        return prefix + "<font color=\"" + String(quickSearchMatchColor)
+            + "\">" + highlighted + "</font>" + suffix
+    }
+
+    // Icons mode can middle-elide very long names before QML paints them.
+    // Preserve match offsets for the retained prefix and suffix around that
+    // synthetic ellipsis.
+    function quickSearchStyledElidedText(value, sourceValue, entryId) {
+        const shown = codePoints(value)
+        const source = codePoints(sourceValue)
+        if (shown.join("") === source.join(""))
+            return quickSearchStyledText(value, entryId, 0)
+
+        let ellipsis = -1
+        for (let index = 0; index < shown.length; ++index) {
+            if (shown[index] === "…") {
+                ellipsis = index
+                break
+            }
+        }
+        if (ellipsis < 0)
+            return quickSearchStyledText(value, entryId, 0)
+
+        const prefix = shown.slice(0, ellipsis)
+        const suffix = shown.slice(ellipsis + 1)
+        if (prefix.join("") !== source.slice(0, prefix.length).join("")
+                || suffix.join("")
+                   !== source.slice(source.length - suffix.length).join(""))
+            return quickSearchStyledText(value, entryId, 0)
+        return quickSearchStyledText(prefix.join(""), entryId, 0)
+            + styledTextEscape("…")
+            + quickSearchStyledText(
+                suffix.join(""), entryId, source.length - suffix.length)
+    }
+
     function metric(name, fallback) {
         if (!metrics || metrics[name] === undefined)
             return fallback
         const value = Number(metrics[name])
         return isFinite(value) ? value : fallback
+    }
+
+    function publishMetadataVisibleRange() {
+        const indexes = galleryLayout.visibleIndexes || []
+        let first = -1
+        let last = -1
+        for (let offset = 0; offset < indexes.length; ++offset) {
+            const row = Number(indexes[offset])
+            if (!Number.isInteger(row) || row < 0)
+                continue
+            first = first < 0 ? row : Math.min(first, row)
+            last = Math.max(last, row)
+        }
+        metadataVisibleRangeChanged(first, last)
     }
 
     // Return one self-contained placement snapshot so a real-application
@@ -343,6 +597,7 @@ FocusScope {
         viewportUpdateTimer.stop()
         viewportUpdatePendingAfterScroll = false
         viewportUpdateEnsuresCursor = false
+        viewportUpdateSuppressAnimation = false
         densityViewportTransaction = true
         try {
             change()
@@ -461,27 +716,18 @@ FocusScope {
             // the pending keyboard hand-off.
             viewportUpdateTimer.stop()
             viewportUpdateEnsuresCursor = false
+            viewportUpdateSuppressAnimation = false
             viewportUpdatePendingAfterScroll = false
             setPanelContentY(galleryLayout.contentY, false)
         }
         const previousIndex = session.currentIndex
         forceActiveFocus()
 
-        if ((button & Qt.MiddleButton) !== 0) {
-            const previousVisualIndex = visualCursorIndex
-            selectionAnchorIndex = viewIndex
-            localCursorNavigation = true
-            selectIndex(viewIndex, true)
-            localCursorNavigation = false
-            ensureCurrentVisible()
-            resetCurrentItemCenter(viewIndex)
-            coordinateVisualCursor(viewIndex, previousVisualIndex)
-            if (interruptedKeyboardScroll) {
-                session.panelScrollOffset = galleryLayout.contentY
-                session.panelViewportCursorEntryId = session.cursorEntryId
-            }
+        // Middle-button ownership lives on galleryMiddleButtonArea. Keep a
+        // defensive guard here for embedders with a legacy delegate so a
+        // middle click can never fall back to tile selection.
+        if ((button & Qt.MiddleButton) !== 0)
             return
-        }
 
         const previousVisualIndex = visualCursorIndex
         localCursorNavigation = true
@@ -502,12 +748,24 @@ FocusScope {
         const commandModifier = Boolean(modifiers &
             (Qt.ControlModifier | Qt.MetaModifier))
         const shiftModifier = Boolean(modifiers & Qt.ShiftModifier)
+        dragCursorActive = false
+        if (keyboardShiftSelectionActive)
+            finishKeyboardShiftSelection()
 
         if ((button & Qt.RightButton) !== 0) {
+            if (scrollingMode)
+                mouseAutoScroll.end()
             selectionAnchorIndex = viewIndex
             const ids = selectionIds(viewIndex, viewIndex)
             if (ids.length > 0)
                 selectionRequested("toggle", ids)
+            // Holding the button and dragging paints the selection over
+            // every tile the pointer crosses, like FAR/NC's right-drag mark
+            // gesture. Reuse the Shift-navigation range/toggle machinery:
+            // the anchor's pre-toggle state (read here, before the toggle
+            // above round-trips back through session) already fixes the
+            // same add/remove direction the immediate toggle just applied.
+            beginKeyboardShiftSelection(viewIndex)
         } else if (shiftModifier) {
             const anchor = selectionAnchorIndex >= 0
                     ? selectionAnchorIndex
@@ -523,9 +781,106 @@ FocusScope {
         } else {
             selectionAnchorIndex = viewIndex
         }
+
+        if ((button & (Qt.LeftButton | Qt.RightButton)) !== 0) {
+            // Holding either button and dragging carries the cursor to
+            // whatever tile is under the pointer. Left never marks/unmarks
+            // anything by itself (matching a plain click); Right also paints
+            // the selection via keyboardShiftSelectionActive above.
+            dragCursorActive = true
+            dragCursorLastIndex = viewIndex
+        }
     }
 
-    function animatePanelScrollTo(targetY, quickScroll, keyboardReveal) {
+    // Right double-click inverts the whole panel's selection (mirrors FAR's
+    // "*"/Numpad* invert-selection action).
+    function invertPanelSelection() {
+        if (!session || galleryLayout.count <= 0)
+            return
+        const ids = selectionIds(0, galleryLayout.count - 1)
+        if (ids.length > 0)
+            selectionRequested("toggle", ids)
+    }
+
+    // Called on every pointer move while a button-drag gesture (started in
+    // handlePointerPress) is active. panelX/panelY are in this item's own
+    // coordinate space so the delegate does not need to know about
+    // galleryLayout's internal geometry.
+    function handlePointerDrag(panelX, panelY) {
+        if (!session || galleryLayout.count <= 0)
+            return
+        if (!dragCursorActive && !keyboardShiftSelectionActive)
+            return
+        const point = galleryLayout.mapFromItem(root, panelX, panelY)
+        const clampedX = Math.max(0, Math.min(galleryLayout.width - 0.01, point.x))
+        const clampedY = Math.max(0, Math.min(galleryLayout.height - 0.01, point.y))
+        const index = presentationMode === "columns"
+                ? galleryLayout.indexAtViewport(clampedX, clampedY)
+                : galleryLayout.indexAt(clampedX, galleryLayout.contentY + clampedY)
+        if (index < 0)
+            return
+        if (dragCursorActive && index !== dragCursorLastIndex) {
+            dragCursorLastIndex = index
+            const previousVisualIndex = visualCursorIndex
+            localCursorNavigation = true
+            selectIndex(index, false)
+            localCursorNavigation = false
+            // A drag gesture already shows exactly where the pointer is; do
+            // not additionally animate the viewport toward it.
+            ensureCurrentVisible(false)
+            resetCurrentItemCenter(index)
+            coordinateVisualCursor(index, previousVisualIndex)
+        }
+        if (keyboardShiftSelectionActive)
+            updateDragPaintSelection(index)
+    }
+
+    function endPointerDrag() {
+        dragCursorActive = false
+        if (keyboardShiftSelectionActive)
+            finishKeyboardShiftSelection()
+    }
+
+    // Fixed compact modes use two different coordinate systems for their
+    // content. Columns delegates are pixel-snapped by BrickItem, while
+    // Details deliberately keeps its fractional row pitch. A keyboard reveal
+    // therefore has to land on the corresponding visual lattice; a raw
+    // minimal reveal leaves a half-pixel phase behind after every boundary.
+    function keyboardAlignedContentY(value, direction) {
+        const revealDirection = Number(direction)
+        const target = Number(value)
+        if (!Number.isFinite(target)
+                || !Number.isFinite(revealDirection)
+                || revealDirection === 0)
+            return value
+
+        const epsilon = 0.000001
+        if (presentationMode === "columns") {
+            const columnWidth = Number(galleryLayout.columnStride())
+            if (!(columnWidth > 0))
+                return value
+            const coordinate = target / columnWidth
+            const column = revealDirection < 0
+                    ? Math.floor(coordinate + epsilon)
+                    : Math.ceil(coordinate - epsilon)
+            return column * columnWidth
+        }
+
+        if (presentationMode === "details") {
+            const rowExtent = Math.max(1, Number(galleryLayout.density))
+            const coordinate = target / rowExtent
+            const row = revealDirection < 0
+                    ? Math.floor(coordinate + epsilon)
+                    : Math.ceil(coordinate - epsilon)
+            // Details rows start at paddingTop, so a row's screen Y matches
+            // row zero precisely when contentY is an integer row pitch.
+            return row * rowExtent
+        }
+        return value
+    }
+
+    function animatePanelScrollTo(targetY, quickScroll, keyboardReveal,
+                                  keyboardRevealDirection) {
         if (!keyboardReveal)
             cancelCursorChromeTransition()
         // An embedded session can queue a zero-delay offset restoration while
@@ -534,17 +889,23 @@ FocusScope {
         // snap back to the pre-gesture offset.
         viewportUpdateTimer.stop()
         viewportUpdateEnsuresCursor = false
+        viewportUpdateSuppressAnimation = false
         viewportUpdatePendingAfterScroll = false
+        const viewportExtent = presentationMode === "columns"
+                ? galleryLayout.width : galleryLayout.height
         const maximum = Math.max(
-                    0, galleryLayout.contentHeight - galleryLayout.height)
-        const target = Math.max(
-                    0, Math.min(maximum, targetY))
+                    0, galleryLayout.contentHeight - viewportExtent)
+        let target = Number(targetY)
+        if (keyboardReveal)
+            target = keyboardAlignedContentY(target,
+                                              keyboardRevealDirection)
+        target = Math.max(0, Math.min(maximum, target))
         const compactRows = presentationMode === "columns"
                 || presentationMode === "details"
-        if (compactRows) {
-            // Compact file-list presentations intentionally follow the
-            // classic panel contract: viewport changes are immediate.  Do
-            // not run (or leave behind) the large-preview reveal animation.
+        if (compactRows && keyboardReveal) {
+            // Keyboard/path placement in compact rows remains an immediate
+            // reveal. Wheel input, however, must use the same animation as
+            // Masonry so every presentation has one GUI scrolling contract.
             setPanelContentY(target, true)
             return target
         }
@@ -555,11 +916,45 @@ FocusScope {
         return target
     }
 
-    function scrollBy(deltaY, quickScroll, keyboardReveal) {
+    function scrollBy(deltaY, quickScroll, keyboardReveal,
+                      keyboardRevealDirection) {
         const plannedContentY = panelScrollAnimation.running
                 ? panelScrollAnimation.to : galleryLayout.contentY
         return animatePanelScrollTo(plannedContentY + deltaY,
-                                    quickScroll, keyboardReveal)
+                                    quickScroll, keyboardReveal,
+                                    keyboardRevealDirection)
+    }
+
+    function handlePanelMiddlePress(x, y, modifiers) {
+        if (mouseWheelMode === "console") {
+            consoleMouseButtonRequested(x, y, Qt.MiddleButton, true,
+                                        modifiers)
+            return
+        }
+        if (scrollingMode) {
+            mouseAutoScroll.end()
+        } else {
+            resetGridPageLattice()
+            resetMasonryPageSequence()
+            cancelCursorChromeTransition()
+            // A wheel step may still be easing toward its endpoint. The
+            // middle gesture owns contentY exclusively once it starts.
+            panelScrollAnimation.stop()
+            mouseAutoScroll.start()
+        }
+    }
+
+    function handlePanelMiddleRelease(x, y, modifiers) {
+        if (mouseWheelMode === "console") {
+            consoleMouseButtonRequested(x, y, Qt.MiddleButton, false,
+                                        modifiers)
+            return
+        }
+        // A release after the pointer actually moved ends the gesture. A
+        // stationary middle click deliberately leaves auto-scroll armed,
+        // exactly like the original MasonryMode toggle.
+        if (scrollingStarted)
+            mouseAutoScroll.end()
     }
 
     function handlePanelWheel(pixelDeltaY, angleDeltaY, modifiers,
@@ -591,6 +986,18 @@ FocusScope {
             scrollBy(-delta, macPlatform)
         }
         return true
+    }
+
+    onMouseWheelModeChanged: {
+        if (mouseWheelMode !== "gui" && scrollingMode)
+            mouseAutoScroll.end()
+    }
+
+    onScrollingModeChanged: {
+        if (!scrollingMode && session) {
+            session.panelScrollOffset = galleryLayout.contentY
+            session.panelViewportCursorEntryId = session.cursorEntryId
+        }
     }
 
     function beginThumbnailPinch() {
@@ -648,12 +1055,29 @@ FocusScope {
         viewportUpdateTimer.stop()
         viewportUpdatePendingAfterScroll = false
         viewportUpdateEnsuresCursor = false
+        viewportUpdateSuppressAnimation = false
         suppressScrollAnimationPersistence = true
         panelScrollAnimation.stop()
         suppressScrollAnimationPersistence = false
         cursorChromeGeometryAnimation.stop()
         cancelCursorChromeTransition()
         presentationSwitchTimer.restart()
+    }
+
+    // Embedders may own presentation chrome (for example f4's Details
+    // header) outside this component. Bracket the complete semantic update so
+    // native mode, density, insets and the resulting anchored viewport size
+    // produce one layout revision and one paintable state.
+    function beginPresentationStateUpdate(switchingMode) {
+        if (switchingMode)
+            beginPresentationSwitch()
+        galleryLayout.beginLayoutUpdate()
+    }
+
+    function endPresentationStateUpdate(publishVisibleRange) {
+        galleryLayout.endLayoutUpdate()
+        if (publishVisibleRange)
+            publishMetadataVisibleRange()
     }
 
     function restoreScrollOffset() {
@@ -827,9 +1251,11 @@ FocusScope {
         interval: 0
         onTriggered: {
             const ensureCursor = root.viewportUpdateEnsuresCursor
+            const suppressAnimation = root.viewportUpdateSuppressAnimation
             root.viewportUpdateEnsuresCursor = false
+            root.viewportUpdateSuppressAnimation = false
             if (ensureCursor)
-                root.ensureCurrentVisible()
+                root.ensureCurrentVisible(!suppressAnimation)
             else
                 root.restoreScrollOrEnsureCursor()
         }
@@ -849,6 +1275,7 @@ FocusScope {
             viewportUpdateTimer.stop()
             root.viewportUpdatePendingAfterScroll = false
             root.viewportUpdateEnsuresCursor = false
+            root.viewportUpdateSuppressAnimation = false
             // MasonryLayout already reveals the stable current index during
             // its synchronous rewrap. Re-run the public reveal contract after
             // all declarative geometry bindings have settled, still without
@@ -960,13 +1387,13 @@ FocusScope {
         viewportUpdateTimer.restart()
     }
 
-    function selectIndex(viewIndex, openItem, deferCursorCommit) {
+    function selectIndex(viewIndex, openItem, deferCursorCommit, autoRepeat) {
         if (!session || viewIndex < 0 || viewIndex >= galleryLayout.count)
             return
         session.activateIndex(viewIndex)
         if (openItem) {
             openRequested(session.entryIdAt(viewIndex), sourceIndex(viewIndex),
-                          session.isImageAt(viewIndex))
+                          session.isImageAt(viewIndex), Boolean(autoRepeat))
         } else {
             activateRequested()
             cursorRequested(session.entryIdAt(viewIndex), sourceIndex(viewIndex),
@@ -1208,7 +1635,7 @@ FocusScope {
         if (presentationMode !== "details") {
             return {
                 fill: cursorColor,
-                border: Qt.lighter(cursorColor, 1.35),
+                border: cardCursorBorderColor,
                 borderWidth: 1,
                 radius: cursorChromeModeRadius()
             }
@@ -1433,7 +1860,7 @@ FocusScope {
 
     function moveCursor(index, preserveSelectionAnchor,
                         preserveHorizontalAnchor, deferCursorCommit,
-                        preserveVerticalAnchor) {
+                        preserveVerticalAnchor, keyboardRevealDirection) {
         if (!session || galleryLayout.count === 0)
             return
         const bounded = Math.max(0, Math.min(galleryLayout.count - 1, index))
@@ -1450,7 +1877,7 @@ FocusScope {
         // interior PageUp/PageDown. Every ordinary move (including Up/Down,
         // which preserves only X) reveals the item and adopts its resulting Y.
         if (!preserveVerticalAnchor) {
-            ensureCurrentVisible()
+            ensureCurrentVisible(undefined, keyboardRevealDirection)
             resetCurrentItemCenterY(bounded)
         }
         coordinateVisualCursor(bounded, previousVisualIndex)
@@ -1459,7 +1886,8 @@ FocusScope {
     function moveCursorWithSelection(index, togglePrevious,
                                      preserveHorizontalAnchor,
                                      deferCursorCommit,
-                                     preserveVerticalAnchor) {
+                                     preserveVerticalAnchor,
+                                     keyboardRevealDirection) {
         if (!session || galleryLayout.count === 0)
             return
         const previousIndex = session.currentIndex
@@ -1472,13 +1900,14 @@ FocusScope {
             if (!preserveHorizontalAnchor)
                 resetCurrentItemCenterX(previousIndex)
             if (!preserveVerticalAnchor) {
-                ensureCurrentVisible()
+                ensureCurrentVisible(undefined, keyboardRevealDirection)
                 resetCurrentItemCenterY(previousIndex)
             }
             return
         }
         moveCursor(bounded, togglePrevious, preserveHorizontalAnchor,
-                   deferCursorCommit, preserveVerticalAnchor)
+                   deferCursorCommit, preserveVerticalAnchor,
+                   keyboardRevealDirection)
         if (togglePrevious)
             updateKeyboardShiftSelection(bounded)
     }
@@ -1515,7 +1944,22 @@ FocusScope {
             first = targetIndex + 1
             last = anchor
         }
+        applyShiftSelectionRange(first, last)
+    }
 
+    // A mouse drag's targetIndex is the tile currently under the pointer, so
+    // (unlike a keyboard step, which has not "passed over" targetIndex yet)
+    // it must be part of the painted range.
+    function updateDragPaintSelection(targetIndex) {
+        if (!keyboardShiftSelectionActive || !session)
+            return
+        const anchor = keyboardShiftSelectionAnchorIndex
+        const first = Math.min(anchor, targetIndex)
+        const last = Math.max(anchor, targetIndex)
+        applyShiftSelectionRange(first, last)
+    }
+
+    function applyShiftSelectionRange(first, last) {
         const pending = pendingKeyboardSelectionToggles
         const oldFirst = keyboardShiftSelectionFirst
         const oldLast = keyboardShiftSelectionLast
@@ -1923,13 +2367,23 @@ FocusScope {
         const deltaY = galleryLayout.height - galleryLayout.height / 8
         const futureContentY = panelScrollAnimation.running
                 ? panelScrollAnimation.to : galleryLayout.contentY
+        const maximum = Math.max(
+                    0, galleryLayout.contentHeight - galleryLayout.height)
+        const rawPageContentY = direction < 0
+                ? Math.max(0, futureContentY - deltaY)
+                : Math.min(maximum, futureContentY + deltaY)
+        // Details may quantize the page destination to its row lattice. Pick
+        // the cursor from that same destination, otherwise a row selected at
+        // the raw page probe can end up exactly outside the aligned viewport.
+        const pageContentY = presentationMode === "details"
+                ? keyboardAlignedContentY(rawPageContentY, direction)
+                : rawPageContentY
+        const pageY = pageContentY + currentItemCenterY
         const currentIndex = session.currentIndex
         let targetIndex = currentIndex
         let hitEdge = false
 
         if (direction < 0) {
-            const pageY = Math.max(0, futureContentY - deltaY)
-                    + currentItemCenterY
             targetIndex = galleryLayout.indexAt(currentItemCenterX, pageY)
             if (targetIndex === -1)
                 targetIndex = 0
@@ -1941,10 +2395,6 @@ FocusScope {
                     targetIndex = 0
             }
         } else {
-            const maximum = Math.max(
-                    0, galleryLayout.contentHeight - galleryLayout.height)
-            const pageY = Math.min(maximum, futureContentY + deltaY)
-                    + currentItemCenterY
             targetIndex = galleryLayout.indexAt(currentItemCenterX, pageY)
             if (targetIndex === -1)
                 targetIndex = galleryLayout.count - 1
@@ -1968,11 +2418,11 @@ FocusScope {
 
         moveCursorWithSelection(targetIndex, togglePrevious,
                                 !hitEdge, deferCursorCommit, !hitEdge)
-        scrollBy(direction * deltaY, false, true)
+        scrollBy(direction * deltaY, false, true, direction)
         return targetIndex
     }
 
-    function ensureCurrentVisible(animateScroll) {
+    function ensureCurrentVisible(animateScroll, keyboardRevealDirection) {
         if (!session || galleryLayout.count === 0
                 || session.currentIndex < 0 || galleryLayout.height <= 0)
             return
@@ -2018,6 +2468,8 @@ FocusScope {
                                  - (presentationMode === "columns"
                                     ? galleryLayout.width
                                     : galleryLayout.height))
+        targetY = keyboardAlignedContentY(targetY,
+                                          keyboardRevealDirection)
         targetY = Math.max(0, Math.min(maximum, targetY))
         const compactRows = presentationMode === "columns"
                 || presentationMode === "details"
@@ -2222,6 +2674,10 @@ FocusScope {
     MasonryLayout {
         id: galleryLayout
         objectName: "galleryMasonryLayout"
+        readonly property bool verticalInsetBelongsToContent:
+            root.presentationMode === "masonry"
+            || root.presentationMode === "grid"
+            || root.presentationMode === "icons"
         clip: true
         persistSettings: false
         visible: !root.customContent
@@ -2237,10 +2693,18 @@ FocusScope {
             // the effective panel width.
             right: parent.right
             leftMargin: root.presentationMode === "details" ? 0 : 6
-            topMargin: root.presentationMode === "details" ? 0 : 6
-            bottomMargin: root.presentationMode === "details" ? 0 : 6
+            topMargin: root.presentationMode === "details"
+                       || galleryLayout.verticalInsetBelongsToContent ? 0 : 6
+            bottomMargin: root.presentationMode === "details"
+                          || galleryLayout.verticalInsetBelongsToContent ? 0 : 6
             rightMargin: root.presentationMode === "details" ? 0 : 6
         }
+        // Masonry, Grid and Icons own a vertically scrollable catalog. Keep
+        // their viewport at the full panel height and put the breathing room
+        // into content geometry so it precedes the first tile and follows the
+        // last one at the scroll endpoint.
+        paddingTop: verticalInsetBelongsToContent ? 6 : 0
+        paddingBottom: verticalInsetBelongsToContent ? 6 : 0
         model: root.session ? root.session.model : null
         currentIndex: root.session ? root.session.currentIndex : -1
         presentationMode: root.nativePresentationMode()
@@ -2251,10 +2715,20 @@ FocusScope {
         // Mode changes are atomic. The host applies the mode and then that
         // mode's saved density in one turn; allowing the second rewrap to
         // animate makes recycled tiles visibly fly between layouts.
-        animateResizing: !root.presentationSwitchPending
+        animateResizing: root.animateLayoutChanges
+                         && !root.presentationSwitchPending
                          && !root.pathViewportPlacementPending
         devicePixelRatio: root.devicePixelRatio
         iconLabelFont: root.iconLabelFont
+        // GallerySession lowers catalogReady before every path replacement.
+        // Let native geometry and hit testing commit immediately, then bind
+        // the final visible row facades in the polish phase. Stale slots are
+        // disabled during that event-stack and the first rendered frame is
+        // complete, without charging QML delegate work to panel_catalog apply.
+        deferDelegateRefreshOnReset:
+            root.session
+            && typeof root.session.catalogReady !== "undefined"
+            && !root.session.catalogReady
 
         onLayoutReset: {
             root.traceBenchmarkStage("layout.reset", {})
@@ -2275,6 +2749,7 @@ FocusScope {
             else if (!root.densityViewportTransaction)
                 root.scheduleViewportUpdate(false)
         }
+        onVisibleIndexesChanged: root.publishMetadataVisibleRange()
         onCountChanged: {
             root.traceBenchmarkStage("layout.count.changed", {})
             root.cancelCursorChromeTransition()
@@ -2350,6 +2825,7 @@ FocusScope {
             width: root.cursorChromeWidth
             height: root.cursorChromeHeight
             radius: root.cursorChromeRadius
+            antialiasing: true
             color: root.cursorChromeFillColor
         }
     }
@@ -2363,13 +2839,17 @@ FocusScope {
         visible: root.cursorChromeTransitionActive && root.showCursor
         Rectangle {
             objectName: "galleryCursorChromeBorder"
+            readonly property bool visualBorderPixelAligned:
+                border.pixelAligned
             x: root.cursorChromeX
             y: root.cursorChromeY
             width: root.cursorChromeWidth
             height: root.cursorChromeHeight
             radius: root.cursorChromeRadius
+            antialiasing: true
             color: "transparent"
             border.width: root.cursorChromeBorderWidth
+            border.pixelAligned: true
             border.color: root.cursorChromeBorderColor
         }
     }
@@ -2380,6 +2860,31 @@ FocusScope {
     // its thumb and drag mapping remain pixel-identical to f4's old Detailed
     // list. This proxy is noninteractive and materializes only ListView's
     // bounded visible/cache window of empty Items.
+    Timer {
+        id: detailsMetricFallback
+        interval: 50
+        repeat: false
+        onTriggered: root.publishDeferredDetailsMetrics()
+    }
+
+    Connections {
+        target: root.Window.window
+        enabled: root.detailsMetricAwaitingFrame
+        ignoreUnknownSignals: true
+        function onFrameSwapped() {
+            root.publishDeferredDetailsMetrics()
+        }
+    }
+
+    Connections {
+        target: galleryLayout
+        function onCountChanged() {
+            root.deferDetailsMetricPopulation()
+        }
+    }
+
+    onCustomContentChanged: deferDetailsMetricPopulation()
+
     ListView {
         id: detailsScrollMetrics
         objectName: "galleryDetailsScrollMetrics"
@@ -2398,7 +2903,8 @@ FocusScope {
         // demand that would otherwise keep the same buffer populated.
         cacheBuffer: 320
         readonly property real rowExtent: galleryLayout.density
-        readonly property int sourceCount: visible ? galleryLayout.count : 0
+        readonly property int sourceCount: visible
+                                           ? root.detailsMetricCount : 0
         // Do not observe the renderer's cursor while this Details-only proxy
         // is dormant. MasonryLayout establishes its model/currentIndex
         // bindings during component completion; forcing an eager read from a
@@ -2428,6 +2934,7 @@ FocusScope {
             syncContentY()
         }
         Component.onCompleted: {
+            root.deferDetailsMetricPopulation()
             applySourceCurrentIndex()
             syncContentY()
         }
@@ -2454,9 +2961,9 @@ FocusScope {
 
     Label {
         anchors.centerIn: parent
-        visible: !root.customContent &&
+        visible: root.emptyStateEnabled && !root.customContent &&
                  (!root.session || galleryLayout.count === 0)
-        text: qsTr("No previewable entries")
+        text: root.emptyStateText
         color: root.mutedColor
     }
 
@@ -2466,11 +2973,58 @@ FocusScope {
         acceptedButtons: Qt.NoButton
         enabled: !root.customContent
         onWheel: wheel => {
-            root.handlePanelWheel(wheel.pixelDelta.y, wheel.angleDelta.y,
-                                  wheel.modifiers, wheel.pixelDelta.x,
-                                  wheel.angleDelta.x)
+            if (root.mouseWheelMode === "console") {
+                // The console contract is deliberately angle-step based. The
+                // hidden VtuiGridItem performs the same 120-unit remainder
+                // conversion as native terminal input.
+                root.consoleWheelRequested(wheel.x, wheel.y,
+                                           wheel.angleDelta.y,
+                                           wheel.modifiers)
+            } else {
+                root.handlePanelWheel(wheel.pixelDelta.y, wheel.angleDelta.y,
+                                      wheel.modifiers, wheel.pixelDelta.x,
+                                      wheel.angleDelta.x)
+            }
             wheel.accepted = true
         }
+    }
+
+    MouseArea {
+        id: galleryMiddleButtonArea
+        objectName: "galleryMiddleButtonArea"
+        anchors.fill: parent
+        acceptedButtons: Qt.MiddleButton
+        enabled: !root.customContent
+        hoverEnabled: true
+
+        onPressed: mouse => {
+            root.handlePanelMiddlePress(mouse.x, mouse.y, mouse.modifiers)
+            mouse.accepted = true
+        }
+        onReleased: mouse => {
+            root.handlePanelMiddleRelease(mouse.x, mouse.y,
+                                          mouse.modifiers)
+            mouse.accepted = true
+        }
+        onCanceled: {
+            if (root.mouseWheelMode === "console") {
+                root.consoleMouseButtonRequested(
+                    mouseX, mouseY, Qt.MiddleButton, false, Qt.NoModifier)
+            } else if (root.scrollingStarted) {
+                mouseAutoScroll.end()
+            }
+        }
+    }
+
+    AutoScrollController {
+        id: mouseAutoScroll
+        objectName: "galleryMouseAutoScrollController"
+        layout: galleryLayout
+        pointerSource: galleryMiddleButtonArea
+        horizontal: root.presentationMode === "columns"
+        scrollExtent: root.Window.window
+                     ? root.Window.window.height
+                     : (horizontal ? galleryLayout.width : galleryLayout.height)
     }
 
     PinchArea {
@@ -2631,9 +3185,10 @@ FocusScope {
         }
 
         function scrollContentY() {
-            return root.presentationMode === "details"
-                    ? detailsScrollMetrics.contentY
-                    : galleryLayout.contentY
+            if (root.presentationMode === "details"
+                    && detailsScrollMetrics.count === galleryLayout.count)
+                return detailsScrollMetrics.contentY
+            return galleryLayout.contentY
         }
 
         function updateSize() {
@@ -2678,7 +3233,10 @@ FocusScope {
         theme: root.theme
         anchors.left: galleryLayout.left
         anchors.right: galleryLayout.right
-        anchors.bottom: galleryLayout.bottom
+        // The viewport keeps a six-pixel breathing room around its tiles.
+        // The horizontal scrollbar is panel chrome, so it must bridge that
+        // inset and sit directly on the panel's bottom edge.
+        anchors.bottom: parent.bottom
         z: 10
         height: visible ? 16 : 0
         visible: !root.customContent && root.presentationMode === "columns"
@@ -2741,13 +3299,19 @@ FocusScope {
             const index = root.navigationTargetForKey(event.key, false)
             if (index >= 0) {
                 chromeTargetIndex = index
+                const keyboardRevealDirection = event.key === Qt.Key_Left
+                        || event.key === Qt.Key_Up ? -1 : 1
                 root.moveCursorWithSelection(
                             index, shiftSelection,
                             event.key === Qt.Key_Up || event.key === Qt.Key_Down,
-                            deferCursorCommit)
+                            deferCursorCommit, false,
+                            keyboardRevealDirection)
             } else if (shiftSelection) {
                 root.moveCursorWithSelection(root.session.currentIndex, true,
-                                             true, false)
+                                             true, false, false,
+                                             event.key === Qt.Key_Left
+                                             || event.key === Qt.Key_Up
+                                             ? -1 : 1)
             }
             event.accepted = true
         } else if (page) {
@@ -2760,11 +3324,13 @@ FocusScope {
                     // Columns owns a discrete virtual page/window rather than
                     // a continuous vertical viewport.
                     root.moveCursorWithSelection(index, shiftSelection, false,
-                                                 deferCursorCommit, false)
+                                                 deferCursorCommit, false,
+                                                 direction)
                 }
             } else {
-                // Details/Icons retain the original raw 7/8-page choreography.
-                // Grid quantizes it to fixed row strides; Masonry chooses real
+                // Details/Icons retain the original 7/8-page choreography;
+                // Details aligns its destination to the row lattice. Grid
+                // quantizes to fixed row strides; Masonry chooses real
                 // variable-height row-band boundaries. All paths preserve the
                 // persistent X/Y probe and keep selection, cursor chrome and
                 // the exact planned viewport destination coupled.
@@ -2775,14 +3341,18 @@ FocusScope {
         } else if (edge) {
             chromeTargetIndex = event.key === Qt.Key_Home
                     ? 0 : galleryLayout.count - 1
+            const keyboardRevealDirection = event.key === Qt.Key_Home
+                    ? -1 : 1
             root.moveCursorWithSelection(
                         chromeTargetIndex,
-                        shiftSelection, false, deferCursorCommit)
+                        shiftSelection, false, deferCursorCommit, false,
+                        keyboardRevealDirection)
             event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             root.cancelCursorChromeTransition()
             root.commitPendingCursor()
-            root.selectIndex(root.session.currentIndex, true)
+            root.selectIndex(root.session.currentIndex, true, false,
+                             event.isAutoRepeat)
             event.accepted = true
         } else if (event.key === Qt.Key_Space || event.key === Qt.Key_Insert) {
             root.cancelCursorChromeTransition()
@@ -2794,7 +3364,7 @@ FocusScope {
             // Match the f4/Far panel contract: Insert marks the current item
             // and advances, while Space only toggles in place.
             if (event.key === Qt.Key_Insert && currentIndex + 1 < galleryLayout.count)
-                root.moveCursor(currentIndex + 1, false, false, false)
+                root.moveCursor(currentIndex + 1, false, false, false, false, 1)
             event.accepted = true
         } else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
             root.cancelCursorChromeTransition()
@@ -2913,7 +3483,15 @@ FocusScope {
                 viewportUpdateTimer.stop()
                 root.viewportUpdatePendingAfterScroll = false
                 root.viewportUpdateEnsuresCursor = false
+                root.viewportUpdateSuppressAnimation = false
                 root.schedulePathViewportPlacement("current-path-changed")
+            } else {
+                // Masonry/Icons/Columns have no dedicated path-placement
+                // flow; they reveal the new folder's initial cursor through
+                // the generic ensureCursor path below. Mark the next such
+                // reveal so it jumps instead of running the 150ms scroll
+                // animation used for ordinary same-folder cursor moves.
+                root.viewportUpdateSuppressAnimation = true
             }
             root.resetCurrentItemCenter(root.session.currentIndex)
             root.selectionAnchorIndex = root.session.currentIndex
@@ -2962,6 +3540,7 @@ FocusScope {
         // keep BrickItem geometry updates synchronous until the new mode,
         // its density and declarative anchors have all settled.
         beginPresentationSwitch()
+        deferDetailsMetricPopulation()
     }
     onShowCursorChanged: {
         if (!showCursor)

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls
 import QtQuick.Controls.impl
@@ -16,15 +17,34 @@ Item {
     // allowing embedded hosts to share their own chrome and content grid.
     property bool backgroundOnHoverOnly: false
     property real leadingInset: 15
+    // Embedded hosts may place the drive selector beside the path control
+    // while keeping the standalone control's original drive icon by default.
+    property bool showDriveIcon: true
     // Hosts may align breadcrumb labels with their ordinary UI typography
     // without changing the editable path field or standalone defaults.
     property real breadcrumbFontPixelSize: 14
+    property alias breadcrumbFont: rootFolder.font
+    property color pathBackgroundColor: Style.pathBackground
     property color pathTextColor: Style.text
     property color pathHoveredColor: Style.pathBackgroundHovered
     property color pathItemHoveredColor: Style.pathItemHovered
     property color pathItemPressedColor: Style.pathItemPressed
+    property url breadcrumbSeparatorIconSource:
+        "qrc:/ZoinGallery/resources/PathSeparator.svg"
     property url localDriveIconSource: "qrc:/ZoinGallery/resources/DriveIcon.svg"
     property url networkDriveIconSource: "qrc:/ZoinGallery/resources/NetworkDriveIcon.svg"
+    readonly property url currentDriveIconSource:
+        isNetworkDrive ? networkDriveIconSource : localDriveIconSource
+    property real devicePixelRatio:
+        pathRoot.Window.window && pathRoot.Window.window.screen
+        ? pathRoot.Window.window.screen.devicePixelRatio : 1.0
+    // ShaderEffectSource currently drops the dynamic breadcrumb subtree when
+    // it contains images served by a QQuickImageProvider. Keep the original
+    // fade mask for resource icons, and use the clipped source directly for
+    // provider-backed icons until those temporary images are removed.
+    property bool breadcrumbMaskEnabled:
+        !String(isNetworkDrive ? networkDriveIconSource
+                               : localDriveIconSource).startsWith("image://")
     // Standalone ZoinGallery supplies canonical '/' paths, while embedded
     // Windows hosts can naturally expose native '\\' paths. Accept both forms
     // before building breadcrumbs and keep '/' as the navigation contract.
@@ -73,7 +93,7 @@ Item {
         color: pathMouse.containsMouse
                ? pathRoot.pathHoveredColor
                : (backgroundOnHoverOnly ? "transparent"
-                                        : Style.pathBackground)
+                                        : pathRoot.pathBackgroundColor)
         radius: 4
     }
 
@@ -106,21 +126,76 @@ Item {
         }
     }
 
+    readonly property real dpr:
+        Math.max(0.5, Number(pathRoot.devicePixelRatio || 1.0))
+    function snap(val) {
+        return Math.round(Number(val || 0) * dpr) / dpr
+    }
+    property real alignmentRevision:
+        pathRoot.Window.window
+        ? pathRoot.Window.window.width + pathRoot.Window.window.height + dpr
+        : width + height + dpr
+    function visualPixelOffsetX(item, geometryRevision) {
+        if (!item || !item.parent)
+            return 0
+        const revision = alignmentRevision + pathRoot.x + pathRoot.y
+                       + Number(geometryRevision || 0)
+        const scenePoint = item.parent.mapToItem(null, item.x, item.y)
+        return snap(scenePoint.x) - scenePoint.x + revision * 0
+    }
+    function visualPixelOffsetY(item, geometryRevision) {
+        if (!item || !item.parent)
+            return 0
+        const revision = alignmentRevision + pathRoot.x + pathRoot.y
+                       + Number(geometryRevision || 0)
+        const scenePoint = item.parent.mapToItem(null, item.x, item.y)
+        return snap(scenePoint.y) - scenePoint.y + revision * 0
+    }
+    readonly property real breadcrumbSeparatorSize: snap(12)
+    readonly property real breadcrumbSeparatorHorizontalPadding: snap(6)
+    readonly property real driveIconLogicalSize: 18
+    readonly property real driveIconSize: snap(driveIconLogicalSize)
+    readonly property real breadcrumbGeometryRevision:
+        alignmentRevision
+        + fixedPart.x + fixedPart.y + fixedPart.width + fixedPart.height
+        + dynamicPart.x + dynamicPart.y + dynamicPart.width + dynamicPart.height
+        + collapsiblePart.x + collapsiblePart.y
+        + collapsiblePart.width + collapsiblePart.height
+
     component FolderDelegate : Item {
         id: folderDelegate
         property alias text: folderText.text
+        property alias font: folderText.font
         property bool needArrow: true
         property int splitIndex: -1
+        readonly property real horizontalLeadingInset:
+            Math.floor(pathRoot.breadcrumbSeparatorHorizontalPadding
+                       * pathRoot.dpr / 2) / pathRoot.dpr
+        readonly property real horizontalTrailingInset:
+            pathRoot.breadcrumbSeparatorHorizontalPadding
+            - horizontalLeadingInset
+        readonly property real geometryRevision:
+            pathRoot.breadcrumbGeometryRevision
+            + x + y + width + height + folder.x + folder.y
+            + folder.width + folder.height + pathRoot.breadcrumbs.length
 
         signal clicked(index: int)
 
-        implicitWidth: folder.width + 11
+        implicitWidth: pathRoot.snap(folder.implicitWidth
+                                     + horizontalLeadingInset
+                                     + horizontalTrailingInset)
         implicitHeight: parent.height
+        // RowLayout is allowed to distribute rounding residue among children.
+        // A breadcrumb's width must instead remain its exact snapped width so
+        // adding the next segment cannot move already-rendered labels.
+        Layout.minimumWidth: implicitWidth
+        Layout.preferredWidth: implicitWidth
+        Layout.maximumWidth: implicitWidth
 
         Rectangle {
             anchors.centerIn: parent
             width: parent.width
-            height: 24
+            height: pathRoot.snap(24)
             color: folderMouse.containsMouse
                    ? (folderMouse.pressed
                       ? pathRoot.pathItemPressedColor
@@ -131,26 +206,40 @@ Item {
 
         Row {
             id: folder
-            anchors.centerIn: parent
-            spacing: 12
+            x: folderDelegate.horizontalLeadingInset
+            y: pathRoot.snap((folderDelegate.height - height) / 2)
+            spacing: pathRoot.breadcrumbSeparatorHorizontalPadding
 
             Text {
                 id: folderText
+                objectName: folderDelegate.objectName + "-text"
                 color: pathRoot.pathTextColor
                 font.pixelSize: pathRoot.breadcrumbFontPixelSize
-                renderType: Text.NativeRendering
+                transform: Translate {
+                    x: pathRoot.visualPixelOffsetX(
+                           folderText, folderDelegate.geometryRevision)
+                    y: pathRoot.visualPixelOffsetY(
+                           folderText, folderDelegate.geometryRevision)
+                }
             }
 
-            IconLabel {
-                anchors {
-                    verticalCenter: parent.verticalCenter
-                    verticalCenterOffset: 1
-                }
+            Image {
+                id: separatorIcon
+                objectName: folderDelegate.objectName + "-separator"
+                // Snap both physical edges so the provider's physical raster
+                // is neither clipped nor resampled at fractional DPR.
+                y: pathRoot.snap((folderDelegate.height - height) / 2 + 1) - folder.y
+                width: pathRoot.breadcrumbSeparatorSize
+                height: pathRoot.breadcrumbSeparatorSize
+                smooth: false
                 visible: needArrow
-                opacity: 0.5
-
-                icon.source: "qrc:/ZoinGallery/resources/PathSeparator.svg"
-                icon.color: pathRoot.pathTextColor
+                source: pathRoot.breadcrumbSeparatorIconSource
+                transform: Translate {
+                    x: pathRoot.visualPixelOffsetX(
+                           separatorIcon, folderDelegate.geometryRevision)
+                    y: pathRoot.visualPixelOffsetY(
+                           separatorIcon, folderDelegate.geometryRevision)
+                }
             }
         }
 
@@ -165,6 +254,8 @@ Item {
 
     RowLayout {
         id: fixedPart
+        objectName: "pathFixedPart"
+        width: implicitWidth
         anchors {
             left: parent.left
             top: parent.top
@@ -173,30 +264,35 @@ Item {
         spacing: 0
 
         Item {
-            Layout.leftMargin: pathRoot.leadingInset
-            Layout.preferredWidth: 24
+            objectName: "pathDriveIconSlot"
+            visible: pathRoot.showDriveIcon
+            Layout.leftMargin: pathRoot.showDriveIcon
+                               ? pathRoot.leadingInset : 0
+            Layout.minimumWidth: pathRoot.showDriveIcon ? 24 : 0
+            Layout.preferredWidth: pathRoot.showDriveIcon ? 24 : 0
+            Layout.maximumWidth: pathRoot.showDriveIcon ? 24 : 0
             Layout.preferredHeight: parent.height
 
-            IconLabel {
-                width: 18
-                height: 18
-                anchors {
-                    verticalCenter: parent.verticalCenter
-                    right: parent.right
-                    rightMargin: 7
-                }
+            Image {
+                id: driveIcon
+                objectName: "pathDriveIcon"
+                visible: pathRoot.showDriveIcon
+                width: pathRoot.driveIconSize
+                height: pathRoot.driveIconSize
+                smooth: false
+                anchors.centerIn: parent
 
-                icon.source: isNetworkDrive
-                             ? pathRoot.networkDriveIconSource
-                             : pathRoot.localDriveIconSource
-                icon.width: 18
-                icon.height: 18
-                icon.color: pathRoot.pathTextColor
+                source: pathRoot.currentDriveIconSource
+                transform: Translate {
+                    x: pathRoot.visualPixelOffsetX(driveIcon)
+                    y: pathRoot.visualPixelOffsetY(driveIcon)
+                }
             }
         }
 
         FolderDelegate {
             id: rootFolder
+            objectName: "pathBreadcrumbRoot"
             visible: !editMode
             text: breadcrumbs[0]
             onClicked: (index) => pathRoot.folderClicked("")
@@ -205,13 +301,17 @@ Item {
 
     Item {
         id: dynamicPart
+        objectName: "pathDynamicPart"
         anchors.left: fixedPart.right
-        width: rectMaskSource.overflowIndicatorVisible ? pathRoot.width - fixedPart.width - 10 : collapsiblePart.width
+        width: rectMaskSource.overflowIndicatorVisible ? pathRoot.width - fixedPart.width - 10 : collapsiblePart.implicitWidth
         height: parent.height
         clip: true
+        visible: !editMode
 
         RowLayout {
             id: collapsiblePart
+            objectName: "pathCollapsiblePart"
+            width: implicitWidth
             anchors {
                 top: parent.top
                 bottom: parent.bottom
@@ -224,6 +324,7 @@ Item {
                 model: breadcrumbs.slice(1)
 
                 FolderDelegate {
+                    objectName: "pathBreadcrumb-" + index
                     text: modelData
                     needArrow: index !== repeater.model.length - 1
                     splitIndex: index
@@ -270,7 +371,7 @@ Item {
         anchors.fill: dynamicPart
         source: ShaderEffectSource {
             sourceItem: dynamicPart
-            hideSource: true
+            hideSource: pathRoot.breadcrumbMaskEnabled
         }
 
         maskEnabled: true
@@ -279,7 +380,7 @@ Item {
         maskThresholdMin: 0.5
         maskSpreadAtMin: 1.0
 
-        visible: !editMode
+        visible: !editMode && pathRoot.breadcrumbMaskEnabled
     }
 
     ZGS.TextField {
@@ -292,8 +393,7 @@ Item {
             right: parent.right
         }
         visible: editMode
-        font.pixelSize: 14
-        renderType: Text.NativeRendering
+        font: pathRoot.breadcrumbFont
 
         leftPadding: 7
         rightPadding: 10

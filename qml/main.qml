@@ -939,7 +939,6 @@ MainWindow {
 
                         text: "ZoinGallery"
                         color: Style.text
-                        renderType: Text.NativeRendering
 
                         opacity: topLevelWindow.active ? 1 : 0.5
                         Behavior on opacity {

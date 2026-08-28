@@ -3,6 +3,7 @@
 #include "MasonryLayoutQuickSearch.h"
 #include "SvgCursor.h"
 
+#include <QAbstractAnimation>
 #include <QParallelAnimationGroup>
 #include <QPropertyAnimation>
 #include <QPropertyAnimation>
@@ -11,10 +12,13 @@
 #include <QQmlProperty>
 #include <QQuickWindow>
 #include <QDir>
+#include <QFileInfo>
+#include <QElapsedTimer>
 #include <QSettings>
 #include <QMap>
 #include <QGuiApplication>
 #include <QFontMetricsF>
+#include <QTimer>
 
 #include <algorithm>
 #include <cmath>
@@ -35,6 +39,12 @@ static bool modelRequestsViewStatePreservation(QAbstractItemModel *model) {
     const auto *requestModel =
         dynamic_cast<const ThumbnailsRequestInterface *>(model);
     return requestModel && requestModel->preserveViewStateOnReset();
+}
+
+bool isScalableVectorImage(const ImageInfo &info) {
+    const QString suffix = QFileInfo(info.path).suffix();
+    return suffix.compare(QStringLiteral("svg"), Qt::CaseInsensitive) == 0
+        || suffix.compare(QStringLiteral("svgz"), Qt::CaseInsensitive) == 0;
 }
 
 namespace {
@@ -203,9 +213,17 @@ void MasonryLayout::componentComplete() {
     QQuickItem::componentComplete();
 
     connect(this, &MasonryLayout::widthChanged,
-            this, [this]() { rewrap(); });
+            this, [this]() { requestRewrap(); });
 
     connect(this, &MasonryLayout::heightChanged, this, [&] () {
+        if (_layoutUpdateDepth > 0) {
+            // The outer f4 Details header changes this height in the same
+            // transaction as presentationMode/density. Recompute against the
+            // final viewport once instead of laying out the outgoing mode.
+            _layoutUpdateNeedsScrollRefresh = true;
+            requestRewrap(false);
+            return;
+        }
         if (_presentationMode == Columns) {
             rewrap(false);
             updateNeedScroll();
@@ -227,6 +245,11 @@ void MasonryLayout::componentComplete() {
     // folders have no later metadata change to trigger another layout pass, so
     // ensure the already-populated model is wrapped once at its completed size.
     rewrap(false);
+}
+
+void MasonryLayout::updatePolish() {
+    QQuickItem::updatePolish();
+    flushDeferredDelegateRefresh();
 }
 
 QQuickItem *MasonryLayout::itemAt(qreal x, qreal y) const {
@@ -324,39 +347,47 @@ QRectF MasonryLayout::indexPreviewGeometry(int index) const {
 
 QString MasonryLayout::indexImageIdUrl(int index) const {
     if (index >= 0 && index < _bricks.size()) {
-        QString imageIdUrl;
-        if (!_bricks[index].image->imageIdUrl().isEmpty()) {
-            imageIdUrl = _bricks[index].image->imageIdUrl();
-        }
-        return imageIdUrl;
+        ImageFile *image = const_cast<MasonryLayout *>(this)
+                               ->materializeImageForIndex(index);
+        return image ? image->imageIdUrl() : QString();
     }
     return QString();
 }
 
 QString MasonryLayout::indexText(int index) const {
     if (index >= 0 && index < _bricks.size()) {
-        return _bricks[index].image->fileName();
+        if (!_bricks[index].modelText.isEmpty()) {
+            return _bricks[index].modelText;
+        }
+        ImageFile *image = const_cast<MasonryLayout *>(this)
+                               ->materializeImageForIndex(index);
+        return image ? image->fileName() : QString();
     }
     return QString();
 }
 
 QString MasonryLayout::indexFullPath(int index) const {
     if (index >= 0 && index < _bricks.size()) {
-        return QDir::toNativeSeparators(_bricks[index].image->fullPath());
+        return QDir::toNativeSeparators(brickPath(index));
     }
     return QString();
 }
 
 QSize MasonryLayout::indexOriginalSize(int index) const {
     if (index >= 0 && index < _bricks.size()) {
+        if (_bricks[index].modelKnownSize.isValid()) {
+            return _bricks[index].modelKnownSize;
+        }
         return _bricks[index].originalSize.toSize();
     }
     return QSize();
 }
 
 QVariantMap MasonryLayout::indexExif(int index) const {
-    if (index >= 0 && index < _bricks.size() && _bricks[index].image) {
-        return _bricks[index].image->info().exif;
+    if (index >= 0 && index < _bricks.size()) {
+        ImageFile *image = const_cast<MasonryLayout *>(this)
+                               ->materializeImageForIndex(index);
+        return image ? image->info().exif : QVariantMap();
     }
     return QVariantMap();
 }
@@ -364,7 +395,7 @@ QVariantMap MasonryLayout::indexExif(int index) const {
 int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
     int nextIndex = _currentIndex;
     for (int i = _currentIndex + (forward ? 1 : -1); i >= 0 && i < _bricks.size(); i += (forward ? 1 : -1)) {
-        if (_bricks[i].image->isImage()) {
+        if (brickIsImage(i)) {
             nextIndex = i;
             if (!moveToEnd) {
                 break;
@@ -388,6 +419,12 @@ int MasonryLayout::pageIndex(
 
 QVariantMap MasonryLayout::navigationTarget(
     int index, NavigationDirection direction, bool page) const {
+    if (_lightweightRewrapPending) {
+        // Metadata relayout is frame-gated during background completion, but
+        // keyboard navigation must never target stale row geometry. Treat an
+        // interactive navigation query as a synchronous consistency barrier.
+        const_cast<MasonryLayout *>(this)->flushLightweightRewrap();
+    }
     QVariantMap result{
         {QStringLiteral("targetIndex"), index},
         {QStringLiteral("windowTopIndex"), _windowTopIndex},
@@ -740,19 +777,15 @@ void MasonryLayout::preserveCurrentItemPositionForNextModelReset() {
         return;
     }
 
-    if (_currentIndex >= 0 && _currentIndex < _bricks.size() &&
-        _bricks[_currentIndex].image) {
-        _preservedCurrentItemFullPath =
-            _bricks[_currentIndex].image->fullPath();
+    if (_currentIndex >= 0 && _currentIndex < _bricks.size()) {
+        _preservedCurrentItemFullPath = brickPath(_currentIndex);
         _preservedCurrentFallbackIndex = _currentIndex;
     }
 
     const int anchorIndex = _topItem;
-    if (anchorIndex >= 0 && anchorIndex < _bricks.size() &&
-        _bricks[anchorIndex].image) {
+    if (anchorIndex >= 0 && anchorIndex < _bricks.size()) {
         const MasonryBrick &anchorBrick = _bricks[anchorIndex];
-        _preservedViewportAnchorFullPath =
-            anchorBrick.image->fullPath();
+        _preservedViewportAnchorFullPath = brickPath(anchorIndex);
         _preservedViewportAnchorFallbackIndex = anchorIndex;
         _preservedViewportAnchorOffset = anchorBrick.y - _contentY;
     }
@@ -959,6 +992,29 @@ int MasonryLayout::rowsPerColumn() const {
         usableHeight / qMax<qreal>(1.0, effectiveTargetExtent()))));
 }
 
+qreal MasonryLayout::columnStride() const {
+    const int columns = effectiveColumnCount();
+    const qreal canvasWidth = qMax<qreal>(
+        0, width() - _paddingLeft - _paddingRight);
+    if (columns <= 0 || canvasWidth <= 0) {
+        return 0;
+    }
+
+    // Equal mathematical thirds do not generally land on device pixels.
+    // Rounding each QRectF independently then produces alternating widths
+    // and one-pixel phase changes while the viewport moves. Choose one
+    // integral physical-pixel pitch for every column instead. Any remainder
+    // (at most columnCount-1 pixels) stays at the far right of the canvas, so
+    // all cells and all horizontal scroll steps remain strictly identical.
+    const qreal dpr = qMax<qreal>(0.01, devicePixelRatio());
+    const qreal physicalCanvas = std::floor(canvasWidth * dpr + 0.000001);
+    const qreal physicalStride = std::floor(physicalCanvas / columns);
+    if (physicalStride < 1) {
+        return canvasWidth / columns;
+    }
+    return physicalStride / dpr;
+}
+
 int MasonryLayout::maximumWindowTopIndex() const {
     if (_presentationMode != Columns) {
         return 0;
@@ -970,9 +1026,7 @@ int MasonryLayout::maximumWindowTopIndex() const {
 
 qreal MasonryLayout::contentYForWindowTopIndex(int index) const {
     const int rows = rowsPerColumn();
-    const qreal canvasWidth = qMax<qreal>(
-        0, width() - _paddingLeft - _paddingRight);
-    const qreal cellWidth = canvasWidth / effectiveColumnCount();
+    const qreal cellWidth = columnStride();
     const int firstColumn = qBound(0, index, maximumWindowTopIndex()) / rows;
     return qBound<qreal>(0, firstColumn * cellWidth,
                          maximumContentOffset());
@@ -980,9 +1034,7 @@ qreal MasonryLayout::contentYForWindowTopIndex(int index) const {
 
 int MasonryLayout::windowTopIndexForContentY(qreal contentY) const {
     const int rows = rowsPerColumn();
-    const qreal canvasWidth = qMax<qreal>(
-        0, width() - _paddingLeft - _paddingRight);
-    const qreal cellWidth = canvasWidth / effectiveColumnCount();
+    const qreal cellWidth = columnStride();
     if (cellWidth <= 0) {
         return 0;
     }
@@ -1042,8 +1094,7 @@ void MasonryLayout::calcFixedLayout() {
         // The configured count controls how many columns fit in the viewport;
         // it does not divide the catalog into atomic virtual pages.
         const int rows = rowsPerColumn();
-        const qreal cellWidth = columns > 0
-            ? canvasWidth / columns : canvasWidth;
+        const qreal cellWidth = columnStride();
         for (int index = 0; index < _bricks.size(); ++index) {
             MasonryBrick &brick = _bricks[index];
             const int rowInColumn = index % rows;
@@ -1104,7 +1155,7 @@ void MasonryLayout::calcFixedLayout() {
         for (int index = 0; index < _bricks.size(); ++index) {
             MasonryBrick &brick = _bricks[index];
             const QString sourceText = brick.image
-                ? brick.image->text() : QString();
+                ? brick.image->text() : brick.modelText;
             const IconLabelLayout label = textMeasurer.layout(
                 sourceText, labelWidth);
             brick.iconLabelText = label.text;
@@ -1154,6 +1205,29 @@ void MasonryLayout::calcFixedLayout() {
 
 void MasonryLayout::rebuildLayoutBands() {
     _layoutBands.clear();
+    if (_presentationMode == Details) {
+        // Details has exactly one brick per monotonically increasing row.
+        // Avoid building a QMap with hundreds of one-element lists and then
+        // sorting values that are already in vertical order.
+        _layoutBands.reserve(_bricks.size());
+        for (int index = 0; index < _bricks.size(); ++index) {
+            const MasonryBrick &brick = _bricks.at(index);
+            const QRectF geometry = brick.geometry();
+            if (!geometry.isValid() || geometry.isEmpty()) {
+                continue;
+            }
+            LayoutBand band;
+            band.row = brick.row;
+            band.top = geometry.top();
+            band.bottom = geometry.bottom();
+            band.indexes.append(index);
+            _layoutBands.append(std::move(band));
+        }
+        ++_layoutRevision;
+        emit layoutRevisionChanged();
+        emit layoutBandsChanged();
+        return;
+    }
     QMap<int, LayoutBand> byRow;
     int firstIndex = 0;
     int endIndex = _bricks.size();
@@ -1229,6 +1303,12 @@ QList<int> MasonryLayout::indexesForVerticalRange(
 }
 
 void MasonryLayout::rewrap(bool animate) {
+    const bool traceReset = qEnvironmentVariableIsSet(
+        "F4_NAV_BENCHMARK_TRACE");
+    QElapsedTimer rewrapTimer;
+    if (traceReset) {
+        rewrapTimer.start();
+    }
    // qDebug() << "rewrap" << width() << _bricks.size();
    //  if (width() <= 0) {
    //     qDebug() << "no rewrap, zero width";
@@ -1281,16 +1361,42 @@ void MasonryLayout::rewrap(bool animate) {
             const int rows = rowsPerColumn();
             const int totalColumns = rows > 0
                 ? (_bricks.size() + rows - 1) / rows : 0;
-            setContentHeight(_paddingLeft + totalColumns
-                             * (qMax<qreal>(0, width() - _paddingLeft
-                                           - _paddingRight) / columns)
-                             + _paddingRight);
+            const qreal stride = columnStride();
+            const qreal canvasWidth = qMax<qreal>(
+                0, width() - _paddingLeft - _paddingRight);
+            const qreal trailingCanvasRemainder = qMax<qreal>(
+                0, canvasWidth - columns * stride);
+            // The integral physical-pixel stride can leave one or two pixels
+            // after the visible columns. Keep that remainder at the trailing
+            // edge of the horizontal content too. Otherwise
+            // contentHeight-width shortens the terminal offset by precisely
+            // the remainder and shifts the whole last screen to the right.
+            setContentHeight(_paddingLeft + totalColumns * stride
+                             + trailingCanvasRemainder + _paddingRight);
         }
         else {
             virtualRows = columns > 0
                 ? (_bricks.size() + columns - 1) / columns : 0;
         }
-        if (_presentationMode != Icons && _presentationMode != Columns) {
+        if (_presentationMode == Details) {
+            const qreal usableViewportHeight = qMax<qreal>(
+                0, height() - _paddingTop - _paddingBottom);
+            const int completeVisibleRows = int(std::floor(
+                usableViewportHeight / extent + 0.000000001));
+            const qreal trailingViewportRemainder = completeVisibleRows > 0
+                ? qMax<qreal>(
+                    0, usableViewportHeight - completeVisibleRows * extent)
+                : 0;
+
+            // Keep the terminal scroll position on the same row lattice as
+            // every keyboard reveal. Without the viewport's fractional row
+            // remainder at the trailing edge, contentHeight-height clamps
+            // the final screen between two rows and shifts its top row down.
+            setContentHeight(_paddingTop + virtualRows * extent
+                             + trailingViewportRemainder + _paddingBottom);
+        }
+        else if (_presentationMode != Icons
+                 && _presentationMode != Columns) {
             setContentHeight(_paddingTop + virtualRows * extent +
                              _paddingBottom);
         }
@@ -1301,7 +1407,11 @@ void MasonryLayout::rewrap(bool animate) {
             _contentY = qBound<qreal>(
                 0, _contentY, qMax<qreal>(0, _contentHeight - height()));
         }
+        const qint64 extentCompletedNs = traceReset
+            ? rewrapTimer.nsecsElapsed() : 0;
         calcFixedLayout();
+        const qint64 layoutCompletedNs = traceReset
+            ? rewrapTimer.nsecsElapsed() : 0;
         if (_presentationMode == Icons) {
             const qreal iconContentHeight = _bricks.isEmpty()
                 ? 0
@@ -1311,6 +1421,8 @@ void MasonryLayout::rewrap(bool animate) {
                 0, _contentY, qMax<qreal>(0, _contentHeight - height()));
         }
         rebuildLayoutBands();
+        const qint64 bandsCompletedNs = traceReset
+            ? rewrapTimer.nsecsElapsed() : 0;
         if (viewportAnchorIndex >= 0 &&
             viewportAnchorIndex < _bricks.size()) {
             const QRectF anchorGeometry =
@@ -1329,7 +1441,11 @@ void MasonryLayout::rewrap(bool animate) {
             updateWindowTopFromContentY();
         }
         positionViewport();
+        const qint64 viewportCompletedNs = traceReset
+            ? rewrapTimer.nsecsElapsed() : 0;
         updateProperties(animate);
+        const qint64 propertiesCompletedNs = traceReset
+            ? rewrapTimer.nsecsElapsed() : 0;
         // A strategy switch can preserve the same numeric content height
         // while changing from an embedded Masonry surface (which owns no
         // scrollbar) to a fixed viewport. Re-evaluate overflow even when
@@ -1337,6 +1453,24 @@ void MasonryLayout::rewrap(bool animate) {
         updateNeedScroll();
         if (!qFuzzyCompare(oldContentY, _contentY)) {
             emit contentYChanged();
+        }
+        if (traceReset) {
+            const qint64 completedNs = rewrapTimer.nsecsElapsed();
+            qInfo().nospace()
+                << "F4_NAV_BENCHMARK_TRACE masonry.rewrap rows="
+                << _bricks.size() << " mode="
+                << static_cast<int>(_presentationMode)
+                << " extentNs=" << extentCompletedNs
+                << " layoutNs="
+                << (layoutCompletedNs - extentCompletedNs)
+                << " bandsNs="
+                << (bandsCompletedNs - layoutCompletedNs)
+                << " viewportNs="
+                << (viewportCompletedNs - bandsCompletedNs)
+                << " propertiesNs="
+                << (propertiesCompletedNs - viewportCompletedNs)
+                << " tailNs=" << (completedNs - propertiesCompletedNs)
+                << " totalNs=" << completedNs;
         }
         return;
     }
@@ -1575,7 +1709,15 @@ QString rectToString(QRectF rect) {
 }
 
 void MasonryLayout::updateProperties(bool animate) {
+    const bool traceReset = qEnvironmentVariableIsSet(
+        "F4_NAV_BENCHMARK_TRACE");
+    QElapsedTimer propertiesTimer;
+    if (traceReset) {
+        propertiesTimer.start();
+    }
     updateViewportIndexSets();
+    const qint64 viewportSetsCompletedNs = traceReset
+        ? propertiesTimer.nsecsElapsed() : 0;
 
     QList<int> delegateIndexes;
     if (_presentationMode == Columns) {
@@ -1594,6 +1736,27 @@ void MasonryLayout::updateProperties(bool animate) {
     }
     const QSet<int> delegateIndexSet(delegateIndexes.cbegin(),
                                      delegateIndexes.cend());
+    const qint64 indexesCompletedNs = traceReset
+        ? propertiesTimer.nsecsElapsed() : 0;
+    if (_delegateRefreshPending) {
+        // A host-controlled path replacement keeps this item fully transparent
+        // until catalog and cursor placement have both completed. Preserve the
+        // old visual slots for this event-stack, then bind the final current
+        // model/window in updatePolish(), immediately before scene-graph sync.
+        // This stores no prior catalog: only the already-live BrickItems are
+        // retained across the one synchronous reset transaction.
+        if (traceReset) {
+            const qint64 completedNs = propertiesTimer.nsecsElapsed();
+            qInfo().nospace()
+                << "F4_NAV_BENCHMARK_TRACE masonry.properties rows="
+                << _bricks.size() << " delegates=" << delegateIndexes.size()
+                << " deferred=1 viewportSetsNs="
+                << viewportSetsCompletedNs << " indexesNs="
+                << (indexesCompletedNs - viewportSetsCompletedNs)
+                << " totalNs=" << completedNs;
+        }
+        return;
+    }
     QSet<BrickItem *> itemsToHide;
     const QSet<int> oldActiveIndexes = _activeBrickIndexes;
     for (const int index : oldActiveIndexes) {
@@ -1608,25 +1771,106 @@ void MasonryLayout::updateProperties(bool animate) {
         }
         _activeBrickIndexes.remove(index);
     }
+    const qint64 retiredCompletedNs = traceReset
+        ? propertiesTimer.nsecsElapsed() : 0;
 
+    int reboundCount = 0;
+    int createdOrPoppedCount = 0;
+    int retainedSlotCount = 0;
+    int snapshotCount = 0;
+    qint64 delegateAcquireNs = 0;
+    qint64 visualSnapshotApplyNs = 0;
+    qint64 delegateBindingNs = 0;
+    qint64 delegateLayoutMetaNs = 0;
+    qint64 delegateGeometryNs = 0;
+    qint64 delegateVisibilityNs = 0;
     for (const int i : delegateIndexes) {
         if (i >= 0 && i < _bricks.size() &&
             _bricks[i].normalizedSize.isValid() &&
             !_bricks[i].normalizedSize.isEmpty()) {
+            qint64 phaseStartedNs = traceReset
+                ? propertiesTimer.nsecsElapsed() : 0;
+            // ImageFile is the QML delegate/viewer façade. Keep construction
+            // bounded to active visual rows; fixed Details geometry above was
+            // computed entirely from lightweight catalog roles.
+            // Snapshot-backed rows that become active during the post-swap
+            // queue (metadata rewrap, scroll, resize) must join that same
+            // bounded queue. Eager materialization here would turn one such
+            // updateProperties() pass back into 49 synchronous QObject/QML
+            // rebinds.
+            const bool deferMissingFacade = _visualSnapshotRole >= 0
+                && _delegateMaterializationPending
+                && !_bricks[i].image;
+            ImageFile *const image = (_visualSnapshotRefresh
+                                      || deferMissingFacade)
+                ? _bricks[i].image : materializeImageForIndex(i);
             bool itemPopped = false;
             if (!_bricks[i].item) {
-                itemPopped = true;
-                if (isEmbedded()) {
-                    // qDebug() << "POP ITEM" << i << dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem();
+                BrickItem *const retained = _resetSlotItems.take(i);
+                if (retained) {
+                    _bricks[i].item = retained;
+                    _freeBrickItems.remove(retained);
+                    _usedBrickItems.insert(retained);
+                    ++retainedSlotCount;
                 }
-                _bricks[i].item = popBrickItem();
-                _bricks[i].item->setProperty("model", QVariant::fromValue(_bricks[i].image));
-                _bricks[i].item->setProperty("viewIndex", i);
-                _bricks[i].item->setProperty("sourceIndex", _bricks[i].image ? _bricks[i].image->index() : -1);
+                else {
+                    itemPopped = true;
+                    ++createdOrPoppedCount;
+                    if (isEmbedded()) {
+                        // qDebug() << "POP ITEM" << i << dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem();
+                    }
+                    _bricks[i].item = popBrickItem();
+                }
             }
-            else {
-                _bricks[i].item->setProperty("viewIndex", i);
-                _bricks[i].item->setProperty("sourceIndex", _bricks[i].image ? _bricks[i].image->index() : -1);
+            BrickItem *const item = _bricks[i].item;
+            if (traceReset) {
+                const qint64 now = propertiesTimer.nsecsElapsed();
+                delegateAcquireNs += now - phaseStartedNs;
+                phaseStartedNs = now;
+            }
+            if (_visualSnapshotRole >= 0) {
+                item->setVisualRow(visualSnapshotForIndex(i));
+                ++snapshotCount;
+            }
+            if (traceReset) {
+                const qint64 now = propertiesTimer.nsecsElapsed();
+                visualSnapshotApplyNs += now - phaseStartedNs;
+                phaseStartedNs = now;
+            }
+            if (_visualSnapshotRole >= 0) {
+                if (_visualSnapshotRefresh) {
+                    item->setVisualFacadeReady(false);
+                    // A retained slot can still carry the QObject from the
+                    // previous directory. Static bindings are snapshot-owned
+                    // now, so clearing this stale dynamic facade invalidates
+                    // only name-search/thumbnail bindings and guarantees that
+                    // first-frame actions can never observe the old row.
+                    if (item->property("model").value<ImageFile *>()) {
+                        item->setProperty("model", QVariant());
+                    }
+                }
+            }
+            if (!_visualSnapshotRefresh
+                && item->property("model").value<ImageFile *>() != image) {
+                item->setProperty(
+                    "model", QVariant::fromValue(image));
+                ++reboundCount;
+            }
+            if (!_visualSnapshotRefresh) {
+                item->setVisualFacadeReady(image != nullptr);
+            }
+            if (item->property("viewIndex").toInt() != i) {
+                item->setProperty("viewIndex", i);
+            }
+            const int sourceIndex = image
+                ? image->index() : _bricks[i].modelSourceIndex;
+            if (item->property("sourceIndex").toInt() != sourceIndex) {
+                item->setProperty("sourceIndex", sourceIndex);
+            }
+            if (traceReset) {
+                const qint64 now = propertiesTimer.nsecsElapsed();
+                delegateBindingNs += now - phaseStartedNs;
+                phaseStartedNs = now;
             }
             _bricks[i].item->setRowColumn(_bricks[i].row, _bricks[i].column);
             _bricks[i].item->setIconLabelText(
@@ -1634,14 +1878,19 @@ void MasonryLayout::updateProperties(bool animate) {
             _bricks[i].item->setPreviewRect(
                 _bricks[i].previewGeometry.translated(
                     -_bricks[i].x, -_bricks[i].y));
+            if (traceReset) {
+                const qint64 now = propertiesTimer.nsecsElapsed();
+                delegateLayoutMetaNs += now - phaseStartedNs;
+                phaseStartedNs = now;
+            }
 
-            // The classic Details view deliberately derives a fractional row
-            // extent from the host font metrics (for example 24.2 logical
-            // pixels in f4).  Snapping each row independently makes that
-            // fractional phase accumulate as visible drift.  Other modes keep
-            // their established pixel-snapped delegate geometry.
+            // Details derives a fractional row extent from host font metrics.
+            // Columns derives one integral *physical*-pixel stride, which can
+            // likewise be fractional in logical coordinates at a non-integer
+            // DPR. Snapping either QRectF independently would reintroduce the
+            // cumulative phase drift these layouts are designed to avoid.
             const bool preserveFractionalGeometry =
-                _presentationMode == Details;
+                _presentationMode == Details || _presentationMode == Columns;
             const bool geometryDiffers = preserveFractionalGeometry
                 ? _bricks[i].item->geometry() != _bricks[i].geometry()
                 : roundRect(_bricks[i].item->geometry()) !=
@@ -1668,8 +1917,16 @@ void MasonryLayout::updateProperties(bool animate) {
                         !preserveFractionalGeometry);
                 }
             }
+            if (traceReset) {
+                const qint64 now = propertiesTimer.nsecsElapsed();
+                delegateGeometryNs += now - phaseStartedNs;
+                phaseStartedNs = now;
+            }
 
             _activeBrickIndexes.insert(i);
+            if (deferMissingFacade) {
+                enqueueDeferredDelegateMaterialization(i);
+            }
 
             if (itemsToHide.contains(_bricks[i].item)) {
                 itemsToHide.remove(_bricks[i].item);
@@ -1679,14 +1936,54 @@ void MasonryLayout::updateProperties(bool animate) {
                     _bricks[i].item->setVisible(true);
                 }
             }
+            if (traceReset) {
+                delegateVisibilityNs += propertiesTimer.nsecsElapsed()
+                    - phaseStartedNs;
+            }
         }
     }
+    const qint64 delegatesCompletedNs = traceReset
+        ? propertiesTimer.nsecsElapsed() : 0;
+
+    // Slots outside the new visible window are no longer part of the active
+    // catalog. Release them only after every reusable row has been claimed.
+    // This is still inside the synchronous reset; no previous catalog state
+    // survives the call.
+    releaseResetSlotItems();
 
     for (BrickItem *item : itemsToHide) {
         item->setVisible(false);
+        item->setVisualRow({});
+        item->setVisualFacadeReady(false);
         item->setProperty("model", QVariant());
         item->setProperty("viewIndex", -1);
         item->setProperty("sourceIndex", -1);
+    }
+    if (traceReset) {
+        const qint64 completedNs = propertiesTimer.nsecsElapsed();
+        qInfo().nospace()
+            << "F4_NAV_BENCHMARK_TRACE masonry.properties rows="
+            << _bricks.size() << " delegates=" << delegateIndexes.size()
+            << " popped=" << createdOrPoppedCount
+            << " retainedSlots=" << retainedSlotCount
+            << " rebound=" << reboundCount
+            << " snapshots=" << snapshotCount
+            << " snapshotOnly=" << (_visualSnapshotRefresh ? 1 : 0)
+            << " viewportSetsNs=" << viewportSetsCompletedNs
+            << " indexesNs="
+            << (indexesCompletedNs - viewportSetsCompletedNs)
+            << " retiredNs="
+            << (retiredCompletedNs - indexesCompletedNs)
+            << " delegatesNs="
+            << (delegatesCompletedNs - retiredCompletedNs)
+            << " acquireNs=" << delegateAcquireNs
+            << " visualNs=" << visualSnapshotApplyNs
+            << " bindingNs=" << delegateBindingNs
+            << " layoutMetaNs=" << delegateLayoutMetaNs
+            << " geometryNs=" << delegateGeometryNs
+            << " visibilityNs=" << delegateVisibilityNs
+            << " leftoversNs=" << (completedNs - delegatesCompletedNs)
+            << " totalNs=" << completedNs;
     }
 }
 
@@ -1755,6 +2052,19 @@ void MasonryLayout::planThumbnailForIndex(
     }
     MasonryBrick &brick = _bricks[index];
     ImageFile *image = brick.image;
+    if (!image && canUseLightweightRows()) {
+        // The layout intentionally keeps non-delegate rows as POD-only
+        // bricks. Once metadata makes an overscan image decodable, create its
+        // ImageFile facade here rather than requiring a viewport-set change
+        // (or materializing the whole catalog during model reset).
+        if (_delegateRefreshPending || _visualSnapshotRefresh
+            || _delegateMaterializationPending
+            || !brick.modelIsImage || !brick.modelKnownSize.isValid()
+            || brick.modelKnownSize.isEmpty()) {
+            return;
+        }
+        image = materializeImageForIndex(index);
+    }
     if (!image || !image->isImage() || !image->fullSize().isValid()) {
         return;
     }
@@ -1850,10 +2160,17 @@ QSize MasonryLayout::previewDecodeTargetSize(
     // PreserveAspectFit, so decode the smallest aspect-preserving frame that
     // covers that fitted surface instead of the old Grid crop tier.
     qreal scale = qMin(horizontalScale, verticalScale);
-    // Thumbnail decoders never need to synthesize pixels. If the native
-    // image is smaller than the preview, publish native dimensions and let
-    // the scene graph perform the unavoidable display upscale.
-    scale = qBound<qreal>(0, scale, 1.0);
+    // Raster thumbnails never need synthesized pixels: if the native image
+    // is smaller than the preview, publish native dimensions and let the
+    // scene graph perform the unavoidable display upscale. SVG metadata is
+    // different: its width/height is only the authoring viewport (commonly
+    // 16 or 24 px), not a native pixel limit. Clamping SVG here used to
+    // publish a tiny raster which was then enlarged by QML in every panel
+    // mode. Keep the requested physical preview size for scalable vectors.
+    if (!isScalableVectorImage(brick.image->info())) {
+        scale = qMin<qreal>(scale, 1.0);
+    }
+    scale = qMax<qreal>(0, scale);
     if (scale <= 0) {
         return {};
     }
@@ -2049,6 +2366,113 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
     int changedIndexes = indexTo - index;
     if (index >= 0 && index < _bricks.size() && indexTo >= 0 &&
         indexTo < _bricks.size()) {
+        const bool semanticRolesChanged = roles.isEmpty()
+            || roles.contains(FileListModel::IsImageRole)
+            || roles.contains(FileListModel::FolderRole);
+        const bool pathRoleChanged = _localPathRole >= 0
+            && (roles.isEmpty() || roles.contains(_localPathRole));
+        const bool textRoleChanged = _entryNameRole >= 0
+            && (roles.isEmpty() || roles.contains(_entryNameRole));
+        const bool sizeRoleChanged = roles.isEmpty()
+            || roles.contains(FileListModel::ImageFullSizeRole)
+            || (_knownImageSizeRole >= 0
+                && roles.contains(_knownImageSizeRole));
+        if (semanticRolesChanged || pathRoleChanged || textRoleChanged
+            || sizeRoleChanged) {
+            for (int row = index; row <= indexTo; ++row) {
+                const QModelIndex modelIndex = _model->index(row, 0);
+                if (semanticRolesChanged) {
+                    _bricks[row].modelIsImage = modelIndex.data(
+                        FileListModel::IsImageRole).toBool();
+                    _bricks[row].modelIsFolder = modelIndex.data(
+                        FileListModel::FolderRole).toBool();
+                }
+                if (pathRoleChanged) {
+                    _bricks[row].modelPath = modelIndex.data(
+                        _localPathRole).toString();
+                }
+                if (textRoleChanged) {
+                    _bricks[row].modelText = modelIndex.data(
+                        _entryNameRole).toString();
+                }
+                if (sizeRoleChanged) {
+                    _bricks[row].modelKnownSize = modelIndex.data(
+                        FileListModel::ImageFullSizeRole).toSize();
+                }
+                if (canUseLightweightRows()
+                    && (semanticRolesChanged || sizeRoleChanged)) {
+                    QSize layoutSize = _bricks[row].modelKnownSize;
+                    bool lineBreakAfter = false;
+                    if (layoutSize.isEmpty()) {
+                        if (_bricks[row].modelIsFolder && _listView) {
+                            lineBreakAfter = true;
+                            layoutSize = QSize(0, listRowHeight());
+                        }
+                        else {
+                            layoutSize = GridView_Folder.toSize();
+                        }
+                    }
+                    _bricks[row].originalSize = layoutSize;
+                    _bricks[row].lineBreakAfter = lineBreakAfter;
+                }
+            }
+            if (semanticRolesChanged) {
+                const int previousImageCount = _imageCount;
+                _imageCount = 0;
+                for (int row = 0; row < _bricks.size(); ++row) {
+                    if (brickIsImage(row)) {
+                        ++_imageCount;
+                    }
+                }
+                if (_imageCount != previousImageCount) {
+                    emit imageCountChanged();
+                }
+                updateCurrentImageIndex();
+            }
+        }
+        const bool imageUrlOnly = roles.size() == 1
+            && roles.contains(FileListModel::ImageIdUrlRole);
+        if (_visualSnapshotRole >= 0) {
+            for (int row = index; row <= indexTo; ++row) {
+                if (_activeBrickIndexes.contains(row)) {
+                    BrickItem *item = _bricks[row].item;
+                    // A current, generation-checked facade exposes its
+                    // notifying thumbnail URL directly to QML. Avoid making
+                    // a URL-only cache event invalidate every static field in
+                    // this otherwise immutable first-frame snapshot.
+                    if (!imageUrlOnly || !item
+                        || !item->visualFacadeReady()) {
+                        updateVisualSnapshotForIndex(row);
+                    }
+                }
+            }
+        }
+        if (_presentationMode == Masonry && canUseLightweightRows()) {
+            if (semanticRolesChanged || sizeRoleChanged) {
+                // Header results can arrive for offscreen rows without an
+                // ImageFile facade. Fold a synchronous decoder batch into one
+                // full-catalog rewrap; otherwise per-image header completions
+                // produce O(image-count * catalog-size) GUI-thread work.
+                if (roles.isEmpty()) {
+                    flushLightweightRewrap();
+                }
+                else {
+                    scheduleLightweightRewrap();
+                }
+            }
+            if (roles.isEmpty()
+                || roles.contains(FileListModel::ImageFullSizeRole)
+                || roles.contains(FileListModel::ImageIdUrlRole)) {
+                QSet<int> candidates;
+                for (int row = index; row <= indexTo; ++row) {
+                    if (_overscanIndexSet.contains(row)) {
+                        candidates.insert(row);
+                    }
+                }
+                planViewportThumbnails(candidates);
+            }
+            return;
+        }
         if (_presentationMode != Masonry) {
             if (roles.isEmpty() ||
                 roles.contains(FileListModel::ImageFullSizeRole)) {
@@ -2160,7 +2584,8 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             QSize folderViewSize = _listView ? QSize(0, 0) : GridView_Folder.toSize();
             if (_bricks[index].originalSize != folderViewSize) {
                 _bricks[index].originalSize = folderViewSize;
-                rewrap(!_bricks[index].image->info().isCached);
+                rewrap(!_bricks[index].image ||
+                       !_bricks[index].image->info().isCached);
             }
         }
         if (roles.contains(FileListModel::TimeToFlushRole)) {
@@ -2300,6 +2725,187 @@ MasonryLayout::MasonryBrick MasonryLayout::brickForImage(
     };
 }
 
+void MasonryLayout::updateModelRoleCache() {
+    _entryIdRole = -1;
+    _sourceIndexRole = -1;
+    _localPathRole = -1;
+    _entryNameRole = -1;
+    _knownImageSizeRole = -1;
+    _visualSnapshotRole = -1;
+    if (!_model) {
+        return;
+    }
+    const QHash<int, QByteArray> roles = _model->roleNames();
+    for (auto role = roles.cbegin(); role != roles.cend(); ++role) {
+        if (role.value() == QByteArrayLiteral("entryId")) {
+            _entryIdRole = role.key();
+        }
+        else if (role.value() == QByteArrayLiteral("sourceIndex")) {
+            _sourceIndexRole = role.key();
+        }
+        else if (role.value() == QByteArrayLiteral("localPath")) {
+            _localPathRole = role.key();
+        }
+        else if (role.value() == QByteArrayLiteral("entryName")) {
+            _entryNameRole = role.key();
+        }
+        else if (role.value() == QByteArrayLiteral("knownImageSize")) {
+            _knownImageSizeRole = role.key();
+        }
+        else if (role.value() == QByteArrayLiteral("visualSnapshot")) {
+            _visualSnapshotRole = role.key();
+        }
+    }
+}
+
+QVariantMap MasonryLayout::visualSnapshotForIndex(int index) const {
+    if (!_model || _visualSnapshotRole < 0 || index < 0
+        || index >= _model->rowCount()) {
+        return {};
+    }
+    return _model->index(index, 0).data(_visualSnapshotRole).toMap();
+}
+
+void MasonryLayout::updateVisualSnapshotForIndex(int index) {
+    if (_visualSnapshotRole < 0 || index < 0 || index >= _bricks.size()) {
+        return;
+    }
+    BrickItem *item = _bricks[index].item;
+    if (!item) {
+        return;
+    }
+    item->setVisualRow(visualSnapshotForIndex(index));
+}
+
+bool MasonryLayout::canUseLightweightRows() const {
+    // External catalogs carry enough POD role data to build every strategy's
+    // first geometry. Unknown image dimensions deliberately use the same 1:1
+    // placeholder as a freshly-created ImageFile; metadata later updates the
+    // cheap size role and rewraps the affected rows.
+    return _model
+        && _entryIdRole >= 0 && _sourceIndexRole >= 0
+        && _localPathRole >= 0 && _entryNameRole >= 0
+        && _knownImageSizeRole >= 0;
+}
+
+MasonryLayout::MasonryBrick MasonryLayout::lightweightBrickForModelRow(
+    int row) const {
+    MasonryBrick brick;
+    populateBrickModelState(brick, row);
+    QSize imageSize = brick.modelKnownSize;
+    if (imageSize.isEmpty()) {
+        if (brick.modelIsFolder && _listView) {
+            brick.lineBreakAfter = true;
+            imageSize = QSize(0, listRowHeight());
+        }
+        else {
+            imageSize = GridView_Folder.toSize();
+        }
+    }
+    brick.originalSize = imageSize;
+    return brick;
+}
+
+void MasonryLayout::populateBrickModelState(
+    MasonryBrick &brick, int row) const {
+    if (!_model || row < 0 || row >= _model->rowCount()) {
+        return;
+    }
+    const QModelIndex modelIndex = _model->index(row, 0);
+    brick.modelIsImage = modelIndex.data(
+        FileListModel::IsImageRole).toBool();
+    brick.modelIsFolder = modelIndex.data(
+        FileListModel::FolderRole).toBool();
+    if (_entryIdRole >= 0) {
+        brick.modelIdentity = modelIndex.data(_entryIdRole).toString();
+    }
+    if (_sourceIndexRole >= 0) {
+        brick.modelSourceIndex = modelIndex.data(_sourceIndexRole).toInt();
+    }
+    if (_localPathRole >= 0) {
+        brick.modelPath = modelIndex.data(_localPathRole).toString();
+    }
+    if (_entryNameRole >= 0) {
+        brick.modelText = modelIndex.data(_entryNameRole).toString();
+    }
+    if (_knownImageSizeRole >= 0) {
+        brick.modelKnownSize = modelIndex.data(
+            _knownImageSizeRole).toSize();
+    }
+    if (brick.image) {
+        brick.modelIsImage = brick.image->isImage();
+        brick.modelIsFolder = brick.image->isFolder();
+        brick.modelSourceIndex = brick.image->index();
+        if (brick.modelPath.isEmpty()) {
+            brick.modelPath = brick.image->fullPath();
+        }
+        if (brick.modelIdentity.isEmpty()) {
+            brick.modelIdentity = brick.modelPath;
+        }
+        if (brick.modelText.isEmpty()) {
+            brick.modelText = brick.image->text();
+        }
+        if (brick.image->fullSize().isValid()) {
+            brick.modelKnownSize = brick.image->fullSize();
+        }
+    }
+}
+
+ImageFile *MasonryLayout::materializeImageForIndex(int index) {
+    if (!_model || index < 0 || index >= _bricks.size()
+        || index >= _model->rowCount()) {
+        return nullptr;
+    }
+    MasonryBrick &brick = _bricks[index];
+    if (!brick.image) {
+        brick.image = imageFileFromModelIndex(_model->index(index, 0));
+        if (brick.image) {
+            brick.modelIsImage = brick.image->isImage();
+            brick.modelIsFolder = brick.image->isFolder();
+            brick.modelSourceIndex = brick.image->index();
+            if (brick.modelPath.isEmpty()) {
+                brick.modelPath = brick.image->fullPath();
+            }
+            if (brick.modelIdentity.isEmpty()) {
+                brick.modelIdentity = brick.modelPath;
+            }
+            if (brick.modelText.isEmpty()) {
+                brick.modelText = brick.image->text();
+            }
+            if (brick.image->fullSize().isValid()) {
+                brick.modelKnownSize = brick.image->fullSize();
+            }
+            if (_quickSearch) {
+                _quickSearch->updateItemText(index);
+            }
+        }
+    }
+    return brick.image;
+}
+
+bool MasonryLayout::brickIsImage(int index) const {
+    return index >= 0 && index < _bricks.size()
+        && (_bricks[index].image
+                ? _bricks[index].image->isImage()
+                : _bricks[index].modelIsImage);
+}
+
+bool MasonryLayout::brickIsFolder(int index) const {
+    return index >= 0 && index < _bricks.size()
+        && (_bricks[index].image
+                ? _bricks[index].image->isFolder()
+                : _bricks[index].modelIsFolder);
+}
+
+QString MasonryLayout::brickPath(int index) const {
+    if (index < 0 || index >= _bricks.size()) {
+        return {};
+    }
+    return _bricks[index].image
+        ? _bricks[index].image->fullPath()
+        : _bricks[index].modelPath;
+}
+
 void MasonryLayout::prepareForIncrementalModelChange() {
     if (_incrementalModelChangeDepth++ > 0) {
         return;
@@ -2337,10 +2943,15 @@ void MasonryLayout::applyIncrementalModelChange() {
 
     QList<MasonryBrick> oldBricks = std::move(_bricks);
     QHash<ImageFile *, int> oldIndexes;
+    QHash<QString, int> oldIdentityIndexes;
     oldIndexes.reserve(oldBricks.size());
+    oldIdentityIndexes.reserve(oldBricks.size());
     for (int i = 0; i < oldBricks.size(); ++i) {
         if (oldBricks[i].image) {
             oldIndexes.insert(oldBricks[i].image, i);
+        }
+        if (!oldBricks[i].modelIdentity.isEmpty()) {
+            oldIdentityIndexes.insert(oldBricks[i].modelIdentity, i);
         }
     }
 
@@ -2348,16 +2959,49 @@ void MasonryLayout::applyIncrementalModelChange() {
     _bricks.clear();
     if (_model) {
         _bricks.reserve(_model->rowCount());
+        const bool lightweightRows = canUseLightweightRows();
         for (int row = 0; row < _model->rowCount(); ++row) {
-            ImageFile *imageFile =
-                imageFileFromModelIndex(_model->index(row, 0));
-            const auto oldIt = oldIndexes.constFind(imageFile);
-            if (imageFile && oldIt != oldIndexes.constEnd()) {
-                retained[*oldIt] = true;
-                _bricks.append(std::move(oldBricks[*oldIt]));
+            if (lightweightRows) {
+                const QString identity = _model->index(row, 0)
+                    .data(_entryIdRole).toString();
+                const auto oldIt = oldIdentityIndexes.constFind(identity);
+                MasonryBrick brick;
+                if (!identity.isEmpty()
+                    && oldIt != oldIdentityIndexes.constEnd()) {
+                    retained[*oldIt] = true;
+                    brick = std::move(oldBricks[*oldIt]);
+                    const MasonryBrick modelState =
+                        lightweightBrickForModelRow(row);
+                    brick.originalSize = modelState.originalSize;
+                    brick.lineBreakAfter = modelState.lineBreakAfter;
+                    brick.modelIdentity = modelState.modelIdentity;
+                    brick.modelPath = modelState.modelPath;
+                    brick.modelText = modelState.modelText;
+                    brick.modelKnownSize = modelState.modelKnownSize;
+                    brick.modelSourceIndex = modelState.modelSourceIndex;
+                    brick.modelIsImage = modelState.modelIsImage;
+                    brick.modelIsFolder = modelState.modelIsFolder;
+                }
+                else {
+                    brick = lightweightBrickForModelRow(row);
+                }
+                _bricks.append(std::move(brick));
             }
-            else if (imageFile) {
-                _bricks.append(brickForImage(imageFile));
+            else {
+                ImageFile *imageFile =
+                    imageFileFromModelIndex(_model->index(row, 0));
+                const auto oldIt = oldIndexes.constFind(imageFile);
+                if (imageFile && oldIt != oldIndexes.constEnd()) {
+                    retained[*oldIt] = true;
+                    MasonryBrick brick = std::move(oldBricks[*oldIt]);
+                    populateBrickModelState(brick, row);
+                    _bricks.append(std::move(brick));
+                }
+                else if (imageFile) {
+                    MasonryBrick brick = brickForImage(imageFile);
+                    populateBrickModelState(brick, row);
+                    _bricks.append(std::move(brick));
+                }
             }
         }
     }
@@ -2371,6 +3015,8 @@ void MasonryLayout::applyIncrementalModelChange() {
         BrickItem *item = oldBricks[i].item;
         pushBrickItem(item);
         item->setVisible(false);
+        item->setVisualRow({});
+        item->setVisualFacadeReady(false);
         item->setProperty("model", QVariant());
         item->setProperty("viewIndex", -1);
         item->setProperty("sourceIndex", -1);
@@ -2421,8 +3067,8 @@ void MasonryLayout::applyIncrementalModelChange() {
 
     const int previousImageCount = _imageCount;
     _imageCount = 0;
-    for (const MasonryBrick &brick : std::as_const(_bricks)) {
-        if (brick.image && brick.image->isImage()) {
+    for (int index = 0; index < _bricks.size(); ++index) {
+        if (brickIsImage(index)) {
             ++_imageCount;
         }
     }
@@ -2439,14 +3085,56 @@ void MasonryLayout::applyIncrementalModelChange() {
 
     const bool currentIdentityPreserved =
         !previousCurrentPath.isEmpty() && _currentIndex >= 0 &&
-        _currentIndex < _bricks.size() && _bricks[_currentIndex].image &&
-        _bricks[_currentIndex].image->fullPath() == previousCurrentPath;
+        _currentIndex < _bricks.size() &&
+        brickPath(_currentIndex) == previousCurrentPath;
     if (!currentIdentityPreserved || previousCurrentIndex != _currentIndex) {
         emit currentIndexChanged();
     }
 }
 
 void MasonryLayout::onModelAboutToBeReset() {
+    // `beginResetModel()` and `endResetModel()` run in one GUI-thread stack.
+    // Retain each painted delegate in its current visual slot across that
+    // interval. Clearing `model`, `viewIndex`, and `sourceIndex` here used to
+    // invalidate every QML binding, only to assign all three again a few
+    // milliseconds later. Under repeated directory navigation that doubled
+    // native-icon cancellation and binding work for every visible row.
+    cancelDeferredDelegateMaterialization();
+    releaseResetSlotItems();
+    _lightweightRewrapPending = false;
+    ++_lightweightRewrapGeneration;
+    _resetSlotPresentationMode = _presentationMode;
+    _resetSlotWidth = width();
+    _resetSlotHeight = height();
+    _resetSlotDensity = _density;
+    _resetSlotDelegate = _delegate;
+    _resetSlotViewport = _viewport;
+    _resetSlotReusePending = _delegate && _viewport;
+    QSet<BrickItem *> retainedItems;
+    if (_resetSlotReusePending) {
+        _resetSlotItems.reserve(_activeBrickIndexes.size());
+        retainedItems.reserve(_activeBrickIndexes.size());
+        for (const int index : std::as_const(_activeBrickIndexes)) {
+            if (index < 0 || index >= _bricks.size()
+                || !_bricks.at(index).item) {
+                continue;
+            }
+            BrickItem *item = _bricks.at(index).item;
+            _resetSlotItems.insert(index, item);
+            _resetSlotModels.insert(
+                index, item->property("model").value<ImageFile *>());
+            if (_deferDelegateRefreshOnReset) {
+                // Until polish installs the current row, an old slot must be
+                // neither paintable nor hit-testable. The scene graph cannot
+                // observe this intermediate hidden state: the matching polish
+                // pass runs before the next synchronization.
+                item->setVisible(false);
+                item->setVisualFacadeReady(false);
+            }
+            retainedItems.insert(item);
+        }
+    }
+
     _incrementalModelChangeDepth = 0;
     _currentLoadingRow.clear();
     _visibleStart = -1;
@@ -2466,13 +3154,18 @@ void MasonryLayout::onModelAboutToBeReset() {
     if (!_preserveCurrentItemPositionOnNextModelReset) {
         _currentIndex = 0;
     }
-    for (auto it = _usedBrickItems.begin(); it != _usedBrickItems.end(); ++it) {
-        (*it)->setVisible(false);
-        (*it)->setProperty("model", QVariant());
-        (*it)->setProperty("viewIndex", -1);
-        (*it)->setProperty("sourceIndex", -1);
+    for (BrickItem *item : std::as_const(_usedBrickItems)) {
+        if (retainedItems.contains(item)) {
+            continue;
+        }
+        item->setVisible(false);
+        item->setVisualRow({});
+        item->setVisualFacadeReady(false);
+        item->setProperty("model", QVariant());
+        item->setProperty("viewIndex", -1);
+        item->setProperty("sourceIndex", -1);
+        _freeBrickItems.insert(item);
     }
-    _freeBrickItems.unite(_usedBrickItems);
     _usedBrickItems.clear();
     if (hadVisibleIndexes) {
         emit visibleIndexesChanged();
@@ -2482,36 +3175,337 @@ void MasonryLayout::onModelAboutToBeReset() {
     }
 }
 
+bool MasonryLayout::resetSlotLayoutMatches() const {
+    if (!(_resetSlotReusePending
+        && _resetSlotDelegate == _delegate
+        && _resetSlotViewport == _viewport
+        && _resetSlotPresentationMode == _presentationMode
+        && qFuzzyCompare(_resetSlotWidth + 1, width() + 1)
+        && qFuzzyCompare(_resetSlotHeight + 1, height() + 1)
+        && qFuzzyCompare(_resetSlotDensity + 1, _density + 1))) {
+        return false;
+    }
+    for (auto slot = _resetSlotItems.cbegin();
+         slot != _resetSlotItems.cend(); ++slot) {
+        BrickItem *item = slot.value();
+        const QPointer<ImageFile> expected = _resetSlotModels.value(
+            slot.key());
+        const bool validSnapshotSlot = _visualSnapshotRole >= 0
+            && item && item->visualRow().value(
+                QStringLiteral("valid")).toBool()
+            && item->property("viewIndex").toInt() == slot.key();
+        if (!item || item->parentItem() != _viewport
+            || (_visualSnapshotRole >= 0 && !validSnapshotSlot)
+            || (_visualSnapshotRole < 0
+                && (expected.isNull()
+                    || item->property("model").value<ImageFile *>()
+                        != expected.data()))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void MasonryLayout::releaseResetSlotItems(bool clearBindings) {
+    for (BrickItem *item : std::as_const(_resetSlotItems)) {
+        if (!item) {
+            continue;
+        }
+        item->stopGeometryAnimation();
+        item->setVisible(false);
+        if (clearBindings) {
+            item->setVisualRow({});
+            item->setVisualFacadeReady(false);
+            item->setProperty("model", QVariant());
+            item->setProperty("viewIndex", -1);
+            item->setProperty("sourceIndex", -1);
+        }
+        _usedBrickItems.remove(item);
+        _freeBrickItems.insert(item);
+    }
+    _resetSlotItems.clear();
+    _resetSlotModels.clear();
+    _resetSlotReusePending = false;
+    _resetSlotDelegate = nullptr;
+    _resetSlotViewport = nullptr;
+}
+
+void MasonryLayout::scheduleDeferredDelegateRefresh() {
+    cancelDeferredDelegateMaterialization();
+    _delegateRefreshPending = true;
+    const quint64 generation = ++_delegateRefreshGeneration;
+    polish();
+    update();
+    // Polish is tied to a renderable window. Keep a zero-delay fallback for
+    // offscreen/windowless embedders and tests; whichever path runs first
+    // consumes the same generation and the other becomes a no-op.
+    QTimer::singleShot(0, this, [this, generation]() {
+        if (_delegateRefreshPending
+            && generation == _delegateRefreshGeneration) {
+            flushDeferredDelegateRefresh();
+        }
+    });
+}
+
+void MasonryLayout::flushDeferredDelegateRefresh() {
+    if (!_delegateRefreshPending) {
+        return;
+    }
+    _delegateRefreshPending = false;
+    ++_delegateRefreshGeneration;
+    const bool snapshotOnly = _visualSnapshotRole >= 0;
+    _visualSnapshotRefresh = snapshotOnly;
+    updateProperties(false);
+    _visualSnapshotRefresh = false;
+    if (snapshotOnly) {
+        scheduleDeferredDelegateMaterialization();
+    }
+}
+
+void MasonryLayout::cancelDeferredDelegateMaterialization() {
+    _delegateMaterializationPending = false;
+    _delegateMaterializationRows.clear();
+    _delegateMaterializationEntries.clear();
+    _delegateMaterializationCursor = 0;
+    _delegateSynchronizedGeneration.store(0, std::memory_order_release);
+    if (_delegateFrameSwappedConnection) {
+        disconnect(_delegateFrameSwappedConnection);
+        _delegateFrameSwappedConnection = {};
+    }
+    if (_delegateAfterSynchronizingConnection) {
+        disconnect(_delegateAfterSynchronizingConnection);
+        _delegateAfterSynchronizingConnection = {};
+    }
+}
+
+void MasonryLayout::scheduleDeferredDelegateMaterialization() {
+    cancelDeferredDelegateMaterialization();
+    _delegateMaterializationPending = true;
+    const quint64 generation = ++_delegateRefreshGeneration;
+
+    QList<int> orderedRows;
+    orderedRows.reserve(_activeBrickIndexes.size());
+    if (_activeBrickIndexes.contains(_currentIndex)) {
+        orderedRows.append(_currentIndex);
+    }
+    for (const int row : std::as_const(_activeBrickIndexes)) {
+        if (row != _currentIndex && brickIsImage(row)) {
+            orderedRows.append(row);
+        }
+    }
+    for (const int row : std::as_const(_activeBrickIndexes)) {
+        if (row != _currentIndex && !brickIsImage(row)) {
+            orderedRows.append(row);
+        }
+    }
+    _delegateMaterializationRows.reserve(orderedRows.size());
+    _delegateMaterializationEntries.reserve(orderedRows.size());
+    for (const int row : std::as_const(orderedRows)) {
+        enqueueDeferredDelegateMaterialization(row);
+    }
+
+    if (QQuickWindow *quickWindow = window()) {
+        // A frameSwapped from an already-in-flight old scene is not proof
+        // that the new snapshot was painted. Arm the swap only after the
+        // render thread has synchronized at least once since this generation
+        // was installed.
+        _delegateAfterSynchronizingConnection = connect(
+            quickWindow, &QQuickWindow::afterSynchronizing, this,
+            [this, generation]() {
+                _delegateSynchronizedGeneration.store(
+                    generation, std::memory_order_release);
+            }, Qt::DirectConnection);
+        _delegateFrameSwappedConnection = connect(
+            quickWindow, &QQuickWindow::frameSwapped, this,
+            [this, generation]() {
+                if (_delegateSynchronizedGeneration.load(
+                        std::memory_order_acquire) == generation) {
+                    beginDeferredDelegateMaterialization(generation);
+                }
+            }, Qt::QueuedConnection);
+        // A hidden/offscreen surface may never swap. This fallback affects no
+        // visible first frame and keeps tests/lifecycle users from retaining
+        // old QObject facades indefinitely.
+        QPointer<QQuickWindow> guardedWindow(quickWindow);
+        QTimer::singleShot(100, this, [this, generation, guardedWindow]() {
+            if (!guardedWindow || !guardedWindow->isVisible()
+                || !guardedWindow->isExposed()) {
+                beginDeferredDelegateMaterialization(generation);
+            }
+        });
+    }
+    else {
+        QTimer::singleShot(0, this, [this, generation]() {
+            beginDeferredDelegateMaterialization(generation);
+        });
+    }
+}
+
+void MasonryLayout::enqueueDeferredDelegateMaterialization(int row) {
+    if (!_delegateMaterializationPending || row < 0
+        || row >= _bricks.size()) {
+        return;
+    }
+    const QString entryId = _bricks.at(row).modelIdentity;
+    if (_delegateMaterializationEntries.value(row) == entryId
+        && _delegateMaterializationEntries.contains(row)) {
+        return;
+    }
+    _delegateMaterializationEntries.insert(row, entryId);
+    _delegateMaterializationRows.append(qMakePair(row, entryId));
+}
+
+void MasonryLayout::beginDeferredDelegateMaterialization(
+    quint64 generation) {
+    if (!_delegateMaterializationPending
+        || generation != _delegateRefreshGeneration) {
+        return;
+    }
+    if (_delegateFrameSwappedConnection) {
+        disconnect(_delegateFrameSwappedConnection);
+        _delegateFrameSwappedConnection = {};
+    }
+    if (_delegateAfterSynchronizingConnection) {
+        disconnect(_delegateAfterSynchronizingConnection);
+        _delegateAfterSynchronizingConnection = {};
+    }
+    materializeDeferredDelegateBatch(generation);
+}
+
+void MasonryLayout::materializeDeferredDelegateBatch(
+    quint64 generation) {
+    if (!_delegateMaterializationPending
+        || generation != _delegateRefreshGeneration) {
+        return;
+    }
+    QElapsedTimer budget;
+    budget.start();
+    int completed = 0;
+    QSet<int> thumbnailRows;
+    while (_delegateMaterializationCursor
+               < _delegateMaterializationRows.size()
+           && completed < 4 && budget.nsecsElapsed() < 1'000'000) {
+        const auto [row, expectedEntryId] =
+            _delegateMaterializationRows.at(
+                _delegateMaterializationCursor++);
+        const auto queuedEntry = _delegateMaterializationEntries.constFind(
+            row);
+        if (queuedEntry != _delegateMaterializationEntries.cend()
+            && *queuedEntry == expectedEntryId) {
+            _delegateMaterializationEntries.remove(row);
+        }
+        ++completed;
+        if (row < 0 || row >= _bricks.size()
+            || !_activeBrickIndexes.contains(row)
+            || _bricks.at(row).modelIdentity != expectedEntryId) {
+            continue;
+        }
+        BrickItem *item = _bricks[row].item;
+        if (!item || item->property("viewIndex").toInt() != row
+            || item->visualRow().value(
+                QStringLiteral("entryId")).toString() != expectedEntryId) {
+            continue;
+        }
+        ImageFile *image = materializeImageForIndex(row);
+        if (image && item->property("model").value<ImageFile *>() != image) {
+            item->setProperty("model", QVariant::fromValue(image));
+        }
+        item->setVisualFacadeReady(image != nullptr);
+        if (image && _overscanIndexSet.contains(row)) {
+            thumbnailRows.insert(row);
+        }
+    }
+    if (!thumbnailRows.isEmpty()) {
+        // Thumbnail planning was deliberately suppressed before the first
+        // swap. Resume it only for facades admitted by this bounded batch;
+        // already-materialized rows bypass the pending-queue gate above.
+        planViewportThumbnails(thumbnailRows);
+    }
+    if (_delegateMaterializationCursor
+        >= _delegateMaterializationRows.size()) {
+        _delegateMaterializationPending = false;
+        _delegateMaterializationRows.clear();
+        _delegateMaterializationEntries.clear();
+        _delegateMaterializationCursor = 0;
+        return;
+    }
+    // Yield between small batches. A repeated navigation reset increments the
+    // generation and cancels this current-model-only queue before it can bind
+    // a facade to the replacement catalog.
+    QTimer::singleShot(8, this, [this, generation]() {
+        materializeDeferredDelegateBatch(generation);
+    });
+}
+
+void MasonryLayout::scheduleLightweightRewrap() {
+    if (_lightweightRewrapPending) {
+        return;
+    }
+    _lightweightRewrapPending = true;
+    const quint64 generation = ++_lightweightRewrapGeneration;
+    // Header readers finish independently and their historical isLast marker
+    // follows submission order, not completion order. Gate relayout to at
+    // most one pass per frame instead of treating that marker as a barrier.
+    QTimer::singleShot(16, this, [this, generation]() {
+        if (generation != _lightweightRewrapGeneration) {
+            return;
+        }
+        _lightweightRewrapPending = false;
+        if (_presentationMode != Masonry || !canUseLightweightRows()) {
+            return;
+        }
+        rewrap(false);
+        // Rewrap can change the exact target tier without changing the set of
+        // overscan indexes, so explicitly re-plan that bounded window.
+        planViewportThumbnails(_overscanIndexSet);
+    });
+}
+
+void MasonryLayout::flushLightweightRewrap() {
+    if (_lightweightRewrapPending) {
+        _lightweightRewrapPending = false;
+        ++_lightweightRewrapGeneration;
+    }
+    rewrap(false);
+    planViewportThumbnails(_overscanIndexSet);
+}
+
 void MasonryLayout::onModelReset() {
+    const bool traceReset = qEnvironmentVariableIsSet(
+        "F4_NAV_BENCHMARK_TRACE");
+    QElapsedTimer resetTimer;
+    if (traceReset) {
+        resetTimer.start();
+    }
     const int previousCurrentIndex = _currentIndex;
     const QString preservedCurrentPath =
         _preserveCurrentItemPositionOnNextModelReset
             ? _preservedCurrentItemFullPath
             : QString();
     if (_model) {
+        _bricks.reserve(_model->rowCount());
+        const bool lightweightRows = canUseLightweightRows();
         for (int i = 0; i < _model->rowCount(); i++) {
-            ImageFile *imageFile = imageFileFromModelIndex(_model->index(i, 0));
-            if (!imageFile) {
-                continue;
+            MasonryBrick brick;
+            if (lightweightRows) {
+                brick = lightweightBrickForModelRow(i);
             }
-            QSize imgSize = imageFile->fullSize();
-            bool lineBreakAfter = false;
-            if (imgSize.isEmpty()) {
-                if (imageFile->isFolder() && _listView) {
-                    lineBreakAfter = true;
-                    imgSize = QSize(0, imageFile->folderView() ? 0 : listRowHeight());
+            else {
+                ImageFile *imageFile = imageFileFromModelIndex(
+                    _model->index(i, 0));
+                if (!imageFile) {
+                    continue;
                 }
-                else {
-                    imgSize = GridView_Folder.toSize();
-                }
+                brick = brickForImage(imageFile);
             }
-            _bricks.append(MasonryBrick {
-                .originalSize = imgSize,
-                .lineBreakAfter = lineBreakAfter,
-                .image = imageFile,
-            });
+            if (!lightweightRows) {
+                populateBrickModelState(brick, i);
+            }
+            _bricks.append(std::move(brick));
         }
     }
+    const qint64 rowsBuiltNs = traceReset
+        ? resetTimer.nsecsElapsed() : 0;
     restorePreservedCurrentItemPosition();
     if (_bricks.isEmpty()) {
         _currentIndex = -1;
@@ -2520,18 +3514,59 @@ void MasonryLayout::onModelReset() {
         _currentIndex = qBound(0, _currentIndex, _bricks.size() - 1);
     }
 
+    // QML is allowed to react to modelAboutToBeReset. If that changed the
+    // renderer or its geometry, fall back to the ordinary free-pool path;
+    // visual-row retention is valid only for an unchanged layout contract.
+    if (!resetSlotLayoutMatches()) {
+        releaseResetSlotItems();
+    }
+
+    const qint64 modelSignalStartedNs = traceReset
+        ? resetTimer.nsecsElapsed() : 0;
     emit modelChanged();
-    rewrap();
+    const qint64 modelSignalCompletedNs = traceReset
+        ? resetTimer.nsecsElapsed() : 0;
+    // Model identity and hit-test geometry change atomically at reset. Move
+    // retained delegates to their target rect in the same frame rather than
+    // animating them from stale catalog positions for 500 ms.
+    const bool synchronousSnapshotRefresh =
+        _deferDelegateRefreshOnReset && _visualSnapshotRole >= 0;
+    if (synchronousSnapshotRefresh) {
+        // A polish requested from modelReset can miss the threaded render
+        // loop's imminent sync cutoff and add a whole vsync even though the
+        // snapshot work itself is only a few milliseconds. Install the POD
+        // facade as part of this reset transaction; QObject/thumbnail work
+        // remains gated behind frameSwapped below.
+        _delegateRefreshPending = false;
+        ++_delegateRefreshGeneration;
+        _visualSnapshotRefresh = true;
+    }
+    else if (_deferDelegateRefreshOnReset) {
+        scheduleDeferredDelegateRefresh();
+    }
+    rewrap(false);
+    if (synchronousSnapshotRefresh) {
+        _visualSnapshotRefresh = false;
+        scheduleDeferredDelegateMaterialization();
+        // Property/geometry changes already dirty the scene graph. Explicitly
+        // request a frame as well so a quiet threaded window can consume the
+        // synchronous snapshot at the nearest render-loop opportunity.
+        update();
+    }
+    const qint64 rewrapCompletedNs = traceReset
+        ? resetTimer.nsecsElapsed() : 0;
     restorePendingThumbnailRequestsAfterModelReset();
     if (_preserveDecodeQueueForCurrentRebuild) {
         _skipThumbnailBackfillUntilFlush = true;
     }
     _preserveDecodeQueueForCurrentRebuild = false;
     positionViewport();
+    const qint64 viewportCompletedNs = traceReset
+        ? resetTimer.nsecsElapsed() : 0;
 
     _imageCount = 0;
     for (int i = 0; i < _bricks.size(); i++) {
-        if (_bricks[i].image->isImage()) {
+        if (brickIsImage(i)) {
             _imageCount++;
         }
     }
@@ -2539,17 +3574,35 @@ void MasonryLayout::onModelReset() {
 
     updateCurrentImageIndex();
     emit countChanged();
+    const qint64 countCompletedNs = traceReset
+        ? resetTimer.nsecsElapsed() : 0;
 
     if (!_quickSearch->mask().isEmpty()) {
         _quickSearch->updateItemsText();
     }
     const bool currentIdentityPreserved =
         !preservedCurrentPath.isEmpty() && _currentIndex >= 0 &&
-        _currentIndex < _bricks.size() && _bricks[_currentIndex].image &&
-        _bricks[_currentIndex].image->fullPath() == preservedCurrentPath;
+        _currentIndex < _bricks.size() &&
+        brickPath(_currentIndex) == preservedCurrentPath;
     if (!currentIdentityPreserved ||
         previousCurrentIndex != _currentIndex) {
         emit currentIndexChanged();
+    }
+    if (traceReset) {
+        const qint64 completedNs = resetTimer.nsecsElapsed();
+        qInfo().nospace()
+            << "F4_NAV_BENCHMARK_TRACE masonry.reset rowsNs="
+            << rowsBuiltNs << " preSignalNs="
+            << (modelSignalStartedNs - rowsBuiltNs)
+            << " modelSignalNs="
+            << (modelSignalCompletedNs - modelSignalStartedNs)
+            << " rewrapNs="
+            << (rewrapCompletedNs - modelSignalCompletedNs)
+            << " viewportNs="
+            << (viewportCompletedNs - rewrapCompletedNs)
+            << " countNs=" << (countCompletedNs - viewportCompletedNs)
+            << " tailNs=" << (completedNs - countCompletedNs)
+            << " totalNs=" << completedNs;
     }
 }
 
@@ -2562,9 +3615,7 @@ void MasonryLayout::restorePreservedCurrentItemPosition() {
     bool restored = false;
     if (!_preservedCurrentItemFullPath.isEmpty()) {
         for (int i = 0; i < _bricks.size(); i++) {
-            if (_bricks[i].image &&
-                _bricks[i].image->fullPath() ==
-                    _preservedCurrentItemFullPath) {
+            if (brickPath(i) == _preservedCurrentItemFullPath) {
                 _currentIndex = i;
                 restored = true;
                 break;
@@ -2579,9 +3630,7 @@ void MasonryLayout::restorePreservedCurrentItemPosition() {
     bool restoredViewportAnchor = false;
     if (!_preservedViewportAnchorFullPath.isEmpty()) {
         for (int i = 0; i < _bricks.size(); ++i) {
-            if (_bricks[i].image &&
-                _bricks[i].image->fullPath() ==
-                    _preservedViewportAnchorFullPath) {
+            if (brickPath(i) == _preservedViewportAnchorFullPath) {
                 _topItem = i;
                 _topItemOffset = _preservedViewportAnchorOffset;
                 restoredViewportAnchor = true;
@@ -2759,6 +3808,11 @@ void MasonryLayout::setDevicePixelRatio(qreal value) {
     }
     _devicePixelRatioOverride = normalized;
     emit devicePixelRatioChanged();
+    if (_presentationMode == Columns) {
+        // Columns geometry is expressed on the device-pixel lattice. Moving
+        // the window between screens therefore changes its logical stride.
+        rewrap(false);
+    }
     reReadAndDecodeThumbnails();
 }
 
@@ -2777,52 +3831,113 @@ void MasonryLayout::setIconLabelFont(const QFont &font) {
     }
 }
 
+bool MasonryLayout::deferDelegateRefreshOnReset() const {
+    return _deferDelegateRefreshOnReset;
+}
+
+void MasonryLayout::setDeferDelegateRefreshOnReset(bool defer) {
+    if (_deferDelegateRefreshOnReset == defer) {
+        return;
+    }
+    _deferDelegateRefreshOnReset = defer;
+    emit deferDelegateRefreshOnResetChanged();
+}
+
 MasonryLayout::PresentationMode MasonryLayout::presentationMode() const {
     return _presentationMode;
 }
 
-void MasonryLayout::setPresentationMode(PresentationMode mode) {
-    const int normalizedValue = qBound(
-        static_cast<int>(Masonry), static_cast<int>(mode),
-        static_cast<int>(Icons));
-    mode = static_cast<PresentationMode>(normalizedValue);
-    if (_presentationMode == mode) {
+void MasonryLayout::requestRewrap(bool animate) {
+    if (_layoutUpdateDepth > 0) {
+        _layoutUpdateNeedsRewrap = true;
+        // One non-animated participant makes the whole atomic commit
+        // non-animated. Presentation switches always take this path.
+        _layoutUpdateAnimate = _layoutUpdateAnimate && animate;
         return;
     }
-    qreal previousCurrentViewportY = 0;
-    bool previousCurrentWasVisible = false;
-    if (_currentIndex >= 0 && _currentIndex < _bricks.size()) {
-        const QRectF previousGeometry = indexGeometry(_currentIndex);
-        previousCurrentWasVisible = previousGeometry.isValid() &&
-            !previousGeometry.isEmpty() &&
-            previousGeometry.top() < _contentY + height() &&
-            previousGeometry.bottom() > _contentY;
-        if (previousCurrentWasVisible) {
-            previousCurrentViewportY =
-                previousGeometry.top() - _contentY;
-        }
+    rewrap(animate);
+}
+
+void MasonryLayout::capturePresentationViewportAnchor(
+    qreal *viewportY, bool *wasVisible) const {
+    if (!viewportY || !wasVisible) {
+        return;
     }
-    _presentationMode = mode;
-    _density = _modeDensities[normalizedValue];
-    _targetHeight = qRound(_density);
-    _currentLoadingRow.clear();
-    _scheduledThumbnailIndexes.clear();
-    _scheduledThumbnailRequestKeys.clear();
-    _lastThumbnailViewportIndexes.clear();
-    _windowTopIndex = qBound(
-        0, _topItem, maximumWindowTopIndex());
-    if (_presentationMode == Columns && _currentIndex >= 0) {
-        _windowTopIndex = windowTopIndexForIndex(_currentIndex);
+    *viewportY = 0;
+    *wasVisible = false;
+    if (_currentIndex < 0 || _currentIndex >= _bricks.size()) {
+        return;
     }
-    if (_persistSettings && !isEmbedded()) {
-        QSettings settings;
-        settings.setValue(QStringLiteral("layout/presentationMode"),
-                          normalizedValue);
+    const QRectF geometry = indexGeometry(_currentIndex);
+    *wasVisible = geometry.isValid() && !geometry.isEmpty()
+        && geometry.top() < _contentY + height()
+        && geometry.bottom() > _contentY;
+    if (*wasVisible) {
+        *viewportY = geometry.top() - _contentY;
     }
-    emit presentationModeChanged();
-    emit densityChanged();
-    emit targetExtentChanged();
-    emit targetHeightChanged();
+}
+
+void MasonryLayout::beginLayoutUpdate() {
+    if (_layoutUpdateDepth++ > 0) {
+        return;
+    }
+    _layoutUpdateNeedsRewrap = false;
+    _layoutUpdateAnimate = true;
+    _layoutUpdateNeedsPositionViewport = false;
+    _layoutUpdateNeedsScrollRefresh = false;
+    _layoutUpdatePresentationModeChanged = false;
+    capturePresentationViewportAnchor(
+        &_layoutUpdateCurrentViewportY,
+        &_layoutUpdateCurrentWasVisible);
+}
+
+void MasonryLayout::endLayoutUpdate() {
+    if (_layoutUpdateDepth <= 0) {
+        return;
+    }
+    if (--_layoutUpdateDepth > 0) {
+        return;
+    }
+
+    const bool needsRewrap = _layoutUpdateNeedsRewrap;
+    const bool animate = _layoutUpdateAnimate;
+    const bool needsPositionViewport =
+        _layoutUpdateNeedsPositionViewport;
+    const bool needsScrollRefresh = _layoutUpdateNeedsScrollRefresh;
+    const bool presentationModeChanged =
+        _layoutUpdatePresentationModeChanged;
+    const qreal previousCurrentViewportY =
+        _layoutUpdateCurrentViewportY;
+    const bool previousCurrentWasVisible =
+        _layoutUpdateCurrentWasVisible;
+
+    _layoutUpdateNeedsRewrap = false;
+    _layoutUpdateAnimate = true;
+    _layoutUpdateNeedsPositionViewport = false;
+    _layoutUpdateNeedsScrollRefresh = false;
+    _layoutUpdatePresentationModeChanged = false;
+
+    if (needsPositionViewport) {
+        positionViewport();
+    }
+    if (presentationModeChanged) {
+        // setDensity() may have requested a same-mode viewport anchor after
+        // setPresentationMode(). A cross-mode switch owns the stronger
+        // current-item viewport contract below.
+        _preserveViewportAnchorForNextRewrap = false;
+        completePresentationModeChange(previousCurrentViewportY,
+                                       previousCurrentWasVisible);
+    }
+    else if (needsRewrap) {
+        rewrap(animate);
+    }
+    if (needsScrollRefresh) {
+        updateNeedScroll();
+    }
+}
+
+void MasonryLayout::completePresentationModeChange(
+    qreal previousCurrentViewportY, bool previousCurrentWasVisible) {
     if (_model && (_presentationMode == Details
                    || (_presentationMode != Masonry && !isEmbedded()))) {
         dynamic_cast<ThumbnailsRequestInterface *>(_model)
@@ -2839,10 +3954,10 @@ void MasonryLayout::setPresentationMode(PresentationMode mode) {
         const QRectF currentGeometry = indexGeometry(_currentIndex);
         if (currentGeometry.isValid() && !currentGeometry.isEmpty()) {
             qreal targetY = _contentY;
-            if (_presentationMode != Columns &&
-                previousCurrentWasVisible) {
-                const qreal desired = currentGeometry.top() -
-                    previousCurrentViewportY;
+            if (_presentationMode != Columns
+                && previousCurrentWasVisible) {
+                const qreal desired = currentGeometry.top()
+                    - previousCurrentViewportY;
                 const qreal minimumForVisibility =
                     currentGeometry.bottom() - height();
                 targetY = qBound(
@@ -2874,6 +3989,50 @@ void MasonryLayout::setPresentationMode(PresentationMode mode) {
     }
 }
 
+void MasonryLayout::setPresentationMode(PresentationMode mode) {
+    const int normalizedValue = qBound(
+        static_cast<int>(Masonry), static_cast<int>(mode),
+        static_cast<int>(Icons));
+    mode = static_cast<PresentationMode>(normalizedValue);
+    if (_presentationMode == mode) {
+        return;
+    }
+    qreal previousCurrentViewportY = _layoutUpdateCurrentViewportY;
+    bool previousCurrentWasVisible = _layoutUpdateCurrentWasVisible;
+    if (_layoutUpdateDepth == 0) {
+        capturePresentationViewportAnchor(
+            &previousCurrentViewportY, &previousCurrentWasVisible);
+    }
+    _presentationMode = mode;
+    _density = _modeDensities[normalizedValue];
+    _targetHeight = qRound(_density);
+    _currentLoadingRow.clear();
+    _scheduledThumbnailIndexes.clear();
+    _scheduledThumbnailRequestKeys.clear();
+    _lastThumbnailViewportIndexes.clear();
+    _windowTopIndex = qBound(
+        0, _topItem, maximumWindowTopIndex());
+    if (_presentationMode == Columns && _currentIndex >= 0) {
+        _windowTopIndex = windowTopIndexForIndex(_currentIndex);
+    }
+    if (_persistSettings && !isEmbedded()) {
+        QSettings settings;
+        settings.setValue(QStringLiteral("layout/presentationMode"),
+                          normalizedValue);
+    }
+    emit presentationModeChanged();
+    emit densityChanged();
+    emit targetExtentChanged();
+    emit targetHeightChanged();
+    if (_layoutUpdateDepth > 0) {
+        _layoutUpdatePresentationModeChanged = true;
+        requestRewrap(false);
+        return;
+    }
+    completePresentationModeChange(previousCurrentViewportY,
+                                   previousCurrentWasVisible);
+}
+
 int MasonryLayout::columnCount() const {
     return _columnCount;
 }
@@ -2893,7 +4052,7 @@ void MasonryLayout::setColumnCount(int columnCount) {
     if (_presentationMode == Columns) {
         _windowTopIndex = qBound(
             0, _windowTopIndex, maximumWindowTopIndex());
-        rewrap(false);
+        requestRewrap(false);
     }
 }
 
@@ -2930,7 +4089,7 @@ void MasonryLayout::setDensity(qreal density) {
                               _targetHeight);
         }
     }
-    rewrap();
+    requestRewrap();
     emit densityChanged();
     emit targetExtentChanged();
     if (previousTargetHeight != _targetHeight) {
@@ -3081,8 +4240,195 @@ qreal MasonryLayout::contentHeight() const {
     return _contentHeight;
 }
 
+BrickVisualRow::BrickVisualRow(QObject *parent)
+    : QObject(parent) {}
+
+void BrickVisualRow::applySnapshot(const QVariantMap &snapshot) {
+    const bool nextValid = snapshot.value(QStringLiteral("valid")).toBool();
+    const QString nextEntryId = snapshot.value(
+        QStringLiteral("entryId")).toString();
+    const int nextSourceIndex = snapshot.value(
+        QStringLiteral("sourceIndex"), -1).toInt();
+    const QString nextLocalPath = snapshot.value(
+        QStringLiteral("localPath")).toString();
+    const QString nextText = snapshot.value(QStringLiteral("text")).toString();
+    const bool nextIsFolder = snapshot.value(
+        QStringLiteral("isFolder")).toBool();
+    const bool nextIsImage = snapshot.value(
+        QStringLiteral("isImage")).toBool();
+    const bool nextIsSelected = snapshot.value(
+        QStringLiteral("isSelected")).toBool();
+    const QString nextIconPath = snapshot.value(
+        QStringLiteral("iconPath")).toString();
+    const QVariantMap nextHighlightStyle = snapshot.value(
+        QStringLiteral("highlightStyle")).toMap();
+    const QVariantMap nextDisplayFields = snapshot.value(
+        QStringLiteral("displayFields")).toMap();
+    const QString nextImageIdUrl = snapshot.value(
+        QStringLiteral("imageIdUrl")).toString();
+    const QString nextDisplayBaseName = nextDisplayFields.value(
+        QStringLiteral("displayBaseName")).toString();
+    const QString nextDisplayExtension = nextDisplayFields.value(
+        QStringLiteral("displayExtension")).toString();
+    const QString nextSizeText = nextDisplayFields.value(
+        QStringLiteral("sizeText")).toString();
+    const bool nextIsHidden = nextDisplayFields.value(
+        QStringLiteral("isHidden")).toBool();
+    const QString nextHighlightMarker = nextHighlightStyle.value(
+        QStringLiteral("marker")).toString();
+    const auto highlightPatch = [&nextHighlightStyle](const char *name) {
+        return nextHighlightStyle.value(QString::fromLatin1(name)).toMap();
+    };
+    const QVariantMap normalPatch = highlightPatch("normal");
+    const QVariantMap selectedPatch = highlightPatch("selected");
+    const QVariantMap cursorPatch = highlightPatch("cursor");
+    const QVariantMap selectedCursorPatch = highlightPatch("selectedCursor");
+    const QString nextNormalForeground = normalPatch.value(
+        QStringLiteral("foreground")).toString();
+    const QString nextNormalBackground = normalPatch.value(
+        QStringLiteral("background")).toString();
+    const QString nextSelectedForeground = selectedPatch.value(
+        QStringLiteral("foreground")).toString();
+    const QString nextSelectedBackground = selectedPatch.value(
+        QStringLiteral("background")).toString();
+    const QString nextCursorForeground = cursorPatch.value(
+        QStringLiteral("foreground")).toString();
+    const QString nextCursorBackground = cursorPatch.value(
+        QStringLiteral("background")).toString();
+    const QString nextSelectedCursorForeground = selectedCursorPatch.value(
+        QStringLiteral("foreground")).toString();
+    const QString nextSelectedCursorBackground = selectedCursorPatch.value(
+        QStringLiteral("background")).toString();
+
+    const auto assign = [](auto &target, const auto &next) {
+        if (target == next) {
+            return false;
+        }
+        target = next;
+        return true;
+    };
+    // Commit every backing field before notifying QML. A reset therefore
+    // never evaluates a binding against a half-old/half-new row, and each
+    // targeted dependency runs at most once for this snapshot.
+    const bool validChangedFlag = assign(_valid, nextValid);
+    const bool entryIdChangedFlag = assign(_entryId, nextEntryId);
+    const bool sourceIndexChangedFlag = assign(_sourceIndex, nextSourceIndex);
+    const bool localPathChangedFlag = assign(_localPath, nextLocalPath);
+    const bool textChangedFlag = assign(_text, nextText);
+    const bool isFolderChangedFlag = assign(_isFolder, nextIsFolder);
+    const bool isImageChangedFlag = assign(_isImage, nextIsImage);
+    const bool isSelectedChangedFlag = assign(_isSelected, nextIsSelected);
+    const bool iconPathChangedFlag = assign(_iconPath, nextIconPath);
+    const bool highlightStyleChangedFlag = assign(
+        _highlightStyle, nextHighlightStyle);
+    const bool displayFieldsChangedFlag = assign(
+        _displayFields, nextDisplayFields);
+    const bool imageIdUrlChangedFlag = assign(_imageIdUrl, nextImageIdUrl);
+    const bool displayBaseNameChangedFlag = assign(
+        _displayBaseName, nextDisplayBaseName);
+    const bool displayExtensionChangedFlag = assign(
+        _displayExtension, nextDisplayExtension);
+    const bool sizeTextChangedFlag = assign(_sizeText, nextSizeText);
+    const bool isHiddenChangedFlag = assign(_isHidden, nextIsHidden);
+    const bool highlightMarkerChangedFlag = assign(
+        _highlightMarker, nextHighlightMarker);
+    const bool normalForegroundChangedFlag = assign(
+        _normalForeground, nextNormalForeground);
+    const bool normalBackgroundChangedFlag = assign(
+        _normalBackground, nextNormalBackground);
+    const bool selectedForegroundChangedFlag = assign(
+        _selectedForeground, nextSelectedForeground);
+    const bool selectedBackgroundChangedFlag = assign(
+        _selectedBackground, nextSelectedBackground);
+    const bool cursorForegroundChangedFlag = assign(
+        _cursorForeground, nextCursorForeground);
+    const bool cursorBackgroundChangedFlag = assign(
+        _cursorBackground, nextCursorBackground);
+    const bool selectedCursorForegroundChangedFlag = assign(
+        _selectedCursorForeground, nextSelectedCursorForeground);
+    const bool selectedCursorBackgroundChangedFlag = assign(
+        _selectedCursorBackground, nextSelectedCursorBackground);
+
+    if (validChangedFlag) emit validChanged();
+    if (entryIdChangedFlag) emit entryIdChanged();
+    if (sourceIndexChangedFlag) emit sourceIndexChanged();
+    if (localPathChangedFlag) emit localPathChanged();
+    if (textChangedFlag) emit textChanged();
+    if (isFolderChangedFlag) emit isFolderChanged();
+    if (isImageChangedFlag) emit isImageChanged();
+    if (isSelectedChangedFlag) emit isSelectedChanged();
+    if (iconPathChangedFlag) emit iconPathChanged();
+    if (highlightStyleChangedFlag) emit highlightStyleChanged();
+    if (displayFieldsChangedFlag) emit displayFieldsChanged();
+    if (imageIdUrlChangedFlag) emit imageIdUrlChanged();
+    if (displayBaseNameChangedFlag) emit displayBaseNameChanged();
+    if (displayExtensionChangedFlag) emit displayExtensionChanged();
+    if (sizeTextChangedFlag) emit sizeTextChanged();
+    if (isHiddenChangedFlag) emit isHiddenChanged();
+    if (highlightMarkerChangedFlag) emit highlightMarkerChanged();
+    if (normalForegroundChangedFlag) emit normalForegroundChanged();
+    if (normalBackgroundChangedFlag) emit normalBackgroundChanged();
+    if (selectedForegroundChangedFlag) emit selectedForegroundChanged();
+    if (selectedBackgroundChangedFlag) emit selectedBackgroundChanged();
+    if (cursorForegroundChangedFlag) emit cursorForegroundChanged();
+    if (cursorBackgroundChangedFlag) emit cursorBackgroundChanged();
+    if (selectedCursorForegroundChangedFlag) {
+        emit selectedCursorForegroundChanged();
+    }
+    if (selectedCursorBackgroundChangedFlag) {
+        emit selectedCursorBackgroundChanged();
+    }
+}
+
+bool BrickVisualRow::valid() const { return _valid; }
+QString BrickVisualRow::entryId() const { return _entryId; }
+int BrickVisualRow::sourceIndex() const { return _sourceIndex; }
+QString BrickVisualRow::localPath() const { return _localPath; }
+QString BrickVisualRow::text() const { return _text; }
+bool BrickVisualRow::isFolder() const { return _isFolder; }
+bool BrickVisualRow::isImage() const { return _isImage; }
+bool BrickVisualRow::isSelected() const { return _isSelected; }
+QString BrickVisualRow::iconPath() const { return _iconPath; }
+QVariantMap BrickVisualRow::highlightStyle() const {
+    return _highlightStyle;
+}
+QVariantMap BrickVisualRow::displayFields() const {
+    return _displayFields;
+}
+QString BrickVisualRow::displayBaseName() const { return _displayBaseName; }
+QString BrickVisualRow::displayExtension() const { return _displayExtension; }
+QString BrickVisualRow::sizeText() const { return _sizeText; }
+bool BrickVisualRow::isHidden() const { return _isHidden; }
+QString BrickVisualRow::highlightMarker() const { return _highlightMarker; }
+QString BrickVisualRow::normalForeground() const {
+    return _normalForeground;
+}
+QString BrickVisualRow::normalBackground() const {
+    return _normalBackground;
+}
+QString BrickVisualRow::selectedForeground() const {
+    return _selectedForeground;
+}
+QString BrickVisualRow::selectedBackground() const {
+    return _selectedBackground;
+}
+QString BrickVisualRow::cursorForeground() const {
+    return _cursorForeground;
+}
+QString BrickVisualRow::cursorBackground() const {
+    return _cursorBackground;
+}
+QString BrickVisualRow::selectedCursorForeground() const {
+    return _selectedCursorForeground;
+}
+QString BrickVisualRow::selectedCursorBackground() const {
+    return _selectedCursorBackground;
+}
+QString BrickVisualRow::imageIdUrl() const { return _imageIdUrl; }
+
 BrickItem::BrickItem(QQuickItem *parent)
     : QQuickItem(parent) {
+    _visualModel = new BrickVisualRow(this);
     _isChangingGeometry = false;
     _row = -1;
     _column = -1;
@@ -3108,6 +4454,16 @@ BrickItem::BrickItem(QQuickItem *parent)
     _heightAnimation->setDuration(animationDuration);
     _heightAnimation->setEasingCurve(QEasingCurve::InOutQuad);
     _geometryAnimationGroup->addAnimation(_heightAnimation);
+
+    connect(_geometryAnimationGroup, &QAbstractAnimation::stateChanged,
+            this, [this](QAbstractAnimation::State current,
+                         QAbstractAnimation::State previous) {
+        const bool isRunning = current == QAbstractAnimation::Running;
+        const bool wasRunning = previous == QAbstractAnimation::Running;
+        if (isRunning != wasRunning) {
+            emit geometryAnimationRunningChanged();
+        }
+    });
 }
 
 void BrickItem::setRowColumn(int row, int column) {
@@ -3135,8 +4491,42 @@ void BrickItem::setIconLabelText(const QString &text) {
     emit iconLabelTextChanged();
 }
 
+void BrickItem::setVisualRow(const QVariantMap &visualRow) {
+    if (_visualRow == visualRow) {
+        return;
+    }
+    _visualRow = visualRow;
+    _visualModel->applySnapshot(visualRow);
+    emit visualRowChanged();
+}
+
+void BrickItem::setVisualFacadeReady(bool ready) {
+    if (_visualFacadeReady == ready) {
+        return;
+    }
+    _visualFacadeReady = ready;
+    emit visualFacadeReadyChanged();
+}
+
 QString BrickItem::iconLabelText() const {
     return _iconLabelText;
+}
+
+QVariantMap BrickItem::visualRow() const {
+    return _visualRow;
+}
+
+bool BrickItem::visualFacadeReady() const {
+    return _visualFacadeReady;
+}
+
+bool BrickItem::geometryAnimationRunning() const {
+    return _geometryAnimationGroup
+        && _geometryAnimationGroup->state() == QAbstractAnimation::Running;
+}
+
+QObject *BrickItem::visualModel() const {
+    return _visualModel;
 }
 
 void BrickItem::animateToRect(const QRectF &rect) {
@@ -3264,6 +4654,7 @@ void MasonryLayout::setModel(QAbstractItemModel *newModel) {
         disconnect(_model, nullptr, this, nullptr);
     }
     _model = newModel;
+    updateModelRoleCache();
     if (_model) {
         connect(_model, &QAbstractItemModel::dataChanged,
                 this, &MasonryLayout::onDataChanged);
@@ -3349,7 +4740,7 @@ int MasonryLayout::currentIndex() const {
 void MasonryLayout::updateCurrentImageIndex() {
     _currentImageIndex = 0;
     for (int i = 0; i < _currentIndex && i < _bricks.size(); i++) {
-        if (_bricks[i].image && _bricks[i].image->isImage()) {
+        if (brickIsImage(i)) {
             _currentImageIndex++;
         }
     }
@@ -3383,7 +4774,7 @@ void MasonryLayout::setSpacing(int newSpacing) {
         return;
     _spacing = newSpacing;
     emit spacingChanged();
-    rewrap(false);
+    requestRewrap(false);
 }
 
 QQuickItem *MasonryLayout::currentItem() const {
@@ -3423,18 +4814,21 @@ void MasonryLayout::setListView(bool isListView) {
     }
 
     for (int i = 0; i < _bricks.size(); i++) {
-        if (_bricks[i].image->isFolder()) {
+        if (brickIsFolder(i)) {
             if (!_listView) {
                 _bricks[i].originalSize = GridView_Folder;
                 _bricks[i].lineBreakAfter = false;
             }
             else {
-                _bricks[i].originalSize = QSize(0, _bricks[i].image->folderView() ? 0 : listRowHeight());
+                const bool folderView = _bricks[i].image
+                    && _bricks[i].image->folderView();
+                _bricks[i].originalSize = QSize(
+                    0, folderView ? 0 : listRowHeight());
                 _bricks[i].lineBreakAfter = true;
             }
         }
     }
-    rewrap();
+    requestRewrap();
 
     emit listViewChanged();
 }
@@ -3452,7 +4846,7 @@ void MasonryLayout::setCurrentImageIndex(int newCurrentImageIndex) {
         return;
     }
     for (int i = 0, imageIndex = 0; i < _bricks.size(); i++) {
-        if (_bricks[i].image->isImage()) {
+        if (brickIsImage(i)) {
             if (imageIndex == newCurrentImageIndex) {
                 setCurrentIndex(i);
                 break;
@@ -3508,8 +4902,13 @@ void MasonryLayout::setPaddingLeft(qreal newPaddingLeft) {
     if (qFuzzyCompare(_paddingLeft, newPaddingLeft))
         return;
     _paddingLeft = newPaddingLeft;
-    positionViewport();
-    rewrap();
+    if (_layoutUpdateDepth > 0) {
+        _layoutUpdateNeedsPositionViewport = true;
+    }
+    else {
+        positionViewport();
+    }
+    requestRewrap();
     emit paddingLeftChanged();
 }
 
@@ -3521,7 +4920,7 @@ void MasonryLayout::setPaddingRight(qreal newPaddingRight) {
     if (qFuzzyCompare(_paddingRight, newPaddingRight))
         return;
     _paddingRight = newPaddingRight;
-    rewrap();
+    requestRewrap();
     emit paddingRightChanged();
 }
 
@@ -3535,7 +4934,7 @@ void MasonryLayout::setPaddingTop(qreal newPaddingTop) {
 
     _paddingTop = newPaddingTop;
     _topItemOffset = _paddingTop;
-    rewrap();
+    requestRewrap();
     emit paddingTopChanged();
 }
 
@@ -3547,7 +4946,7 @@ void MasonryLayout::setPaddingBottom(qreal newPaddingBottom) {
     if (qFuzzyCompare(_paddingBottom, newPaddingBottom))
         return;
     _paddingBottom = newPaddingBottom;
-    rewrap();
+    requestRewrap();
     emit paddingBottomChanged();
 }
 
@@ -3561,7 +4960,9 @@ int MasonryLayout::listRowHeight() const {
 
 QVariantList MasonryLayout::currentImageExif() const {
     if (_currentIndex >= 0 && _currentIndex < _bricks.size()) {
-        return _bricks[_currentIndex].image->exifList();
+        ImageFile *image = const_cast<MasonryLayout *>(this)
+                               ->materializeImageForIndex(_currentIndex);
+        return image ? image->exifList() : QVariantList();
     }
     return QVariantList();
 }

@@ -272,10 +272,25 @@ private slots:
         QTRY_VERIFY(layout->property("contentHeight").toReal() > layout->width());
 
         const qreal start = layout->property("contentY").toReal();
-        QVERIFY(invokeWheel(panel, 7, 0, int(Qt::NoModifier), -53, 0));
-        QCOMPARE(layout->property("contentY").toReal(), start + 53);
-        QVERIFY(invokeWheel(panel, -31, 0, int(Qt::NoModifier), 0, 0));
-        QCOMPARE(layout->property("contentY").toReal(), start + 84);
+        // Feed both physical-pixel and angle deltas. GalleryPanel selects the
+        // physical axis on macOS and the angle axis on desktop mouse input,
+        // so the test remains about the gesture contract on every platform.
+        QVERIFY(invokeWheel(panel, 7, 7, int(Qt::NoModifier), -53, -53));
+        auto *scrollAnimation = panel->findChild<QObject *>(
+            QStringLiteral("galleryPanelScrollAnimation"));
+        QVERIFY(scrollAnimation);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            qAbs(layout->property("contentY").toReal() - (start + 53)) < 0.5,
+            1000);
+        QTRY_VERIFY_WITH_TIMEOUT(!scrollAnimation->property("running").toBool(),
+                                 1000);
+
+        QVERIFY(invokeWheel(panel, -31, -31, int(Qt::NoModifier), 0, 0));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            qAbs(layout->property("contentY").toReal() - (start + 84)) < 0.5,
+            1000);
+        QTRY_VERIFY_WITH_TIMEOUT(!scrollAnimation->property("running").toBool(),
+                                 1000);
     }
 
     void positionsInitialAndRecreatedAuthoritativeCursorInstantly() {

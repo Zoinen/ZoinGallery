@@ -1882,6 +1882,42 @@ private slots:
             QStringLiteral("c"), 2, {QStringLiteral("a")}, 20));
         QCOMPARE(cursorOnlyDataChanges.size(), 0);
 
+        QSignalSpy sparseSelectionChanges(
+            session->model(), &QAbstractItemModel::dataChanged);
+        const QVariantList delta{
+            QVariantMap{{QStringLiteral("index"), 8},
+                        {QStringLiteral("entryId"), QStringLiteral("b")},
+                        {QStringLiteral("selected"), true}},
+            QVariantMap{{QStringLiteral("index"), 3},
+                        {QStringLiteral("entryId"), QStringLiteral("a")},
+                        {QStringLiteral("selected"), false}},
+        };
+        QVERIFY(session->applyExternalStateDelta(
+            QStringLiteral("c"), 2, delta, 20, 21));
+        QCOMPARE(session->selectionRevision(), qulonglong(21));
+        QCOMPARE(session->currentIndex(), 2);
+        QVERIFY(session->isSelectedAt(0));
+        QVERIFY(!session->isSelectedAt(1));
+        QCOMPARE(sparseSelectionChanges.size(), 1);
+
+        // Revision mismatch and one invalid identity both reject the complete
+        // operation; the valid first row must not be changed partially.
+        QVERIFY(!session->applyExternalStateDelta(
+            QStringLiteral("c"), 2, delta, 20, 22));
+        const QVariantList invalidDelta{
+            QVariantMap{{QStringLiteral("index"), 8},
+                        {QStringLiteral("entryId"), QStringLiteral("b")},
+                        {QStringLiteral("selected"), false}},
+            QVariantMap{{QStringLiteral("index"), 999},
+                        {QStringLiteral("entryId"), QStringLiteral("c")},
+                        {QStringLiteral("selected"), true}},
+        };
+        QVERIFY(!session->applyExternalStateDelta(
+            QStringLiteral("c"), 2, invalidDelta, 21, 22));
+        QCOMPARE(session->selectionRevision(), qulonglong(21));
+        QVERIFY(session->isSelectedAt(0));
+        QVERIFY(!session->isSelectedAt(1));
+
         QSignalSpy viewportCursorChanges(
             session,
             &ZoinGallery::GallerySession::panelViewportCursorEntryIdChanged);
@@ -2017,6 +2053,219 @@ private slots:
         // item properties and the model observers.
         QVERIFY(session->applyExternalAppearance(appearance, 2));
         QCOMPARE(changedSpy.size(), 1);
+
+        runtime->shutdown();
+    }
+
+    void appliesRevisionedMetadataChunksWithoutResettingCatalog() {
+        QQmlEngine engine;
+        ZoinGallery::GalleryRuntime *runtime =
+            ZoinGallery::GalleryRuntime::install(&engine);
+        QVERIFY(runtime);
+        ZoinGallery::GallerySession *session =
+            runtime->createExternalSession(QStringLiteral("metadata-chunks"));
+        QVERIFY(session);
+
+        QVariantMap first{
+            {QStringLiteral("entryId"), QStringLiteral("first")},
+            {QStringLiteral("index"), 0},
+            {QStringLiteral("name"), QStringLiteral("first.png")},
+            {QStringLiteral("path"), QStringLiteral("/virtual/first.png")},
+            {QStringLiteral("isDir"), false},
+            {QStringLiteral("isImage"), true},
+            {QStringLiteral("isHidden"), true},
+            {QStringLiteral("displayBaseName"), QStringLiteral("first")},
+            {QStringLiteral("displayExtension"), QStringLiteral("png")},
+        };
+        QVariantMap second{
+            {QStringLiteral("entryId"), QStringLiteral("second")},
+            {QStringLiteral("index"), 1},
+            {QStringLiteral("name"), QStringLiteral("second.txt")},
+            {QStringLiteral("path"), QStringLiteral("/virtual/second.txt")},
+            {QStringLiteral("isDir"), false},
+            {QStringLiteral("isImage"), false},
+            {QStringLiteral("displayBaseName"), QStringLiteral("second")},
+            {QStringLiteral("displayExtension"), QStringLiteral("txt")},
+        };
+        const QVariantMap options{
+            {QStringLiteral("currentPath"), QStringLiteral("/virtual")},
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("metadataRevision"), qulonglong(77)},
+        };
+        QVERIFY(session->applyExternalCatalog({first, second}, 12, options));
+
+        const auto roles = session->model()->roleNames();
+        const int itemRole = roles.key(QByteArrayLiteral("imageFileRole"), -1);
+        const int sizeRole = roles.key(QByteArrayLiteral("fileSizeRole"), -1);
+        QVERIFY(itemRole >= 0);
+        QVERIFY(sizeRole >= 0);
+        ImageFile *firstItem = qvariant_cast<ImageFile *>(
+            session->model()->data(session->model()->index(0, 0), itemRole));
+        QVERIFY(firstItem);
+        QVERIFY(firstItem->displayFields().value(
+                    QStringLiteral("isHidden")).toBool());
+        QCOMPARE(session->model()->data(session->model()->index(0, 0), sizeRole)
+                     .toLongLong(),
+                 qint64(-1));
+        QVERIFY(!firstItem->lastModified().isValid());
+
+        QSignalSpy resetSpy(session->model(),
+                            &QAbstractItemModel::modelReset);
+        QSignalSpy changedSpy(session->model(),
+                              &QAbstractItemModel::dataChanged);
+        const QVariantMap style{
+            {QStringLiteral("icon"), QStringLiteral("qrc:/custom/png.svg")},
+        };
+        const QVariantMap firstMetadata{
+            {QStringLiteral("entryId"), QStringLiteral("first")},
+            {QStringLiteral("index"), 0},
+            {QStringLiteral("size"), qint64(8192)},
+            {QStringLiteral("mtimeNanos"), qint64(1'700'000'000'123'000'000LL)},
+            {QStringLiteral("sizeText"), QStringLiteral("8 KB")},
+            {QStringLiteral("mtimeText"), QStringLiteral("now")},
+            {QStringLiteral("modeText"), QStringLiteral("rw-r--r--")},
+            {QStringLiteral("highlightStyle"), style},
+        };
+
+        // Wrong catalog/revision and a malformed chunk are atomic no-ops.
+        QVERIFY(!session->applyExternalMetadata(
+            {firstMetadata}, 11, 77));
+        QVariantMap missing = firstMetadata;
+        missing.insert(QStringLiteral("entryId"), QStringLiteral("missing"));
+        QVERIFY(!session->applyExternalMetadata(
+            {firstMetadata, missing}, 12, 77));
+        QCOMPARE(changedSpy.size(), 0);
+
+        QVERIFY(session->applyExternalMetadata(
+            {firstMetadata}, 12, 77, false));
+        QCOMPARE(resetSpy.size(), 0);
+        QCOMPARE(qvariant_cast<ImageFile *>(session->model()->data(
+                     session->model()->index(0, 0), itemRole)),
+                 firstItem);
+        QCOMPARE(session->model()->data(session->model()->index(0, 0), sizeRole)
+                     .toLongLong(),
+                 qint64(8192));
+        QCOMPARE(firstItem->displayFields().value(
+                     QStringLiteral("sizeText")).toString(),
+                 QStringLiteral("8 KB"));
+        QVERIFY(firstItem->displayFields().value(
+                    QStringLiteral("isHidden")).toBool());
+        QCOMPARE(firstItem->highlightStyle(), style);
+        QCOMPARE(firstItem->iconPath(), QStringLiteral("qrc:/custom/png.svg"));
+        QVERIFY(firstItem->lastModified().isValid());
+        QCOMPARE(changedSpy.size(), 1);
+        const QList<int> metadataRoles =
+            changedSpy.constFirst().at(2).value<QList<int>>();
+        QVERIFY(metadataRoles.contains(FileListModel::FileSizeRole));
+        QVERIFY(metadataRoles.contains(
+            ZoinGallery::ExternalCatalogModel::VisualSnapshotRole));
+
+        const QVariantMap secondMetadata{
+            {QStringLiteral("entryId"), QStringLiteral("second")},
+            {QStringLiteral("index"), 1},
+            {QStringLiteral("size"), qint64(17)},
+            {QStringLiteral("mtimeNanos"), qint64(42'000'000)},
+            {QStringLiteral("sizeText"), QStringLiteral("17 B")},
+        };
+        QVERIFY(session->applyExternalMetadata(
+            {secondMetadata}, 12, 77, true));
+        QCOMPARE(resetSpy.size(), 0);
+        QVERIFY(!session->applyExternalMetadata(
+            {firstMetadata}, 12, 77, false));
+        QVERIFY(session->applyExternalCatalog({first, second}, 12, options));
+        QVERIFY(!session->applyExternalMetadata(
+            {firstMetadata}, 12, 77, false));
+
+        // Replacing the base catalog invalidates every outstanding chunk.
+        QVERIFY(session->applyExternalCatalog(
+            {first, second}, 13,
+            {{QStringLiteral("currentPath"), QStringLiteral("/virtual")},
+             {QStringLiteral("metadataDeferred"), true},
+             {QStringLiteral("metadataRevision"), qulonglong(78)}}));
+        QVERIFY(!session->applyExternalMetadata(
+            {firstMetadata}, 12, 77));
+
+        runtime->shutdown();
+    }
+
+    void deferredMetadataRequeuesVisiblePreviewForPublishedVersion() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(
+            QStringLiteral("deferred-preview.png"));
+        QImage source(41, 29, QImage::Format_ARGB32_Premultiplied);
+        source.fill(Qt::cyan);
+        QVERIFY(source.save(path));
+        const QFileInfo file(path);
+
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions runtimeOptions;
+        runtimeOptions.maxDecodeThreads = 1;
+        runtimeOptions.persistentCache = false;
+        ZoinGallery::GalleryRuntime *runtime =
+            ZoinGallery::GalleryRuntime::install(&engine, runtimeOptions);
+        QVERIFY(runtime);
+        ZoinGallery::GallerySession *session =
+            runtime->createExternalSession(
+                QStringLiteral("deferred-preview-version"));
+        QVERIFY(session);
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(model);
+
+        const QVariantMap base{
+            {QStringLiteral("entryId"), QStringLiteral("preview")},
+            {QStringLiteral("index"), 0},
+            {QStringLiteral("name"), file.fileName()},
+            {QStringLiteral("path"), path},
+            {QStringLiteral("isDir"), false},
+            {QStringLiteral("isImage"), true},
+        };
+        const QVariantMap options{
+            {QStringLiteral("currentPath"), directory.path()},
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("metadataRevision"), qulonglong(91)},
+        };
+        QVERIFY(session->applyExternalCatalog({base}, 23, options));
+
+        // Seed the exact race exercised by the phased protocol: the first
+        // painted catalog asks for image geometry while its version is still
+        // provisional, then the authoritative metadata arrives.
+        model->requestImageMetadata({0}, true);
+        for (int attempt = 0;
+             attempt < 20 && model->metadataSubmittedBatchCount() == 0;
+             ++attempt) {
+            QCoreApplication::processEvents();
+            QTest::qWait(1);
+        }
+        QVERIFY(model->metadataSubmittedBatchCount() > 0);
+
+        QSignalSpy changedSpy(model, &QAbstractItemModel::dataChanged);
+        const qint64 version =
+            file.lastModified().toMSecsSinceEpoch() * 1'000'000;
+        const QVariantMap metadata{
+            {QStringLiteral("entryId"), QStringLiteral("preview")},
+            {QStringLiteral("index"), 0},
+            {QStringLiteral("localPath"), path},
+            {QStringLiteral("size"), file.size()},
+            {QStringLiteral("mtimeNanos"), version},
+            {QStringLiteral("isImage"), true},
+        };
+        QVERIFY(session->applyExternalMetadata(
+            {metadata}, 23, 91, true));
+
+        bool invalidationRolesSeen = false;
+        for (const QList<QVariant> &arguments : changedSpy) {
+            const QList<int> roles = arguments.at(2).value<QList<int>>();
+            if (roles.contains(FileListModel::ImageIdUrlRole)
+                && roles.contains(FileListModel::ImageFullSizeRole)) {
+                invalidationRolesSeen = true;
+                break;
+            }
+        }
+        QVERIFY(invalidationRolesSeen);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            model->imageOriginalSizeAt(0), source.size(), 5000);
 
         runtime->shutdown();
     }

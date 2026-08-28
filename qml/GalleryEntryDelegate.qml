@@ -10,6 +10,12 @@ BrickItem {
 
     required property var panelRoot
     property var model
+    // Embedded catalog resets paint from the current model's POD snapshot.
+    // Keeping this facade authoritative after ImageFile materialization makes
+    // the later QObject pointer assignment invisible to the large delegate
+    // tree; thumbnails and metadata update the same snapshot role.
+    readonly property var effectiveModel:
+        visualModel && visualModel.valid === true ? visualModel : model
     property int viewIndex: -1
     property int sourceIndex: -1
     property alias thumbnailItem: thumbnail
@@ -25,51 +31,91 @@ BrickItem {
     readonly property real renderDpr:
         Math.max(0.01, Number(panelRoot.devicePixelRatio) || 1)
     readonly property string entryId:
-        panelRoot.session && viewIndex >= 0
-        ? panelRoot.session.entryIdAt(viewIndex) : ""
+        effectiveModel && effectiveModel.entryId !== undefined
+        ? effectiveModel.entryId
+        : (panelRoot.session && viewIndex >= 0
+           ? panelRoot.session.entryIdAt(viewIndex) : "")
     readonly property bool current:
         panelRoot.visualCursorIndex === viewIndex
     readonly property bool selected: panelRoot.effectiveEntrySelected(
-        entryId, Boolean(model && model.isSelected))
+        entryId, Boolean(effectiveModel && effectiveModel.isSelected))
     readonly property bool cursorChromeSuppressed:
         current && panelRoot.cursorChromeTransitionActive
     readonly property bool cursorChromeExposesUnderlay:
         panelRoot.cursorChromeTransitionActive
         && panelRoot.cursorChromeCoveredIndex === viewIndex
-    readonly property var displayFields:
-        model && model.displayFields ? model.displayFields : ({})
+    readonly property bool typedVisualModel: effectiveModel === visualModel
+    readonly property var legacyDisplayFields:
+        !typedVisualModel && effectiveModel && effectiveModel.displayFields
+        ? effectiveModel.displayFields : ({})
     readonly property string displayName:
-        model ? model.text : ""
+        visualFacadeReady && model ? model.text
+                                   : (effectiveModel
+                                      ? effectiveModel.text : "")
     readonly property string displayBaseName:
-        displayFields.displayBaseName !== undefined
-        ? displayFields.displayBaseName : displayName
+        typedVisualModel
+        ? visualModel.displayBaseName
+        : (legacyDisplayFields.displayBaseName !== undefined
+           ? legacyDisplayFields.displayBaseName : displayName)
     readonly property string displayExtension:
-        displayFields.displayExtension || ""
+        typedVisualModel ? visualModel.displayExtension
+                         : (legacyDisplayFields.displayExtension || "")
     readonly property string displaySize:
-        displayFields.sizeText || ""
+        typedVisualModel ? visualModel.sizeText
+                         : (legacyDisplayFields.sizeText || "")
     readonly property bool hiddenEntry:
-        Boolean(displayFields.isHidden)
-    readonly property var highlightStyle:
-        model && model.highlightStyle ? model.highlightStyle : ({})
-    readonly property var highlightPatch: {
+        typedVisualModel ? visualModel.isHidden
+                         : Boolean(legacyDisplayFields.isHidden)
+    readonly property var legacyHighlightStyle:
+        !typedVisualModel && effectiveModel && effectiveModel.highlightStyle
+        ? effectiveModel.highlightStyle : ({})
+    readonly property string highlightMarker:
+        typedVisualModel ? visualModel.highlightMarker
+                         : (legacyHighlightStyle.marker || "")
+    readonly property string highlightForegroundValue: {
         const cursor = current && panelRoot.showCursor
         if (cursor && selected)
-            return highlightStyle.selectedCursor || ({})
+            return typedVisualModel
+                    ? visualModel.selectedCursorForeground
+                    : ((legacyHighlightStyle.selectedCursor || ({}))
+                       .foreground || "")
         if (cursor)
-            return highlightStyle.cursor || ({})
+            return typedVisualModel
+                    ? visualModel.cursorForeground
+                    : ((legacyHighlightStyle.cursor || ({})).foreground || "")
         if (selected)
-            return highlightStyle.selected || ({})
-        return highlightStyle.normal || ({})
+            return typedVisualModel
+                    ? visualModel.selectedForeground
+                    : ((legacyHighlightStyle.selected || ({})).foreground || "")
+        return typedVisualModel
+                ? visualModel.normalForeground
+                : ((legacyHighlightStyle.normal || ({})).foreground || "")
     }
-    readonly property string highlightForegroundValue:
-        highlightPatch.foreground || ""
-    readonly property string highlightBackgroundValue:
-        highlightPatch.background || ""
-    readonly property var nonCursorHighlightPatch:
-        selected ? (highlightStyle.selected || ({}))
-                 : (highlightStyle.normal || ({}))
+    readonly property string highlightBackgroundValue: {
+        const cursor = current && panelRoot.showCursor
+        if (cursor && selected)
+            return typedVisualModel
+                    ? visualModel.selectedCursorBackground
+                    : ((legacyHighlightStyle.selectedCursor || ({}))
+                       .background || "")
+        if (cursor)
+            return typedVisualModel
+                    ? visualModel.cursorBackground
+                    : ((legacyHighlightStyle.cursor || ({})).background || "")
+        if (selected)
+            return typedVisualModel
+                    ? visualModel.selectedBackground
+                    : ((legacyHighlightStyle.selected || ({})).background || "")
+        return typedVisualModel
+                ? visualModel.normalBackground
+                : ((legacyHighlightStyle.normal || ({})).background || "")
+    }
     readonly property string nonCursorHighlightBackgroundValue:
-        nonCursorHighlightPatch.background || ""
+        typedVisualModel
+        ? (selected ? visualModel.selectedBackground
+                    : visualModel.normalBackground)
+        : ((selected ? (legacyHighlightStyle.selected || ({}))
+                     : (legacyHighlightStyle.normal || ({}))).background || "")
     readonly property color highlightForeground:
         selected
         ? panelRoot.markedTextColor
@@ -82,13 +128,13 @@ BrickItem {
     readonly property color fallbackIconColor:
         selected
         ? panelRoot.markedTextColor
-        : (model && model.isFolder
+        : (effectiveModel && effectiveModel.isFolder
            ? (current && panelRoot.showCursor
               ? panelRoot.foregroundColor : panelRoot.folderIconColor)
            : (highlightForegroundValue !== ""
               ? highlightForeground : panelRoot.mutedColor))
     readonly property color highlightLabelBackground:
-        highlightPatch.background || "#aa101216"
+        highlightBackgroundValue || panelRoot.labelBackgroundColor
     readonly property rect effectivePreviewRect: {
         if (detailsMode) {
             return Qt.rect(panelRoot.detailsRowInset,
@@ -124,16 +170,40 @@ BrickItem {
         return path >= 0 && value.indexOf("/lucide/", path) === path
     }
 
+    // System file URLs are resolved by the host's native image provider.  A
+    // precise shell icon can take noticeably longer than the first catalog
+    // frame (especially on a cold folder), so keep a small immutable fallback
+    // under it until that image is actually ready.  The host first supplies a
+    // shared native generic file/folder URL; this QRC image covers only its
+    // very first asynchronous load and is never used for custom icon URLs.
+    function isSystemFileIconSource(source) {
+        const value = source ? source.toString() : ""
+        return value.indexOf("image://") === 0
+                && value.indexOf("/file/") >= 0
+    }
+
+    function systemFileFallbackSource(logicalSize) {
+        const folder = effectiveModel && effectiveModel.isFolder
+        const iconName = folder
+                ? (displayName === ".." ? "folder-up" : "folder")
+                : "file"
+        const group = Math.max(1, Number(logicalSize) || 1) >= 48
+                ? "lucide-gallery" : "lucide"
+        return "qrc:/F4QtHost/icons/" + group + "/" + iconName + ".svg"
+    }
+
     // f4 supplies one model icon URL that can be reused by every Gallery
     // presentation. Native Windows icon resources contain separately drawn
-    // small frames; rendering the model's 128-DIP Gallery frame into a 16-DIP
-    // Details slot makes those icons noticeably darker and softer than
-    // Explorer. Retarget only image-provider file routes to the live visual
-    // size. Ordinary files/qrc URLs and Lucide routes remain untouched.
-    function sourceColorIconAtSize(source, logicalSize) {
+    // small frames, while large Lucide routes are already rasterized by the
+    // provider. Rendering either 128-DIP frame into a 16-DIP compact slot can
+    // lose single-physical-pixel detail completely. Retarget supported image
+    // provider routes to the live visual size; ordinary file/qrc URLs remain
+    // untouched.
+    function sourceColorIconAtSize(source, logicalSize, tint) {
         let value = source ? source.toString() : ""
         if (value.indexOf("image://") !== 0
-                || value.indexOf("/file/") < 0
+                || (value.indexOf("/file/") < 0
+                    && value.indexOf("/lucide/") < 0)
                 || value.indexOf("size=") < 0)
             return value
 
@@ -141,6 +211,19 @@ BrickItem {
         const dpr = Math.max(0.5, Number(renderDpr) || 1)
         value = value.replace(/([?&])size=[^&]*/, "$1size=" + size)
         value = value.replace(/([?&])dpr=[^&]*/, "$1dpr=" + dpr)
+        // Only monochrome Lucide routes are masks. Native/system file routes
+        // may be multicolour and must never receive a tint query.
+        if (value.indexOf("/lucide/") >= 0 && tint !== undefined
+                && tint !== null) {
+            const encodedTint = encodeURIComponent(String(tint))
+            if (/([?&])color=/.test(value)) {
+                value = value.replace(/([?&])color=[^&]*/,
+                                      "$1color=" + encodedTint)
+            } else {
+                value += (value.indexOf("?") >= 0 ? "&" : "?")
+                        + "color=" + encodedTint
+            }
+        }
         return value
     }
 
@@ -149,22 +232,61 @@ BrickItem {
         objectName: "gallerySelectionSurface-" + brick.viewIndex
         readonly property real visualBorderWidth: border.width
         readonly property color visualBorderColor: border.color
+        readonly property bool visualBorderPixelAligned: border.pixelAligned
         readonly property real surfaceInset: brick.detailsMode ? 0
                                               : (brick.columnsMode ? 1 : 2)
-        x: surfaceInset
-        y: surfaceInset
-        width: Math.max(0, parent.width - surfaceInset * 2)
+        readonly property rect nominalSurfaceRect: Qt.rect(
+            surfaceInset, surfaceInset,
+            Math.max(0, parent.width - surfaceInset * 2),
+            brick.iconsMode
+                ? Math.max(0, Math.min(parent.height - surfaceInset * 2,
+                    gridLabel.y + gridLabel.contentHeight + 3
+                    - surfaceInset))
+                : Math.max(0, parent.height - surfaceInset * 2))
+        // Quantize only the settled cursor. Applying the correction while its
+        // independent chrome, viewport, or owning brick is animating would
+        // turn smooth fractional motion into physical-pixel stair steps.
+        readonly property bool pixelAlignedCursorGeometry:
+            brick.current && brick.panelRoot.showCursor
+            && !brick.panelRoot.cursorPixelAlignmentSuspended
+            && !brick.geometryAnimationRunning
+        readonly property rect visualSurfaceRect:
+            pixelAlignedCursorGeometry
+            ? brick.panelRoot.alignViewportItemRectToDevicePixels(
+                  brick, nominalSurfaceRect)
+            : nominalSurfaceRect
+        readonly property real nominalBorderWidth: {
+            if (brick.cursorChromeExposesUnderlay)
+                return 0
+            // Compact presentations communicate persistent selection through
+            // the marked foreground only. Keep the thin border exclusively
+            // for the transient keyboard cursor; a selected non-current row
+            // must not acquire the large coloured card outline used by the
+            // image-centric presentations.
+            if (brick.detailsMode || brick.columnsMode) {
+                return brick.current && brick.panelRoot.showCursor
+                        && !brick.cursorChromeSuppressed ? 1 : 0
+            }
+            if (brick.selected)
+                return 3
+            return brick.current && brick.panelRoot.showCursor
+                    && !brick.cursorChromeSuppressed ? 1 : 0
+        }
+        x: visualSurfaceRect.x
+        y: visualSurfaceRect.y
+        width: visualSurfaceRect.width
         // Icons rows share the tallest brick's layout stride, but a short
         // filename must not inherit the empty label space required by a
         // neighbour with several wrapped lines. Keep hit testing/navigation
         // on the full row geometry and size only the painted selection chrome
         // to this brick's actual preview + rendered text content.
-        height: brick.iconsMode
-                ? Math.max(0, Math.min(parent.height - surfaceInset * 2,
-                    gridLabel.y + gridLabel.contentHeight + 3
-                    - surfaceInset))
-                : Math.max(0, parent.height - surfaceInset * 2)
+        height: visualSurfaceRect.height
         radius: brick.columnsMode || brick.detailsMode ? 4 : 6
+        // Keep rounded corners smooth in every state. Settled straight edges
+        // get their crispness from scene-space geometry snapping and Qt's
+        // pixel-aligned border, not from disabling antialiasing for the whole
+        // rounded rectangle.
+        antialiasing: true
         color: {
             if (brick.cursorChromeExposesUnderlay)
                 return "transparent"
@@ -189,37 +311,26 @@ BrickItem {
             if (brick.selected)
                 return "transparent"
             if (brickPointer.containsMouse && !brick.iconsMode)
-                return Qt.lighter(brick.panelRoot.backgroundColor, 1.25)
+                return brick.panelRoot.itemHoverColor
             if (brick.masonryMode || brick.gridMode)
-                return Qt.lighter(brick.panelRoot.backgroundColor,
-                                  brick.model && brick.model.isFolder ? 1.20 : 1.09)
+                return brick.effectiveModel && brick.effectiveModel.isFolder
+                        ? brick.panelRoot.directoryBackgroundColor
+                        : brick.panelRoot.itemBackgroundColor
             return "transparent"
         }
-        border.width: {
-            if (brick.cursorChromeExposesUnderlay)
-                return 0
-            // Compact presentations communicate persistent selection through
-            // the marked foreground only.  Keep the thin border exclusively
-            // for the transient keyboard cursor; a selected non-current row
-            // must not acquire the large coloured card outline used by the
-            // image-centric presentations.
-            if (brick.detailsMode || brick.columnsMode) {
-                return brick.current && brick.panelRoot.showCursor
-                        && !brick.cursorChromeSuppressed ? 1 : 0
-            }
-            if (brick.selected)
-                return 3
-            return brick.current && brick.panelRoot.showCursor
-                    && !brick.cursorChromeSuppressed ? 1 : 0
-        }
+        border.width: nominalBorderWidth
+        // Always let Qt round the rendered stroke after applying the actual
+        // window DPR. Cursor geometry may remain fractional during animation;
+        // this property quantizes only the physical border width.
+        border.pixelAligned: true
         border.color: brick.detailsMode
             ? brick.panelRoot.cursorBorderColor
             : (brick.columnsMode
-               ? Qt.lighter(brick.panelRoot.cursorColor, 1.35)
+               ? brick.panelRoot.cardCursorBorderColor
                : (brick.selected
                ? brick.panelRoot.selectionColor
                : (brick.current && brick.panelRoot.showCursor
-                  ? Qt.lighter(brick.panelRoot.cursorColor, 1.35)
+                  ? brick.panelRoot.cardCursorBorderColor
                   : brick.panelRoot.selectionColor)))
     }
 
@@ -246,7 +357,7 @@ BrickItem {
             Layout.preferredWidth: brick.panelRoot.detailsIconSlotSize
             Layout.preferredHeight: brick.panelRoot.detailsIconSlotSize
 
-            IconLabel {
+            Image {
                 id: detailsFallbackIcon
                 objectName: brick.detailsMode ? "galleryFallbackIcon-"
                                                 + brick.viewIndex : ""
@@ -254,21 +365,40 @@ BrickItem {
                     brick.fallbackIconColor
                 width: brick.panelRoot.detailsIconSize
                 height: brick.panelRoot.detailsIconSize
+                smooth: false
                 anchors.centerIn: parent
+                readonly property url modelIconSource:
+                    brick.effectiveModel
+                    ? brick.effectiveModel.iconPath : ""
                 readonly property bool lucideSource:
-                    brick.isLucideIconSource(
-                        brick.model ? brick.model.iconPath : "")
-                visible: Boolean(lucideSource
-                    && brick.model
+                    brick.detailsMode && brick.isLucideIconSource(
+                        modelIconSource)
+                readonly property bool systemFileSource:
+                    brick.detailsMode && brick.isSystemFileIconSource(
+                        modelIconSource)
+                visible: Boolean(brick.detailsMode
+                    && (lucideSource || (systemFileSource
+                                         && detailsSourceColorIcon.status
+                                            !== Image.Ready))
+                    && brick.effectiveModel
                     && thumbnail.source.toString() === ""
-                    && brick.model.iconPath.toString() !== ""
+                    && modelIconSource.toString() !== ""
+                    // A marker suppresses only a native/system icon (kept
+                    // redundant next to a colored marker glyph); a Lucide
+                    // icon is a thin monochrome glyph that combines fine
+                    // with a marker and must still show.
+                    && (!brick.highlightMarker || lucideSource)
                     && !(brick.panelRoot.viewerTransitionActive
-                         && brick.panelRoot.viewerTransitionEntryId
-                            === brick.entryId))
-                icon.source: brick.model ? brick.model.iconPath : ""
-                icon.width: brick.panelRoot.detailsIconSize
-                icon.height: brick.panelRoot.detailsIconSize
-                icon.color: effectiveIconColor
+                          && brick.panelRoot.viewerTransitionEntryId
+                             === brick.entryId))
+                source: brick.detailsMode && lucideSource
+                             ? brick.sourceColorIconAtSize(
+                                   modelIconSource,
+                                   brick.panelRoot.detailsIconSize,
+                                   effectiveIconColor)
+                             : (brick.detailsMode && systemFileSource
+                                ? brick.systemFileFallbackSource(
+                                      brick.panelRoot.detailsIconSize) : "")
             }
 
             Image {
@@ -278,15 +408,25 @@ BrickItem {
                 anchors.centerIn: parent
                 width: brick.panelRoot.detailsIconSize
                 height: brick.panelRoot.detailsIconSize
-                source: brick.sourceColorIconAtSize(
-                    brick.model ? brick.model.iconPath : "",
-                    brick.panelRoot.detailsIconSize)
+                source: brick.detailsMode && !detailsFallbackIcon.lucideSource
+                        ? brick.sourceColorIconAtSize(
+                              detailsFallbackIcon.modelIconSource,
+                              brick.panelRoot.detailsIconSize)
+                        : ""
                 fillMode: Image.PreserveAspectFit
-                smooth: true
-                cache: false
+                smooth: false
+                // Native Windows shell icon extraction can take tens or
+                // hundreds of milliseconds for a metadata batch. Never run
+                // an image-provider request on the GUI/input thread.
+                asynchronous: true
+                // The base catalog uses two shared native generic URLs.  Keep
+                // them cached and retain that resolved image while metadata
+                // replaces the source with the precise shell icon.
+                cache: true
+                retainWhileLoading: true
                 opacity: 1
                 visible: Boolean(
-                    brick.model
+                    brick.effectiveModel
                     && source.toString() !== ""
                     && !brick.isLucideIconSource(source)
                     && thumbnail.source.toString() === ""
@@ -300,10 +440,10 @@ BrickItem {
                                                 + brick.viewIndex : ""
                 anchors.centerIn: parent
                 visible: thumbnail.source.toString() === ""
-                         && (!brick.model
-                             || brick.model.iconPath.toString() === "")
-                text: brick.highlightStyle.marker || (brick.model
-                      && brick.model.isFolder
+                         && (!brick.effectiveModel
+                             || brick.effectiveModel.iconPath.toString() === "")
+                text: brick.highlightMarker || (brick.effectiveModel
+                      && brick.effectiveModel.isFolder
                       ? (brick.displayName === ".." ? "↰" : "▸") : " ")
                 color: brick.fallbackIconColor
                 font.pixelSize: brick.panelRoot.detailsNameFontPixelSize
@@ -314,11 +454,15 @@ BrickItem {
             id: detailsBaseName
             objectName: brick.detailsMode ? "galleryBaseName-"
                                             + brick.viewIndex : ""
-            text: brick.panelRoot.separateFileExtensions
-                ? brick.displayBaseName
-                : brick.displayBaseName
-                  + (brick.displayExtension !== ""
-                     ? "." + brick.displayExtension : "")
+            text: brick.panelRoot.quickSearchStyledText(
+                brick.panelRoot.separateFileExtensions
+                    ? brick.displayBaseName
+                    : brick.displayBaseName
+                      + (brick.displayExtension !== ""
+                         ? "." + brick.displayExtension : ""),
+                brick.entryId, 0)
+            textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
+                        ? Text.StyledText : Text.AutoText
             color: brick.highlightForegroundValue !== "" || brick.selected
                    ? brick.highlightForeground
                    : brick.panelRoot.foregroundColor
@@ -331,7 +475,11 @@ BrickItem {
             id: detailsExtension
             objectName: brick.detailsMode ? "galleryExtension-"
                                             + brick.viewIndex : ""
-            text: brick.displayExtension
+            text: brick.panelRoot.quickSearchStyledText(
+                brick.displayExtension, brick.entryId,
+                brick.panelRoot.codePointLength(brick.displayBaseName) + 1)
+            textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
+                        ? Text.StyledText : Text.AutoText
             visible: brick.panelRoot.separateFileExtensions
                      && text.length > 0
             color: brick.highlightForegroundValue !== "" || brick.selected
@@ -383,30 +531,33 @@ BrickItem {
         Rectangle {
             id: previewBackdrop
             objectName: "galleryThumbnailBackdrop-" + brick.viewIndex
+            readonly property bool enabledForPresentation:
+                brick.masonryMode || brick.gridMode
             anchors.fill: parent
             radius: 4
-            color: Qt.styleHints.colorScheme === Qt.Dark
-                   ? Qt.rgba(0, 0, 0, 0.3)
-                   : Qt.rgba(0, 0, 0, 0.2)
+            color: brick.panelRoot.previewBackdropColor
             // The card is presentation chrome, not part of the thumbnail.
             // Keep it below both fallback icon renderers so an empty image
             // URL can never dim an opaque native/system icon again.
-            visible: (brick.masonryMode || brick.gridMode)
+            visible: enabledForPresentation
                      && thumbnailSource.status !== Image.Ready
                      && !(brick.panelRoot.viewerTransitionActive
                           && brick.panelRoot.viewerTransitionEntryId
                              === brick.entryId)
         }
 
-        IconLabel {
+        Image {
             id: fallbackIcon
             objectName: brick.detailsMode ? ""
                                          : "galleryFallbackIcon-"
                                            + brick.viewIndex
             readonly property color effectiveIconColor:
                 brick.fallbackIconColor
-            property url source: {
-                const value = brick.model ? brick.model.iconPath.toString() : ""
+            property url modelIconSource: {
+                if (brick.detailsMode)
+                    return ""
+                const value = brick.effectiveModel
+                        ? brick.effectiveModel.iconPath.toString() : ""
                 const prefix = "qrc:/F4QtHost/icons/lucide/"
                 // The thinner Gallery pack compensates for genuinely large
                 // icon rendering. Columns is a compact text presentation just
@@ -417,6 +568,15 @@ BrickItem {
                             + value.substring(prefix.length)
                 return value
             }
+            readonly property bool lucideSource:
+                brick.isLucideIconSource(modelIconSource)
+            readonly property bool systemFileSource:
+                brick.isSystemFileIconSource(modelIconSource)
+            source: lucideSource
+                    ? brick.sourceColorIconAtSize(
+                          modelIconSource, width, effectiveIconColor)
+                    : (systemFileSource
+                       ? brick.systemFileFallbackSource(width) : "")
             anchors.centerIn: parent
             width: brick.detailsMode || brick.columnsMode
                    ? Math.min(parent.width, brick.panelRoot.detailsIconSize)
@@ -425,15 +585,19 @@ BrickItem {
                    : Math.max(0, Math.min(parent.width, parent.height)
                               * 0.55)
             height: width
-            icon.source: source
-            icon.width: width
-            icon.height: height
-            icon.color: effectiveIconColor
+            smooth: false
             opacity: brick.detailsMode || brick.columnsMode ? 1 : 0.78
             visible: !brick.detailsMode
-                     && brick.isLucideIconSource(source)
-                     && thumbnail.source.toString() === ""
-                     && source.toString() !== ""
+                      && (lucideSource || (systemFileSource
+                                           && sourceColorFallbackIcon.status
+                                              !== Image.Ready))
+                      && thumbnail.source.toString() === ""
+                      && source.toString() !== ""
+                      // A marker suppresses only a native/system icon (kept
+                      // redundant next to a colored marker glyph); a Lucide
+                      // icon is a thin monochrome glyph that combines fine
+                      // with a marker and must still show.
+                      && (!brick.highlightMarker || lucideSource)
                      && !(brick.panelRoot.viewerTransitionActive
                           && brick.panelRoot.viewerTransitionEntryId
                              === brick.entryId)
@@ -448,11 +612,17 @@ BrickItem {
             anchors.centerIn: parent
             width: fallbackIcon.width
             height: fallbackIcon.height
-            source: brick.sourceColorIconAtSize(
-                fallbackIcon.source, width)
+            source: !brick.detailsMode && !fallbackIcon.lucideSource
+                    ? brick.sourceColorIconAtSize(
+                          fallbackIcon.modelIconSource, width)
+                    : ""
             fillMode: Image.PreserveAspectFit
-            smooth: true
-            cache: false
+            smooth: false
+            // Keep system/native icon lookup out of the GUI thread. The
+            // fallback remains visible while the asynchronous result loads.
+            asynchronous: true
+            cache: true
+            retainWhileLoading: true
             opacity: 1
             visible: !brick.detailsMode
                      && !brick.isLucideIconSource(source)
@@ -468,11 +638,12 @@ BrickItem {
                                          : "galleryFallbackMarker-"
                                            + brick.viewIndex
             anchors.centerIn: parent
-            visible: brick.detailsMode
-                     && thumbnail.source.toString() === ""
-                     && fallbackIcon.source.toString() === ""
-            text: brick.highlightStyle.marker || (brick.model
-                  && brick.model.isFolder
+            // Details owns its fallback marker in detailsIconSlot above.
+            // Keeping this second copy visible would overlay that dedicated
+            // icon after inactive generic icon sources are gated to empty.
+            visible: false
+            text: brick.highlightMarker || (brick.effectiveModel
+                  && brick.effectiveModel.isFolder
                   ? (brick.displayName === ".." ? "↰" : "▸") : " ")
             color: brick.fallbackIconColor
             font.pixelSize: brick.panelRoot.detailsNameFontPixelSize
@@ -487,7 +658,16 @@ BrickItem {
                    / brick.renderDpr
             height: Math.round(parent.height * brick.renderDpr)
                     / brick.renderDpr
-            property url source: brick.model ? brick.model.imageIdUrl : ""
+            // Static row semantics remain snapshot-owned, but thumbnail URLs
+            // are inherently dynamic. Once this exact row's QObject facade
+            // is generation-checked and installed, follow only its notifying
+            // image URL instead of rebuilding the whole visualRow map for
+            // every cache publish/eviction.
+            property url source:
+                brick.visualFacadeReady && brick.model
+                ? brick.model.imageIdUrl
+                : (brick.effectiveModel
+                   ? brick.effectiveModel.imageIdUrl : "")
             // `source` is a url value. Strictly comparing that object with a
             // string makes even an empty URL look non-empty, leaving the dark
             // loading backdrop above ordinary file/folder icons.
@@ -562,13 +742,15 @@ BrickItem {
                 property size viewportSize: Qt.size(
                     width * brick.renderDpr,
                     height * brick.renderDpr)
-                property real sharpenAmount: 1.5
+                property real sharpenAmount:
+                    brick.masonryMode || brick.gridMode ? 1.5 : 0
                 property bool showCheckerboard:
                     brick.masonryMode || brick.gridMode
                 property int checkerboardSize:
                     4 * brick.renderDpr
                 property real borderRadius:
-                    4.1 * brick.renderDpr
+                    (brick.masonryMode || brick.gridMode)
+                    ? 4.1 * brick.renderDpr : 0
 
                 fragmentShader:
                     "qrc:/ZoinGallery/resources/shader.frag.qsb"
@@ -587,7 +769,11 @@ BrickItem {
         anchors.bottom: parent.bottom
         anchors.margins: 4
         padding: 6
-        text: brick.model ? brick.displayName : ""
+        text: brick.panelRoot.quickSearchStyledText(
+            brick.effectiveModel ? brick.displayName : "",
+            brick.entryId, 0)
+        textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
+                    ? Text.StyledText : Text.AutoText
         color: brick.hiddenEntry
                ? Qt.rgba(brick.highlightForeground.r,
                          brick.highlightForeground.g,
@@ -613,7 +799,13 @@ BrickItem {
         y: brick.effectivePreviewRect.y + brick.effectivePreviewRect.height + 3
         width: Math.max(0, parent.width - 8)
         height: Math.max(0, parent.height - y - 3)
-        text: brick.iconsMode ? brick.iconLabelText : brick.displayName
+        text: brick.iconsMode
+              ? brick.panelRoot.quickSearchStyledElidedText(
+                    brick.iconLabelText, brick.displayName, brick.entryId)
+              : brick.panelRoot.quickSearchStyledText(
+                    brick.displayName, brick.entryId, 0)
+        textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
+                    ? Text.StyledText : Text.AutoText
         font: brick.panelRoot.iconLabelFont
         color: brick.hiddenEntry
                ? Qt.rgba(brick.highlightForeground.r,
@@ -647,6 +839,7 @@ BrickItem {
             id: extensionMeasurement
             visible: false
             text: extensionLabel.text
+            textFormat: extensionLabel.textFormat
             font: extensionLabel.font
         }
         readonly property real sizeColumnWidth: brick.detailsMode
@@ -684,11 +877,15 @@ BrickItem {
                 ? parent.gap : 0
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            text: brick.panelRoot.separateFileExtensions
-                ? brick.displayBaseName
-                : brick.displayBaseName
-                  + (brick.displayExtension !== ""
-                     ? "." + brick.displayExtension : "")
+            text: brick.panelRoot.quickSearchStyledText(
+                brick.panelRoot.separateFileExtensions
+                    ? brick.displayBaseName
+                    : brick.displayBaseName
+                      + (brick.displayExtension !== ""
+                         ? "." + brick.displayExtension : ""),
+                brick.entryId, 0)
+            textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
+                        ? Text.StyledText : Text.AutoText
             color: brick.detailsMode
                    ? (brick.highlightForegroundValue !== "" || brick.selected
                       ? brick.highlightForeground
@@ -712,9 +909,15 @@ BrickItem {
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: parent.extensionColumnWidth
-            text: brick.displayExtension !== ""
-                ? (brick.detailsMode ? brick.displayExtension
-                   : "." + brick.displayExtension) : ""
+            text: brick.panelRoot.quickSearchStyledText(
+                brick.displayExtension !== ""
+                    ? (brick.detailsMode ? brick.displayExtension
+                       : "." + brick.displayExtension) : "",
+                brick.entryId,
+                brick.panelRoot.codePointLength(brick.displayBaseName)
+                    + (brick.detailsMode ? 1 : 0))
+            textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
+                        ? Text.StyledText : Text.AutoText
             color: brick.detailsMode
                    ? (brick.highlightForegroundValue !== "" || brick.selected
                       ? brick.highlightForeground
@@ -769,7 +972,10 @@ BrickItem {
         id: brickPointer
         objectName: "galleryBrickPointer-" + brick.viewIndex
         anchors.fill: parent
-        acceptedButtons: Qt.AllButtons
+        // Middle-button input belongs to GalleryPanel's shared wheel
+        // contract. Let it bubble to the panel-level GUI auto-scroll or
+        // console-forwarding surface instead of turning it into a tile click.
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
         hoverEnabled: true
         preventStealing: true
         onPressed: mouse => {
@@ -778,9 +984,23 @@ BrickItem {
                                                mouse.modifiers)
             mouse.accepted = true
         }
+        onPositionChanged: mouse => {
+            if (!(mouse.buttons & (Qt.LeftButton | Qt.RightButton)))
+                return
+            const point = mapToItem(brick.panelRoot, mouse.x, mouse.y)
+            brick.panelRoot.handlePointerDrag(point.x, point.y)
+        }
+        onReleased: {
+            brick.panelRoot.endPointerDrag()
+        }
+        onCanceled: {
+            brick.panelRoot.endPointerDrag()
+        }
         onDoubleClicked: mouse => {
             if ((mouse.button & Qt.LeftButton) !== 0)
                 brick.panelRoot.selectIndex(brick.viewIndex, true)
+            else if ((mouse.button & Qt.RightButton) !== 0)
+                brick.panelRoot.invertPanelSelection()
             mouse.accepted = true
         }
     }

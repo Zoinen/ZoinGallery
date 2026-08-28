@@ -29,6 +29,9 @@ public:
     QString currentPath;
     QString stableCursorEntryId;
     qulonglong catalogRevision = 0;
+    qulonglong metadataRevision = 0;
+    bool metadataDeferred = false;
+    bool metadataCompleted = false;
     bool catalogReady = true;
     qulonglong highlightRevision = 0;
     qulonglong selectionRevision = 0;
@@ -362,6 +365,10 @@ bool GallerySession::applyExternalCatalog(
     const bool requestedCatalogReady =
         !options.value(QStringLiteral("catalogProvisional")).toBool()
         && !options.value(QStringLiteral("deferCatalogReady")).toBool();
+    const bool metadataDeferred =
+        options.value(QStringLiteral("metadataDeferred")).toBool();
+    const qulonglong metadataRevision = options.value(
+        QStringLiteral("metadataRevision"), qulonglong(0)).toULongLong();
 
     const bool carriesPath = options.contains(QStringLiteral("currentPath"))
         || options.contains(QStringLiteral("path"));
@@ -387,6 +394,14 @@ bool GallerySession::applyExternalCatalog(
     }
 
     if (!pathChanged && revision == d->catalogRevision && revision != 0) {
+        const bool alreadyCompleted = metadataDeferred
+            && metadataRevision == d->metadataRevision
+            && d->metadataCompleted;
+        d->metadataRevision = metadataRevision;
+        if (!alreadyCompleted) {
+            d->metadataDeferred = metadataDeferred;
+            d->metadataCompleted = false;
+        }
         if (d->catalogReady != requestedCatalogReady) {
             d->catalogReady = requestedCatalogReady;
             emit catalogReadyChanged();
@@ -396,10 +411,17 @@ bool GallerySession::applyExternalCatalog(
 
     const QString previousCursorId = cursorEntryId();
     const int previousIndex = d->currentIndex;
-    if (!d->external->applyCatalog(entries)) {
+    // A directory transition necessarily replaces the current catalog. Skip
+    // the additional O(N) equivalence pass; it remains enabled for same-path
+    // revision bumps where retaining image objects and decode work matters.
+    if (!d->external->applyCatalog(entries, metadataDeferred,
+                                   !pathChanged)) {
         return false;
     }
     d->catalogRevision = revision;
+    d->metadataRevision = metadataRevision;
+    d->metadataDeferred = metadataDeferred;
+    d->metadataCompleted = false;
 
     const int remapped = d->external->rowForEntryId(previousCursorId);
     setCurrentIndex(remapped >= 0 ? remapped : previousIndex);
@@ -455,6 +477,47 @@ bool GallerySession::applyExternalAppearance(
         return false;
     }
     d->highlightRevision = revision;
+    return true;
+}
+
+bool GallerySession::applyExternalMetadata(
+    const QVariantList &entries, qulonglong catalogRevision,
+    qulonglong metadataRevision, bool final) {
+    if (d->shutdown || !d->external || !d->metadataDeferred
+        || catalogRevision != d->catalogRevision
+        || metadataRevision != d->metadataRevision) {
+        return false;
+    }
+    if (!d->external->applyMetadata(entries)) {
+        return false;
+    }
+    if (final) {
+        d->metadataDeferred = false;
+        d->metadataCompleted = true;
+    }
+    return true;
+}
+
+bool GallerySession::applyExternalStateDelta(
+    const QString &entryId, int cursorIndex,
+    const QVariantList &selectionChanges,
+    qulonglong baseSelectionRevision, qulonglong revision) {
+    if (d->shutdown || !d->external
+        || baseSelectionRevision != d->selectionRevision
+        || revision < baseSelectionRevision
+        || (!selectionChanges.isEmpty()
+            && revision == baseSelectionRevision)) {
+        return false;
+    }
+    if (!d->external->applyStateDelta(entryId, cursorIndex,
+                                      selectionChanges)) {
+        return false;
+    }
+    setCurrentIndex(d->external->cursorRow());
+    if (d->selectionRevision != revision) {
+        d->selectionRevision = revision;
+        emit selectionRevisionChanged();
+    }
     return true;
 }
 
@@ -551,6 +614,9 @@ bool GallerySession::isSelectedAt(int index) const {
 }
 
 QVariantMap GallerySession::highlightStyleAt(int index) const {
+    if (d->external) {
+        return d->external->highlightStyleAt(index);
+    }
     QAbstractItemModel *catalog = d->model();
     if (!catalog || index < 0 || index >= catalog->rowCount()) {
         return {};
@@ -765,6 +831,9 @@ void GallerySession::resetExternalSource() {
     d->currentIndex = -1;
     d->stableCursorEntryId.clear();
     d->catalogRevision = 0;
+    d->metadataRevision = 0;
+    d->metadataDeferred = false;
+    d->metadataCompleted = false;
     const bool catalogWasReady = d->catalogReady;
     d->catalogReady = true;
     d->highlightRevision = 0;

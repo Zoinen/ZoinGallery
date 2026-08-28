@@ -296,6 +296,35 @@ void ImageFile::setDisplayFields(const QVariantMap &displayFields) {
     emit displayFieldsChanged();
 }
 
+void ImageFile::initializeExternalCatalogRow(
+    const QString &folderPath, const QString &fileName, int index,
+    bool isFolder, bool isImage, const QString &iconPath, bool isSelected,
+    const QString &imageProviderName, const ImageInfo &info,
+    const QVariantMap &highlightStyle, const QVariantMap &displayFields,
+    bool deferDisplayMetadata) {
+    _folderPath = folderPath;
+    _fileName = fileName;
+    _index = index;
+    _isFolder = isFolder;
+    _isImage = isImage;
+    _iconPath = iconPath;
+    _isSelected = isSelected;
+    if (!imageProviderName.isEmpty()) {
+        _imageProviderName = imageProviderName;
+    }
+    _info = info;
+    _highlightStyle = highlightStyle;
+    _displayFields = displayFields;
+    _explicitDisplayFieldKeys.clear();
+    if (!deferDisplayMetadata) {
+        _explicitDisplayFieldKeys.reserve(displayFields.size());
+        for (auto it = displayFields.cbegin();
+             it != displayFields.cend(); ++it) {
+            _explicitDisplayFieldKeys.insert(it.key());
+        }
+    }
+}
+
 int ImageFile::index() const {
     return _index;
 }

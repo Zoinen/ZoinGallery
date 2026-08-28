@@ -101,9 +101,24 @@ public:
     Q_INVOKABLE void setExternalCatalogReady(bool ready);
     Q_INVOKABLE bool applyExternalAppearance(
         const QVariantList &entries, qulonglong highlightRevision);
+    // Applies a bounded metadata chunk to the current external catalog.
+    // Both revisions must exactly match the catalog advertised by the host;
+    // stale chunks from a directory that has already been replaced are
+    // rejected without changing the model.
+    Q_INVOKABLE bool applyExternalMetadata(
+        const QVariantList &entries, qulonglong catalogRevision,
+        qulonglong metadataRevision, bool final = false);
     Q_INVOKABLE bool applyExternalState(
         const QString &cursorEntryId, int cursorIndex,
         const QStringList &selectedEntryIds, qulonglong selectionRevision);
+    // Applies cursor state and a sparse selection overlay without scanning the
+    // immutable external catalog. baseSelectionRevision must exactly match
+    // the currently installed state; the operation is all-or-nothing.
+    Q_INVOKABLE bool applyExternalStateDelta(
+        const QString &cursorEntryId, int cursorIndex,
+        const QVariantList &selectionChanges,
+        qulonglong baseSelectionRevision,
+        qulonglong selectionRevision);
 
     // Compatibility convenience for hosts that carry the path separately.
     Q_INVOKABLE bool applySnapshot(

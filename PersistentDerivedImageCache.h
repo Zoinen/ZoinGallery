@@ -3,6 +3,7 @@
 
 #include "ImageFile.h"
 
+#include <QList>
 #include <QMutex>
 #include <QSharedPointer>
 #include <QWaitCondition>
@@ -45,6 +46,14 @@ public:
     // Fit key before opening a slow source and therefore reach a persisted
     // derived hit without a full materialization.
     static bool retrieveMetadata(ImageInfo &info);
+    // Resolve a catalog window under one cache critical section. Results keep
+    // their input-relative order inside each output list, so callers can emit
+    // one model update for all hits while forwarding only misses to source
+    // readers. The intended window is at least one masonry viewport/catalog
+    // admission batch (currently 128 items).
+    static void retrieveMetadataBatch(const QList<ImageInfo> &candidates,
+                                      QList<ImageInfo> &hits,
+                                      QList<ImageInfo> &misses);
     static void storeMetadata(const ImageInfo &info);
 
     static qint64 cacheSize();

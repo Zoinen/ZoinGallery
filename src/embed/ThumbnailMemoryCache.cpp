@@ -2,6 +2,8 @@
 
 #include "ProviderImageStore.h"
 
+#include <ZoinGallery/MediaTimingTrace.h>
+
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
@@ -305,6 +307,15 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::storeDecoded(
                 // a concurrent lookup must never observe a provider ID whose
                 // pixels have not reached ProviderImageStore yet.
                 if (_store) {
+                    MediaTimingTrace::Span publishSpan(
+                        QStringLiteral("qt.gallery.provider_store.publish"), {
+                            {QStringLiteral("providerId"), providerId},
+                            {QStringLiteral("imageWidth"), image.width()},
+                            {QStringLiteral("imageHeight"), image.height()},
+                            {QStringLiteral("imageBytes"), bytes},
+                            {QStringLiteral("transformKey"),
+                             normalizedTransform},
+                        });
                     _store->publish(providerId, image);
                 }
                 result = {providerId, image.size()};

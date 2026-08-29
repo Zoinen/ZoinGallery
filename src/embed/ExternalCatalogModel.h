@@ -95,8 +95,10 @@ public:
     qsizetype metadataPendingRequestCount() const;
     qsizetype metadataPeakPendingRequestCount() const;
     quint64 metadataSubmittedBatchCount() const;
-    static constexpr qsizetype metadataRequestLimit() { return 64; }
-    static constexpr qsizetype metadataRefillLowWatermark() { return 32; }
+    // One warm catalog window is deliberately large enough to resolve the
+    // common 100+ image folder in one metadata-cache lookup and one reflow.
+    static constexpr qsizetype metadataRequestLimit() { return 128; }
+    static constexpr qsizetype metadataRefillLowWatermark() { return 64; }
     static constexpr qsizetype probeRequestLimit() { return 32; }
     static constexpr qsizetype probeRefillLowWatermark() { return 16; }
     static constexpr qsizetype catalogFitRequestLimit() { return 8; }
@@ -164,6 +166,7 @@ private:
     };
 
     void handleImageInfo(const ImageInfo &info);
+    void handleImageInfos(const QList<ImageInfo> &infos);
     void handleImageProbe(const ImageProbeResult &result);
     void handleImageReady(const ImageDecodeRequest &request,
                           const QImage &image,

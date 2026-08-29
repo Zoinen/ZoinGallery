@@ -8,8 +8,12 @@ namespace ZoinGallery {
 
 namespace {
 
-constexpr qsizetype RetainedLeaseCapacity = 64;
-constexpr qint64 RetainedLeaseByteBudget = 512LL * 1024LL * 1024LL;
+// Leases for external sources retain disk-backed spools, not decoded pixels.
+// Keep enough of a large phone-camera folder to bridge the foreground
+// thumbnail and background Fit passes without downloading the first visible
+// sources again after the catalog walk has displaced them.
+constexpr qsizetype RetainedLeaseCapacity = 256;
+constexpr qint64 RetainedLeaseByteBudget = 1024LL * 1024LL * 1024LL;
 constexpr qint64 UnknownLeaseCharge = 128LL * 1024LL * 1024LL;
 
 } // namespace

@@ -3,8 +3,11 @@
 #include "DecodeManager.h"
 #include "ProviderImageStore.h"
 #include "ThumbnailMemoryCache.h"
+#include "ThumbnailLoader.h"
 #include "ViewerImageCache.h"
 #include "DecodeSizePolicy.h"
+
+#include <ZoinGallery/MediaTimingTrace.h>
 
 #include <QDateTime>
 #include <QDir>
@@ -23,6 +26,21 @@
 namespace ZoinGallery {
 
 namespace {
+
+QVariantMap decodeRequestTimingFields(const ImageDecodeRequest &request) {
+    QVariantMap fields = MediaTimingTrace::sourceFields(request.info.source);
+    fields.insert(QStringLiteral("sourceIdentity"),
+                  request.info.sourceIdentity());
+    fields.insert(QStringLiteral("targetWidth"), request.targetSize.width());
+    fields.insert(QStringLiteral("targetHeight"), request.targetSize.height());
+    fields.insert(QStringLiteral("viewer"), request.viewerRequest);
+    fields.insert(QStringLiteral("backgroundViewer"),
+                  request.backgroundViewerRequest);
+    fields.insert(QStringLiteral("highPriority"), request.highPriority);
+    fields.insert(QStringLiteral("requestNamespace"),
+                  request.requestNamespace);
+    return fields;
+}
 
 QString normalizedSessionId(QString id) {
     for (QChar &character : id) {
@@ -63,7 +81,12 @@ bool versionMatches(const QString &expectedVersion, qint64 expectedMtimeNs,
         expectedSize != actual.fileSize) {
         return false;
     }
-    if (expectedMtimeNs != 0 && actual.lastModified.isValid() &&
+    // An external source is decoded from a temporary materialized path. Its
+    // filesystem mtime describes the download time, not the authoritative
+    // VFS item. The opaque source revision/size checks above are the identity
+    // contract for that case; retain the mtime check for ordinary local files.
+    if (!actual.source.isValid() && expectedMtimeNs != 0 &&
+        actual.lastModified.isValid() &&
         expectedMtimeNs / 1000000 !=
             actual.lastModified.toMSecsSinceEpoch()) {
         return false;
@@ -207,6 +230,7 @@ QString defaultIconPath(bool directory, bool image) {
 
 constexpr auto EmbeddedProvisionalTransform =
     "embedded-provisional-v1";
+constexpr int CatalogThumbnailLongEdge = 384;
 constexpr int NativeDwellMs = 450;
 
 bool expensiveSource(const ImageSourceDescriptor &source) {
@@ -281,11 +305,7 @@ ExternalCatalogModel::ExternalCatalogModel(
     connect(_decodeManager, &DecodeManager::imageInfoReady, this,
             &ExternalCatalogModel::handleImageInfo);
     connect(_decodeManager, &DecodeManager::imagesInfoReady, this,
-            [this](const QList<ImageInfo> &infos) {
-                for (const ImageInfo &info : infos) {
-                    handleImageInfo(info);
-                }
-            });
+            &ExternalCatalogModel::handleImageInfos);
     connect(_decodeManager, &DecodeManager::imageReady, this,
             &ExternalCatalogModel::handleImageReady);
     connect(_decodeManager, &DecodeManager::imageReadFailed, this,
@@ -619,7 +639,14 @@ bool ExternalCatalogModel::catalogMatches(
 bool ExternalCatalogModel::applyCatalog(
     const QVariantList &values, bool metadataDeferred,
     bool checkEquivalentCatalog) {
+    MediaTimingTrace::Span timingSpan(
+        QStringLiteral("qt.gallery.model.catalog_apply"), {
+            {QStringLiteral("sessionId"), _sessionId},
+            {QStringLiteral("inputEntries"), values.size()},
+            {QStringLiteral("previousEntries"), _entries.size()},
+        });
     if (_shutdown) {
+        timingSpan.set(QStringLiteral("outcome"), QStringLiteral("shutdown"));
         return false;
     }
     const bool traceCatalog = qEnvironmentVariableIsSet(
@@ -638,7 +665,12 @@ bool ExternalCatalogModel::applyCatalog(
     bool hasAppearance = false;
     if (checkEquivalentCatalog
         && catalogMatches(values, &hasAppearance, metadataDeferred)) {
-        return !hasAppearance || applyAppearance(values);
+        const bool applied = !hasAppearance || applyAppearance(values);
+        timingSpan.set(QStringLiteral("outcome"),
+                       hasAppearance ? QStringLiteral("appearance-only")
+                                     : QStringLiteral("unchanged"));
+        timingSpan.set(QStringLiteral("applied"), applied);
+        return applied;
     }
 
     const QString activeViewerEntryId = _viewerEntryId;
@@ -1162,6 +1194,12 @@ bool ExternalCatalogModel::applyCatalog(
         scheduleViewerDecode();
     }
 
+    timingSpan.set(QStringLiteral("outcome"), QStringLiteral("reset"));
+    timingSpan.set(QStringLiteral("outputEntries"), _entries.size());
+    timingSpan.set(QStringLiteral("retainedSources"),
+                   retainedSourceIdentities.size());
+    timingSpan.set(QStringLiteral("invalidatedSources"),
+                   invalidatedSourceIdentities.size());
     return true;
 }
 
@@ -1899,6 +1937,14 @@ void ExternalCatalogModel::decodeImages(
         }
         if (_catalogProbeRequested && !_probePassComplete &&
             expensiveSource(entry.source) && !probeResolvedFor(entry)) {
+            MediaTimingTrace::event(
+                QStringLiteral("qt.gallery.thumbnail.admission"),
+                MediaTimingTrace::mergedFields(
+                    decodeRequestTimingFields(request), {
+                        {QStringLiteral("row"), row},
+                        {QStringLiteral("outcome"),
+                         QStringLiteral("probe-barrier")},
+                    }));
             enqueueProbeRows({row}, request.highPriority);
             scheduleProbePump();
         }
@@ -1916,7 +1962,9 @@ void ExternalCatalogModel::decodeImages(
         request.thumbnailTransformKey = thumbnailTransformKey(request);
         request.targetSize = stableDecodeTarget(
             request.targetSize,
-            entry.item ? entry.item->fullSize() : QSize(),
+            entry.originalSize.isValid()
+                ? entry.originalSize
+                : entry.item ? entry.item->fullSize() : QSize(),
             entry.thumbnailRequestedSize,
             DecodeSizeFamily::Thumbnail,
             expensiveSource(entry.source));
@@ -1939,6 +1987,14 @@ void ExternalCatalogModel::decodeImages(
 
         const QString key = thumbnailRequestKey(request);
         if (_pendingThumbnailRequests.contains(key)) {
+            MediaTimingTrace::event(
+                QStringLiteral("qt.gallery.thumbnail.admission"),
+                MediaTimingTrace::mergedFields(
+                    decodeRequestTimingFields(request), {
+                        {QStringLiteral("row"), row},
+                        {QStringLiteral("outcome"),
+                         QStringLiteral("local-pending")},
+                    }));
             continue;
         }
         const ThumbnailMemoryCache::AcquireResult cached =
@@ -1947,6 +2003,15 @@ void ExternalCatalogModel::decodeImages(
                 entry.size, request.targetSize,
                 request.thumbnailTransformKey);
         if (cached.state == ThumbnailMemoryCache::AcquireState::Hit) {
+            MediaTimingTrace::event(
+                QStringLiteral("qt.gallery.thumbnail.admission"),
+                MediaTimingTrace::mergedFields(
+                    decodeRequestTimingFields(request), {
+                        {QStringLiteral("row"), row},
+                        {QStringLiteral("outcome"), QStringLiteral("hit")},
+                        {QStringLiteral("providerId"),
+                         cached.handle.providerId},
+                    }));
             attachThumbnail(row, cached.handle.providerId);
             continue;
         }
@@ -1963,8 +2028,24 @@ void ExternalCatalogModel::decodeImages(
         if (cached.state == ThumbnailMemoryCache::AcquireState::Owner) {
             scopedRequests.append(request);
         }
+        MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.thumbnail.admission"),
+            MediaTimingTrace::mergedFields(
+                decodeRequestTimingFields(request), {
+                    {QStringLiteral("row"), row},
+                    {QStringLiteral("outcome"),
+                     cached.state == ThumbnailMemoryCache::AcquireState::Owner
+                         ? QStringLiteral("owner")
+                         : QStringLiteral("shared-pending")},
+                }));
     }
     if (!scopedRequests.isEmpty()) {
+        MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.thumbnail.batch_submitted"), {
+                {QStringLiteral("sessionId"), _sessionId},
+                {QStringLiteral("requested"), requests.size()},
+                {QStringLiteral("submitted"), scopedRequests.size()},
+            });
         _decodeManager->decodeImages(scopedRequests);
     }
 }
@@ -2109,90 +2190,129 @@ void ExternalCatalogModel::shutdown() {
 }
 
 void ExternalCatalogModel::handleImageInfo(const ImageInfo &info) {
-    if (_shutdown || info.requestNamespace != _sessionId) {
+    handleImageInfos({info});
+}
+
+void ExternalCatalogModel::handleImageInfos(
+    const QList<ImageInfo> &infos) {
+    if (_shutdown || infos.isEmpty()) {
         return;
     }
-    const QString sourceIdentity = info.sourceIdentity();
-    const auto pending = _metadataPendingVersions.constFind(sourceIdentity);
-    if (pending != _metadataPendingVersions.cend() &&
-        pending.value() == info.sourceVersionToken) {
-        _metadataPendingVersions.remove(sourceIdentity);
-    }
-    const int row = _sourceToRow.value(sourceIdentity, -1);
-    if (!validRow(row)) {
-        scheduleMetadataPump();
-        return;
-    }
-    Entry &entry = _entries[row];
-    if (!entry.image || entry.contentVersion != info.sourceVersionToken ||
-        !sourceAuthorityMatches(entry.source, info.source)) {
-        scheduleMetadataPump();
-        return;
-    }
-    if (info.sourceAccessFailed) {
-        // Network/offline/timeout is not evidence that this immutable source
-        // lacks metadata. Release the admission slot and retry with bounded
-        // backoff; an explicit viewer/visible request may still retry sooner.
-        const bool background = !info.highPriority;
-        scheduleMetadataRetry(sourceIdentity, entry.contentVersion,
-                              entry.source.resourceId, background);
-        scheduleMetadataPump();
-        return;
-    }
-    // A corrupt/unsupported image still completed its metadata probe. Keep
-    // that terminal result for this catalog generation so synchronous
-    // dataChanged/re-layout cycles cannot enqueue the same failed header
-    // read forever. A stale completion from an older catalog version never
-    // marks the replacement entry resolved.
-    _metadataResolvedPaths.insert(sourceIdentity);
-    const QString retryKey = sourceIdentity + QChar(0x1f) +
-        entry.contentVersion;
-    _metadataRetryAttempts.remove(retryKey);
-    _metadataRetryScheduled.remove(retryKey);
-    _backgroundMetadataRetries.remove(retryKey);
-    if (!versionMatches(entry.contentVersion, entry.mtimeNs,
-                        entry.size, info)) {
-        scheduleMetadataPump();
-        return;
-    }
-    ImageInfo currentInfo = info;
-    if (entry.mtimeNs != 0) {
-        currentInfo.lastModified = QDateTime::fromMSecsSinceEpoch(
-            entry.mtimeNs / 1000000, QTimeZone::UTC);
-    }
-    currentInfo.source = entry.source;
-    currentInfo.path = entry.sourceIdentity;
-    currentInfo.sourceVersionToken = entry.contentVersion;
-    if (entry.size >= 0) {
-        currentInfo.fileSize = entry.size;
-    }
-    entry.imageInfo = currentInfo;
-    entry.originalSize = rotateToOrientation(
-        currentInfo.imageSize, currentInfo.orientation);
-    if (entry.item) {
-        entry.item->setInfo(entry.imageInfo);
-        entry.item->setFullSize(entry.originalSize);
-    }
-    QList<int> roles{FileListModel::ImageFullSizeRole,
-                     KnownImageSizeRole};
-    if (info.isLast) {
-        roles.append(FileListModel::TimeToFlushRole);
-    }
-    emit dataChanged(index(row), index(row), roles);
-    if (_catalogFitWaitingMetadata.remove(sourceIdentity) &&
-        !_catalogFitResolvedSources.contains(sourceIdentity)) {
-        _catalogFitRows.prepend(row);
-        scheduleCatalogFitPump();
-    }
-    const auto plans = _viewerPlans;
-    for (auto plan = plans.cbegin(); plan != plans.cend(); ++plan) {
-        const int centerRow = rowForEntryId(plan.key());
-        if (validRow(centerRow)) {
-            scheduleViewerDecodeAt(centerRow, plan->viewportSize,
-                                   plan->prefetchCount);
+
+    int firstChangedRow = _entries.size();
+    int lastChangedRow = -1;
+    bool flushRequested = false;
+    bool catalogFitChanged = false;
+    bool viewerMetadataChanged = false;
+    bool acceptedNamespace = false;
+    bool allChangedMetadataCached = true;
+
+    for (const ImageInfo &info : infos) {
+        if (info.requestNamespace != _sessionId) {
+            continue;
+        }
+        acceptedNamespace = true;
+        const QString sourceIdentity = info.sourceIdentity();
+        const auto pending =
+            _metadataPendingVersions.constFind(sourceIdentity);
+        if (pending != _metadataPendingVersions.cend() &&
+            pending.value() == info.sourceVersionToken) {
+            _metadataPendingVersions.remove(sourceIdentity);
+        }
+        const int row = _sourceToRow.value(sourceIdentity, -1);
+        if (!validRow(row)) {
+            continue;
+        }
+        Entry &entry = _entries[row];
+        if (!entry.image ||
+            entry.contentVersion != info.sourceVersionToken ||
+            !sourceAuthorityMatches(entry.source, info.source)) {
+            continue;
+        }
+        if (info.sourceAccessFailed) {
+            // Network/offline/timeout is not evidence that this immutable
+            // source lacks metadata. Release the admission slot and retry with
+            // bounded backoff; an explicit viewer request may retry sooner.
+            scheduleMetadataRetry(sourceIdentity, entry.contentVersion,
+                                  entry.source.resourceId,
+                                  !info.highPriority);
+            continue;
+        }
+        // A corrupt/unsupported image still completed its metadata probe. Keep
+        // that terminal result for this catalog generation so dataChanged
+        // cannot enqueue the same failed header read forever.
+        _metadataResolvedPaths.insert(sourceIdentity);
+        const QString retryKey = sourceIdentity + QChar(0x1f) +
+            entry.contentVersion;
+        _metadataRetryAttempts.remove(retryKey);
+        _metadataRetryScheduled.remove(retryKey);
+        _backgroundMetadataRetries.remove(retryKey);
+        if (!versionMatches(entry.contentVersion, entry.mtimeNs,
+                            entry.size, info)) {
+            continue;
+        }
+        ImageInfo currentInfo = info;
+        if (entry.mtimeNs != 0) {
+            currentInfo.lastModified = QDateTime::fromMSecsSinceEpoch(
+                entry.mtimeNs / 1000000, QTimeZone::UTC);
+        }
+        currentInfo.source = entry.source;
+        currentInfo.path = entry.sourceIdentity;
+        currentInfo.sourceVersionToken = entry.contentVersion;
+        if (entry.size >= 0) {
+            currentInfo.fileSize = entry.size;
+        }
+        entry.imageInfo = currentInfo;
+        entry.originalSize = rotateToOrientation(
+            currentInfo.imageSize, currentInfo.orientation);
+        if (entry.item) {
+            entry.item->setInfo(entry.imageInfo);
+            entry.item->setFullSize(entry.originalSize);
+        }
+        allChangedMetadataCached =
+            allChangedMetadataCached && currentInfo.isCached;
+        firstChangedRow = qMin(firstChangedRow, row);
+        lastChangedRow = qMax(lastChangedRow, row);
+        flushRequested = flushRequested || info.isLast;
+        viewerMetadataChanged = true;
+        if (_catalogFitWaitingMetadata.remove(sourceIdentity) &&
+            !_catalogFitResolvedSources.contains(sourceIdentity)) {
+            _catalogFitRows.prepend(row);
+            catalogFitChanged = true;
         }
     }
-    scheduleMetadataPump();
+
+    // Cached dimensions arrive as one list. Publish one broad range only after
+    // every ImageFile has its final size, making Masonry perform one rewrap
+    // instead of one rewrap per manifest. Rows between sparse hits are safe:
+    // Masonry ignores ImageFiles whose fullSize is still invalid.
+    if (lastChangedRow >= firstChangedRow) {
+        QList<int> roles{FileListModel::ImageFullSizeRole,
+                         KnownImageSizeRole};
+        if (allChangedMetadataCached) {
+            roles.append(FileListModel::CachedMetadataBatchRole);
+        }
+        if (flushRequested) {
+            roles.append(FileListModel::TimeToFlushRole);
+        }
+        emit dataChanged(index(firstChangedRow), index(lastChangedRow), roles);
+    }
+    if (catalogFitChanged) {
+        scheduleCatalogFitPump();
+    }
+    if (viewerMetadataChanged) {
+        const auto plans = _viewerPlans;
+        for (auto plan = plans.cbegin(); plan != plans.cend(); ++plan) {
+            const int centerRow = rowForEntryId(plan.key());
+            if (validRow(centerRow)) {
+                scheduleViewerDecodeAt(centerRow, plan->viewportSize,
+                                       plan->prefetchCount);
+            }
+        }
+    }
+    if (acceptedNamespace) {
+        scheduleMetadataPump();
+    }
 }
 
 void ExternalCatalogModel::handleImageReady(
@@ -2201,6 +2321,14 @@ void ExternalCatalogModel::handleImageReady(
     if (request.requestNamespace != _sessionId) {
         return;
     }
+    MediaTimingTrace::event(
+        QStringLiteral("qt.gallery.decode.delivered"),
+        MediaTimingTrace::mergedFields(
+            decodeRequestTimingFields(request), {
+                {QStringLiteral("imageWidth"), image.width()},
+                {QStringLiteral("imageHeight"), image.height()},
+                {QStringLiteral("null"), image.isNull()},
+            }));
     const int authorityRow = _sourceToRow.value(
         request.info.sourceIdentity(), -1);
     if (!validRow(authorityRow) ||
@@ -2231,6 +2359,13 @@ void ExternalCatalogModel::handleImageReady(
         if (!request.viewerRequest) {
             releaseFailedThumbnailRequest(request);
         }
+        // A null decode from a VFS-backed source is commonly caused by a
+        // transiently invalid materialized lease during transport recovery.
+        // Keep the bounded retry path for it as well; local corrupt/unsupported
+        // files retain their terminal behavior.
+        if (request.info.source.isValid()) {
+            scheduleSourceDecodeRetry(request);
+        }
         return;
     }
     const int row = _sourceToRow.value(
@@ -2248,6 +2383,45 @@ void ExternalCatalogModel::handleImageReady(
     if (request.viewerRequest) {
         const ViewerImageCache::StoredImage stored =
             _viewerImageCache.storeDecodedImage(request, image, decodedInfo);
+        if (request.backgroundViewerRequest &&
+            request.fitToViewerRequest && _thumbnailCache) {
+            // The catalog Fit pass has already paid for the remote full-file
+            // read and decode. Derive one covering thumbnail now so scrolling
+            // to an unseen row never downloads that source a second time.
+            // A 384px source-aspect frame covers the fixed-grid 256/384 tiers
+            // and is small enough for the shared thumbnail-memory budget.
+            const QSize thumbnailTarget = stableDecodeTarget(
+                QSize(CatalogThumbnailLongEdge,
+                      CatalogThumbnailLongEdge),
+                entry.originalSize.isValid()
+                    ? entry.originalSize
+                    : entry.item ? entry.item->fullSize() : QSize(),
+                {},
+                DecodeSizeFamily::Thumbnail, true);
+            QVariantMap deriveFields = decodeRequestTimingFields(request);
+            deriveFields.insert(QStringLiteral("thumbnailTargetWidth"),
+                                thumbnailTarget.width());
+            deriveFields.insert(QStringLiteral("thumbnailTargetHeight"),
+                                thumbnailTarget.height());
+            MediaTimingTrace::Span deriveSpan(
+                QStringLiteral("qt.gallery.catalog_thumbnail_derive"),
+                deriveFields);
+            const QImage thumbnail = ThumbnailLoader::createThumbnail(
+                image, thumbnailTarget);
+            deriveSpan.set(QStringLiteral("ok"), !thumbnail.isNull());
+            deriveSpan.set(QStringLiteral("outputWidth"),
+                           thumbnail.width());
+            deriveSpan.set(QStringLiteral("outputHeight"),
+                           thumbnail.height());
+            if (!thumbnail.isNull()) {
+                _thumbnailCache->storeDecoded(
+                    _sessionId, entry.sourceIdentity,
+                    entry.contentVersion, entry.size, thumbnailTarget,
+                    QString::fromLatin1(
+                        ThumbnailMemoryCache::DefaultTransformKey),
+                    thumbnail);
+            }
+        }
         if (stored.presentable) {
             emit viewerSourceAtChanged(row);
             if (entry.id == _viewerEntryId) {
@@ -2280,6 +2454,9 @@ void ExternalCatalogModel::handleImageReadFailed(
     if (_shutdown || request.requestNamespace != _sessionId) {
         return;
     }
+    MediaTimingTrace::event(
+        QStringLiteral("qt.gallery.image_read.failed"),
+        decodeRequestTimingFields(request));
     const int authorityRow = _sourceToRow.value(
         request.info.sourceIdentity(), -1);
     if (!validRow(authorityRow) ||
@@ -2304,7 +2481,11 @@ void ExternalCatalogModel::handleImageReadFailed(
     }
 
     releaseFailedThumbnailRequest(request);
-    if (request.sourceAccessFailed && request.highPriority) {
+    // External/VFS reads can fail transiently while the media transport is
+    // reconnecting. A normal thumbnail must get the same bounded retry as a
+    // visible/high-priority request; otherwise one timeout leaves its card
+    // permanently empty until the folder is reopened.
+    if (request.sourceAccessFailed) {
         scheduleSourceDecodeRetry(request);
     }
 }
@@ -2345,7 +2526,8 @@ void ExternalCatalogModel::scheduleSourceDecodeRetry(
         return;
     }
     const int MaxAutomaticAttempts =
-        request.backgroundViewerRequest ? 1 : 3;
+        request.backgroundViewerRequest ? 1 :
+        (request.info.source.isValid() ? 8 : 3);
     const int attempt = _sourceDecodeRetryAttempts.value(retryKey) + 1;
     if (attempt > MaxAutomaticAttempts) {
         return;
@@ -2440,8 +2622,28 @@ void ExternalCatalogModel::attachThumbnail(
     }
     entry.thumbnailProviderId = providerId;
     _providerEntryIds.insert(providerId, entry.id);
+    const QVariantMap attachFields = MediaTimingTrace::mergedFields(
+        MediaTimingTrace::sourceFields(entry.source), {
+            {QStringLiteral("sessionId"), _sessionId},
+            {QStringLiteral("row"), row},
+            {QStringLiteral("entryId"), entry.id},
+            {QStringLiteral("providerId"), providerId},
+            {QStringLiteral("requestedWidth"),
+             entry.thumbnailRequestedSize.width()},
+            {QStringLiteral("requestedHeight"),
+             entry.thumbnailRequestedSize.height()},
+            {QStringLiteral("transformKey"),
+             entry.thumbnailTransformKey},
+            {QStringLiteral("provisional"),
+             !entry.thumbnailRequestedSize.isValid()},
+        });
+    MediaTimingTrace::Span attachSpan(
+        QStringLiteral("qt.gallery.thumbnail.attach"), attachFields);
     item->setImage({}, {});
     item->setImageId(providerId);
+    MediaTimingTrace::event(
+        QStringLiteral("qt.gallery.thumbnail.published"),
+        attachFields);
     emit dataChanged(index(row), index(row),
                      {FileListModel::ImageIdUrlRole});
     emit viewerSourceAtChanged(row);
@@ -2776,9 +2978,25 @@ void ExternalCatalogModel::pumpProbeRequests() {
     }
 
     if (!highRequests.isEmpty()) {
+        MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.probe.batch_submitted"), {
+                {QStringLiteral("sessionId"), _sessionId},
+                {QStringLiteral("priority"), QStringLiteral("high")},
+                {QStringLiteral("submitted"), highRequests.size()},
+                {QStringLiteral("pending"), _probePendingVersions.size()},
+                {QStringLiteral("catalogCursor"), _catalogProbeCursor},
+            });
         _decodeManager->probeImages(highRequests);
     }
     if (!backgroundRequests.isEmpty()) {
+        MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.probe.batch_submitted"), {
+                {QStringLiteral("sessionId"), _sessionId},
+                {QStringLiteral("priority"), QStringLiteral("background")},
+                {QStringLiteral("submitted"), backgroundRequests.size()},
+                {QStringLiteral("pending"), _probePendingVersions.size()},
+                {QStringLiteral("catalogCursor"), _catalogProbeCursor},
+            });
         _decodeManager->probeImages(backgroundRequests);
     }
 
@@ -2821,7 +3039,15 @@ void ExternalCatalogModel::handleImageProbe(
             30000, 500LL << qMin(attempt - 1, 6));
         _probeRetryNotBeforeMs.insert(
             cacheKey, QDateTime::currentMSecsSinceEpoch() + delayMs);
-        if (result.request.highPriority && attempt <= 3) {
+        // A failed high-priority probe must not keep re-entering the urgent
+        // queue while the catalog-wide probe barrier is still draining.  On
+        // a slow/virtual filesystem this otherwise lets two timed-out probe
+        // workers monopolize the lane indefinitely, so the viewer-fit pass
+        // never gets a chance to start.  Keep the retryable state for an
+        // explicit visibility/user-action retry; only schedule the old
+        // eager retry once the first pass is complete.
+        if (result.request.highPriority && attempt <= 3
+            && (!_catalogProbeRequested || _probePassComplete)) {
             const QString resourceId =
                 result.request.source.resourceId;
             QTimer::singleShot(
@@ -2860,6 +3086,17 @@ void ExternalCatalogModel::handleImageProbe(
             result.request.source.size, result.preview.size(),
             QString::fromLatin1(EmbeddedProvisionalTransform),
             result.preview);
+        MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.probe.provisional_stored"),
+            MediaTimingTrace::mergedFields(
+                MediaTimingTrace::sourceFields(result.request.source), {
+                    {QStringLiteral("providerId"), provisional.providerId},
+                    {QStringLiteral("previewWidth"), result.preview.width()},
+                    {QStringLiteral("previewHeight"), result.preview.height()},
+                    {QStringLiteral("sourceBytesRead"),
+                     result.sourceBytesRead},
+                    {QStringLiteral("rangeRequests"), result.rangeRequests},
+                }));
     }
     for (const QString &entryId : entryIds) {
         const int row = rowForEntryId(entryId);
@@ -2991,13 +3228,16 @@ ImageDecodeRequest ExternalCatalogModel::catalogFitRequestForRow(
         return {};
     }
     const Entry &entry = _entries.at(row);
-    if (!entry.image || !entry.item ||
-        !entry.item->fullSize().isValid()) {
+    const QSize originalSize = entry.originalSize.isValid()
+        ? entry.originalSize
+        : entry.item ? entry.item->fullSize() : QSize();
+    if (!entry.image || !originalSize.isValid()) {
         return {};
     }
+    const ImageInfo info = entry.imageInfo.sourceIdentity().isEmpty()
+        && entry.item ? entry.item->info() : entry.imageInfo;
     ImageDecodeRequest request = ViewerImageCache::makeRequest(
-        entry.item->info(), entry.item->fullSize(),
-        _lastViewerFitViewportSize);
+        info, originalSize, _lastViewerFitViewportSize);
     stabilizeViewerFitRequest(request);
     request.requestNamespace = _sessionId;
     request.info.requestNamespace = _sessionId;
@@ -3028,7 +3268,10 @@ void ExternalCatalogModel::stabilizeViewerFitRequest(
         entry.sourceIdentity, false).requestedSize;
     request.targetSize = stableDecodeTarget(
         request.targetSize,
-        entry.item ? entry.item->fullSize() : QSize(), previous,
+        entry.originalSize.isValid()
+            ? entry.originalSize
+            : entry.item ? entry.item->fullSize() : QSize(),
+        previous,
         DecodeSizeFamily::ViewerFit, expensiveSource(entry.source));
 }
 
@@ -3065,7 +3308,10 @@ void ExternalCatalogModel::pumpCatalogFitRequests() {
             _catalogFitResolvedSources.contains(entry.sourceIdentity)) {
             continue;
         }
-        if (!entry.item || !entry.item->fullSize().isValid()) {
+        const QSize originalSize = entry.originalSize.isValid()
+            ? entry.originalSize
+            : entry.item ? entry.item->fullSize() : QSize();
+        if (!originalSize.isValid()) {
             if (_metadataResolvedPaths.contains(entry.sourceIdentity)) {
                 _catalogFitResolvedSources.insert(entry.sourceIdentity);
             }
@@ -3120,11 +3366,16 @@ bool ExternalCatalogModel::viewerFitWindowReady(
             continue;
         }
         const Entry &entry = _entries.at(candidateRow);
-        if (!entry.item || !entry.item->fullSize().isValid()) {
+        const QSize originalSize = entry.originalSize.isValid()
+            ? entry.originalSize
+            : entry.item ? entry.item->fullSize() : QSize();
+        if (!originalSize.isValid()) {
             return false;
         }
+        const ImageInfo info = entry.imageInfo.sourceIdentity().isEmpty()
+            && entry.item ? entry.item->info() : entry.imageInfo;
         ImageDecodeRequest fit = ViewerImageCache::makeRequest(
-            entry.item->info(), entry.item->fullSize(), viewportSize);
+            info, originalSize, viewportSize);
         stabilizeViewerFitRequest(fit);
         if (!fit.targetSize.isValid() ||
             _viewerImageCache.needsDecode(fit)) {
@@ -3361,15 +3612,18 @@ void ExternalCatalogModel::pumpMetadataRequests() {
     _metadataPeakPending = qMax(
         _metadataPeakPending,
         static_cast<qsizetype>(_metadataPendingVersions.size()));
-    if (!highRequests.isEmpty()) {
+    if (!highRequests.isEmpty() || !backgroundRequests.isEmpty()) {
+        for (DecodeManager::VersionedImageInfoRequest &request :
+             highRequests) {
+            request.highPriority = true;
+        }
+        highRequests.append(std::move(backgroundRequests));
         ++_metadataSubmittedBatches;
+        // Resolve the complete admitted window through one cache call and
+        // one model update. Per-request priority is retained solely for
+        // misses that actually have to touch the external source.
         _decodeManager->readVersionedImagesInfo(
-            highRequests, false, true, _sessionId);
-    }
-    if (!backgroundRequests.isEmpty()) {
-        ++_metadataSubmittedBatches;
-        _decodeManager->readVersionedImagesInfo(
-            backgroundRequests, false, false, _sessionId);
+            highRequests, false, false, _sessionId);
     }
 }
 

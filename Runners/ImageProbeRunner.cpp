@@ -3,6 +3,8 @@
 #include "ThumbnailLoader.h"
 #include "src/embed/EmbeddedImageProbe.h"
 
+#include <ZoinGallery/MediaTimingTrace.h>
+
 #include <QBuffer>
 #include <QImageReader>
 
@@ -57,11 +59,21 @@ ImageProbeRunner::ImageProbeRunner(
 
 void ImageProbeRunner::run()
 {
+    QVariantMap timingFields =
+        ZoinGallery::MediaTimingTrace::sourceFields(_request.source);
+    timingFields.insert(QStringLiteral("highPriority"),
+                        _request.highPriority);
+    timingFields.insert(QStringLiteral("requestNamespace"),
+                        _request.requestNamespace);
+    ZoinGallery::MediaTimingTrace::Span timingSpan(
+        QStringLiteral("qt.gallery.probe"), timingFields);
     ZoinGallery::ImageProbeResult result;
     result.request = _request;
     if (!_provider || !_request.source.isValid()) {
         result.status = ZoinGallery::ImageSourceProbeStatus::Failed;
         result.diagnostic = QStringLiteral("source provider is unavailable");
+        timingSpan.set(QStringLiteral("outcome"),
+                       QStringLiteral("provider-unavailable"));
         emit imageProbeReady(result);
         emit finished(this);
         return;
@@ -70,6 +82,7 @@ void ImageProbeRunner::run()
     const ZoinGallery::ImageSourceProbeResult providerProbe =
         _provider->probeEmbedded(_request.source, _cancellation);
     if (_cancellation->isCanceled()) {
+        timingSpan.set(QStringLiteral("outcome"), QStringLiteral("cancelled"));
         emit finished(this);
         return;
     }
@@ -101,6 +114,8 @@ void ImageProbeRunner::run()
                 }, ZoinGallery::EmbeddedProbeLimits{},
                 _request.source.mimeType);
         if (_cancellation->isCanceled()) {
+            timingSpan.set(QStringLiteral("outcome"),
+                           QStringLiteral("cancelled"));
             emit finished(this);
             return;
         }
@@ -131,7 +146,17 @@ void ImageProbeRunner::run()
                     "embedded preview dimensions exceed the pixel budget");
             }
             else {
+                ZoinGallery::MediaTimingTrace::Span decodeSpan(
+                    QStringLiteral("qt.gallery.probe.preview_decode"),
+                    timingFields);
                 result.preview = reader.read();
+                decodeSpan.set(QStringLiteral("encodedBytes"), encoded.size());
+                decodeSpan.set(QStringLiteral("previewWidth"),
+                               result.preview.width());
+                decodeSpan.set(QStringLiteral("previewHeight"),
+                               result.preview.height());
+                decodeSpan.set(QStringLiteral("ok"),
+                               !result.preview.isNull());
                 if (result.preview.isNull()) {
                     result.status =
                         ZoinGallery::ImageSourceProbeStatus::NotFound;
@@ -149,6 +174,16 @@ void ImageProbeRunner::run()
         }
     }
 
+    timingSpan.set(QStringLiteral("status"),
+                   static_cast<int>(result.status));
+    timingSpan.set(QStringLiteral("found"), result.found());
+    timingSpan.set(QStringLiteral("sourceBytesRead"),
+                   result.sourceBytesRead);
+    timingSpan.set(QStringLiteral("rangeRequests"), result.rangeRequests);
+    timingSpan.set(QStringLiteral("encodedBytes"), encoded.size());
+    timingSpan.set(QStringLiteral("previewWidth"), result.preview.width());
+    timingSpan.set(QStringLiteral("previewHeight"), result.preview.height());
+    timingSpan.set(QStringLiteral("diagnostic"), result.diagnostic);
     emit imageProbeReady(result);
     emit finished(this);
 }

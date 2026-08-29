@@ -1,6 +1,8 @@
 #include "ImageReadRunner.h"
 #include "ThumbnailLoader.h"
 
+#include <ZoinGallery/MediaTimingTrace.h>
+
 #include <utility>
 
 ImageReadRunner::ImageReadRunner(
@@ -14,12 +16,35 @@ ImageReadRunner::ImageReadRunner(
 }
 
 void ImageReadRunner::run() {
-    if (PersistentDerivedImageCache::waitForLookup(
-            _derivedLookupGate, _cancellation)) {
+    QVariantMap timingFields =
+        ZoinGallery::MediaTimingTrace::sourceFields(_request.info.source);
+    timingFields.insert(QStringLiteral("sourceIdentity"),
+                        _request.info.sourceIdentity());
+    timingFields.insert(QStringLiteral("targetWidth"),
+                        _request.targetSize.width());
+    timingFields.insert(QStringLiteral("targetHeight"),
+                        _request.targetSize.height());
+    timingFields.insert(QStringLiteral("viewer"), _request.viewerRequest);
+    timingFields.insert(QStringLiteral("highPriority"),
+                        _request.highPriority);
+    ZoinGallery::MediaTimingTrace::Span timingSpan(
+        QStringLiteral("qt.gallery.image_read"), timingFields);
+    bool derivedLookupWon = false;
+    {
+        ZoinGallery::MediaTimingTrace::Span lookupSpan(
+            QStringLiteral("qt.gallery.derived_lookup_wait"), timingFields);
+        derivedLookupWon = PersistentDerivedImageCache::waitForLookup(
+            _derivedLookupGate, _cancellation);
+        lookupSpan.set(QStringLiteral("satisfied"), derivedLookupWon);
+    }
+    if (derivedLookupWon) {
+        timingSpan.set(QStringLiteral("outcome"),
+                       QStringLiteral("derived-cache-satisfied"));
         emit finished(this);
         return;
     }
     if (_cancellation->isCanceled()) {
+        timingSpan.set(QStringLiteral("outcome"), QStringLiteral("cancelled"));
         emit finished(this);
         return;
     }
@@ -35,6 +60,10 @@ void ImageReadRunner::run() {
                 failedRequest.sourceAccessFailed = true;
                 emit imageReadFailed(failedRequest);
             }
+            timingSpan.set(QStringLiteral("outcome"),
+                           _cancellation->isCanceled()
+                               ? QStringLiteral("cancelled")
+                               : QStringLiteral("materialize-failed"));
             emit finished(this);
             return;
         }
@@ -42,11 +71,33 @@ void ImageReadRunner::run() {
     }
     ImageData imageData(materializedRequest);
     imageData.sourceLease = lease;
-    if (ThumbnailLoader::readImage(imageData)) {
+    bool read = false;
+    {
+        ZoinGallery::MediaTimingTrace::Span compressedReadSpan(
+            QStringLiteral("qt.gallery.compressed_read"), timingFields);
+        read = ThumbnailLoader::readImage(imageData);
+        compressedReadSpan.set(QStringLiteral("ok"), read);
+        compressedReadSpan.set(QStringLiteral("compressedBytes"),
+                               imageData.data.size());
+    }
+    if (read) {
+        timingSpan.set(QStringLiteral("outcome"), QStringLiteral("ok"));
+        timingSpan.set(QStringLiteral("compressedBytes"),
+                       imageData.data.size());
         emit imageReadReady(imageData);
     }
     else {
-        emit imageReadFailed(_request);
+        // A materialized external path can disappear or become unreadable
+        // while the VFS/media transport is reconnecting. Treat that as a
+        // retryable source failure; otherwise the catalog sees a terminal
+        // decode failure and leaves the thumbnail empty for this generation.
+        ImageDecodeRequest failedRequest = _request;
+        if (_request.info.source.isValid()) {
+            failedRequest.sourceAccessFailed = true;
+        }
+        timingSpan.set(QStringLiteral("outcome"),
+                       QStringLiteral("compressed-read-failed"));
+        emit imageReadFailed(failedRequest);
     }
     emit finished(this);
 }

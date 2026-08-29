@@ -2,6 +2,8 @@
 #include "PersistentDerivedImageCache.h"
 #include "ThumbnailLoader.h"
 
+#include <ZoinGallery/MediaTimingTrace.h>
+
 #include <QThread>
 
 #include <utility>
@@ -28,6 +30,14 @@ ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool 
 }
 
 void ImageInfoReadRunner::run() {
+    QVariantMap timingFields =
+        ZoinGallery::MediaTimingTrace::sourceFields(_source);
+    timingFields.insert(QStringLiteral("path"), _path);
+    timingFields.insert(QStringLiteral("highPriority"), _highPriority);
+    timingFields.insert(QStringLiteral("requestNamespace"),
+                        _requestNamespace);
+    ZoinGallery::MediaTimingTrace::Span timingSpan(
+        QStringLiteral("qt.gallery.metadata"), timingFields);
     ImageInfo result{
         .path = _path,
         .source = _source,
@@ -46,6 +56,12 @@ void ImageInfoReadRunner::run() {
         result.fileSize = _source.size;
         if (_readDerivedMetadataCache &&
             PersistentDerivedImageCache::retrieveMetadata(result)) {
+            timingSpan.set(QStringLiteral("outcome"),
+                           QStringLiteral("derived-cache-hit"));
+            timingSpan.set(QStringLiteral("imageWidth"),
+                           result.imageSize.width());
+            timingSpan.set(QStringLiteral("imageHeight"),
+                           result.imageSize.height());
             emit imageInfoReady(result);
             emit finished(this);
             return;
@@ -54,6 +70,8 @@ void ImageInfoReadRunner::run() {
             ? _provider->materialize(_source, _cancellation)
             : QSharedPointer<ZoinGallery::ImageSourceLease>();
         if (_cancellation->isCanceled()) {
+            timingSpan.set(QStringLiteral("outcome"),
+                           QStringLiteral("cancelled"));
             emit finished(this);
             return;
         }
@@ -63,6 +81,8 @@ void ImageInfoReadRunner::run() {
             // a successfully opened corrupt/unsupported file.
             result.path = _source.runtimeIdentity();
             result.sourceAccessFailed = true;
+            timingSpan.set(QStringLiteral("outcome"),
+                           QStringLiteral("materialize-failed"));
             emit imageInfoReady(result);
             emit finished(this);
             return;
@@ -70,7 +90,17 @@ void ImageInfoReadRunner::run() {
         result.path = lease->localPath();
     }
 
-    const bool metadataRead = ThumbnailLoader::readMetadata(result);
+    bool metadataRead = false;
+    {
+        ZoinGallery::MediaTimingTrace::Span readSpan(
+            QStringLiteral("qt.gallery.metadata.decode"), timingFields);
+        metadataRead = ThumbnailLoader::readMetadata(result);
+        readSpan.set(QStringLiteral("ok"), metadataRead);
+        readSpan.set(QStringLiteral("imageWidth"),
+                     result.imageSize.width());
+        readSpan.set(QStringLiteral("imageHeight"),
+                     result.imageSize.height());
+    }
 
     if (_source.isValid()) {
         // Never leak a temporary materialized path into catalog identity or a
@@ -88,6 +118,11 @@ void ImageInfoReadRunner::run() {
     //     QThread::msleep(250);
     // }
 
+    timingSpan.set(QStringLiteral("outcome"),
+                   metadataRead ? QStringLiteral("ok")
+                                : QStringLiteral("decode-failed"));
+    timingSpan.set(QStringLiteral("imageWidth"), result.imageSize.width());
+    timingSpan.set(QStringLiteral("imageHeight"), result.imageSize.height());
     emit imageInfoReady(result);
     emit finished(this);
 }

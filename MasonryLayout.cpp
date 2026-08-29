@@ -2453,7 +2453,8 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
                 // ImageFile facade. Fold a synchronous decoder batch into one
                 // full-catalog rewrap; otherwise per-image header completions
                 // produce O(image-count * catalog-size) GUI-thread work.
-                if (roles.isEmpty()) {
+                if (roles.isEmpty() || roles.contains(
+                        FileListModel::CachedMetadataBatchRole)) {
                     flushLightweightRewrap();
                 }
                 else {
@@ -2528,12 +2529,18 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             }
         }
         if (roles.contains(FileListModel::ImageFullSizeRole)) {
-            bool animateLayoutChange = false;
-            for (int i = index; i <= indexTo; i++) {
-                if (_bricks[i].image && _bricks[i].image->fullSize().isValid()
-                    && !_bricks[i].image->info().isCached) {
-                    animateLayoutChange = true;
-                    break;
+            const bool cachedMetadataBatch =
+                roles.contains(FileListModel::CachedMetadataBatchRole);
+            bool animateLayoutChange = !cachedMetadataBatch;
+            if (animateLayoutChange) {
+                animateLayoutChange = false;
+                for (int i = index; i <= indexTo; i++) {
+                    if (_bricks[i].image &&
+                        _bricks[i].image->fullSize().isValid() &&
+                        !_bricks[i].image->info().isCached) {
+                        animateLayoutChange = true;
+                        break;
+                    }
                 }
             }
             if (isEmbedded() || _skipThumbnailBackfillUntilFlush ||
@@ -2589,7 +2596,10 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             }
         }
         if (roles.contains(FileListModel::TimeToFlushRole)) {
-            const bool animateLayoutChange = !_bricks[index].image || !_bricks[index].image->info().isCached;
+            const bool animateLayoutChange =
+                !roles.contains(FileListModel::CachedMetadataBatchRole) &&
+                (!_bricks[index].image ||
+                 !_bricks[index].image->info().isCached);
             onThumbnailReadFinished(animateLayoutChange);
         }
     }

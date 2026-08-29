@@ -724,50 +724,103 @@ QByteArray PersistentDerivedImageCache::createImageForCache(
 }
 
 bool PersistentDerivedImageCache::retrieveMetadata(ImageInfo &info) {
-    if (!info.source.isValid() ||
-        (!hasPersistentVersionStrength(info) &&
-         !hasSessionVersionStrength(info))) {
+    QList<ImageInfo> hits;
+    QList<ImageInfo> misses;
+    retrieveMetadataBatch({info}, hits, misses);
+    if (hits.size() != 1) {
         return false;
     }
-    const MetadataKey requestedKey = metadataKeyForInfo(info);
-    if (!requestedKey.isValid()) {
-        return false;
+    info = std::move(hits.front());
+    return true;
+}
+
+void PersistentDerivedImageCache::retrieveMetadataBatch(
+    const QList<ImageInfo> &candidates, QList<ImageInfo> &hits,
+    QList<ImageInfo> &misses) {
+    struct MetadataRead {
+        ImageInfo info;
+        MetadataKey key;
+        QString path;
+        QByteArray entry;
+        bool eligible = false;
+    };
+
+    hits.clear();
+    misses.clear();
+    hits.reserve(candidates.size());
+    misses.reserve(candidates.size());
+
+    QList<MetadataRead> reads;
+    reads.reserve(candidates.size());
+    for (const ImageInfo &candidate : candidates) {
+        MetadataRead read{.info = candidate};
+        if (candidate.source.isValid() &&
+            (hasPersistentVersionStrength(candidate) ||
+             hasSessionVersionStrength(candidate))) {
+            read.key = metadataKeyForInfo(candidate);
+            read.eligible = read.key.isValid();
+            if (read.eligible) {
+                read.path = metadataCacheFilePath(read.key);
+                read.eligible = !read.path.isEmpty();
+            }
+        }
+        reads.append(std::move(read));
     }
-    const QString path = metadataCacheFilePath(requestedKey);
-    QByteArray entry;
+
+    // The old per-runner path acquired this mutex, opened one manifest, then
+    // opened it again merely to update its LRU timestamp. A catalog hit now
+    // performs all short reads under one lock and touches each already-open
+    // file before releasing it. Parsing remains outside the global lock.
     {
         QMutexLocker locker(&cacheMutex);
-        const QFileInfo fileInfo(path);
-        if (!fileInfo.isFile() || fileInfo.size() <= 0 ||
-            fileInfo.size() > MaximumMetadataEntryBytes) {
-            return false;
-        }
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) {
-            return false;
-        }
-        entry = file.readAll();
-        if (entry.size() != fileInfo.size()) {
-            return false;
+        const QDateTime touchedAt = QDateTime::currentDateTimeUtc();
+        for (MetadataRead &read : reads) {
+            if (!read.eligible) {
+                continue;
+            }
+            QFile file(read.path);
+            if (!file.open(QIODevice::ReadOnly)) {
+                continue;
+            }
+            const qint64 expectedSize = file.size();
+            if (expectedSize <= 0 ||
+                expectedSize > MaximumMetadataEntryBytes) {
+                continue;
+            }
+            read.entry = file.readAll();
+            if (read.entry.size() != expectedSize) {
+                read.entry.clear();
+                continue;
+            }
+            file.setFileTime(touchedAt,
+                             QFileDevice::FileModificationTime);
         }
     }
 
-    MetadataKey storedKey;
-    QSize imageSize;
-    ExifOrientation orientation = ExifOrientation::Horizontal;
-    QVariantMap exif;
-    if (!parseMetadataEntry(entry, storedKey, imageSize, orientation, exif) ||
-        !metadataKeysEqual(requestedKey, storedKey)) {
-        removeMetadataIfUnchanged(path, entry, requestedKey);
-        return false;
+    for (MetadataRead &read : reads) {
+        if (!read.eligible || read.entry.isEmpty()) {
+            misses.append(std::move(read.info));
+            continue;
+        }
+
+        MetadataKey storedKey;
+        QSize imageSize;
+        ExifOrientation orientation = ExifOrientation::Horizontal;
+        QVariantMap exif;
+        if (!parseMetadataEntry(read.entry, storedKey, imageSize,
+                                orientation, exif) ||
+            !metadataKeysEqual(read.key, storedKey)) {
+            removeMetadataIfUnchanged(read.path, read.entry, read.key);
+            misses.append(std::move(read.info));
+            continue;
+        }
+        read.info.imageSize = imageSize;
+        read.info.orientation = orientation;
+        read.info.exif = std::move(exif);
+        read.info.fileSize = read.info.source.size;
+        read.info.isCached = true;
+        hits.append(std::move(read.info));
     }
-    info.imageSize = imageSize;
-    info.orientation = orientation;
-    info.exif = std::move(exif);
-    info.fileSize = info.source.size;
-    info.isCached = true;
-    touchFile(path);
-    return true;
 }
 
 void PersistentDerivedImageCache::storeMetadata(const ImageInfo &info) {

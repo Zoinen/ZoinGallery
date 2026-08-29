@@ -10,6 +10,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <algorithm>
 #include <atomic>
 #include <utility>
 
@@ -240,6 +241,162 @@ private slots:
         QVERIFY(changedSpy.constFirst().at(0)
                     .value<ImageInfo>().sourceAccessFailed);
         QCOMPARE(coldProvider->materializations.load(), 1);
+    }
+
+    void metadataManifestsAreRetrievedAsOneLargeBatch() {
+        constexpr int hitCount = 128;
+        QList<ImageInfo> candidates;
+        candidates.reserve(hitCount + 1);
+        for (int index = 0; index <= hitCount; ++index) {
+            ImageDecodeRequest request = requestFor(
+                QStringLiteral("strong"),
+                QStringLiteral("batch-revision-%1").arg(index),
+                QStringLiteral("batch-resource-%1").arg(index));
+            request.info.source.sourceKey =
+                QStringLiteral("remote/batch/image-%1.png").arg(index);
+            request.info.source.displayName =
+                QStringLiteral("image-%1.png").arg(index);
+            request.info.source.mimeType = QStringLiteral("image/png");
+            request.info.source.size = 10'000 + index;
+            request.info.fileSize = request.info.source.size;
+            request.info.imageSize = QSize(640 + index, 480 + index);
+            request.info.requestNamespace = QStringLiteral("batch-test");
+            request.info.isLast = index == hitCount;
+            if (index < hitCount) {
+                PersistentDerivedImageCache::storeMetadata(request.info);
+            }
+            request.info.imageSize = {};
+            candidates.append(request.info);
+        }
+
+        QList<ImageInfo> hits;
+        QList<ImageInfo> misses;
+        PersistentDerivedImageCache::retrieveMetadataBatch(
+            candidates, hits, misses);
+
+        QCOMPARE(hits.size(), hitCount);
+        QCOMPARE(misses.size(), 1);
+        for (int index = 0; index < hits.size(); ++index) {
+            QVERIFY(hits.at(index).isCached);
+            QCOMPARE(hits.at(index).imageSize,
+                     QSize(640 + index, 480 + index));
+            QCOMPARE(hits.at(index).requestNamespace,
+                     QStringLiteral("batch-test"));
+            QVERIFY(!hits.at(index).isLast);
+        }
+        QCOMPARE(misses.first().source.contentVersion,
+                 QStringLiteral("batch-revision-128"));
+        QVERIFY(misses.first().isLast);
+    }
+
+    void decodeManagerPublishesCachedMetadataAsOneBatch() {
+        constexpr int imageCount = 128;
+        QList<DecodeManager::VersionedImageInfoRequest> requests;
+        requests.reserve(imageCount);
+        for (int index = 0; index < imageCount; ++index) {
+            ImageDecodeRequest request = requestFor(
+                QStringLiteral("strong"),
+                QStringLiteral("manager-revision-%1").arg(index),
+                QStringLiteral("manager-resource-%1").arg(index));
+            request.info.source.sourceKey =
+                QStringLiteral("remote/manager/image-%1.png").arg(index);
+            request.info.source.displayName =
+                QStringLiteral("image-%1.png").arg(index);
+            request.info.source.mimeType = QStringLiteral("image/png");
+            request.info.source.size = 20'000 + index;
+            request.info.fileSize = request.info.source.size;
+            request.info.imageSize = QSize(800 + index, 600 + index);
+            PersistentDerivedImageCache::storeMetadata(request.info);
+            DecodeManager::VersionedImageInfoRequest infoRequest{
+                request.info.source.runtimeIdentity(),
+                request.info.sourceVersionToken,
+                request.info.source};
+            infoRequest.highPriority = index < 16;
+            requests.append(std::move(infoRequest));
+        }
+
+        auto provider = QSharedPointer<CountingSourceProvider>::create();
+        DecodeManager manager(nullptr, 4, provider);
+        int batchSignals = 0;
+        int singleSignals = 0;
+        QList<ImageInfo> received;
+        connect(&manager, &DecodeManager::imagesInfoReady, this,
+                [&](const QList<ImageInfo> &infos) {
+                    ++batchSignals;
+                    received = infos;
+                });
+        connect(&manager, &DecodeManager::imageInfoReady, this,
+                [&](const ImageInfo &) { ++singleSignals; });
+
+        manager.readVersionedImagesInfo(
+            requests, false, false, QStringLiteral("manager-batch"));
+
+        QCOMPARE(batchSignals, 1);
+        QCOMPARE(singleSignals, 0);
+        QCOMPARE(received.size(), imageCount);
+        QCOMPARE(provider->materializations.load(), 0);
+        QCOMPARE(provider->rangeReads.load(), 0);
+        QCOMPARE(std::count_if(received.cbegin(), received.cend(),
+                               [](const ImageInfo &info) {
+                                   return info.highPriority;
+                               }),
+                 16);
+        QVERIFY(received.constLast().isLast);
+        QCOMPARE(received.constLast().requestNamespace,
+                 QStringLiteral("manager-batch"));
+    }
+
+    void decodeManagerFlushesMixedBatchAfterFinalMiss() {
+        constexpr int imageCount = 128;
+        constexpr int missingIndex = 37;
+        QList<DecodeManager::VersionedImageInfoRequest> requests;
+        requests.reserve(imageCount);
+        for (int index = 0; index < imageCount; ++index) {
+            ImageDecodeRequest request = requestFor(
+                QStringLiteral("strong"),
+                QStringLiteral("mixed-revision-%1").arg(index),
+                QStringLiteral("mixed-resource-%1").arg(index));
+            request.info.source.sourceKey =
+                QStringLiteral("remote/mixed/image-%1.png").arg(index);
+            request.info.source.displayName =
+                QStringLiteral("image-%1.png").arg(index);
+            request.info.source.mimeType = QStringLiteral("image/png");
+            request.info.source.size = 30'000 + index;
+            request.info.fileSize = request.info.source.size;
+            request.info.imageSize = QSize(1000 + index, 700 + index);
+            if (index != missingIndex) {
+                PersistentDerivedImageCache::storeMetadata(request.info);
+            }
+            DecodeManager::VersionedImageInfoRequest infoRequest{
+                request.info.source.runtimeIdentity(),
+                request.info.sourceVersionToken,
+                request.info.source};
+            infoRequest.highPriority = index == missingIndex;
+            requests.append(std::move(infoRequest));
+        }
+
+        auto provider = QSharedPointer<CountingSourceProvider>::create();
+        DecodeManager manager(nullptr, 4, provider);
+        QList<ImageInfo> cached;
+        QList<ImageInfo> sourceResults;
+        connect(&manager, &DecodeManager::imagesInfoReady, this,
+                [&](const QList<ImageInfo> &infos) { cached = infos; });
+        connect(&manager, &DecodeManager::imageInfoReady, this,
+                [&](const ImageInfo &info) { sourceResults.append(info); });
+
+        manager.readVersionedImagesInfo(
+            requests, false, false, QStringLiteral("mixed-batch"));
+
+        QCOMPARE(cached.size(), imageCount - 1);
+        QVERIFY(std::none_of(cached.cbegin(), cached.cend(),
+                             [](const ImageInfo &info) {
+                                 return info.isLast;
+                             }));
+        QTRY_COMPARE_WITH_TIMEOUT(sourceResults.size(), 1, 5000);
+        QVERIFY(sourceResults.first().isLast);
+        QVERIFY(sourceResults.first().highPriority);
+        QVERIFY(sourceResults.first().sourceAccessFailed);
+        QCOMPARE(provider->materializations.load(), 1);
     }
 
     void weakHitSkipsSourceMaterializationWithinAuthority() {

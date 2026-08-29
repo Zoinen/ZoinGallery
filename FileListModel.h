@@ -107,7 +107,13 @@ public:
         SelectionGroupIdRole,
         SelectionGroupColorRole,
         LastModifiedRole,
-        FileSizeRole
+        FileSizeRole,
+        // Notification-only role: every ImageFullSizeRole value changed by
+        // this signal came from one persistent-metadata cache batch.  A
+        // broad sparse range may contain unchanged, non-cached rows, so
+        // consumers must not infer the batch provenance by scanning all rows
+        // between topLeft and bottomRight.
+        CachedMetadataBatchRole
     };
 
     FileListModel(QSharedPointer<ProviderImageStore> providerImageStore,

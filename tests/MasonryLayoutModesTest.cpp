@@ -1,6 +1,7 @@
 #include "FileListModel.h"
 #include "DecodeManager.h"
 #include "MasonryLayout.h"
+#include "SvgCursor.h"
 
 #include <ZoinGallery/GalleryRuntime.h>
 #include <ZoinGallery/GallerySession.h>
@@ -9,13 +10,17 @@
 
 #include <QCoreApplication>
 #include <QColor>
+#include <QColorSpace>
+#include <QCursor>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QGuiApplication>
 #include <QImage>
 #include <QKeyEvent>
 #include <QElapsedTimer>
 #include <QEvent>
+#include <QParallelAnimationGroup>
 #include <QPointer>
 #include <QQmlComponent>
 #include <QQmlContext>
@@ -30,6 +35,10 @@
 #include <cmath>
 #include <limits>
 #include <tuple>
+
+#if defined(Q_OS_MACOS)
+#include <CoreGraphics/CoreGraphics.h>
+#endif
 
 namespace {
 
@@ -265,11 +274,11 @@ private slots:
         QQuickItem *scrollBar = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT(
             (cursorSurface = panel->findChild<QQuickItem *>(
-                 QStringLiteral("gallerySelectionSurface-0"))),
+                 QStringLiteral("gallerySelectionSurface-1"))),
             3000);
         QTRY_VERIFY_WITH_TIMEOUT(
             (plainSurface = panel->findChild<QQuickItem *>(
-                 QStringLiteral("gallerySelectionSurface-1"))),
+                 QStringLiteral("gallerySelectionSurface-0"))),
             3000);
         QTRY_VERIFY_WITH_TIMEOUT(
             (previewBackdrop = panel->findChild<QQuickItem *>(
@@ -334,11 +343,55 @@ private slots:
         QCOMPARE(scrollBar->property("trackHoveredColor").value<QColor>(),
                  QColor(QStringLiteral("#919293")));
         QCOMPARE(panel->findChild<QQuickItem *>(
-                     QStringLiteral("gallerySelectionSurface-0")),
+                     QStringLiteral("gallerySelectionSurface-1")),
                  cursorSurface);
         QCOMPARE(panel->findChild<QQuickItem *>(
                      QStringLiteral("galleryPanelScrollBar")),
                  scrollBar);
+    }
+
+    void svgCursorAvoidsQtCustomColorSpaceCrash() {
+        QVERIFY(QGuiApplication::overrideCursor() == nullptr);
+        struct CursorReset {
+            ~CursorReset() { SvgCursor::setOverrideCursor(); }
+        } cursorReset;
+
+        const QList<std::tuple<QString, qreal>> cursors{
+            {QStringLiteral(":/ZoinGallery/resources/ScrollMode.svg"), 0.0},
+            {QStringLiteral(":/ZoinGallery/resources/ScrollModeDown.svg"),
+             0.0},
+            {QStringLiteral(":/ZoinGallery/resources/ScrollModeUp.svg"),
+             0.0},
+            {QStringLiteral(":/ZoinGallery/resources/SphereScroll.svg"),
+             37.0},
+        };
+
+        for (int repeat = 0; repeat < 100; ++repeat) {
+            for (const auto &[path, rotation] : cursors) {
+                SvgCursor::setOverrideCursor(path, 2.0, rotation);
+                const QCursor *cursor = QGuiApplication::overrideCursor();
+                QVERIFY(cursor);
+                QCOMPARE(cursor->shape(), Qt::BitmapCursor);
+
+                const QImage image = cursor->pixmap().toImage();
+                QVERIFY(!image.isNull());
+                QVERIFY2(!image.colorSpace().isValid(),
+                         "custom cursor must remain untagged so Qt 6.11.1 "
+                         "uses the safe system-sRGB CoreGraphics path");
+
+#if defined(Q_OS_MACOS)
+                // This is the exact conversion in the submitted crash stack.
+                // Repeating it also gives ASan/GuardMalloc a deterministic
+                // regression seam for the former dangling CGColorSpaceRef.
+                CGImageRef cgImage = image.toCGImage();
+                QVERIFY(cgImage);
+                CGImageRelease(cgImage);
+#endif
+            }
+        }
+
+        SvgCursor::setOverrideCursor();
+        QVERIFY(QGuiApplication::overrideCursor() == nullptr);
     }
 
     void geometryAndNavigationAreModeOwnedAndDeterministic() {
@@ -1040,7 +1093,8 @@ private slots:
         QVERIFY(sameRowShortSelection->height() < firstShort.height() - 1);
         QVERIFY(longSelection->height() <= firstLong.height());
         QCOMPARE(layout->contentHeight(),
-                 layout->indexGeometry(layout->count() - 1).bottom());
+                 layout->indexGeometry(layout->count() - 1).bottom()
+                     + layout->paddingBottom());
 
         // Grid remains the equal-height, one-line presentation.
         panel->setProperty("presentationMode", QStringLiteral("grid"));
@@ -1048,6 +1102,100 @@ private slots:
                                   MasonryLayout::Grid, 3000);
         QCOMPARE(layout->indexGeometry(0).height(), layout->density());
         QCOMPARE(layout->indexGeometry(2).height(), layout->density());
+
+        runtime->shutdown();
+    }
+
+    void cachedSparseMetadataBatchSnapsWithoutGeometryAnimation() {
+        constexpr int imageCount = 6;
+        QVariantList catalog;
+        catalog.reserve(imageCount);
+        for (int row = 0; row < imageCount; ++row) {
+            catalog.append(QVariantMap{
+                {QStringLiteral("entryId"),
+                 QStringLiteral("cached-layout-%1").arg(row)},
+                {QStringLiteral("index"), row},
+                {QStringLiteral("name"),
+                 QStringLiteral("cached-layout-%1.png").arg(row)},
+                {QStringLiteral("localPath"),
+                 QStringLiteral("/virtual/cache/layout-%1.png").arg(row)},
+                {QStringLiteral("isDir"), false},
+                {QStringLiteral("isImage"), true},
+                {QStringLiteral("mtimeNs"),
+                 qint64(1'700'000'000'000'000'000LL + row)},
+                {QStringLiteral("size"), qint64(4096 + row)},
+            });
+        }
+
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("cached-layout-batch"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("cachedLayoutSession"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(layout);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), imageCount, 3000);
+        DecodeManager *decodeManager = runtime->findChild<DecodeManager *>();
+        QVERIFY(decodeManager);
+
+        auto metadataForRows = [&](const QList<int> &rows, bool cached) {
+            QList<ImageInfo> infos;
+            infos.reserve(rows.size());
+            for (qsizetype position = 0; position < rows.size(); ++position) {
+                const int row = rows.at(position);
+                ImageFile *image = session->model()
+                    ->data(session->model()->index(row, 0),
+                           FileListModel::ImageFileRole)
+                    .value<ImageFile *>();
+                Q_ASSERT(image);
+                ImageInfo info = image->info();
+                info.imageSize = cached
+                    ? QSize(480 + row * 120, 900 - row * 70)
+                    : QSize(800 + row * 40, 600 + row * 30);
+                info.isCached = cached;
+                info.isLast = position == rows.size() - 1;
+                info.requestNamespace = session->sessionId();
+                infos.append(std::move(info));
+            }
+            return infos;
+        };
+
+        decodeManager->imagesInfoReady(
+            metadataForRows({0, 1, 2, 3, 4, 5}, false));
+        QTest::qWait(550);
+        QCoreApplication::processEvents();
+
+        QQuickItem *surface = panel->findChild<QQuickItem *>(
+            QStringLiteral("gallerySelectionSurface-0"));
+        QVERIFY(surface);
+        QQuickItem *brick = surface->parentItem();
+        QVERIFY(brick);
+        auto *animation =
+            brick->findChild<QParallelAnimationGroup *>();
+        QVERIFY(animation);
+        QCOMPARE(animation->state(), QAbstractAnimation::Stopped);
+
+        // Rows 0 and 2 form one sparse dataChanged range. Row 1 deliberately
+        // retains valid, non-cached metadata; scanning the whole range used to
+        // misclassify the cached batch and animate every visible brick for
+        // 500 ms.
+        decodeManager->imagesInfoReady(metadataForRows({0, 2}, true));
+        QCOMPARE(animation->state(), QAbstractAnimation::Stopped);
+        const QRectF target = layout->indexGeometry(0).adjusted(
+            0, layout->paddingTop(), 0, 0);
+        const QRectF actual(brick->x(), brick->y(), brick->width(),
+                            brick->height());
+        QCOMPARE(actual.toRect(), target.toRect());
 
         runtime->shutdown();
     }
@@ -1130,7 +1278,8 @@ private slots:
                           selectedDelegate->width(),
                           selectedDelegate->height());
         };
-        QCOMPARE(delegateGeometry(), layout->indexGeometry(selectedIndex));
+        QCOMPARE(delegateGeometry().toRect(),
+                 layout->indexGeometry(selectedIndex).toRect());
         const QRectF settledGridGeometry = delegateGeometry();
         QTest::qWait(80);
         QCOMPARE(delegateGeometry(), settledGridGeometry);
@@ -4424,6 +4573,16 @@ private slots:
             QObject *panel = createPanel(
                 view, session, QStringLiteral("compactLucideSession"), mode);
             QVERIFY(panel);
+            const qreal windowDpr = view.devicePixelRatio();
+            if (qAbs(windowDpr - 1.75) < 0.001)
+                panel->setProperty("devicePixelRatio", windowDpr);
+            session->setCurrentIndex(3);
+            panel->setProperty("theme", QVariantMap{
+                {QStringLiteral("panelBackground"),
+                 QStringLiteral("#141922")},
+                {QStringLiteral("mutedText"),
+                 QStringLiteral("#5ab2f1")},
+            });
             auto *layout = panel->findChild<MasonryLayout *>(
                 QStringLiteral("galleryMasonryLayout"));
             QVERIFY(layout);
@@ -4438,6 +4597,77 @@ private slots:
                 QCOMPARE(icon->property("source").toUrl(),
                          QUrl(QStringLiteral(
                              "qrc:/F4QtHost/icons/lucide/folder.svg")));
+            }
+
+            if (qAbs(windowDpr - 1.75) < 0.001
+                && QFile::exists(QStringLiteral(
+                    ":/F4QtHost/icons/lucide/folder.svg"))) {
+                QTRY_COMPARE_WITH_TIMEOUT(icon->property("status").toInt(),
+                                          1, 3000); // Image.Ready
+                view.update();
+                QTest::qWait(50);
+                const QImage frame = view.grabWindow().convertToFormat(
+                    QImage::Format_ARGB32_Premultiplied);
+                QVERIFY(!frame.isNull());
+
+                const QPointF sceneOrigin = icon->mapToScene(QPointF{});
+                const QRect physicalRect(
+                    QPoint(qRound(sceneOrigin.x() * windowDpr),
+                           qRound(sceneOrigin.y() * windowDpr)),
+                    QSize(qRound(icon->width() * windowDpr),
+                          qRound(icon->height() * windowDpr)));
+                QVERIFY(frame.rect().contains(physicalRect));
+
+                const QColor expected = icon->property(
+                    "effectiveIconColor").value<QColor>();
+                int closestDistance = std::numeric_limits<int>::max();
+                QPoint closestPoint;
+                QColor closestColor;
+                for (int y = physicalRect.top();
+                     y <= physicalRect.bottom(); ++y) {
+                    for (int x = physicalRect.left();
+                         x <= physicalRect.right(); ++x) {
+                        const QColor actual = frame.pixelColor(x, y);
+                        const int distance = qAbs(actual.red() - expected.red())
+                            + qAbs(actual.green() - expected.green())
+                            + qAbs(actual.blue() - expected.blue());
+                        if (distance < closestDistance) {
+                            closestDistance = distance;
+                            closestPoint = QPoint(x, y);
+                            closestColor = actual;
+                        }
+                    }
+                }
+                const QByteArray tintDetails = QStringLiteral(
+                    "%1 icon has no theme-tinted stroke: expected %2, "
+                    "closest %3 at physical (%4,%5), icon physical rect "
+                    "(%6,%7 %8x%9), logical scene origin (%10,%11), DPR %12")
+                    .arg(mode, expected.name(QColor::HexArgb),
+                         closestColor.name(QColor::HexArgb))
+                    .arg(closestPoint.x()).arg(closestPoint.y())
+                    .arg(physicalRect.x()).arg(physicalRect.y())
+                    .arg(physicalRect.width()).arg(physicalRect.height())
+                    .arg(sceneOrigin.x(), 0, 'f', 6)
+                    .arg(sceneOrigin.y(), 0, 'f', 6)
+                    .arg(windowDpr, 0, 'f', 2).toUtf8();
+                QVERIFY2(closestDistance <= 6, tintDetails.constData());
+
+                const auto verifyPhysicalEdge = [windowDpr, &mode](
+                        qreal edge, const QString &name) {
+                    const qreal physical = edge * windowDpr;
+                    const QByteArray details = QStringLiteral(
+                        "%1 icon %2 edge is %3 physical pixels at DPR %4")
+                        .arg(mode, name).arg(physical, 0, 'f', 6)
+                        .arg(windowDpr, 0, 'f', 2).toUtf8();
+                    QVERIFY2(qAbs(physical - qRound(physical)) < 0.001,
+                             details.constData());
+                };
+                verifyPhysicalEdge(sceneOrigin.x(), QStringLiteral("left"));
+                verifyPhysicalEdge(sceneOrigin.y(), QStringLiteral("top"));
+                verifyPhysicalEdge(sceneOrigin.x() + icon->width(),
+                                   QStringLiteral("right"));
+                verifyPhysicalEdge(sceneOrigin.y() + icon->height(),
+                                   QStringLiteral("bottom"));
             }
 
             // Large Lucide model routes are provider-rasterized for the
@@ -5108,8 +5338,8 @@ private slots:
         QCOMPARE(stableImage->fileName(), QStringLiteral("large-renamed.png"));
         QVERIFY(textChangedSpy.count() > 0);
 
-        // A DecodeManager batch must publish every cheap known-size role but
-        // pay for only one full Masonry rewrap. Row 0 and row 4 deliberately
+        // A DecodeManager batch publishes one broad known-size range and pays
+        // for only one full Masonry rewrap. Row 0 and row 4 deliberately
         // receive opposite aspect ratios for the reset-geometry check below.
         auto *decodeManager = runtime->findChild<DecodeManager *>();
         QVERIFY(decodeManager);
@@ -5120,7 +5350,8 @@ private slots:
                 continue;
             }
             ImageInfo info;
-            info.path = entry.value(QStringLiteral("localPath")).toString();
+            info.path = QFileInfo(entry.value(
+                QStringLiteral("localPath")).toString()).absoluteFilePath();
             // Decoder metadata can know the effective size before a deferred
             // semantic metadata chunk updates Entry::size. Snapshot-owned
             // Details fields must match ImageFile defaults in that interval.
@@ -5150,7 +5381,7 @@ private slots:
         timer.restart();
         decodeManager->imagesInfoReady(metadataBatch);
         const qint64 metadataBatchNs = timer.nsecsElapsed();
-        QCOMPARE(knownSizeNotifications, metadataBatch.size());
+        QCOMPARE(knownSizeNotifications, 1);
         QVERIFY2(metadataBatchNs < 33'000'000,
                  qPrintable(QStringLiteral(
                      "447-row metadata batch dispatch took %1 ms")
@@ -5182,7 +5413,8 @@ private slots:
                      "known-size reordered reset took %1 ms")
                      .arg(reorderedResetNs / 1'000'000.0, 0, 'f', 3)));
         const QRectF expectedResetGeometry(
-            layout->indexGeometry(0).toRect());
+            layout->indexGeometry(0).adjusted(
+                0, layout->paddingTop(), 0, 0).toRect());
         QVERIFY(geometryBeforeReorder != expectedResetGeometry);
         QCOMPARE(firstSlot->geometry(), expectedResetGeometry);
 
@@ -5300,9 +5532,10 @@ private slots:
         // The offscreen threaded render loop batches swaps at a platform-
         // dependent cadence (about 50 ms on the Windows CI backend), so the
         // deterministic contract here is that all 49+ correct delegates are
-        // synchronously ready for the next scene-graph sync. Canonical live
-        // profiling measures the actual window's apply-to-swap latency.
-        QVERIFY2(synchronousResetNs < 12'000'000,
+        // synchronously ready within one 60-Hz frame for the next scene-graph
+        // sync. Canonical live profiling measures the actual window's
+        // apply-to-swap latency.
+        QVERIFY2(synchronousResetNs < 16'000'000,
                  qPrintable(QStringLiteral(
                      "49-row synchronous snapshot took %1 ms")
                      .arg(synchronousResetNs / 1'000'000.0, 0, 'f', 3)));

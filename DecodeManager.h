@@ -68,6 +68,10 @@ public:
         QString path;
         QString sourceVersionToken;
         ZoinGallery::ImageSourceDescriptor source;
+        // Cache lookup is catalog-wide, while only a visible miss should
+        // enter the urgent source-I/O lane. The method-level flag remains an
+        // override for callers whose entire batch is urgent.
+        bool highPriority = false;
     };
 
     enum class ImageInfoCachePolicy {
@@ -173,6 +177,8 @@ private:
                                bool highPriority = false,
                                const QString &requestNamespace = QString(),
                                const QString &sourceVersionToken = QString());
+    void queueVersionedImageInfoSourceReads(
+        const QList<ImageInfo> &requests);
     void cancelDecodeRequests(const QString &requestNamespace,
                               bool viewerRequests);
     bool canStartRunner(Runner *runner, int compressedPayloadCount,

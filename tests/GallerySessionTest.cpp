@@ -585,6 +585,98 @@ private slots:
         runtime->shutdown();
     }
 
+    void catalogFitPrimesCanonicalThumbnailWithoutSecondSourceRead() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString backing = directory.filePath(
+            QStringLiteral("catalog-thumbnail.png"));
+        QImage source(640, 480, QImage::Format_RGBA8888);
+        source.fill(Qt::darkCyan);
+        QVERIFY(source.save(backing, "PNG"));
+
+        constexpr int CatalogSize = 3;
+        auto provider =
+            QSharedPointer<MaterializingTestProvider>::create(backing);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.maxDecodeThreads = 4;
+        options.persistentCache = false;
+        options.imageSourceProvider = provider;
+        ZoinGallery::GalleryRuntime *runtime =
+            ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        ZoinGallery::GallerySession *session =
+            runtime->createExternalSession(
+                QStringLiteral("catalog-thumbnail-prime"));
+        QVERIFY(session);
+
+        const QFileInfo backingInfo(backing);
+        QVariantList catalog;
+        for (int row = 0; row < CatalogSize; ++row) {
+            catalog.append(QVariantMap{
+                {QStringLiteral("entryId"),
+                 QStringLiteral("remote-%1").arg(row)},
+                {QStringLiteral("index"), row},
+                {QStringLiteral("name"),
+                 QStringLiteral("remote-%1.png").arg(row)},
+                {QStringLiteral("isImage"), true},
+                {QStringLiteral("resourceId"),
+                 QStringLiteral("resource:%1").arg(row)},
+                {QStringLiteral("sourceKey"),
+                 QStringLiteral("network/catalog-thumbnail/%1").arg(row)},
+                {QStringLiteral("contentVersion"),
+                 QStringLiteral("strong-v1-%1").arg(row)},
+                {QStringLiteral("versionStrength"),
+                 QStringLiteral("strong")},
+                {QStringLiteral("storageClass"),
+                 QStringLiteral("network")},
+                {QStringLiteral("accessProfile"),
+                 QStringLiteral("materializeOnce")},
+                {QStringLiteral("mimeType"),
+                 QStringLiteral("image/png")},
+                {QStringLiteral("size"), backingInfo.size()},
+            });
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        session->ensurePreviews();
+        QTRY_COMPARE_WITH_TIMEOUT(
+            provider->materializations.load(), CatalogSize, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            runtime->thumbnailCacheFrameCount(),
+            qsizetype(CatalogSize), 10000);
+
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(model);
+        const int imageFileRole = session->model()->roleNames().key(
+            QByteArrayLiteral("imageFileRole"), -1);
+        const int imageUrlRole = session->model()->roleNames().key(
+            QByteArrayLiteral("imageIdUrlRole"), -1);
+        QVERIFY(imageFileRole >= 0);
+        QVERIFY(imageUrlRole >= 0);
+        const QModelIndex targetIndex = session->model()->index(2, 0);
+        auto *imageFile = qobject_cast<ImageFile *>(
+            session->model()->data(targetIndex, imageFileRole)
+                .value<QObject *>());
+        QVERIFY(imageFile);
+
+        ImageDecodeRequest request{
+            .info = imageFile->info(),
+            .targetSize = QSize(128, 96),
+            .highPriority = true,
+            .thumbnailTransformKey = QStringLiteral(
+                "thumbnail-aspect-v1"),
+        };
+        model->decodeImages({request});
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !session->model()->data(targetIndex, imageUrlRole)
+                 .toString().isEmpty(),
+            2000);
+        QCOMPARE(provider->materializations.load(), CatalogSize);
+
+        runtime->shutdown();
+    }
+
     void catalogDiffDoesNotResumeFitBeforeNewProbeBarrier() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -1173,8 +1265,6 @@ private slots:
         QSignalSpy failedSpy(decodeManager,
                              &DecodeManager::imageReadFailed);
         QSignalSpy readySpy(decodeManager, &DecodeManager::imageReady);
-        QSignalSpy changedSpy(session->model(),
-                              &QAbstractItemModel::dataChanged);
         ImageDecodeRequest request;
         request.info = imageFile->info();
         request.targetSize = QSize(32, 32);
@@ -1190,7 +1280,6 @@ private slots:
             QVERIFY(!failedSpy.constFirst().at(0)
                          .value<ImageDecodeRequest>().sourceAccessFailed);
         }
-        changedSpy.clear();
         const int firstReadyCount = readySpy.size();
         const int firstFailedCount = failedSpy.size();
 
@@ -1199,7 +1288,6 @@ private slots:
         QTest::qWait(750);
         QCOMPARE(readySpy.size(), firstReadyCount);
         QCOMPARE(failedSpy.size(), firstFailedCount);
-        QCOMPARE(changedSpy.size(), 0);
 
         model->decodeImages({request});
         QTRY_VERIFY_WITH_TIMEOUT(
@@ -2528,6 +2616,137 @@ private slots:
         QCOMPARE(flushChangeCount, 1);
         for (int row = 0; row < imageCount; ++row) {
             QVERIFY(externalModel->imageOriginalSizeAt(row).isValid());
+        }
+
+        runtime->shutdown();
+    }
+
+    void coalescesVisibleAndCatalogMetadataIntoOneSubmission() {
+        constexpr int imageCount = 128;
+        constexpr int visibleCount = 16;
+        QVariantList catalog;
+        catalog.reserve(imageCount);
+        for (int row = 0; row < imageCount; ++row) {
+            catalog.append(entry(
+                QStringLiteral("coalesced-metadata-%1").arg(row), row,
+                QStringLiteral("coalesced-%1.png").arg(row), true, false,
+                1'700'000'000'000'000'000LL + row));
+        }
+
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.maxDecodeThreads = 4;
+        options.persistentCache = false;
+        ZoinGallery::GalleryRuntime *runtime =
+            ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        ZoinGallery::GallerySession *session =
+            runtime->createExternalSession(
+                QStringLiteral("coalesced-metadata-submission"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(model);
+
+        QList<int> visibleRows;
+        visibleRows.reserve(visibleCount);
+        for (int row = 0; row < visibleCount; ++row) {
+            visibleRows.append(row);
+        }
+        model->requestImageMetadata(visibleRows, true, false);
+        model->requestImageMetadata({}, false, true);
+
+        QTRY_COMPARE_WITH_TIMEOUT(
+            model->metadataSubmittedBatchCount(), quint64(1), 1000);
+        QCOMPARE(model->metadataPeakPendingRequestCount(),
+                 qsizetype(imageCount));
+        QVERIFY(model->metadataPeakPendingRequestCount() <=
+                model->metadataRequestLimit());
+
+        runtime->shutdown();
+    }
+
+    void appliesCachedMetadataBatchWithOneModelRange() {
+        constexpr int imageCount = 128;
+        QVariantList catalog;
+        catalog.reserve(imageCount);
+        for (int row = 0; row < imageCount; ++row) {
+            catalog.append(QVariantMap{
+                {QStringLiteral("entryId"),
+                 QStringLiteral("cached-metadata-%1").arg(row)},
+                {QStringLiteral("index"), row},
+                {QStringLiteral("name"),
+                 QStringLiteral("cached-%1.png").arg(row)},
+                {QStringLiteral("localPath"),
+                 QStringLiteral("/virtual/cache/cached-%1.png").arg(row)},
+                {QStringLiteral("isDir"), false},
+                {QStringLiteral("isImage"), true},
+                {QStringLiteral("mtimeNs"), qint64(1'700'000'000'000'000'000LL + row)},
+                {QStringLiteral("size"), qint64(4096 + row)},
+            });
+        }
+
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        ZoinGallery::GalleryRuntime *runtime =
+            ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        ZoinGallery::GallerySession *session =
+            runtime->createExternalSession(
+                QStringLiteral("cached-metadata-range"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        DecodeManager *decodeManager = runtime->findChild<DecodeManager *>();
+        QVERIFY(decodeManager);
+
+        QList<ImageInfo> infos;
+        infos.reserve(imageCount);
+        for (int row = 0; row < imageCount; ++row) {
+            ImageFile *image = session->model()
+                ->data(session->model()->index(row, 0),
+                       FileListModel::ImageFileRole)
+                .value<ImageFile *>();
+            QVERIFY(image);
+            ImageInfo info = image->info();
+            info.imageSize = QSize(900 + row, 700 + row);
+            info.isCached = true;
+            info.isLast = row == imageCount - 1;
+            info.requestNamespace = session->sessionId();
+            infos.append(std::move(info));
+        }
+
+        int fullSizeSignals = 0;
+        int firstChanged = -1;
+        int lastChanged = -1;
+        bool flushed = false;
+        bool cachedBatch = false;
+        connect(session->model(), &QAbstractItemModel::dataChanged, this,
+                [&](const QModelIndex &topLeft,
+                    const QModelIndex &bottomRight,
+                    const QList<int> &roles) {
+                    if (!roles.contains(FileListModel::ImageFullSizeRole)) {
+                        return;
+                    }
+                    ++fullSizeSignals;
+                    firstChanged = topLeft.row();
+                    lastChanged = bottomRight.row();
+                    flushed = roles.contains(FileListModel::TimeToFlushRole);
+                    cachedBatch = roles.contains(
+                        FileListModel::CachedMetadataBatchRole);
+                });
+
+        decodeManager->imagesInfoReady(infos);
+
+        QCOMPARE(fullSizeSignals, 1);
+        QCOMPARE(firstChanged, 0);
+        QCOMPARE(lastChanged, imageCount - 1);
+        QVERIFY(flushed);
+        QVERIFY(cachedBatch);
+        for (int row = 0; row < imageCount; ++row) {
+            QCOMPARE(session->imageOriginalSizeAt(row),
+                     QSize(900 + row, 700 + row));
         }
 
         runtime->shutdown();

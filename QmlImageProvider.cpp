@@ -1,5 +1,7 @@
 #include "QmlImageProvider.h"
 
+#include <ZoinGallery/MediaTimingTrace.h>
+
 #include <QPainter>
 
 #include <utility>
@@ -13,9 +15,20 @@ QmlImageProvider::QmlImageProvider(
 }
 
 QImage QmlImageProvider::requestImage(const QString &id, QSize *size, const QSize &requestedSize) {
-    Q_UNUSED(requestedSize)
+    ZoinGallery::MediaTimingTrace::Span span(
+        QStringLiteral("qt.gallery.qml_provider.sync_request"), {
+            {QStringLiteral("providerName"), _prefix},
+            {QStringLiteral("providerId"), id},
+            {QStringLiteral("requestedWidth"), requestedSize.width()},
+            {QStringLiteral("requestedHeight"), requestedSize.height()},
+        });
     QImage image = _providerImageStore->snapshot(id);
     if (!image.isNull()) {
+        span.set(QStringLiteral("outcome"), QStringLiteral("hit"));
+        span.set(QStringLiteral("imageWidth"), image.width());
+        span.set(QStringLiteral("imageHeight"), image.height());
+        span.set(QStringLiteral("imageBytes"),
+                 QVariant::fromValue<qlonglong>(image.sizeInBytes()));
         if (size) {
             *size = image.size();
         }
@@ -24,6 +37,11 @@ QImage QmlImageProvider::requestImage(const QString &id, QSize *size, const QSiz
 
     QImage empty(1, 1, QImage::Format_RGBA8888);
     empty.fill(Qt::transparent);
+    span.set(QStringLiteral("outcome"), QStringLiteral("missing"));
+    span.set(QStringLiteral("imageWidth"), empty.width());
+    span.set(QStringLiteral("imageHeight"), empty.height());
+    span.set(QStringLiteral("imageBytes"),
+             QVariant::fromValue<qlonglong>(empty.sizeInBytes()));
     if (size) {
         *size = empty.size();
     }

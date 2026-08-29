@@ -45,7 +45,7 @@ QStringList HeicDecoder::supportedFormats() {
 }
 
 bool HeicDecoder::readMetadata(ImageInfo &result) {
-    if (!isFormatSupported(result.path))
+    if (!isFormatSupported(result.formatHint()))
         return false;
 
     HeicContext ctx;
@@ -249,7 +249,7 @@ static QByteArray decodeHandleToPng(heif_image_handle* handle,
 }
 
 bool HeicDecoder::readPreviewAndMime(ImageData &result) {
-    if (!isFormatSupported(result.request.info.path))
+    if (!isFormatSupported(result.request.info.formatHint()))
         return false;
 
     HeicContext ctx;

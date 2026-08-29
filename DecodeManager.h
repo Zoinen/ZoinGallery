@@ -4,14 +4,17 @@
 #include <QElapsedTimer>
 #include <QObject>
 #include <QQueue>
+#include <QSet>
 #include <QTimer>
 
 #include <atomic>
 
 #include "CacheUsageMode.h"
 #include "ImageFile.h"
+#include "ImageProbe.h"
 
 enum class RunnerType {
+    ImageProbe,
     ImageInfoRead,
     ImageRead,
     FolderListRead,
@@ -38,6 +41,8 @@ public:
     virtual QString requestNamespace() const { return QString(); }
     virtual quint64 viewerGeneration() const { return 0; }
     virtual int viewerPriorityOrdinal() const { return -1; }
+    virtual QSharedPointer<ZoinGallery::ImageSourceCancellation>
+    sourceCancellation() const { return {}; }
 
     void cancel();
     bool isCanceled() const {
@@ -61,7 +66,12 @@ class DecodeManager : public QObject {
 public:
     struct VersionedImageInfoRequest {
         QString path;
-        qint64 sourceVersionToken = 0;
+        QString sourceVersionToken;
+        ZoinGallery::ImageSourceDescriptor source;
+        // Cache lookup is catalog-wide, while only a visible miss should
+        // enter the urgent source-I/O lane. The method-level flag remains an
+        // override for callers whose entire batch is urgent.
+        bool highPriority = false;
     };
 
     enum class ImageInfoCachePolicy {
@@ -69,14 +79,16 @@ public:
         ForceSource,
     };
 
-    explicit DecodeManager(QObject *parent = nullptr, int maxThreads = 0);
+    explicit DecodeManager(
+        QObject *parent = nullptr, int maxThreads = 0,
+        QSharedPointer<ZoinGallery::ImageSourceProvider> imageSourceProvider = {});
     ~DecodeManager() override;
     int workerCount() const;
     void readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView,
                         int directOpenGeneration = 0,
                         bool highPriority = false,
                         const QString &requestNamespace = QString(),
-                        qint64 sourceVersionToken = 0,
+                        const QString &sourceVersionToken = QString(),
                         ImageInfoCachePolicy cachePolicy =
                             ImageInfoCachePolicy::UseRuntimePolicy);
     // External catalogs need one metadata batch (and therefore one final
@@ -86,6 +98,11 @@ public:
         const QList<VersionedImageInfoRequest> &requests,
         bool isFromEmbeddedView, bool highPriority = false,
         const QString &requestNamespace = QString());
+    // Bounded pass-1 requests never materialize or fully decode a source.
+    // The caller orders the list visible -> overscan -> catalog; high-priority
+    // probes may preempt queued background probes without invalidating them.
+    void probeImages(
+        const QList<ZoinGallery::ImageProbeRequest> &requests);
     void decodeImages(const QList<ImageDecodeRequest> &requests);
     void readFolderList(const QStringList &paths, int totalImages = -1,
                         quint64 requestGeneration = 0,
@@ -102,6 +119,8 @@ public:
     void cancelThumbnailRequests(const QString &requestNamespace);
     void cancelViewerRequests(const QString &requestNamespace);
     void cancelRequests(const QString &requestNamespace);
+    void cancelSourceRequests(const QString &requestNamespace,
+                              const QSet<QString> &sourceIdentities);
 
     void prepareToClose();
 
@@ -114,6 +133,7 @@ public:
     void setRunningTasksDebug(bool isRunningTasksDebug);
 
 signals:
+    void imageProbeReady(const ZoinGallery::ImageProbeResult &result);
     void imageInfoReady(const ImageInfo &result);
     void imagesInfoReady(const QList<ImageInfo> &result);
     void imageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
@@ -150,13 +170,15 @@ private:
                                     int directOpenGeneration,
                                     bool highPriority,
                                     const QString &requestNamespace,
-                                    qint64 sourceVersionToken);
+                                    const QString &sourceVersionToken);
     void onInfoNotFoundInCache(const QList<QString> &paths,
                                bool isFromEmbeddedView,
                                int directOpenGeneration = 0,
                                bool highPriority = false,
                                const QString &requestNamespace = QString(),
-                               qint64 sourceVersionToken = 0);
+                               const QString &sourceVersionToken = QString());
+    void queueVersionedImageInfoSourceReads(
+        const QList<ImageInfo> &requests);
     void cancelDecodeRequests(const QString &requestNamespace,
                               bool viewerRequests);
     bool canStartRunner(Runner *runner, int compressedPayloadCount,
@@ -181,7 +203,8 @@ private:
     enum class SpecialThreads {
         Read,
         Cache,
-        Last
+        Probe,
+        Last = Probe
     };
 
 
@@ -197,6 +220,7 @@ private:
     bool _runningTasksDebug = false;
     bool _isClosing = false;
     quint64 _nextViewerGeneration = 0;
+    QSharedPointer<ZoinGallery::ImageSourceProvider> _imageSourceProvider;
 
     // Source reads retain the complete compressed file until their decode
     // runner completes. A count limit keeps that stage proportional to the

@@ -2,12 +2,15 @@
 #define IMAGEREADRUNNER_H
 
 #include "DecodeManager.h"
+#include "PersistentDerivedImageCache.h"
 
 class ImageReadRunner : public Runner {
     Q_OBJECT
 
 public:
-    ImageReadRunner(const ImageDecodeRequest &request);
+    ImageReadRunner(
+        const ImageDecodeRequest &request,
+        QSharedPointer<ZoinGallery::ImageSourceProvider> provider = {});
 
     RunnerType type() override { return RunnerType::ImageRead; }
     void run() override;
@@ -24,6 +27,8 @@ public:
     int viewerPriorityOrdinal() const override {
         return _request.viewerPriorityOrdinal;
     }
+    QSharedPointer<ZoinGallery::ImageSourceCancellation>
+    sourceCancellation() const override { return _cancellation; }
 
 signals:
     void imageReadReady(const ImageData &result);
@@ -33,6 +38,9 @@ private:
     friend class DecodeManager;
 
     ImageDecodeRequest _request;
+    QSharedPointer<ZoinGallery::ImageSourceProvider> _provider;
+    QSharedPointer<ZoinGallery::ImageSourceCancellation> _cancellation;
+    PersistentDerivedImageCache::LookupGate _derivedLookupGate;
 };
 
 #endif // IMAGEREADRUNNER_H

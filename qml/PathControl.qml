@@ -13,6 +13,11 @@ Item {
     // path control. The standalone application keeps its historical
     // viewerController/masonryLayout transaction when no callback is set.
     property var navigationHandler: null
+    // Embedded hosts may display a friendly path title (for example an iOS
+    // device name) while navigation still needs the filesystem's canonical
+    // path. When set, this property supplies that canonical path without
+    // changing the breadcrumb text shown to the user.
+    property string navigationPath: ""
     // Keep the standalone control's original appearance by default while
     // allowing embedded hosts to share their own chrome and content grid.
     property bool backgroundOnHoverOnly: false
@@ -57,11 +62,12 @@ Item {
     property var breadcrumbs: (textNetworkFixed.endsWith("/") ? textNetworkFixed.slice(0, -1) : textNetworkFixed).split("/")
 
     function updatePathField() {
+        const editablePath = navigationPath !== "" ? navigationPath : pathRoot.text
         if (windowsPathSeparators) {
-            pathField.text = normalizedText.replace(/\//g, "\\")
+            pathField.text = editablePath.replace(/\\/g, "\\")
         }
         else {
-            pathField.text = pathRoot.text
+            pathField.text = editablePath
         }
     }
 
@@ -107,9 +113,35 @@ Item {
         masonryLayout.view.loadSavedState()
     }
 
+    function canonicalFolderPath(index, fallbackPath) {
+        if (navigationPath === "")
+            return fallbackPath
+
+        const canonical = windowsPathSeparators
+                ? navigationPath.replace(/\\/g, "/")
+                : navigationPath
+        const networkPrefix = canonical.startsWith("//") ? "//" : ""
+        const rootPrefix = networkPrefix !== ""
+                ? networkPrefix
+                : (canonical.startsWith("/") ? "/" : "")
+        const body = canonical.replace(/^\/+|\/+$/g, "")
+        const parts = body === "" ? [] : body.split("/")
+
+        if (index < 0) {
+            if (rootPrefix !== "")
+                return rootPrefix
+            if (parts.length === 0)
+                return canonical
+            return parts[0].endsWith(":") ? parts[0] + "/" : parts[0]
+        }
+        if (parts.length === 0 || index >= parts.length)
+            return canonical
+        return rootPrefix + parts.slice(0, index + 1).join("/")
+    }
+
     function folderClicked(path) {
         const basePath = (isNetworkDrive ? "//" : "") + rootFolder.text
-        navigateTo(basePath + "/" + path)
+        navigateTo(canonicalFolderPath(-1, basePath + "/" + path))
     }
 
     MouseArea {
@@ -329,7 +361,12 @@ Item {
                     needArrow: index !== repeater.model.length - 1
                     splitIndex: index
 
-                    onClicked: (index) => pathRoot.folderClicked(repeater.model.slice(0, index + 1).join("/"))
+                    onClicked: (index) => pathRoot.navigateTo(
+                        pathRoot.canonicalFolderPath(
+                            index,
+                            (pathRoot.isNetworkDrive ? "//" : "")
+                            + pathRoot.breadcrumbs[0] + "/"
+                            + repeater.model.slice(0, index + 1).join("/")))
                 }
             }
         }

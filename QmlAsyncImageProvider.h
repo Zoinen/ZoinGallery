@@ -15,13 +15,15 @@ class AsyncImageResponseRunnable : public QObject, public QRunnable {
     Q_OBJECT
 
 public:
-    AsyncImageResponseRunnable(QImage image, QRect crop);
+    AsyncImageResponseRunnable(
+        QString providerId, QImage image, QRect crop);
     void run() override;
 
 signals:
     void done(const QImage &image);
 
 private:
+    QString _providerId;
     QImage _image;
     QRect _crop;
 };
@@ -32,11 +34,14 @@ public:
     AsyncImageResponse(
         const QString &id, const QSize &requestedSize,
         const QSharedPointer<ProviderImageStore> &providerImageStore,
-        QThreadPool *threadPool);
+        QThreadPool *threadPool, qint64 requestStartedNs);
     void handleDone(const QImage &image);
     QQuickTextureFactory *textureFactory() const override;
 
 private:
+    QString _providerId;
+    QSize _requestedSize;
+    qint64 _requestStartedNs = 0;
     QImage _image;
 };
 

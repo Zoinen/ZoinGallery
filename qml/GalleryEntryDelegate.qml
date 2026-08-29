@@ -30,6 +30,41 @@ BrickItem {
         masonryMode || gridMode || iconsMode
     readonly property real renderDpr:
         Math.max(0.01, Number(panelRoot.devicePixelRatio) || 1)
+    // Icon leaves are centered inside several presentation-specific wrapper
+    // hierarchies. At fractional scale an integral logical center can still
+    // land between physical pixels (13 DIPs is 22.75 px at 175%). Keep a
+    // broad, bindable dependency for the non-bindable mapToItem() lookup and
+    // translate the leaf only; no ancestor or raster texture is rescaled.
+    readonly property real iconPixelAlignmentRevision: {
+        const viewport = panelRoot.cursorPixelGridViewportOrigin
+        return Number(viewport.x || 0) + Number(viewport.y || 0)
+                + x + y + width + height
+                + previewContainer.x + previewContainer.y
+                + previewContainer.width + previewContainer.height
+                + detailsRow.x + detailsRow.y
+                + detailsIconSlot.x + detailsIconSlot.y
+                + mode.length
+    }
+    function snapIconExtent(value) {
+        return Math.max(0, Math.round(Number(value || 0) * renderDpr)
+                           / renderDpr)
+    }
+    function iconPixelOffsetX(item) {
+        if (!item || !item.parent)
+            return 0
+        const revision = iconPixelAlignmentRevision
+        const scenePoint = item.parent.mapToItem(null, item.x, item.y)
+        return Math.round(scenePoint.x * renderDpr) / renderDpr
+                - scenePoint.x + revision * 0
+    }
+    function iconPixelOffsetY(item) {
+        if (!item || !item.parent)
+            return 0
+        const revision = iconPixelAlignmentRevision
+        const scenePoint = item.parent.mapToItem(null, item.x, item.y)
+        return Math.round(scenePoint.y * renderDpr) / renderDpr
+                - scenePoint.y + revision * 0
+    }
     readonly property string entryId:
         effectiveModel && effectiveModel.entryId !== undefined
         ? effectiveModel.entryId
@@ -357,16 +392,26 @@ BrickItem {
             Layout.preferredWidth: brick.panelRoot.detailsIconSlotSize
             Layout.preferredHeight: brick.panelRoot.detailsIconSlotSize
 
-            Image {
+            IconImage {
                 id: detailsFallbackIcon
                 objectName: brick.detailsMode ? "galleryFallbackIcon-"
                                                 + brick.viewIndex : ""
                 readonly property color effectiveIconColor:
                     brick.fallbackIconColor
-                width: brick.panelRoot.detailsIconSize
-                height: brick.panelRoot.detailsIconSize
+                readonly property real nominalIconSize:
+                    brick.panelRoot.detailsIconSize
+                width: brick.snapIconExtent(nominalIconSize)
+                height: width
+                sourceSize: Qt.size(width, height)
+                color: effectiveIconColor
+                fillMode: Image.PreserveAspectFit
                 smooth: false
+                mipmap: false
                 anchors.centerIn: parent
+                transform: Translate {
+                    x: brick.iconPixelOffsetX(detailsFallbackIcon)
+                    y: brick.iconPixelOffsetY(detailsFallbackIcon)
+                }
                 readonly property url modelIconSource:
                     brick.effectiveModel
                     ? brick.effectiveModel.iconPath : ""
@@ -406,8 +451,8 @@ BrickItem {
                 objectName: brick.detailsMode
                     ? "gallerySourceColorIcon-" + brick.viewIndex : ""
                 anchors.centerIn: parent
-                width: brick.panelRoot.detailsIconSize
-                height: brick.panelRoot.detailsIconSize
+                width: detailsFallbackIcon.width
+                height: detailsFallbackIcon.height
                 source: brick.detailsMode && !detailsFallbackIcon.lucideSource
                         ? brick.sourceColorIconAtSize(
                               detailsFallbackIcon.modelIconSource,
@@ -415,6 +460,10 @@ BrickItem {
                         : ""
                 fillMode: Image.PreserveAspectFit
                 smooth: false
+                transform: Translate {
+                    x: brick.iconPixelOffsetX(detailsSourceColorIcon)
+                    y: brick.iconPixelOffsetY(detailsSourceColorIcon)
+                }
                 // Native Windows shell icon extraction can take tens or
                 // hundreds of milliseconds for a metadata batch. Never run
                 // an image-provider request on the GUI/input thread.
@@ -546,7 +595,7 @@ BrickItem {
                              === brick.entryId)
         }
 
-        Image {
+        IconImage {
             id: fallbackIcon
             objectName: brick.detailsMode ? ""
                                          : "galleryFallbackIcon-"
@@ -578,14 +627,23 @@ BrickItem {
                     : (systemFileSource
                        ? brick.systemFileFallbackSource(width) : "")
             anchors.centerIn: parent
-            width: brick.detailsMode || brick.columnsMode
-                   ? Math.min(parent.width, brick.panelRoot.detailsIconSize)
-                   : brick.iconsMode
-                   ? Math.max(0, Math.min(parent.width, parent.height))
-                   : Math.max(0, Math.min(parent.width, parent.height)
-                              * 0.55)
+            readonly property real nominalIconSize:
+                brick.detailsMode || brick.columnsMode
+                ? Math.min(parent.width, brick.panelRoot.detailsIconSize)
+                : brick.iconsMode
+                ? Math.max(0, Math.min(parent.width, parent.height))
+                : Math.max(0, Math.min(parent.width, parent.height) * 0.55)
+            width: brick.snapIconExtent(nominalIconSize)
             height: width
+            sourceSize: Qt.size(width, height)
+            color: effectiveIconColor
+            fillMode: Image.PreserveAspectFit
             smooth: false
+            mipmap: false
+            transform: Translate {
+                x: brick.iconPixelOffsetX(fallbackIcon)
+                y: brick.iconPixelOffsetY(fallbackIcon)
+            }
             opacity: brick.detailsMode || brick.columnsMode ? 1 : 0.78
             visible: !brick.detailsMode
                       && (lucideSource || (systemFileSource
@@ -618,6 +676,10 @@ BrickItem {
                     : ""
             fillMode: Image.PreserveAspectFit
             smooth: false
+            transform: Translate {
+                x: brick.iconPixelOffsetX(sourceColorFallbackIcon)
+                y: brick.iconPixelOffsetY(sourceColorFallbackIcon)
+            }
             // Keep system/native icon lookup out of the GUI thread. The
             // fallback remains visible while the asynchronous result loads.
             asynchronous: true

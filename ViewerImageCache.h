@@ -12,8 +12,12 @@
 #include <QSharedPointer>
 #include <QString>
 
+#include <functional>
+
 class ViewerImageCache {
 public:
+    using RequestTransform =
+        std::function<void(ImageDecodeRequest &request)>;
     static constexpr qint64 DefaultFitByteBudget =
         256LL * 1024LL * 1024LL;
     static constexpr qint64 DefaultNativeByteBudget =
@@ -32,7 +36,7 @@ public:
         DecodedImageInfo decodedInfo;
         QDateTime sourceLastModified;
         qint64 sourceFileSize = -1;
-        qint64 sourceVersionToken = 0;
+        QString sourceVersionToken;
         // A native-size image can still be part of the Fit predecode
         // sequence when the source is smaller than the viewport. Account it
         // against the Fit budget so it receives the same retention guarantee
@@ -78,7 +82,8 @@ public:
     static bool isFullSizeRequest(const ImageDecodeRequest &request);
 
     RequestPlan planRequest(const QList<ImageFile *> &items, int currentIndex,
-                            const QSize &viewerSize, int prefetchCount = 16);
+                            const QSize &viewerSize, int prefetchCount = 16,
+                            const RequestTransform &transform = {});
     StoredImage storeDecodedImage(const ImageDecodeRequest &request,
                                   const QImage &image,
                                   const DecodedImageInfo &decodedInfo);
@@ -86,7 +91,8 @@ public:
     QList<QPair<QString, int>> cachedImagesForPath(
         const QString &path, bool includeFullSize) const;
     QList<QPair<QString, int>> imageSources(
-        const ImageFile *item, const QSize &viewerSize = QSize()) const;
+        const ImageFile *item, const QSize &viewerSize = QSize(),
+        const RequestTransform &transform = {}) const;
     QString bestImageUrl(const ImageFile *item) const;
     QImage viewerImageForId(const QString &imageId) const;
     QImage fullSizeImageForId(const QString &imageId) const;

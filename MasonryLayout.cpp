@@ -1909,7 +1909,7 @@ void MasonryLayout::updateProperties(bool animate) {
                         if (isEmbedded() && dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem()->fileName() == "2015.07.09 Каланча") {
                             qDebug() << "ANIMATE" << i << dynamic_cast<ThumbnailsRequestInterface *>(_model)->rootItem() <<
                                 roundRect(_bricks[i].item->geometry()) << roundRect(_bricks[i].geometry()) <<
-                                _bricks[i].image->info().path;
+                                _bricks[i].image->info().sourceIdentity();
                         }
                     }
                     _bricks[i].item->setGeometry(
@@ -2090,7 +2090,7 @@ void MasonryLayout::planThumbnailForIndex(
     const ImageInfo info = image->info();
     const QString transformKey = previewTransformKey();
     const bool sameSource =
-        brick.lastPlannedSourcePath == info.path &&
+        brick.lastPlannedSourcePath == info.sourceIdentity() &&
         brick.lastPlannedModified == info.lastModified &&
         brick.lastPlannedFileSize == info.fileSize &&
         brick.lastPlannedVersionToken == info.sourceVersionToken;
@@ -2103,7 +2103,7 @@ void MasonryLayout::planThumbnailForIndex(
                                   const QSize &plannedSize) {
         brick.lastPlannedTargetSize = plannedSize;
         brick.lastPlannedTransformKey = transformKey;
-        brick.lastPlannedSourcePath = info.path;
+        brick.lastPlannedSourcePath = info.sourceIdentity();
         brick.lastPlannedModified = info.lastModified;
         brick.lastPlannedFileSize = info.fileSize;
         brick.lastPlannedVersionToken = info.sourceVersionToken;
@@ -2296,8 +2296,8 @@ void MasonryLayout::planViewportThumbnails(
         QSet<QString> keys;
         keys.reserve(requests.size());
         for (const ImageDecodeRequest &request : requests) {
-            keys.insert(request.info.path + QChar(0x1f) +
-                        QString::number(request.info.sourceVersionToken) +
+            keys.insert(request.info.sourceIdentity() + QChar(0x1f) +
+                        request.info.sourceVersionToken +
                         QChar(0x1f) +
                         QString::number(request.info.fileSize) +
                         QChar(0x1f) +
@@ -2453,7 +2453,8 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
                 // ImageFile facade. Fold a synchronous decoder batch into one
                 // full-catalog rewrap; otherwise per-image header completions
                 // produce O(image-count * catalog-size) GUI-thread work.
-                if (roles.isEmpty()) {
+                if (roles.isEmpty() || roles.contains(
+                        FileListModel::CachedMetadataBatchRole)) {
                     flushLightweightRewrap();
                 }
                 else {
@@ -2528,12 +2529,18 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             }
         }
         if (roles.contains(FileListModel::ImageFullSizeRole)) {
-            bool animateLayoutChange = false;
-            for (int i = index; i <= indexTo; i++) {
-                if (_bricks[i].image && _bricks[i].image->fullSize().isValid()
-                    && !_bricks[i].image->info().isCached) {
-                    animateLayoutChange = true;
-                    break;
+            const bool cachedMetadataBatch =
+                roles.contains(FileListModel::CachedMetadataBatchRole);
+            bool animateLayoutChange = !cachedMetadataBatch;
+            if (animateLayoutChange) {
+                animateLayoutChange = false;
+                for (int i = index; i <= indexTo; i++) {
+                    if (_bricks[i].image &&
+                        _bricks[i].image->fullSize().isValid() &&
+                        !_bricks[i].image->info().isCached) {
+                        animateLayoutChange = true;
+                        break;
+                    }
                 }
             }
             if (isEmbedded() || _skipThumbnailBackfillUntilFlush ||
@@ -2589,7 +2596,10 @@ void MasonryLayout::onDataChanged(const QModelIndex &topLeft, const QModelIndex 
             }
         }
         if (roles.contains(FileListModel::TimeToFlushRole)) {
-            const bool animateLayoutChange = !_bricks[index].image || !_bricks[index].image->info().isCached;
+            const bool animateLayoutChange =
+                !roles.contains(FileListModel::CachedMetadataBatchRole) &&
+                (!_bricks[index].image ||
+                 !_bricks[index].image->info().isCached);
             onThumbnailReadFinished(animateLayoutChange);
         }
     }

@@ -2,6 +2,7 @@
 #define CACHEIMAGERUNNERS_H
 
 #include "DecodeManager.h"
+#include "PersistentDerivedImageCache.h"
 
 class CachedImageInfoRunner : public Runner {
     Q_OBJECT
@@ -11,7 +12,7 @@ public:
                           bool validateSource, int directOpenGeneration = 0,
                           bool highPriority = false,
                           QString requestNamespace = QString(),
-                          qint64 sourceVersionToken = 0);
+                          QString sourceVersionToken = QString());
 
     RunnerType type() override { return RunnerType::CachedImageInfo; }
     void run() override;
@@ -23,7 +24,7 @@ signals:
                                   const QString &lastPath, int directOpenGeneration,
                                   bool highPriority,
                                   const QString &requestNamespace,
-                                  qint64 sourceVersionToken);
+                                  const QString &sourceVersionToken);
 
 private:
     friend class DecodeManager;
@@ -34,7 +35,7 @@ private:
     int _directOpenGeneration;
     bool _highPriority;
     QString _requestNamespace;
-    qint64 _sourceVersionToken = 0;
+    QString _sourceVersionToken;
 };
 
 
@@ -47,7 +48,10 @@ public:
     RunnerType type() override { return RunnerType::CachedImageRetrieve; }
     void run() override;
     QString path() const override { return _request.info.path; }
-    bool isViewerRequest() const override { return _request.viewerRequest; }
+    bool isViewerRequest() const override {
+        return _request.viewerRequest &&
+            !_request.backgroundViewerRequest;
+    }
     bool isHighPriority() const override { return _request.highPriority; }
     QString requestNamespace() const override {
         return _request.requestNamespace;
@@ -67,6 +71,7 @@ private:
 
     ImageDecodeRequest _request;
     bool _validateRequestVersion;
+    PersistentDerivedImageCache::LookupGate _derivedLookupGate;
 };
 
 
@@ -78,6 +83,9 @@ public:
 
     RunnerType type() override { return RunnerType::CachedImageStore; }
     void run() override;
+    QString path() const override {
+        return _imageInfo.sourceIdentity();
+    }
     QString requestNamespace() const override {
         return _imageInfo.requestNamespace;
     }

@@ -17,7 +17,7 @@ QStringList PngDecoder::supportedFormats() {
 }
 
 bool PngDecoder::readMetadata(ImageInfo &result) {
-    if (!isFormatSupported(result.path)) {
+    if (!isFormatSupported(result.formatHint())) {
         return false;
     }
 
@@ -70,7 +70,7 @@ bool PngDecoder::readMetadata(ImageInfo &result) {
 }
 
 bool PngDecoder::readPreviewAndMime(ImageData &result) {
-    if (!isFormatSupported(result.request.info.path)) {
+    if (!isFormatSupported(result.request.info.formatHint())) {
         return false;
     }
 
@@ -82,7 +82,11 @@ bool PngDecoder::readPreviewAndMime(ImageData &result) {
     }
 
     QByteArray fileData = file.readAll();
-    result.previewData.reset(new char[fileData.size()]);
+    // previewData is shared_ptr<char>; provide an array deleter for the
+    // array allocated here. Using shared_ptr's scalar default deleter is
+    // undefined behaviour and can corrupt later thumbnail work.
+    result.previewData = std::shared_ptr<char>(
+        new char[fileData.size()], std::default_delete<char[]>());
     std::copy(fileData.begin(), fileData.end(), result.previewData.get());
     result.previewDataSize = fileData.size();
     result.previewMimeType = "image/png";

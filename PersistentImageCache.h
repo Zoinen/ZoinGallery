@@ -31,11 +31,16 @@ public:
     };
 
     static bool hasImage(const QString &path, bool validateSource = true);
+    static bool hasImage(const ImageDecodeRequest &request);
     static void retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList,
                                    QStringList &outNotFound, bool validateSource = true);
     static QImage retrieveImage(ImageDecodeRequest &request, bool validateRequestVersion = true);
     static void storeImage(const ImageInfo &imageInfo, const QByteArray &imageData);
+    static void storeImage(const ImageDecodeRequest &request,
+                           const QByteArray &imageData);
     static QByteArray createImageForCache(const QImage &image);
+    static QByteArray createImageForCache(const ImageDecodeRequest &request,
+                                          const QImage &image);
 
     static void loadDb();
     static void dumpDb();

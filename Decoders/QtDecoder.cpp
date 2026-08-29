@@ -42,7 +42,7 @@ ExifOrientation mapQtTransformationToExifOrientation(QImageIOHandler::Transforma
 }
 
 bool QtDecoder::readMetadata(ImageInfo& result) {
-    if (!isFormatSupported(result.path)) {
+    if (!isFormatSupported(result.formatHint())) {
         return false;
     }
 
@@ -69,4 +69,3 @@ QImage QtDecoder::decode(const QString& mimeType, const QByteArray &data, QSize 
     }
     return img;
 }
-

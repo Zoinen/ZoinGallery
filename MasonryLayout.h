@@ -487,7 +487,7 @@ private:
         QString lastPlannedSourcePath;
         QDateTime lastPlannedModified;
         qint64 lastPlannedFileSize = -1;
-        qint64 lastPlannedVersionToken = 0;
+        QString lastPlannedVersionToken;
         // External catalogs expose these values as cheap model roles. Keep
         // them with the geometry so no presentation mode has to construct one
         // ImageFile QObject per catalog row during a reset.

@@ -92,16 +92,18 @@ bool ImageFile::imageMatchesSource(const ImageInfo &sourceInfo) const {
     // the replacement is decoded, so the mere presence of _image is not
     // enough to establish that equivalence.
     const bool versionTokenMatches =
-        (_imageSourceInfo.sourceVersionToken == 0 &&
-         sourceInfo.sourceVersionToken == 0) ||
-        (_imageSourceInfo.sourceVersionToken != 0 &&
+        (_imageSourceInfo.sourceVersionToken.isEmpty() &&
+         sourceInfo.sourceVersionToken.isEmpty()) ||
+        (!_imageSourceInfo.sourceVersionToken.isEmpty() &&
          _imageSourceInfo.sourceVersionToken == sourceInfo.sourceVersionToken);
     return !_image.isNull() && versionTokenMatches &&
-           !_imageSourceInfo.path.isEmpty() &&
-           _imageSourceInfo.path == sourceInfo.path &&
-           _imageSourceInfo.lastModified.isValid() &&
-           sourceInfo.lastModified.isValid() &&
-           _imageSourceInfo.lastModified == sourceInfo.lastModified &&
+           !_imageSourceInfo.sourceIdentity().isEmpty() &&
+           _imageSourceInfo.sourceIdentity() == sourceInfo.sourceIdentity() &&
+           ((!_imageSourceInfo.source.isValid() &&
+             _imageSourceInfo.lastModified.isValid() &&
+             sourceInfo.lastModified.isValid() &&
+             _imageSourceInfo.lastModified == sourceInfo.lastModified) ||
+            (_imageSourceInfo.source.isValid() && sourceInfo.source.isValid())) &&
            _imageSourceInfo.fileSize >= 0 && sourceInfo.fileSize >= 0 &&
            _imageSourceInfo.fileSize == sourceInfo.fileSize;
 }

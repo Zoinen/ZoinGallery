@@ -145,12 +145,17 @@ set(ZOIN_CORE_SOURCES
     SvgCursor.cpp
     PersistentImageCache.h
     PersistentImageCache.cpp
+    PersistentDerivedImageCache.h
+    PersistentDerivedImageCache.cpp
     PersistentSelectionCache.h
     PersistentSelectionCache.cpp
     PersistentFolderCache.cpp
     PersistentFolderCache.h
     DecodeManager.h
     DecodeManager.cpp
+    ImageProbe.h
+    Runners/ImageProbeRunner.h
+    Runners/ImageProbeRunner.cpp
     Runners/ImageInfoReadRunner.h
     Runners/ImageInfoReadRunner.cpp
     Runners/ImageReadRunner.h
@@ -195,8 +200,16 @@ set(ZOIN_CORE_SOURCES
     Exiftool/LensDatabase.h
     include/ZoinGallery/GalleryRuntime.h
     include/ZoinGallery/GallerySession.h
+    include/ZoinGallery/ImageSourceProvider.h
+    src/embed/ImageSourceProvider.cpp
+    src/embed/SharedImageSourceProvider.h
+    src/embed/SharedImageSourceProvider.cpp
     src/embed/ExternalCatalogModel.h
     src/embed/ExternalCatalogModel.cpp
+    src/embed/EmbeddedImageProbe.h
+    src/embed/EmbeddedImageProbe.cpp
+    src/embed/DecodeSizePolicy.h
+    src/embed/DecodeSizePolicy.cpp
     src/embed/ThumbnailMemoryCache.h
     src/embed/ThumbnailMemoryCache.cpp
     src/embed/LocalFilesystemSource.h
@@ -353,6 +366,36 @@ if(BUILD_TESTING)
         Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME ThumbnailMemoryCacheTest
         COMMAND ZoinGalleryThumbnailMemoryCacheTests)
+
+    add_executable(ZoinGalleryEmbeddedImageProbeTests
+        tests/EmbeddedImageProbeTest.cpp)
+    target_include_directories(ZoinGalleryEmbeddedImageProbeTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryEmbeddedImageProbeTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME EmbeddedImageProbeTest
+        COMMAND ZoinGalleryEmbeddedImageProbeTests)
+
+    add_executable(ZoinGalleryDecodeSizePolicyTests
+        tests/DecodeSizePolicyTest.cpp)
+    target_include_directories(ZoinGalleryDecodeSizePolicyTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryDecodeSizePolicyTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME DecodeSizePolicyTest
+        COMMAND ZoinGalleryDecodeSizePolicyTests)
+
+    add_executable(ZoinGalleryPersistentDerivedImageCacheTests
+        tests/PersistentDerivedImageCacheTest.cpp)
+    target_include_directories(ZoinGalleryPersistentDerivedImageCacheTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryPersistentDerivedImageCacheTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME PersistentDerivedImageCacheTest
+        COMMAND ZoinGalleryPersistentDerivedImageCacheTests)
 
     add_executable(ZoinGalleryDecodeLifecycleTests
         tests/DecodeLifecycleTest.cpp

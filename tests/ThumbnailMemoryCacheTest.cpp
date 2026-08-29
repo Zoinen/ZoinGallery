@@ -29,7 +29,7 @@ ZoinGallery::ThumbnailMemoryCache::Handle storeFrame(
     const QSize &requested, const QSize &decoded = {}) {
     const QImage image = frame(decoded.isValid() ? decoded : requested);
     return cache.storeDecoded(
-        owner, source, version, fileSize, requested,
+        owner, source, QString::number(version), fileSize, requested,
         QString::fromLatin1(
             ZoinGallery::ThumbnailMemoryCache::DefaultTransformKey),
         image);
@@ -57,13 +57,16 @@ private slots:
             &ZoinGallery::ThumbnailMemoryCache::frameAvailable);
 
         const auto left = cache.acquire(
-            QStringLiteral("left"), source, 101, 6, QSize(96, 64));
+            QStringLiteral("left"),
+            ZoinGallery::ThumbnailMemoryCache::canonicalSourceIdentity(source),
+            QStringLiteral("101"), 6, QSize(96, 64));
         QCOMPARE(left.state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         const auto rightWhilePending = cache.acquire(
             QStringLiteral("right"),
-            directory.filePath(QStringLiteral("./image.png")),
-            101, 6, QSize(48, 32));
+            ZoinGallery::ThumbnailMemoryCache::canonicalSourceIdentity(
+                directory.filePath(QStringLiteral("./image.png"))),
+            QStringLiteral("101"), 6, QSize(48, 32));
         QCOMPARE(rightWhilePending.state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Pending);
         QCOMPARE(cache.pendingRequestCount(), qsizetype(1));
@@ -84,7 +87,8 @@ private slots:
         QVERIFY(store->contains(published.providerId));
 
         const auto right = cache.acquire(
-            QStringLiteral("right"), source, 101, 6, QSize(48, 32));
+            QStringLiteral("right"), source, QStringLiteral("101"), 6,
+            QSize(48, 32));
         QCOMPARE(right.state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
         QCOMPARE(right.handle.providerId, published.providerId);
@@ -94,19 +98,23 @@ private slots:
         // Version, source size and pixel transform policy are all part of
         // identity. Gallery crop/fit/masonry share one aspect-preserved pixel
         // policy because QML alone chooses crop versus fit at presentation.
-        QCOMPARE(cache.acquire(QStringLiteral("right"), source, 102, 6,
+        QCOMPARE(cache.acquire(QStringLiteral("right"), source,
+                               QStringLiteral("102"), 6,
                                QSize(48, 32)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
-        QCOMPARE(cache.acquire(QStringLiteral("right"), source, 101, 7,
+        QCOMPARE(cache.acquire(QStringLiteral("right"), source,
+                               QStringLiteral("101"), 7,
                                QSize(48, 32)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         const auto aspectReuse = cache.acquire(
-            QStringLiteral("right"), source, 101, 6, QSize(48, 32),
+            QStringLiteral("right"), source, QStringLiteral("101"), 6,
+            QSize(48, 32),
             QStringLiteral("thumbnail-aspect-v1"));
         QCOMPARE(aspectReuse.state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
         QCOMPARE(aspectReuse.handle.providerId, published.providerId);
-        QCOMPARE(cache.acquire(QStringLiteral("right"), source, 101, 6,
+        QCOMPARE(cache.acquire(QStringLiteral("right"), source,
+                               QStringLiteral("101"), 6,
                                QSize(48, 32),
                                QStringLiteral("thumbnail-filtered-v2")).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
@@ -120,23 +128,25 @@ private slots:
         const QString aspectKey = QStringLiteral("thumbnail-aspect-v1");
 
         const QSize gridCropTier(320, 180);
-        QCOMPARE(cache.acquire(QStringLiteral("gallery"), source, 7, 100,
+        QCOMPARE(cache.acquire(QStringLiteral("gallery"), source,
+                               QStringLiteral("7"), 100,
                                gridCropTier, aspectKey).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         const auto gridFrame = cache.storeDecoded(
-            QStringLiteral("gallery"), source, 7, 100, gridCropTier,
+            QStringLiteral("gallery"), source, QStringLiteral("7"), 100,
+            gridCropTier,
             aspectKey, frame(gridCropTier));
         QVERIFY(gridFrame.isValid());
 
         const auto icons = cache.acquire(
-            QStringLiteral("gallery"), source, 7, 100,
+            QStringLiteral("gallery"), source, QStringLiteral("7"), 100,
             QSize(128, 72), aspectKey);
         QCOMPARE(icons.state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
         QCOMPARE(icons.handle.providerId, gridFrame.providerId);
 
         const auto masonry = cache.acquire(
-            QStringLiteral("gallery"), source, 7, 100,
+            QStringLiteral("gallery"), source, QStringLiteral("7"), 100,
             QSize(160, 90), aspectKey);
         QCOMPARE(masonry.state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
@@ -161,12 +171,14 @@ private slots:
 
         QCOMPARE(cache.acquire(QStringLiteral("first"),
                                QStringLiteral("/virtual/cache/first.png"),
-                               1, frameBytes, QSize(10, 10)).state,
+                               QStringLiteral("1"), frameBytes,
+                               QSize(10, 10)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         const auto first = add(QStringLiteral("first"));
         QCOMPARE(cache.acquire(QStringLiteral("second"),
                                QStringLiteral("/virtual/cache/second.png"),
-                               1, frameBytes, QSize(10, 10)).state,
+                               QStringLiteral("1"), frameBytes,
+                               QSize(10, 10)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         const auto second = add(QStringLiteral("second"));
         QVERIFY(first.isValid());
@@ -177,11 +189,13 @@ private slots:
         // A hit updates recency, so the untouched second frame is the victim.
         QCOMPARE(cache.acquire(QStringLiteral("reader"),
                                QStringLiteral("/virtual/cache/first.png"),
-                               1, frameBytes, QSize(10, 10)).state,
+                               QStringLiteral("1"), frameBytes,
+                               QSize(10, 10)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
         QCOMPARE(cache.acquire(QStringLiteral("third"),
                                QStringLiteral("/virtual/cache/third.png"),
-                               1, frameBytes, QSize(10, 10)).state,
+                               QStringLiteral("1"), frameBytes,
+                               QSize(10, 10)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         const auto third = add(QStringLiteral("third"));
         QVERIFY(third.isValid());
@@ -204,7 +218,8 @@ private slots:
         ZoinGallery::ThumbnailMemoryCache cache(store, 64);
 
         const QString firstSource = QStringLiteral("/virtual/huge/one.png");
-        QCOMPARE(cache.acquire(QStringLiteral("one"), firstSource, 1, 400,
+        QCOMPARE(cache.acquire(QStringLiteral("one"), firstSource,
+                               QStringLiteral("1"), 400,
                                QSize(10, 10)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         const auto first = storeFrame(cache, QStringLiteral("one"),
@@ -213,7 +228,8 @@ private slots:
         QCOMPARE(cache.retainedBytes(), qint64(400));
 
         const QString secondSource = QStringLiteral("/virtual/huge/two.png");
-        QCOMPARE(cache.acquire(QStringLiteral("two"), secondSource, 1, 400,
+        QCOMPARE(cache.acquire(QStringLiteral("two"), secondSource,
+                               QStringLiteral("1"), 400,
                                QSize(10, 10)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         const auto second = storeFrame(cache, QStringLiteral("two"),
@@ -231,10 +247,12 @@ private slots:
             &cache, &ZoinGallery::ThumbnailMemoryCache::requestReleased);
         const QString source = QStringLiteral("/virtual/cancel/image.png");
 
-        QCOMPARE(cache.acquire(QStringLiteral("left"), source, 5, 90,
+        QCOMPARE(cache.acquire(QStringLiteral("left"), source,
+                               QStringLiteral("5"), 90,
                                QSize(12, 12)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
-        QCOMPARE(cache.acquire(QStringLiteral("right"), source, 5, 90,
+        QCOMPARE(cache.acquire(QStringLiteral("right"), source,
+                               QStringLiteral("5"), 90,
                                QSize(8, 8)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Pending);
         cache.cancelRequests(QStringLiteral("left"));
@@ -245,7 +263,8 @@ private slots:
                  QStringLiteral("thumbnail-aspect-v1"));
         QVERIFY(releasedSpy.constFirst().at(5).toBool());
 
-        QCOMPARE(cache.acquire(QStringLiteral("right"), source, 5, 90,
+        QCOMPARE(cache.acquire(QStringLiteral("right"), source,
+                               QStringLiteral("5"), 90,
                                QSize(8, 8)).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
     }

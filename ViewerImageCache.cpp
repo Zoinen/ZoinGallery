@@ -64,14 +64,17 @@ ImageDecodeRequest ViewerImageCache::makeRequest(
 
 ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
     const QList<ImageFile *> &items, int currentIndex, const QSize &viewerSize,
-    int prefetchCount) {
+    int prefetchCount, const RequestTransform &transform) {
     RequestPlan result;
     if (currentIndex < 0 || currentIndex >= items.size()) {
         return result;
     }
 
-    const ImageDecodeRequest currentRequest =
+    ImageDecodeRequest currentRequest =
         requestForItem(items[currentIndex], viewerSize);
+    if (transform) {
+        transform(currentRequest);
+    }
 
     QList<ImageFile *> plannedItems;
     plannedItems.reserve(qMax(0, prefetchCount));
@@ -101,7 +104,7 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
     QList<QString> plannedPaths;
     plannedPaths.reserve(plannedItems.size());
     for (const ImageFile *item : std::as_const(plannedItems)) {
-        const QString path = item ? item->info().path : QString();
+        const QString path = item ? item->info().sourceIdentity() : QString();
         if (!path.isEmpty() && !plannedPaths.contains(path)) {
             plannedPaths.append(path);
         }
@@ -109,7 +112,10 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
     QList<ImageDecodeRequest> plannedRequests;
     plannedRequests.reserve(plannedItems.size());
     for (const ImageFile *item : std::as_const(plannedItems)) {
-        const ImageDecodeRequest request = requestForItem(item, viewerSize);
+        ImageDecodeRequest request = requestForItem(item, viewerSize);
+        if (transform) {
+            transform(request);
+        }
         if (request.targetSize.isValid()) {
             plannedRequests.append(request);
         }
@@ -117,7 +123,7 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
 
     {
         QWriteLocker locker(&_lock);
-        updateRetentionPlanLocked(currentRequest.info.path, plannedPaths,
+        updateRetentionPlanLocked(currentRequest.info.sourceIdentity(), plannedPaths,
                                   prefetchCount);
         for (const ImageDecodeRequest &request :
              std::as_const(plannedRequests)) {
@@ -166,8 +172,8 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
         // the viewer grew.
         return result;
     }
-    if (_hasRetentionPlan &&
-        !_retentionRanks.contains(request.info.path)) {
+    if (!request.backgroundViewerRequest && _hasRetentionPlan &&
+        !_retentionRanks.contains(request.info.sourceIdentity())) {
         // A result from an obsolete navigation generation must not enter the
         // cache after the active predecode sequence has moved elsewhere.
         // Frames which completed before that move remain reusable until the
@@ -178,22 +184,23 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
         // Direct-open decoding can populate the cache before its first
         // planRequest(). Its first frame is the only reliable current-image
         // signal available at that stage.
-        _currentPath = request.info.path;
+        _currentPath = request.info.sourceIdentity();
     }
 
     QHash<QString, Entry> &cache =
         fullSize ? _fullSizeImages : _viewerImages;
     QHash<QString, QString> &idToPath =
         fullSize ? _fullSizeIdToPath : _viewerIdToPath;
-    auto cacheIt = cache.find(request.info.path);
+    const QString sourceIdentity = request.info.sourceIdentity();
+    auto cacheIt = cache.find(sourceIdentity);
     if (cacheIt != cache.end() && !cacheIt->image.isNull()) {
         const bool incomingVersionKnown =
             request.info.lastModified.isValid() ||
             request.info.fileSize >= 0 ||
-            request.info.sourceVersionToken != 0;
+            !request.info.sourceVersionToken.isEmpty();
         const bool sameSourceVersion =
-            (request.info.sourceVersionToken == 0 ||
-             (cacheIt->sourceVersionToken != 0 &&
+            (request.info.sourceVersionToken.isEmpty() ||
+             (!cacheIt->sourceVersionToken.isEmpty() &&
               request.info.sourceVersionToken ==
                   cacheIt->sourceVersionToken)) &&
             (!request.info.lastModified.isValid() ||
@@ -207,11 +214,15 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
             incomingVersionKnown && !sameSourceVersion;
         const bool sameSize =
             cacheIt->image.size() == image.size();
+        const auto needsSourceUpgrade = [](const DecodedImageInfo &info) {
+            return info.isFromCache &&
+                !info.isAuthoritativeDerivedCache;
+        };
         const bool equalSizeSourceReplacement =
-            sameSize && !decodedInfo.isFromCache;
+            sameSize && !needsSourceUpgrade(decodedInfo);
         const bool qualityDowngrade =
-            !cacheIt->decodedInfo.isFromCache &&
-            decodedInfo.isFromCache;
+            !needsSourceUpgrade(cacheIt->decodedInfo) &&
+            needsSourceUpgrade(decodedInfo);
         const bool existingCoversIncoming =
             covers(cacheIt->image.size(), image.size());
 
@@ -248,13 +259,13 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
         .sourceVersionToken = request.info.sourceVersionToken,
         .fitPrepared = request.fitToViewerRequest || !fullSize,
     };
-    cache.insert(request.info.path, entry);
+    cache.insert(sourceIdentity, entry);
     addRetainedBytesLocked(entry, fullSize);
-    idToPath.insert(imageId, request.info.path);
+    idToPath.insert(imageId, sourceIdentity);
     _providerImageStore->publish(imageId, image);
 
     pruneToBudgetsLocked();
-    const auto retainedIt = cache.constFind(request.info.path);
+    const auto retainedIt = cache.constFind(sourceIdentity);
     if (retainedIt == cache.constEnd() || retainedIt->imageId != imageId) {
         return result;
     }
@@ -288,7 +299,8 @@ QList<QPair<QString, int>> ViewerImageCache::cachedImagesForPath(
 }
 
 QList<QPair<QString, int>> ViewerImageCache::imageSources(
-    const ImageFile *item, const QSize &viewerSize) const {
+    const ImageFile *item, const QSize &viewerSize,
+    const RequestTransform &transform) const {
     QList<QPair<QString, int>> result;
     if (!item) {
         return result;
@@ -298,7 +310,10 @@ QList<QPair<QString, int>> ViewerImageCache::imageSources(
         result.append({item->imageIdUrl(), 0});
     }
 
-    const ImageDecodeRequest request = requestForItem(item, viewerSize);
+    ImageDecodeRequest request = requestForItem(item, viewerSize);
+    if (transform) {
+        transform(request);
+    }
     const auto cached = cachedImagesForRequest(request);
     for (const auto &source : cached) {
         if (source.first.isEmpty()) {
@@ -326,7 +341,7 @@ QList<QPair<QString, int>> ViewerImageCache::cachedImagesForRequest(
     const QSize minimumViewerSize = request.fitToViewerRequest
         ? request.targetSize : QSize();
     return cachedImagesForPath(
-        request.info.path, isFullSizeRequest(request),
+        request.info.sourceIdentity(), isFullSizeRequest(request),
         request.fitToViewerRequest, minimumViewerSize,
         request.targetSize);
 }
@@ -403,10 +418,10 @@ bool ViewerImageCache::needsDecode(
     QReadLocker locker(&_lock);
     const QHash<QString, Entry> &cache =
         fullSize ? _fullSizeImages : _viewerImages;
-    const auto it = cache.constFind(info.path);
+    const auto it = cache.constFind(info.sourceIdentity());
     const bool sameVersion = it != cache.constEnd() &&
-        (info.sourceVersionToken == 0 ||
-         (it->sourceVersionToken != 0 &&
+        (info.sourceVersionToken.isEmpty() ||
+         (!it->sourceVersionToken.isEmpty() &&
           info.sourceVersionToken == it->sourceVersionToken)) &&
         (!info.lastModified.isValid() ||
          (it->sourceLastModified.isValid() &&
@@ -417,21 +432,22 @@ bool ViewerImageCache::needsDecode(
     return it == cache.constEnd() ||
         !sameVersion ||
         !satisfies(it.value(), targetSize) ||
-        it->decodedInfo.isFromCache;
+        (it->decodedInfo.isFromCache &&
+         !it->decodedInfo.isAuthoritativeDerivedCache);
 }
 
 void ViewerImageCache::recordPlannedTargetLocked(
     const ImageDecodeRequest &request) {
     QHash<QString, QSize> &targets = request.fitToViewerRequest
         ? _latestPlannedFitTargets : _latestPlannedNativeTargets;
-    targets.insert(request.info.path, request.targetSize);
+    targets.insert(request.info.sourceIdentity(), request.targetSize);
 }
 
 QSize ViewerImageCache::latestPlannedTargetLocked(
     const ImageDecodeRequest &request) const {
     const QHash<QString, QSize> &targets = request.fitToViewerRequest
         ? _latestPlannedFitTargets : _latestPlannedNativeTargets;
-    const auto it = targets.constFind(request.info.path);
+    const auto it = targets.constFind(request.info.sourceIdentity());
     return it == targets.constEnd() ? QSize() : it.value();
 }
 
@@ -776,7 +792,7 @@ void ViewerImageCache::removeEntryLocked(
 QString ViewerImageCache::nextImageId(
     const ImageDecodeRequest &request) {
     const int serial = _lastImageId++;
-    if (request.info.sourceVersionToken == 0) {
+    if (request.info.sourceVersionToken.isEmpty()) {
         return _idPrefix + QString::number(serial);
     }
     return _idPrefix + QStringLiteral("v%1-s%2-%3")

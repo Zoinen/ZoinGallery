@@ -1,4 +1,5 @@
 #include "PersistentImageCache.h"
+#include "PersistentDerivedImageCache.h"
 #include "DisplayColorSpace.h"
 #include "Decoders/WebpCodec.h"
 #include "StorageLocations.h"
@@ -86,6 +87,13 @@ bool PersistentImageCache::hasImage(const QString &path, bool validateSource) {
         && hasUsableThumbnail(*it);
 }
 
+bool PersistentImageCache::hasImage(const ImageDecodeRequest &request) {
+    if (PersistentDerivedImageCache::appliesTo(request)) {
+        return PersistentDerivedImageCache::hasImage(request);
+    }
+    return hasImage(request.info.path);
+}
+
 void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QList<ImageInfo> &outInfoList,
                                               QStringList &outNotFound, bool validateSource) {
     loadDb();
@@ -121,6 +129,9 @@ void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QLi
 }
 
 QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request, bool validateRequestVersion) {
+    if (PersistentDerivedImageCache::appliesTo(request)) {
+        return PersistentDerivedImageCache::retrieveImage(request);
+    }
     loadDb();
 
     ThumbnailInfo info;
@@ -170,6 +181,11 @@ QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request, bool val
 }
 
 void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArray &imageData) {
+    if (imageInfo.source.isValid()) {
+        PersistentDerivedImageCache::storePreparedImage(imageInfo,
+                                                         imageData);
+        return;
+    }
     if (imageData.isEmpty() || !imageInfo.lastModified.isValid()
         || imageInfo.fileSize < 0 || imageInfo.imageSize.width() <= 1
         || imageInfo.imageSize.height() <= 1
@@ -227,6 +243,15 @@ void PersistentImageCache::storeImage(const ImageInfo &imageInfo, const QByteArr
     _db.insert(imageInfo.path, info);
 }
 
+void PersistentImageCache::storeImage(const ImageDecodeRequest &request,
+                                      const QByteArray &imageData) {
+    if (PersistentDerivedImageCache::appliesTo(request)) {
+        PersistentDerivedImageCache::storeImage(request, imageData);
+        return;
+    }
+    storeImage(request.info, imageData);
+}
+
 QByteArray PersistentImageCache::createImageForCache(const QImage &image) {
     if (image.isNull()) {
         return {};
@@ -242,6 +267,15 @@ QByteArray PersistentImageCache::createImageForCache(const QImage &image) {
         return {};
     }
     return WebpCodec::encode(scaled, CacheWebpQuality);
+}
+
+QByteArray PersistentImageCache::createImageForCache(
+    const ImageDecodeRequest &request, const QImage &image) {
+    if (PersistentDerivedImageCache::appliesTo(request)) {
+        return PersistentDerivedImageCache::createImageForCache(request,
+                                                                 image);
+    }
+    return createImageForCache(image);
 }
 
 QDataStream& operator<<(QDataStream& out, const PersistentImageCache::ThumbnailLocation& obj) {
@@ -341,7 +375,8 @@ qint64 PersistentImageCache::cacheSize() {
             }
         }
     }
-    return size + qMax(serializedDbSize, QFileInfo(cacheDbPath()).size());
+    return size + qMax(serializedDbSize, QFileInfo(cacheDbPath()).size()) +
+        PersistentDerivedImageCache::cacheSize();
 }
 
 QString PersistentImageCache::cacheLocation() {
@@ -364,6 +399,7 @@ void PersistentImageCache::clear() {
     for (const QFileInfo &chunk : chunks) {
         QFile::remove(chunk.absoluteFilePath());
     }
+    PersistentDerivedImageCache::clear();
 }
 
 QStringList PersistentImageCache::getAllImagePaths() const {

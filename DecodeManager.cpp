@@ -1,16 +1,21 @@
 #include "DecodeManager.h"
+#include "DecodeQueuePolicy.h"
 
 #include "Runners/FolderListReadRunner.h"
 #include "Runners/ImageDecodeRunner.h"
 #include "Runners/ImageInfoReadRunner.h"
+#include "Runners/ImageProbeRunner.h"
 #include "Runners/ImageReadRunner.h"
 #include "Runners/CacheImageRunners.h"
 #include "Runners/RecursiveFolderScanner.h"
 
 #include "PersistentFolderCache.h"
+#include "PersistentDerivedImageCache.h"
 #include "PersistentImageCache.h"
 #include "NaturalSort.h"
 #include "ThumbnailLoader.h"
+
+#include <ZoinGallery/MediaTimingTrace.h>
 
 #include <QDebug>
 #include <QThread>
@@ -87,6 +92,43 @@ void insertAheadOfLowerPriority(QQueue<Runner *> &queue, Runner *runner) {
     queue.insert(priorityBandEnd(queue, runner), runner);
 }
 
+int foregroundImageStageRank(Runner *runner) {
+    switch (runner->type()) {
+    case RunnerType::ImageDecode:
+        // Compressed bytes are already resident. Decode and publish them before
+        // admitting more source I/O, both for latency and payload memory.
+        return 0;
+    case RunnerType::CachedImageRetrieve:
+    case RunnerType::ImageProbe:
+        return 1;
+    case RunnerType::ImageRead:
+        return 2;
+    default:
+        return 3;
+    }
+}
+
+void insertHighImageStageAheadOfMetadataImpl(QQueue<Runner *> &queue,
+                                             Runner *runner) {
+    if (queuePriority(runner) != QueuePriority::High) {
+        insertAheadOfLowerPriority(queue, runner);
+        return;
+    }
+
+    const int stageRank = foregroundImageStageRank(runner);
+    int index = 0;
+    while (index < queue.size() &&
+           queuePriority(queue.at(index)) == QueuePriority::Viewer) {
+        ++index;
+    }
+    while (index < queue.size() &&
+           queuePriority(queue.at(index)) == QueuePriority::High &&
+           foregroundImageStageRank(queue.at(index)) <= stageRank) {
+        ++index;
+    }
+    queue.insert(index, runner);
+}
+
 void insertViewerStageAheadOfSameRequest(QQueue<Runner *> &queue,
                                          Runner *runner) {
     int index = 0;
@@ -131,6 +173,15 @@ QList<FileInfo> previewImages(const QList<FileInfo> &entries, int totalImages) {
 }
 }
 
+namespace DecodeQueuePolicy {
+
+void insertHighImageStageAheadOfMetadata(QQueue<Runner *> &queue,
+                                         Runner *runner) {
+    insertHighImageStageAheadOfMetadataImpl(queue, runner);
+}
+
+} // namespace DecodeQueuePolicy
+
 bool isRunnerDecode(Runner *runner) {
     return runner->type() == RunnerType::ImageRead || runner->type() == RunnerType::ImageDecode || runner->type() == RunnerType::CachedImageRetrieve;
 }
@@ -143,7 +194,9 @@ bool isRunnerDecodeViewer(Runner *runner) {
 }
 
 bool isRunnerInReadThread(Runner *runner) {
-    return runner->type() == RunnerType::ImageInfoRead || runner->type() == RunnerType::ImageRead;
+    return runner->type() == RunnerType::ImageProbe ||
+        runner->type() == RunnerType::ImageInfoRead ||
+        runner->type() == RunnerType::ImageRead;
 }
 
 bool isRunnerImageInfoEmbedded(Runner *runner) {
@@ -151,8 +204,16 @@ bool isRunnerImageInfoEmbedded(Runner *runner) {
 }
 
 
-DecodeManager::DecodeManager(QObject *parent, int maxThreads)
-    : QObject(parent) {
+DecodeManager::DecodeManager(
+    QObject *parent, int maxThreads,
+    QSharedPointer<ZoinGallery::ImageSourceProvider> imageSourceProvider)
+    : QObject(parent),
+      _imageSourceProvider(std::move(imageSourceProvider)) {
+
+    if (!_imageSourceProvider) {
+        _imageSourceProvider =
+            QSharedPointer<ZoinGallery::LocalImageSourceProvider>::create();
+    }
 
     _runningTasksUpdateTimer.start(100);
     connect(&_runningTasksUpdateTimer, &QTimer::timeout,
@@ -189,13 +250,12 @@ void DecodeManager::readImagesInfo(const QList<QString> &paths,
                                    int directOpenGeneration,
                                    bool highPriority,
                                    const QString &requestNamespace,
-                                   qint64 sourceVersionToken,
+                                   const QString &sourceVersionToken,
                                    ImageInfoCachePolicy cachePolicy) {
     if (cachePolicy == ImageInfoCachePolicy::ForceSource) {
-        // External catalogs carry a host-authoritative, nanosecond source
-        // version. PersistentImageCache is intentionally compatible with the
-        // standalone database and stores only QDateTime milliseconds, so it
-        // cannot prove that metadata belongs to that exact host version.
+        // External catalogs carry a host-authoritative opaque source version.
+        // PersistentImageCache is still path/stat based, so it cannot prove
+        // that metadata belongs to that exact host revision.
         onInfoNotFoundInCache(paths, isFromEmbeddedView,
                               directOpenGeneration, highPriority,
                               requestNamespace, sourceVersionToken);
@@ -240,7 +300,7 @@ void DecodeManager::readImagesInfo(const QList<QString> &paths,
 void DecodeManager::onInfoNotFoundInCache(
     const QList<QString> &imagePaths, bool isFromEmbeddedView,
     int directOpenGeneration, bool highPriority,
-    const QString &requestNamespace, qint64 sourceVersionToken) {
+    const QString &requestNamespace, const QString &sourceVersionToken) {
     int insertIndex = _taskQueue.size();
     // Info requests from visible subviews should be first
     if (!highPriority && isFromEmbeddedView) {
@@ -282,6 +342,90 @@ void DecodeManager::readVersionedImagesInfo(
         return;
     }
 
+    QList<ImageInfo> candidates;
+    candidates.reserve(requests.size());
+    int highPriorityCount = 0;
+    for (int index = 0; index < requests.size(); ++index) {
+        const VersionedImageInfoRequest &request = requests.at(index);
+        ImageInfo info;
+        info.path = request.source.isValid()
+            ? request.source.runtimeIdentity() : request.path;
+        info.fileSize = request.source.isValid()
+            ? request.source.size : -1;
+        info.source = request.source;
+        info.sourceVersionToken = request.sourceVersionToken;
+        info.isLast = index == requests.size() - 1;
+        info.isFromEmbeddedView = isFromEmbeddedView;
+        info.highPriority = highPriority || request.highPriority;
+        highPriorityCount += info.highPriority ? 1 : 0;
+        info.requestNamespace = requestNamespace;
+        candidates.append(std::move(info));
+    }
+
+    QList<ImageInfo> hits;
+    QList<ImageInfo> misses;
+    if (cacheReadsEnabled(_imageCacheMode)) {
+        ZoinGallery::MediaTimingTrace::Span cacheSpan(
+            QStringLiteral("qt.gallery.metadata_cache_batch"),
+            {{QStringLiteral("requestCount"), candidates.size()},
+             {QStringLiteral("requestNamespace"), requestNamespace},
+             {QStringLiteral("highPriorityCount"), highPriorityCount}});
+        PersistentDerivedImageCache::retrieveMetadataBatch(
+            candidates, hits, misses);
+        cacheSpan.set(QStringLiteral("hitCount"), hits.size());
+        cacheSpan.set(QStringLiteral("missCount"), misses.size());
+    }
+    else {
+        misses = candidates;
+    }
+
+    // A mixed batch must flush after its slowest tier, not after a cached
+    // entry which happened to be last in catalog order. Move the single batch
+    // marker to the final miss; an all-hit batch keeps its original marker.
+    if (!misses.isEmpty()) {
+        for (ImageInfo &hit : hits) {
+            hit.isLast = false;
+        }
+        for (ImageInfo &miss : misses) {
+            miss.isLast = false;
+        }
+        misses.last().isLast = true;
+    }
+
+    // One direct signal replaces one queued runner and one queued signal per
+    // cached file. ExternalCatalogModel applies this list atomically to its
+    // ImageFiles and emits one range update, so Masonry performs one rewrap.
+    if (!hits.isEmpty()) {
+        emit imagesInfoReady(hits);
+    }
+    if (sourceReadsEnabled(_imageCacheMode)) {
+        QList<ImageInfo> highPriorityMisses;
+        QList<ImageInfo> backgroundMisses;
+        highPriorityMisses.reserve(misses.size());
+        backgroundMisses.reserve(misses.size());
+        for (ImageInfo &miss : misses) {
+            if (miss.highPriority) {
+                highPriorityMisses.append(std::move(miss));
+            }
+            else {
+                backgroundMisses.append(std::move(miss));
+            }
+        }
+        // Preserve the old source-queue semantics after the cache lookup has
+        // coalesced visible and background requests into one catalog batch.
+        queueVersionedImageInfoSourceReads(highPriorityMisses);
+        queueVersionedImageInfoSourceReads(backgroundMisses);
+    }
+}
+
+void DecodeManager::queueVersionedImageInfoSourceReads(
+    const QList<ImageInfo> &requests) {
+    if (requests.isEmpty()) {
+        return;
+    }
+
+    const bool isFromEmbeddedView = requests.first().isFromEmbeddedView;
+    const bool highPriority = requests.first().highPriority;
     int insertIndex = _taskQueue.size();
     if (!highPriority && isFromEmbeddedView) {
         for (insertIndex = firstBackgroundTask(_taskQueue);
@@ -294,11 +438,15 @@ void DecodeManager::readVersionedImagesInfo(
     }
 
     for (int index = 0; index < requests.size(); ++index) {
-        const VersionedImageInfoRequest &request = requests.at(index);
+        const ImageInfo &request = requests.at(index);
         auto *runner = new ImageInfoReadRunner(
-            request.path, index == requests.size() - 1,
-            isFromEmbeddedView, false, 0, highPriority,
-            requestNamespace, request.sourceVersionToken);
+            request.path, request.isLast,
+            request.isFromEmbeddedView, false,
+            request.directOpenGeneration, request.highPriority,
+            request.requestNamespace, request.sourceVersionToken,
+            request.source, _imageSourceProvider,
+            false,
+            cacheWritesEnabled(_imageCacheMode));
         runner->connections.append(
             connect(runner, &ImageInfoReadRunner::imageInfoReady,
                     this, &DecodeManager::onImageInfoReady));
@@ -308,6 +456,37 @@ void DecodeManager::readVersionedImagesInfo(
         else {
             _taskQueue.insert(insertIndex, runner);
             ++insertIndex;
+        }
+    }
+    processQueue();
+}
+
+void DecodeManager::probeImages(
+    const QList<ZoinGallery::ImageProbeRequest> &requests) {
+    for (const ZoinGallery::ImageProbeRequest &request : requests) {
+        if (!request.source.isValid()) {
+            continue;
+        }
+        auto *runner = new ImageProbeRunner(
+            request, _imageSourceProvider);
+        runner->connections.append(
+            connect(runner, &ImageProbeRunner::imageProbeReady,
+                    this, &DecodeManager::imageProbeReady));
+        if (runner->isHighPriority()) {
+            DecodeQueuePolicy::insertHighImageStageAheadOfMetadata(
+                _taskQueue, runner);
+        }
+        else {
+            // Provisional probes are the first catalog pass. Keep them ahead
+            // of materialization/metadata work within the background band so
+            // a slow full-file read cannot starve the remaining tiny probes.
+            int insertIndex = firstBackgroundTask(_taskQueue);
+            while (insertIndex < _taskQueue.size() &&
+                   _taskQueue.at(insertIndex)->type() ==
+                       RunnerType::ImageProbe) {
+                ++insertIndex;
+            }
+            _taskQueue.insert(insertIndex, runner);
         }
     }
     processQueue();
@@ -363,8 +542,12 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
                         connect(runner, &CachedImageRetrieveRunner::cachedThumbnailRetrieved,
                                 this, &DecodeManager::onImageReady)
                         );
-                    if (runner->isViewerRequest() || runner->isHighPriority()) {
+                    if (runner->isViewerRequest()) {
                         insertAheadOfLowerPriority(_taskQueue, runner);
+                    }
+                    else if (runner->isHighPriority()) {
+                        DecodeQueuePolicy::insertHighImageStageAheadOfMetadata(
+                            _taskQueue, runner);
                     }
                     else {
                         // Background thumbnail cache lookups retain their old
@@ -393,7 +576,8 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
         if (request.viewerRequest) {
             // qDebug() << "ZZ read" << request.info.path << request.targetSize << _taskQueue.size();
         }
-        ImageReadRunner *runner = new ImageReadRunner(request);
+        ImageReadRunner *runner = new ImageReadRunner(
+            request, _imageSourceProvider);
         runner->connections.append(
             connect(runner, &ImageReadRunner::imageReadReady,
                     this, &DecodeManager::onImageReadReady)
@@ -402,8 +586,12 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
             connect(runner, &ImageReadRunner::imageReadFailed,
                     this, &DecodeManager::onImageReadFailed)
         );
-        if (runner->isViewerRequest() || runner->isHighPriority()) {
+        if (runner->isViewerRequest()) {
             insertAheadOfLowerPriority(_taskQueue, runner);
+        }
+        else if (runner->isHighPriority()) {
+            DecodeQueuePolicy::insertHighImageStageAheadOfMetadata(
+                _taskQueue, runner);
         }
         else {
             // Background thumbnail reads retain their old position before
@@ -653,6 +841,45 @@ void DecodeManager::cancelRequests(const QString &requestNamespace) {
     }
 }
 
+void DecodeManager::cancelSourceRequests(
+    const QString &requestNamespace,
+    const QSet<QString> &sourceIdentities) {
+    if (requestNamespace.isEmpty() || sourceIdentities.isEmpty()) {
+        return;
+    }
+
+    const auto matches = [&requestNamespace, &sourceIdentities](
+                             Runner *runner) {
+        return runner && runner->requestNamespace() == requestNamespace &&
+            sourceIdentities.contains(runner->path());
+    };
+    for (WorkerInfo &worker : _workers) {
+        Runner *runner = worker.runner;
+        if (!matches(runner)) {
+            continue;
+        }
+        runner->cancel();
+        if (runner->isViewerRequest()) {
+            emit viewerRunnerCanceled(runner->path(),
+                                      runner->requestNamespace());
+        }
+    }
+    for (int index = _taskQueue.size() - 1; index >= 0; --index) {
+        Runner *runner = _taskQueue.at(index);
+        if (!matches(runner)) {
+            continue;
+        }
+        _taskQueue.removeAt(index);
+        if (runner->isViewerRequest()) {
+            emit viewerRunnerCanceled(runner->path(),
+                                      runner->requestNamespace());
+        }
+        runner->cancel();
+        runner->deleteLater();
+    }
+    processQueue();
+}
+
 void DecodeManager::prepareToClose() {
     qInfo() << "[Shutdown] DecodeManager::prepareToClose begin"
             << "alreadyClosing" << _isClosing
@@ -749,6 +976,9 @@ QString DecodeManager::runnerToString(Runner *task) {
         return "-";
     }
     switch (task->type()) {
+    case RunnerType::ImageProbe:
+        return QString("ImageProbe %1")
+            .arg(static_cast<ImageProbeRunner *>(task)->_request.source.sourceKey);
     case RunnerType::ImageInfoRead:
         return QString("ImageInfoRead %2%3").arg(static_cast<ImageInfoReadRunner *>(task)->_path).arg(static_cast<ImageInfoReadRunner *>(task)->isEmbeddedRequest() ? " E" : "");
         break;
@@ -909,7 +1139,8 @@ void DecodeManager::onImageReadReady(const ImageData &result) {
         insertViewerStageAheadOfSameRequest(_taskQueue, runner);
     }
     else if (runner->isHighPriority()) {
-        insertAheadOfLowerPriority(_taskQueue, runner);
+        DecodeQueuePolicy::insertHighImageStageAheadOfMetadata(
+            _taskQueue, runner);
     }
     else {
         _taskQueue.enqueue(runner);
@@ -977,7 +1208,8 @@ void DecodeManager::onScannerInfoReady(const ImageInfo &result) {
         .checkCache = false
     };
 
-    ImageReadRunner *runner = new ImageReadRunner(request);
+    ImageReadRunner *runner = new ImageReadRunner(
+        request, _imageSourceProvider);
     runner->connections.append(
         connect(runner, &ImageReadRunner::imageReadReady,
                 this, &DecodeManager::onImageReadReady)
@@ -1011,7 +1243,7 @@ void DecodeManager::onCachedImageInfoRetrieved(
     const QList<ImageInfo> &results, const QStringList &notFound,
     bool isFromEmbeddedView, const QString &lastPath,
     int directOpenGeneration, bool highPriority,
-    const QString &requestNamespace, qint64 sourceVersionToken) {
+    const QString &requestNamespace, const QString &sourceVersionToken) {
     if (qobject_cast<Runner *>(sender())->isCanceled()) {
         return;
     }
@@ -1026,6 +1258,38 @@ void DecodeManager::onCachedImageInfoRetrieved(
 }
 
 bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType) {
+    if (runner->type() == RunnerType::ImageProbe) {
+        // Two bounded range probes per runtime hide network latency without
+        // allowing full-file materialization to fan out. Keep the dedicated
+        // source-read lane free: an explicit current image is allowed to
+        // materialize after its own probe even while another catalog probe is
+        // blocked on a slow backend. The probe lanes still execute normal
+        // decode/cache work whenever no probe is queued.
+        return threadType == static_cast<int>(SpecialThreads::Cache) ||
+            threadType == static_cast<int>(SpecialThreads::Probe);
+    }
+
+    // A virtual/network source can block while opening or materializing one
+    // item.  Keep the dedicated local-read lane for the ordinary path, but
+    // let external metadata/payload reads use the two bounded I/O lanes as
+    // well.  Otherwise one poisoned AFC handle at the head of a catalog
+    // serializes every remaining image until its full-file timeout expires.
+    if (runner->type() == RunnerType::ImageInfoRead) {
+        const auto *info = static_cast<const ImageInfoReadRunner *>(runner);
+        if (info->_source.isValid()) {
+            return threadType == static_cast<int>(SpecialThreads::Read) ||
+                threadType == static_cast<int>(SpecialThreads::Cache) ||
+                threadType == static_cast<int>(SpecialThreads::Probe);
+        }
+    }
+    if (runner->type() == RunnerType::ImageRead) {
+        const auto *read = static_cast<const ImageReadRunner *>(runner);
+        if (read->_request.info.source.isValid()) {
+            return threadType == static_cast<int>(SpecialThreads::Read) ||
+                threadType == static_cast<int>(SpecialThreads::Cache) ||
+                threadType == static_cast<int>(SpecialThreads::Probe);
+        }
+    }
     return isRunnerInReadThread(runner) == (threadType == (int)SpecialThreads::Read);
 }
 
@@ -1182,6 +1446,7 @@ bool DecodeManager::canStartRunner(
 
 QDebug operator<<(QDebug dbg, const RunnerType &myEnum) {
     switch (myEnum) {
+    case RunnerType::ImageProbe: dbg.nospace() << "ImageProbe"; break;
     case RunnerType::ImageInfoRead: dbg.nospace() << "ImageInfoRead"; break;
     case RunnerType::ImageRead: dbg.nospace() << "ImageRead"; break;
     case RunnerType::FolderListRead: dbg.nospace() << "FolderListRead"; break;
@@ -1197,6 +1462,9 @@ QDebug operator<<(QDebug dbg, const RunnerType &myEnum) {
 
 void Runner::cancel() {
     _isCanceled.store(true, std::memory_order_release);
+    if (const auto cancellation = sourceCancellation()) {
+        cancellation->cancel();
+    }
     for (auto connection : connections) {
         disconnect(connection);
     }

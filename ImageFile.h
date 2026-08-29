@@ -12,6 +12,8 @@
 #include <QVariantMap>
 #include <QSet>
 
+#include <ZoinGallery/ImageSourceProvider.h>
+
 #include <memory>
 
 enum ExifOrientation {
@@ -40,10 +42,20 @@ struct ImageInfo {
     QString path;
     QDateTime lastModified;
     qint64 fileSize = -1;
-    // Opaque host-provided source version. Unlike QDateTime this retains a
-    // nanosecond token, allowing embedded catalogs to reject a stale result
-    // even when two revisions have the same size and millisecond timestamp.
-    qint64 sourceVersionToken = 0;
+    // External sources retain their host identity while path is used only as
+    // a short-lived decoder backing path. Standalone/local requests leave
+    // source invalid and continue to use path as their identity.
+    ZoinGallery::ImageSourceDescriptor source;
+    QString sourceVersionToken;
+
+    QString sourceIdentity() const {
+        return source.isValid() ? source.runtimeIdentity() : path;
+    }
+
+    QString formatHint() const {
+        return source.isValid() && !source.displayName.isEmpty()
+            ? source.displayName : path;
+    }
 
     QSize imageSize;
     ExifOrientation orientation = ExifOrientation::Horizontal;
@@ -55,6 +67,11 @@ struct ImageInfo {
     bool isFromScanner = false;
     int directOpenGeneration = 0;
     bool highPriority = false;
+    // The byte-source transport could not materialize this revision. This is
+    // transient (network/offline/timeout), unlike a successfully opened but
+    // corrupt or unsupported image, and must not become a permanent metadata
+    // result for the catalog generation.
+    bool sourceAccessFailed = false;
     // Optional owner for metadata work running on the shared embedded
     // scheduler. Standalone requests leave this empty.
     QString requestNamespace;
@@ -68,21 +85,29 @@ struct ImageDecodeRequest {
     // leave this empty; external sessions stamp their stable session ID.
     QString requestNamespace;
     bool viewerRequest = false;
+    // A catalog-wide Fit preparation is stored in the viewer/derived cache,
+    // but stays in the background scheduler band. Interactive viewer work
+    // for the same source may overtake it and share materialization.
+    bool backgroundViewerRequest = false;
     bool checkCache = false;
     // A cold standalone thumbnail decode intentionally prepares a reusable
     // cache-resolution frame before publishing the requested tile. External
-    // catalogs carry an opaque host version which the legacy persistent cache
+    // catalogs carry an opaque host version which the legacy path/stat cache
     // cannot validate, so they disable this expansion and decode the exact
     // masonry/viewer target instead.
     bool expandToCacheResolution = true;
-    // Keep exact external decodes out of the legacy millisecond-versioned
-    // persistent cache. Otherwise a small tile could poison a later request
-    // and the cache still could not prove the host's nanosecond version.
+    // Keep exact external decodes out of the legacy path/stat persistent
+    // cache. Otherwise a small tile could poison a later request and the
+    // cache still could not prove the host's opaque content version.
     bool storeInPersistentCache = true;
     // Keeps Fit intent when a small image's target is already its native size.
     bool fitToViewerRequest = false;
     // Visible/interactively requested work jumps ahead of background scans.
     bool highPriority = false;
+    // Set only when an abstract external byte source could not be acquired.
+    // Consumers use it to retry transport failures without retrying corrupt
+    // local/decoded data forever.
+    bool sourceAccessFailed = false;
     // Assigned by DecodeManager so the latest viewer navigation batch stays
     // ahead of stale queued viewer/prefetch work.
     quint64 viewerGeneration = 0;
@@ -97,6 +122,9 @@ struct DecodedImageInfo {
     int decodingTookTime = -1;
     QString previewUsed;
     bool isFromCache = false;
+    // Opaque-versioned derived artifacts exactly match their requested tier
+    // and do not need the legacy cache-to-source quality upgrade.
+    bool isAuthoritativeDerivedCache = false;
 };
 
 struct ImageData {
@@ -109,6 +137,10 @@ struct ImageData {
     int64_t previewDataSize = 0;
     QString previewMimeType;
     QString previewUsed;
+
+    // Pins a provider-owned local backing file through preview extraction and
+    // decode. It is intentionally not copied into persistent cache metadata.
+    QSharedPointer<ZoinGallery::ImageSourceLease> sourceLease;
 
     ImageData(const ImageDecodeRequest &request_) : request(request_) {}
 };

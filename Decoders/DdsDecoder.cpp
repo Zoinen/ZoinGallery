@@ -212,7 +212,7 @@ QStringList DdsDecoder::supportedFormats() {
 }
 
 bool DdsDecoder::readMetadata(ImageInfo &result) {
-    if (!isFormatSupported(result.path)) {
+    if (!isFormatSupported(result.formatHint())) {
         return false;
     }
 
@@ -430,4 +430,4 @@ QImage DdsDecoder::decodeDds(const QByteArray &data, QSize targetSize) {
     }
     
     return result;
-} 
+}

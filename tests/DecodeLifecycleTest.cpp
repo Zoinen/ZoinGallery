@@ -1,4 +1,5 @@
 #include "DecodeManager.h"
+#include "DecodeQueuePolicy.h"
 #include "Decoders/ImageDecoderFactory.h"
 #include "Decoders/ImageDecoderInterface.h"
 #include "FileListModel.h"
@@ -26,6 +27,23 @@ public:
     RunnerType type() override { return RunnerType::ImageDecode; }
 };
 
+class PriorityRunner final : public Runner {
+public:
+    PriorityRunner(RunnerType runnerType, bool highPriority,
+                   bool viewerRequest = false)
+        : _type(runnerType), _highPriority(highPriority),
+          _viewerRequest(viewerRequest) {}
+
+    RunnerType type() override { return _type; }
+    bool isHighPriority() const override { return _highPriority; }
+    bool isViewerRequest() const override { return _viewerRequest; }
+
+private:
+    RunnerType _type;
+    bool _highPriority;
+    bool _viewerRequest;
+};
+
 ImageDecodeRequest decodeRequest(const QString &path,
                                  const QString &requestNamespace,
                                  bool viewerRequest) {
@@ -48,6 +66,35 @@ class DecodeLifecycleTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void foregroundImageStagesPreemptQueuedHighPriorityMetadata() {
+        PriorityRunner viewer(RunnerType::ImageRead, false, true);
+        PriorityRunner metadataA(RunnerType::ImageInfoRead, true);
+        PriorityRunner metadataB(RunnerType::ImageInfoRead, true);
+        PriorityRunner background(RunnerType::ImageRead, false);
+        QQueue<Runner *> queue;
+        queue.enqueue(&viewer);
+        queue.enqueue(&metadataA);
+        queue.enqueue(&metadataB);
+        queue.enqueue(&background);
+
+        PriorityRunner read(RunnerType::ImageRead, true);
+        DecodeQueuePolicy::insertHighImageStageAheadOfMetadata(queue, &read);
+        QCOMPARE(queue.indexOf(&read), 1);
+
+        PriorityRunner cache(RunnerType::CachedImageRetrieve, true);
+        DecodeQueuePolicy::insertHighImageStageAheadOfMetadata(queue, &cache);
+        QCOMPARE(queue.indexOf(&cache), 1);
+        QCOMPARE(queue.indexOf(&read), 2);
+
+        PriorityRunner decode(RunnerType::ImageDecode, true);
+        DecodeQueuePolicy::insertHighImageStageAheadOfMetadata(queue,
+                                                               &decode);
+        QCOMPARE(queue.indexOf(&decode), 1);
+        QCOMPARE(queue.indexOf(&metadataA), 4);
+        QCOMPARE(queue.indexOf(&metadataB), 5);
+        QCOMPARE(queue.constLast(), static_cast<Runner *>(&background));
+    }
+
     void automaticWorkerLimitPreservesStandaloneParallelism() {
         const int ideal = qMax(1, QThread::idealThreadCount());
         const int reservedMinimum = 3;

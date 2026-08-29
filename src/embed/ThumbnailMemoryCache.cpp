@@ -2,6 +2,8 @@
 
 #include "ProviderImageStore.h"
 
+#include <ZoinGallery/MediaTimingTrace.h>
+
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
@@ -45,10 +47,10 @@ QString ThumbnailMemoryCache::normalizedTransformKey(
 }
 
 QString ThumbnailMemoryCache::sourceKey(
-    const QString &sourceIdentity, qint64 versionToken,
+    const QString &sourceIdentity, const QString &versionToken,
     qint64 sourceFileSize, const QString &transformKey) {
     return sourceIdentity + QChar(0x1f) +
-        QString::number(versionToken) + QChar(0x1f) +
+        versionToken + QChar(0x1f) +
         QString::number(sourceFileSize) + QChar(0x1f) +
         normalizedTransformKey(transformKey);
 }
@@ -128,10 +130,9 @@ ThumbnailMemoryCache::compatiblePendingLocked(
 
 ThumbnailMemoryCache::AcquireResult ThumbnailMemoryCache::acquire(
     const QString &ownerId, const QString &sourceIdentity,
-    qint64 versionToken, qint64 sourceFileSize, const QSize &targetSize,
+    const QString &versionToken, qint64 sourceFileSize, const QSize &targetSize,
     const QString &transformKey) {
-    const QString canonicalSource =
-        canonicalSourceIdentity(sourceIdentity);
+    const QString canonicalSource = sourceIdentity;
     if (canonicalSource.isEmpty() || !targetSize.isValid() ||
         targetSize.width() <= 0 || targetSize.height() <= 0) {
         return {AcquireState::Pending, {}};
@@ -173,11 +174,10 @@ ThumbnailMemoryCache::AcquireResult ThumbnailMemoryCache::acquire(
 }
 
 ThumbnailMemoryCache::Handle ThumbnailMemoryCache::lookup(
-    const QString &sourceIdentity, qint64 versionToken,
+    const QString &sourceIdentity, const QString &versionToken,
     qint64 sourceFileSize, const QSize &targetSize,
     const QString &transformKey) {
-    const QString canonicalSource =
-        canonicalSourceIdentity(sourceIdentity);
+    const QString canonicalSource = sourceIdentity;
     if (canonicalSource.isEmpty() || !targetSize.isValid()) {
         return {};
     }
@@ -190,7 +190,7 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::lookup(
 
 QString ThumbnailMemoryCache::nextProviderIdLocked(
     const QString &ownerId, const QString &sourceKeyValue,
-    qint64 versionToken,
+    const QString &versionToken,
     qint64 sourceFileSize, const QSize &decodedSize) {
     QString ownerToken = ownerId;
     for (QChar &character : ownerToken) {
@@ -240,11 +240,10 @@ QStringList ThumbnailMemoryCache::pruneLocked() {
 
 ThumbnailMemoryCache::Handle ThumbnailMemoryCache::storeDecoded(
     const QString &ownerId, const QString &sourceIdentity,
-    qint64 versionToken, qint64 sourceFileSize,
+    const QString &versionToken, qint64 sourceFileSize,
     const QSize &requestedSize, const QString &transformKey,
     const QImage &image) {
-    const QString canonicalSource =
-        canonicalSourceIdentity(sourceIdentity);
+    const QString canonicalSource = sourceIdentity;
     if (canonicalSource.isEmpty() || image.isNull() ||
         !image.size().isValid()) {
         releaseRequest(ownerId, sourceIdentity, versionToken,
@@ -308,6 +307,15 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::storeDecoded(
                 // a concurrent lookup must never observe a provider ID whose
                 // pixels have not reached ProviderImageStore yet.
                 if (_store) {
+                    MediaTimingTrace::Span publishSpan(
+                        QStringLiteral("qt.gallery.provider_store.publish"), {
+                            {QStringLiteral("providerId"), providerId},
+                            {QStringLiteral("imageWidth"), image.width()},
+                            {QStringLiteral("imageHeight"), image.height()},
+                            {QStringLiteral("imageBytes"), bytes},
+                            {QStringLiteral("transformKey"),
+                             normalizedTransform},
+                        });
                     _store->publish(providerId, image);
                 }
                 result = {providerId, image.size()};
@@ -327,10 +335,9 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::storeDecoded(
 
 void ThumbnailMemoryCache::releaseRequest(
     const QString &ownerId, const QString &sourceIdentity,
-    qint64 versionToken, qint64 sourceFileSize, const QSize &targetSize,
+    const QString &versionToken, qint64 sourceFileSize, const QSize &targetSize,
     const QString &transformKey, bool retryWaiters) {
-    const QString canonicalSource =
-        canonicalSourceIdentity(sourceIdentity);
+    const QString canonicalSource = sourceIdentity;
     PendingEntry released;
     bool didRelease = false;
     {
@@ -358,11 +365,19 @@ void ThumbnailMemoryCache::releaseRequest(
 }
 
 void ThumbnailMemoryCache::cancelRequests(const QString &ownerId) {
+    cancelRequests(ownerId, {});
+}
+
+void ThumbnailMemoryCache::cancelRequests(
+    const QString &ownerId,
+    const QSet<QString> &sourceIdentities) {
     QList<PendingEntry> released;
     {
         QMutexLocker locker(&_mutex);
         for (auto it = _pending.begin(); it != _pending.end();) {
-            if (it->ownerId == ownerId) {
+            if (it->ownerId == ownerId &&
+                (sourceIdentities.isEmpty() ||
+                 sourceIdentities.contains(it->sourceIdentity))) {
                 released.append(it.value());
                 it = _pending.erase(it);
             }

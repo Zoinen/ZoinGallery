@@ -32,6 +32,12 @@ FocusScope {
     // The public string API keeps embedders independent from the native enum
     // while the underlying renderer remains a single reusable C++ type.
     property string presentationMode: "masonry"
+    // Columns and Details are text presentations with a host-owned row pitch.
+    // They intentionally do not expose a user zoom gesture. Grid and Icons
+    // remain zoomable, but their wheel/key steps are delegated to
+    // MasonryLayout so each step crosses one cell-count boundary.
+    readonly property bool densityAdjustmentEnabled:
+        presentationMode !== "columns" && presentationMode !== "details"
     // GUI mode owns smooth wheel scrolling and the reusable middle-button
     // auto-scroll gesture. The host can opt into the terminal contract.
     property string mouseWheelMode: "gui"
@@ -944,6 +950,37 @@ FocusScope {
         }
     }
 
+    function stepDensity(zoomIn) {
+        if (!densityAdjustmentEnabled)
+            return false
+        const previousDensity = galleryLayout.density
+        cancelCursorChromeTransition()
+        changeDensity(function() {
+            if (zoomIn)
+                galleryLayout.zoomIn()
+            else
+                galleryLayout.zoomOut()
+        })
+        if (previousDensity === galleryLayout.density)
+            return false
+        noteDensityChanged(false)
+        return true
+    }
+
+    function resetDensity(value) {
+        if (!densityAdjustmentEnabled)
+            return false
+        const target = Math.min(maximumDensity(), Math.max(minimumDensity(),
+            Number(value)))
+        if (!Number.isFinite(target) || target === galleryLayout.density)
+            return false
+        cancelCursorChromeTransition()
+        changeDensity(function() { galleryLayout.density = target })
+        galleryLayout.reReadAndDecodeThumbnails()
+        noteDensityChanged(true)
+        return true
+    }
+
     function handlePanelMiddleRelease(x, y, modifiers) {
         if (mouseWheelMode === "console") {
             consoleMouseButtonRequested(x, y, Qt.MiddleButton, false,
@@ -971,16 +1008,11 @@ FocusScope {
                 ? horizontalDelta : verticalDelta
         if (delta === 0)
             return false
-        cancelCursorChromeTransition()
         if (modifiers & Qt.ControlModifier) {
-            changeDensity(function() {
-                if (delta < 0)
-                    galleryLayout.zoomOut()
-                else
-                    galleryLayout.zoomIn()
-            })
-            noteDensityChanged(false)
+            if (densityAdjustmentEnabled)
+                stepDensity(delta > 0)
         } else {
+            cancelCursorChromeTransition()
             // Columns consumes the vertical wheel/trackpad gesture as
             // horizontal movement through its column-major strip.
             scrollBy(-delta, macPlatform)
@@ -1001,11 +1033,16 @@ FocusScope {
     }
 
     function beginThumbnailPinch() {
+        if (!densityAdjustmentEnabled)
+            return false
         cancelCursorChromeTransition()
         thumbnailPinchStartHeight = galleryLayout.density
+        return true
     }
 
     function updateThumbnailPinch(scale) {
+        if (!densityAdjustmentEnabled)
+            return false
         if (thumbnailPinchStartHeight <= 0)
             beginThumbnailPinch()
         changeDensity(function() {
@@ -1014,15 +1051,21 @@ FocusScope {
                         thumbnailPinchStartHeight * scale))
         })
         noteDensityChanged(false)
+        return true
     }
 
     function finishThumbnailPinch() {
+        if (!densityAdjustmentEnabled) {
+            thumbnailPinchStartHeight = 0
+            return false
+        }
         if (thumbnailPinchStartHeight > 0
                 && thumbnailPinchStartHeight !== galleryLayout.density) {
             galleryLayout.reReadAndDecodeThumbnails()
             noteDensityChanged(true)
         }
         thumbnailPinchStartHeight = 0
+        return true
     }
 
     function setPanelContentY(value, persist) {
@@ -1395,7 +1438,10 @@ FocusScope {
             openRequested(session.entryIdAt(viewIndex), sourceIndex(viewIndex),
                           session.isImageAt(viewIndex), Boolean(autoRepeat))
         } else {
-            activateRequested()
+            // The embedding host carries activation together with this stable
+            // cursor intent when the target panel is inactive. Keeping it as
+            // one action prevents an intermediate authoritative frame from
+            // highlighting this panel's previous cursor.
             cursorRequested(session.entryIdAt(viewIndex), sourceIndex(viewIndex),
                             Boolean(deferCursorCommit))
             cursorCommitPending = Boolean(deferCursorCommit)
@@ -3030,7 +3076,7 @@ FocusScope {
     PinchArea {
         objectName: "galleryPinchArea"
         anchors.fill: galleryLayout
-        enabled: !root.customContent
+        enabled: !root.customContent && root.densityAdjustmentEnabled
 
         onPinchStarted: pinch => {
             root.beginThumbnailPinch()
@@ -3367,14 +3413,10 @@ FocusScope {
                 root.moveCursor(currentIndex + 1, false, false, false, false, 1)
             event.accepted = true
         } else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
-            root.cancelCursorChromeTransition()
-            root.changeDensity(function() { galleryLayout.zoomIn() })
-            root.noteDensityChanged(false)
+            root.stepDensity(true)
             event.accepted = true
         } else if (event.key === Qt.Key_Minus) {
-            root.cancelCursorChromeTransition()
-            root.changeDensity(function() { galleryLayout.zoomOut() })
-            root.noteDensityChanged(false)
+            root.stepDensity(false)
             event.accepted = true
         }
         if (chromeTargetIndex >= 0)

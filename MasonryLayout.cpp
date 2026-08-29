@@ -3653,12 +3653,39 @@ void MasonryLayout::restorePreservedCurrentItemPosition() {
 }
 
 void MasonryLayout::zoom(bool in) {
-    if (_presentationMode != Masonry) {
-        const qreal step = (_presentationMode == Columns ||
-                            _presentationMode == Details)
-            ? 2.0 : 8.0;
+    if (_presentationMode == Columns || _presentationMode == Details) {
+        // Compact text presentations have a host-owned row pitch. Their
+        // density is an initialization metric, not a user zoom level.
+        return;
+    }
+    if (_presentationMode == Grid || _presentationMode == Icons) {
+        const qreal canvasWidth = qMax<qreal>(
+            1.0, width() - _paddingLeft - _paddingRight);
+        const int currentColumns = effectiveColumnCount();
+        const int targetColumns = in ? currentColumns - 1
+                                     : currentColumns + 1;
+        if (targetColumns < 1) {
+            return;
+        }
+
+        // The interval for exactly N cells is
+        // (canvasWidth / (N + 1), canvasWidth / N].  Pick its midpoint so
+        // tiny floating-point differences cannot land on a boundary and make
+        // an action keep the same number of visible cells.
+        const qreal targetDensity = normalizedDensity(
+            _presentationMode, canvasWidth /
+            (static_cast<qreal>(targetColumns) + 0.5));
+        const int resultingColumns = qMax(1, static_cast<int>(std::floor(
+            canvasWidth / qMax<qreal>(1.0, targetDensity))));
+        if (resultingColumns != targetColumns) {
+            // The min/max density range can make the next cell count
+            // unreachable (for example one cell at the maximum grid size).
+            // A zoom action must then be a true no-op rather than silently
+            // changing the pixel density while retaining the same lattice.
+            return;
+        }
         const qreal previousDensity = _density;
-        setDensity(_density + (in ? step : -step));
+        setDensity(targetDensity);
         if (!qFuzzyCompare(previousDensity, _density)) {
             reReadAndDecodeThumbnails();
         }

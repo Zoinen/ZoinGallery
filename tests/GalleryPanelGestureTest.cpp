@@ -68,6 +68,29 @@ QRectF indexGeometry(QObject *layout, int index) {
     return invoked ? geometry : QRectF{};
 }
 
+int firstRowColumnCount(QObject *layout) {
+    if (!layout) {
+        return 0;
+    }
+    const int count = layout->property("count").toInt();
+    if (count <= 0) {
+        return 0;
+    }
+    const QRectF first = indexGeometry(layout, 0);
+    if (!first.isValid()) {
+        return 0;
+    }
+    int columns = 0;
+    for (int index = 0; index < count; ++index) {
+        const QRectF geometry = indexGeometry(layout, index);
+        if (!geometry.isValid() || qAbs(geometry.top() - first.top()) > 0.5) {
+            break;
+        }
+        ++columns;
+    }
+    return columns;
+}
+
 bool animationEverRan(const QSignalSpy &spy) {
     for (const QList<QVariant> &arguments : spy) {
         if (!arguments.isEmpty() && arguments.constFirst().toBool()) {
@@ -146,6 +169,85 @@ class GalleryPanelGestureTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void gridAndIconsWheelZoomChangesCellCountAndListsStayFixed() {
+        QVariantList catalog;
+        for (int index = 0; index < 120; ++index) {
+            catalog.append(folderEntry(
+                QStringLiteral("folder-%1").arg(index), index,
+                QStringLiteral("/tmp/folder-%1").arg(index)));
+        }
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("discrete-wheel-zoom"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        QVERIFY(session->applyExternalState(
+            QStringLiteral("folder-0"), 0, {}, 1));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("testSession"), session);
+
+        QObject *panel = createPanel(view);
+        QVERIFY(panel);
+        auto *layout = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(layout);
+        view.show();
+
+        // Grid starts with three 96px cells at the 340px test width. Every
+        // Ctrl-wheel step must cross one actual cell-count boundary rather
+        // than merely adding a fixed number of density pixels.
+        panel->setProperty("presentationMode", QStringLiteral("grid"));
+        QTRY_COMPARE(panel->property("presentationMode").toString(),
+                     QStringLiteral("grid"));
+        QTRY_COMPARE(layout->property("presentationMode").toInt(), 3);
+        layout->setProperty("density", 96.0);
+        QTRY_COMPARE(firstRowColumnCount(layout), 3);
+        QVERIFY(invokeWheel(panel, 120, 120, int(Qt::ControlModifier), 0, 0));
+        QTRY_COMPARE(firstRowColumnCount(layout), 2);
+        QVERIFY(invokeWheel(panel, -120, -120, int(Qt::ControlModifier), 0, 0));
+        QTRY_COMPARE(firstRowColumnCount(layout), 3);
+
+        // Icons follows the same rule, but begins at five smaller cells.
+        panel->setProperty("presentationMode", QStringLiteral("icons"));
+        QTRY_COMPARE(panel->property("presentationMode").toString(),
+                     QStringLiteral("icons"));
+        QTRY_COMPARE(layout->property("presentationMode").toInt(), 4);
+        layout->setProperty("density", 64.0);
+        QTRY_COMPARE(firstRowColumnCount(layout), 5);
+        QVERIFY(invokeWheel(panel, 120, 120, int(Qt::ControlModifier), 0, 0));
+        QTRY_COMPARE(firstRowColumnCount(layout), 4);
+        QVERIFY(invokeWheel(panel, -120, -120, int(Qt::ControlModifier), 0, 0));
+        QTRY_COMPARE(firstRowColumnCount(layout), 5);
+
+        // Columns and Details retain their host-supplied row pitch. Their
+        // wheel and shared +/- key path are both harmless no-ops.
+        for (const QString &mode : {QStringLiteral("columns"),
+                                    QStringLiteral("details")}) {
+            panel->setProperty("presentationMode", mode);
+            QTRY_COMPARE(panel->property("presentationMode").toString(),
+                         mode);
+            QTRY_COMPARE(layout->property("presentationMode").toInt(),
+                         mode == QStringLiteral("columns") ? 1 : 2);
+            layout->setProperty("density", 31.0);
+            QTRY_VERIFY(qAbs(layout->property("density").toReal() - 31.0)
+                        < 0.001);
+            QVERIFY(!panel->property("densityAdjustmentEnabled").toBool());
+            QVERIFY(invokeWheel(panel, 120, 120, int(Qt::ControlModifier),
+                                0, 0));
+            QCOMPARE(layout->property("density").toReal(), qreal(31.0));
+            QVERIFY(invoke(panel, "stepDensity", true));
+            QCOMPARE(layout->property("density").toReal(), qreal(31.0));
+            QVERIFY(invoke(panel, "stepDensity", false));
+            QCOMPARE(layout->property("density").toReal(), qreal(31.0));
+        }
+
+        runtime->shutdown();
+    }
+
     void gridPinchKeepsTopBrickAndFractionalOffset() {
         QVariantList catalog;
         for (int index = 0; index < 120; ++index) {

@@ -345,7 +345,8 @@ private slots:
         QVERIFY(invoke(panel, "beginThumbnailPinch"));
         QVERIFY(invoke(panel, "updateThumbnailPinch", 1.5));
         QCOMPARE(layout->property("contentY").toReal(), qreal(0));
-        QCOMPARE(indexGeometry(layout, 0).top(), qreal(0));
+        QCOMPARE(indexGeometry(layout, 0).top(),
+                 layout->property("paddingTop").toReal());
         QVERIFY(invoke(panel, "finishThumbnailPinch"));
         QCoreApplication::processEvents();
         QCOMPARE(layout->property("contentY").toReal(), qreal(0));

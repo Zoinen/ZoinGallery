@@ -972,7 +972,7 @@ private slots:
             QVariantMap entry = catalogEntry(index);
             entry[QStringLiteral("name")] = index == 2
                 ? longName
-                : QStringLiteral("short-%1.txt").arg(index);
+                : QStringLiteral("x%1").arg(index);
             catalog.append(entry);
         }
 
@@ -4113,13 +4113,13 @@ private slots:
             QVariantMap{
                 {QStringLiteral("entryId"), QStringLiteral("photo")},
                 {QStringLiteral("index"), 1},
-                {QStringLiteral("name"), QStringLiteral("photo.jpeg")},
+                {QStringLiteral("name"), QStringLiteral("photo.js")},
                 {QStringLiteral("isDir"), false},
                 {QStringLiteral("isImage"), false},
                 {QStringLiteral("size"), qint64(8192)},
                 {QStringLiteral("displayBaseName"), QStringLiteral("photo")},
                 {QStringLiteral("displayExtension"),
-                 QStringLiteral("jpeg")},
+                 QStringLiteral("js")},
                 {QStringLiteral("sizeText"), QStringLiteral("8 KiB")},
             },
         };
@@ -4167,7 +4167,7 @@ private slots:
         QCOMPARE(extension0->property("text").toString(),
                  QStringLiteral("gz"));
         QCOMPARE(extension1->property("text").toString(),
-                 QStringLiteral("jpeg"));
+                 QStringLiteral("js"));
         QCOMPARE(extension0->property("horizontalAlignment").toInt(),
                  int(Qt::AlignLeft));
         QTRY_VERIFY_WITH_TIMEOUT(

@@ -6136,6 +6136,101 @@ private slots:
         runtime->shutdown();
     }
 
+    void sparseCatalogRendersMasonryGridAndIconsWithoutFullScene() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 2;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("sparse-presentation-modes"));
+        QVERIFY(session);
+
+        constexpr int logicalCount = 30'000;
+        const QVariantList preview = prefixedCatalog(
+            QStringLiteral("sparse-modes"), 64);
+        const QVariantMap sparseOptions{
+            {QStringLiteral("currentPath"),
+             QStringLiteral("C:/Windows/WinSxS")},
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("catalogRowsDeferred"), true},
+            {QStringLiteral("totalCount"), logicalCount},
+            {QStringLiteral("cursorIndex"), 0},
+            {QStringLiteral("cursorEntryId"),
+             QStringLiteral("sparse-modes-entry-0")},
+        };
+        QVERIFY(session->applyExternalCatalog(preview, 1, sparseOptions));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("sparseModesSession"),
+            QStringLiteral("masonry"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(layout && model);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), logicalCount, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!layout->visibleIndexes().isEmpty(), 3000);
+
+        const QList<QPair<QString, MasonryLayout::PresentationMode>> modes{
+            {QStringLiteral("masonry"), MasonryLayout::Masonry},
+            {QStringLiteral("grid"), MasonryLayout::Grid},
+            {QStringLiteral("icons"), MasonryLayout::Icons},
+        };
+        for (const auto &[name, mode] : modes) {
+            panel->setProperty("presentationMode", name);
+            QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(), mode, 3000);
+            QTRY_VERIFY_WITH_TIMEOUT(!layout->visibleIndexes().isEmpty(),
+                                     3000);
+
+            const int row = layout->visibleIndexes().constFirst().toInt();
+            QVERIFY(row >= 0 && row < preview.size());
+            const QRectF geometry = layout->indexGeometry(row);
+            QVERIFY(geometry.isValid() && !geometry.isEmpty());
+
+            const QString objectName = mode == MasonryLayout::Masonry
+                ? QStringLiteral("galleryMasonryLabel-%1").arg(row)
+                : mode == MasonryLayout::Grid
+                    ? QStringLiteral("galleryGridLabel-%1").arg(row)
+                    : QStringLiteral("galleryIconsLabel-%1").arg(row);
+            QQuickItem *label = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (label = panel->findChild<QQuickItem *>(objectName))
+                && label->isVisible()
+                && !label->property("text").toString().isEmpty(), 3000);
+            QCOMPARE(label->property("text").toString(),
+                     session->entryNameAt(row));
+
+            if (mode == MasonryLayout::Masonry) {
+                // A retained slot can briefly have neither a valid visual
+                // snapshot nor its heavyweight ImageFile facade while a
+                // sparse page is handed over. The one-row session lookup is
+                // the intended bounded fallback and must keep the label
+                // paintable in that interval.
+                auto *slot = qobject_cast<BrickItem *>(layout->itemAt(
+                    geometry.center().x(), geometry.center().y()));
+                QVERIFY(slot);
+                slot->setProperty("model", QVariant());
+                slot->setVisualFacadeReady(false);
+                slot->setVisualRow({
+                    {QStringLiteral("valid"), false},
+                    {QStringLiteral("sourceIndex"), row},
+                });
+                QTRY_COMPARE_WITH_TIMEOUT(
+                    label->property("text").toString(),
+                    session->entryNameAt(row), 3000);
+            }
+        }
+
+        // The logical catalog is large, but only the page supplied by the
+        // host and the bounded active/overscan window may be materialized.
+        QVERIFY(model->materializedRows().size() < 256);
+        runtime->shutdown();
+    }
+
     void sparseDetailsScrollBarUsesAnalyticExtentAndHomeIsBounded() {
         QQuickView view;
         ZoinGallery::RuntimeOptions options;

@@ -579,6 +579,15 @@ private:
                          qreal paddingLeft, qreal paddingRight,
                          qreal paddingTop, qreal paddingBottom) const;
     bool sparseFixedLayout() const;
+    // Sparse external catalogs keep only the rows needed by the active
+    // viewport. Masonry and Icons still need a deterministic position for
+    // every logical row, so these helpers provide a bounded, placeholder
+    // geometry without allocating a brick for the whole catalog.
+    bool sparseVirtualLayout() const;
+    int sparseVirtualColumnCount() const;
+    qreal sparseVirtualRowHeight() const;
+    QRectF sparseVirtualGeometry(int index) const;
+    void applySparseVirtualGeometry(MasonryBrick &brick, int index) const;
     int logicalBrickCount() const;
     MasonryBrick *brickAt(int index);
     const MasonryBrick *brickAt(int index) const;

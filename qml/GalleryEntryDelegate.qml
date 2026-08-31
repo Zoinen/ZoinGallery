@@ -100,8 +100,18 @@ BrickItem {
     readonly property var legacyDisplayFields:
         !typedVisualModel && effectiveModel && effectiveModel.displayFields
         ? effectiveModel.displayFields : ({})
+    // The external sparse catalog deliberately exposes only a bounded page.
+    // During a page hand-off the stable visual facade can briefly be empty
+    // while the row is already loaded in the model. Read that one row's name
+    // as a cheap fallback so Grid/Masonry/Icons never lose their label; this
+    // does not materialize an ImageFile or walk the catalog.
+    readonly property string catalogEntryName:
+        panelRoot && panelRoot.session && viewIndex >= 0
+        ? panelRoot.session.entryNameAt(viewIndex) : ""
     readonly property string displayName:
-        effectiveModel ? effectiveModel.text : ""
+        effectiveModel && effectiveModel.text !== undefined
+                && effectiveModel.text !== ""
+        ? effectiveModel.text : catalogEntryName
     readonly property string displayBaseName:
         typedVisualModel
         ? visualModel.displayBaseName
@@ -871,7 +881,7 @@ BrickItem {
         padding: 6
         text: brick.masonryMode
               ? brick.panelRoot.quickSearchStyledText(
-                    brick.effectiveModel ? brick.displayName : "",
+                    brick.displayName,
                     brick.entryId, 0)
               : ""
         textFormat: brick.masonryMode

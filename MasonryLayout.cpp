@@ -270,12 +270,15 @@ QQuickItem *MasonryLayout::itemAt(qreal x, qreal y) const {
 int MasonryLayout::indexAt(qreal x, qreal y) const {
     if (_presentationMode == Details ||
         (_sparseCatalogRows && (_presentationMode == Grid ||
-                                _presentationMode == Columns))) {
+                                _presentationMode == Columns)) ||
+        sparseVirtualLayout()) {
         const int count = logicalBrickCount();
         if (count <= 0) {
             return -1;
         }
         const qreal extent = qMax<qreal>(1.0, effectiveTargetExtent());
+        const qreal rowExtent = sparseVirtualLayout()
+            ? sparseVirtualRowHeight() : extent;
         int index = -1;
         if (_presentationMode == Columns) {
             const qreal stride = columnStride();
@@ -293,9 +296,11 @@ int MasonryLayout::indexAt(qreal x, qreal y) const {
             if (y < _paddingTop) {
                 return -1;
             }
-            const int row = int(std::floor((y - _paddingTop) / extent));
-            if (_presentationMode == Grid) {
-                const int columns = effectiveColumnCount();
+            const int row = int(std::floor((y - _paddingTop) / rowExtent));
+            if (_presentationMode == Grid || _presentationMode == Icons ||
+                sparseVirtualLayout()) {
+                const int columns = sparseVirtualLayout()
+                    ? sparseVirtualColumnCount() : effectiveColumnCount();
                 const qreal canvasWidth = qMax<qreal>(
                     0, width() - _paddingLeft - _paddingRight);
                 const qreal cellWidth = columns > 0
@@ -381,7 +386,8 @@ QRectF MasonryLayout::indexGeometry(int index) const {
     if (index < 0 || index >= logicalBrickCount()) {
         return QRectF();
     }
-    if (sparseFixedLayout() || _presentationMode == Details) {
+    if (sparseFixedLayout() || sparseVirtualLayout() ||
+        _presentationMode == Details) {
         return analyticFixedGeometry(index);
     }
     const MasonryBrick *brick = brickAt(index);
@@ -406,7 +412,7 @@ QRectF MasonryLayout::indexPreviewGeometry(int index) const {
     if (brick) {
         return brick->previewGeometry;
     }
-    if (sparseFixedLayout() && index >= 0 &&
+    if ((sparseFixedLayout() || sparseVirtualLayout()) && index >= 0 &&
         index < logicalBrickCount()) {
         MasonryBrick temporary;
         applyAnalyticFixedGeometry(temporary, index);
@@ -595,7 +601,8 @@ QVariantMap MasonryLayout::navigationTarget(
             break;
         }
     }
-    else if (_presentationMode == Grid || _presentationMode == Icons) {
+    else if (_presentationMode == Grid || _presentationMode == Icons ||
+             sparseVirtualLayout()) {
         switch (direction) {
         case NavigateLeft:
             target = qMax(0, index - 1);
@@ -659,9 +666,65 @@ QVariantMap MasonryLayout::masonryPagePlan(
         {QStringLiteral("hitEdge"), false},
         {QStringLiteral("terminalClamp"), false},
     };
-    if (_presentationMode != Masonry || _layoutBands.isEmpty() ||
-        _bricks.isEmpty() || currentIndex < 0 ||
-        currentIndex >= _bricks.size() || direction == 0) {
+    if (_presentationMode != Masonry || currentIndex < 0 ||
+        currentIndex >= logicalBrickCount() || direction == 0) {
+        return result;
+    }
+
+    if (sparseVirtualLayout()) {
+        // A sparse catalog cannot build justified Masonry row bands without
+        // reading every image aspect ratio. Use the same bounded virtual
+        // rows as the first-frame layout so PageUp/PageDown remains usable
+        // without turning a page action into a full-catalog scan.
+        const qreal distance = qMax<qreal>(1, qAbs(preferredDistance));
+        const qreal destination = qBound<qreal>(
+            0, planned + (direction < 0 ? -distance : distance), maximum);
+        const qreal retainedRowViewportY = std::isfinite(rowViewportY)
+            ? rowViewportY
+            : (std::isfinite(itemViewportY)
+               ? itemViewportY
+               : indexGeometry(currentIndex).top() - planned);
+        const bool atStart = destination <= 0.01;
+        const bool atEnd = destination >= maximum - 0.01;
+        int targetIndex = -1;
+        if (atStart || atEnd) {
+            const int columns = sparseVirtualColumnCount();
+            const int column = qBound(
+                0, currentIndex % qMax(1, columns), qMax(0, columns - 1));
+            if (atStart) {
+                targetIndex = qMin(logicalBrickCount() - 1, column);
+            }
+            else {
+                const int lastRowStart =
+                    ((logicalBrickCount() - 1) / qMax(1, columns))
+                    * qMax(1, columns);
+                targetIndex = qMin(logicalBrickCount() - 1,
+                                   lastRowStart + column);
+            }
+        }
+        if (targetIndex < 0) {
+            const qreal lastProbeY = qMax<qreal>(
+                0, std::nextafter(_contentHeight,
+                                  -std::numeric_limits<qreal>::infinity()));
+            targetIndex = indexAt(
+                anchorX,
+                qBound<qreal>(0, destination + retainedRowViewportY,
+                              lastProbeY));
+        }
+        if (targetIndex < 0) {
+            targetIndex = direction < 0 ? 0 : logicalBrickCount() - 1;
+        }
+        result[QStringLiteral("valid")] = true;
+        result[QStringLiteral("targetIndex")] = targetIndex;
+        result[QStringLiteral("contentY")] = destination;
+        result[QStringLiteral("rowViewportY")] = retainedRowViewportY;
+        result[QStringLiteral("hitEdge")] = atStart || atEnd;
+        result[QStringLiteral("terminalClamp")] = atStart || atEnd;
+        return result;
+    }
+
+    if (_layoutBands.isEmpty() || _bricks.isEmpty() ||
+        currentIndex >= _bricks.size()) {
         return result;
     }
 
@@ -1169,7 +1232,7 @@ void MasonryLayout::positionViewport() {
 }
 
 void MasonryLayout::calcFixedLayout() {
-    if (sparseFixedLayout()) {
+    if (sparseFixedLayout() || sparseVirtualLayout()) {
         return;
     }
     calcFixedLayout(_bricks, _presentationMode, _density,
@@ -1181,6 +1244,88 @@ bool MasonryLayout::sparseFixedLayout() const {
     return _sparseCatalogRows &&
         (_presentationMode == Details || _presentationMode == Columns ||
          _presentationMode == Grid);
+}
+
+bool MasonryLayout::sparseVirtualLayout() const {
+    return _sparseCatalogRows &&
+        (_presentationMode == Masonry || _presentationMode == Icons);
+}
+
+int MasonryLayout::sparseVirtualColumnCount() const {
+    const qreal canvasWidth = qMax<qreal>(
+        1.0, width() - _paddingLeft - _paddingRight);
+    const qreal target = qMax<qreal>(1.0, effectiveTargetExtent());
+    return qMax(1, static_cast<int>(std::floor(canvasWidth / target)));
+}
+
+qreal MasonryLayout::sparseVirtualRowHeight() const {
+    if (_presentationMode != Icons) {
+        return qMax<qreal>(1.0, effectiveTargetExtent());
+    }
+
+    const int columns = sparseVirtualColumnCount();
+    const qreal canvasWidth = qMax<qreal>(
+        0, width() - _paddingLeft - _paddingRight);
+    const qreal cellWidth = columns > 0
+        ? canvasWidth / columns : canvasWidth;
+    // Unknown rows cannot be measured without materializing their catalog
+    // payload. Reserve the same maximum of four wrapped label lines for
+    // every virtual row, keeping all row positions stable as pages arrive.
+    IconTextMeasurer textMeasurer(_iconLabelFont);
+    return qMax<qreal>(1.0, cellWidth + 3 * textMeasurer.lineHeight());
+}
+
+QRectF MasonryLayout::sparseVirtualGeometry(int index) const {
+    if (index < 0 || index >= logicalBrickCount()) {
+        return {};
+    }
+    const int columns = sparseVirtualColumnCount();
+    if (columns <= 0) {
+        return {};
+    }
+    const qreal canvasWidth = qMax<qreal>(
+        0, width() - _paddingLeft - _paddingRight);
+    const qreal cellWidth = canvasWidth / columns;
+    const qreal rowHeight = sparseVirtualRowHeight();
+    const int row = index / columns;
+    const int column = index % columns;
+    return QRectF(column * cellWidth,
+                  _paddingTop + row * rowHeight,
+                  cellWidth, rowHeight);
+}
+
+void MasonryLayout::applySparseVirtualGeometry(
+    MasonryBrick &brick, int index) const {
+    const QRectF geometry = sparseVirtualGeometry(index);
+    if (!geometry.isValid() || geometry.isEmpty()) {
+        return;
+    }
+    const int columns = sparseVirtualColumnCount();
+    brick.row = index / columns;
+    brick.column = index % columns;
+    brick.x = geometry.x();
+    brick.y = geometry.y();
+    brick.normalizedSize = geometry.size();
+
+    if (_presentationMode == Icons) {
+        const qreal labelWidth = qMax<qreal>(1, geometry.width() - 8);
+        const qreal oneLinePreviewHeight = qMax<qreal>(
+            1, geometry.width() - 3
+                - IconTextMeasurer(_iconLabelFont).lineHeight() - 3);
+        IconTextMeasurer textMeasurer(_iconLabelFont);
+        const QString sourceText = brick.image
+            ? brick.image->text() : brick.modelText;
+        brick.iconLabelText = textMeasurer.layout(
+            sourceText, labelWidth).text;
+        brick.previewGeometry = QRectF(
+            geometry.x(), geometry.y(), geometry.width(),
+            oneLinePreviewHeight);
+    }
+    else {
+        brick.previewGeometry = geometry.adjusted(
+            _spacing / 2.0, _spacing / 2.0,
+            -_spacing / 2.0, -_spacing / 2.0);
+    }
 }
 
 int MasonryLayout::logicalBrickCount() const {
@@ -1225,7 +1370,7 @@ MasonryLayout::MasonryBrick &MasonryLayout::ensureBrickAt(int index) {
         brick.globalIndex = index;
         found = _sparseBricks.insert(index, std::move(brick));
     }
-    if (sparseFixedLayout()) {
+    if (sparseFixedLayout() || sparseVirtualLayout()) {
         applyAnalyticFixedGeometry(found.value(), index);
     }
     return found.value();
@@ -1267,12 +1412,19 @@ QRectF MasonryLayout::analyticFixedGeometry(int index) const {
                       _paddingTop + (index / columns) * extent,
                       cellWidth, extent);
     }
+    if (sparseVirtualLayout()) {
+        return sparseVirtualGeometry(index);
+    }
     const MasonryBrick *brick = brickAt(index);
     return brick ? brick->geometry() : QRectF();
 }
 
 void MasonryLayout::applyAnalyticFixedGeometry(
     MasonryBrick &brick, int index) const {
+    if (sparseVirtualLayout()) {
+        applySparseVirtualGeometry(brick, index);
+        return;
+    }
     const QRectF geometry = analyticFixedGeometry(index);
     if (!geometry.isValid() || geometry.isEmpty()) {
         return;
@@ -1509,7 +1661,8 @@ void MasonryLayout::calcFixedLayout(QList<MasonryBrick> &bricks,
 
 void MasonryLayout::rebuildLayoutBands() {
     _layoutBands.clear();
-    if (_presentationMode == Details || sparseFixedLayout()) {
+    if (_presentationMode == Details || sparseFixedLayout()
+        || sparseVirtualLayout()) {
         // Fixed sparse layouts are arithmetic. Building one heap-backed band
         // (and one heavyweight brick lookup) per logical row defeats model
         // paging even though only a viewport-sized range can be painted.
@@ -1577,18 +1730,23 @@ QList<int> MasonryLayout::indexesForVerticalRange(
         std::swap(top, bottom);
     }
     if (_presentationMode == Details ||
-        (_sparseCatalogRows && _presentationMode == Grid)) {
+        (_sparseCatalogRows && _presentationMode == Grid) ||
+        sparseVirtualLayout()) {
         const int count = logicalBrickCount();
         const qreal extent = qMax<qreal>(1.0, effectiveTargetExtent());
-        const int columns = _presentationMode == Grid
-            ? effectiveColumnCount() : 1;
+        const bool virtualLayout = sparseVirtualLayout();
+        const qreal rowExtent = virtualLayout
+            ? sparseVirtualRowHeight() : extent;
+        const int columns = virtualLayout
+            ? sparseVirtualColumnCount()
+            : (_presentationMode == Grid ? effectiveColumnCount() : 1);
         const int rowCount = columns > 0
             ? (count + columns - 1) / columns : 0;
         if (rowCount <= 0) {
             return indexes;
         }
-        int firstRow = int(std::floor((top - _paddingTop) / extent));
-        int lastRow = int(std::floor((bottom - _paddingTop) / extent));
+        int firstRow = int(std::floor((top - _paddingTop) / rowExtent));
+        int lastRow = int(std::floor((bottom - _paddingTop) / rowExtent));
         firstRow = qBound(0, firstRow, rowCount - 1);
         lastRow = qBound(0, lastRow, rowCount - 1);
         if (lastRow < firstRow) {
@@ -1599,7 +1757,9 @@ QList<int> MasonryLayout::indexesForVerticalRange(
             const int begin = row * columns;
             const int end = qMin(count, begin + columns);
             for (int index = begin; index < end; ++index) {
-                const QRectF geometry = analyticFixedGeometry(index);
+                const QRectF geometry = virtualLayout
+                    ? sparseVirtualGeometry(index)
+                    : analyticFixedGeometry(index);
                 if (geometry.bottom() >= top && geometry.top() <= bottom) {
                     indexes.append(index);
                 }
@@ -1724,6 +1884,10 @@ void MasonryLayout::rewrap(bool animate) {
             setContentHeight(_paddingTop + virtualRows * extent
                              + trailingViewportRemainder + _paddingBottom);
         }
+        else if (_presentationMode == Icons && sparseVirtualLayout()) {
+            setContentHeight(_paddingTop + virtualRows
+                             * sparseVirtualRowHeight() + _paddingBottom);
+        }
         else if (_presentationMode != Icons
                  && _presentationMode != Columns) {
             setContentHeight(_paddingTop + virtualRows * extent +
@@ -1732,7 +1896,7 @@ void MasonryLayout::rewrap(bool animate) {
         if (_presentationMode == Columns) {
             _contentY = qBound<qreal>(0, _contentY, maximumContentOffset());
         }
-        else if (_presentationMode != Icons) {
+        else if (_presentationMode != Icons || sparseVirtualLayout()) {
             _contentY = qBound<qreal>(
                 0, _contentY, qMax<qreal>(0, _contentHeight - height()));
         }
@@ -1742,9 +1906,13 @@ void MasonryLayout::rewrap(bool animate) {
         const qint64 layoutCompletedNs = traceReset
             ? rewrapTimer.nsecsElapsed() : 0;
         if (_presentationMode == Icons) {
-            const qreal iconContentHeight = _bricks.isEmpty()
-                ? 0
-                : _bricks.constLast().geometry().bottom() + _paddingBottom;
+            const qreal iconContentHeight = sparseVirtualLayout()
+                ? _paddingTop + virtualRows * sparseVirtualRowHeight()
+                    + _paddingBottom
+                : (_bricks.isEmpty()
+                   ? 0
+                   : _bricks.constLast().geometry().bottom()
+                     + _paddingBottom);
             setContentHeight(iconContentHeight);
             _contentY = qBound<qreal>(
                 0, _contentY, qMax<qreal>(0, _contentHeight - height()));
@@ -1823,6 +1991,53 @@ void MasonryLayout::rewrap(bool animate) {
                      propertiesCompletedNs - viewportCompletedNs},
                     {QStringLiteral("durationNs"), completedNs},
                 });
+        }
+        return;
+    }
+
+    if (sparseVirtualLayout()) {
+        const qreal oldContentY = _contentY;
+        const int count = logicalBrickCount();
+        const int columns = sparseVirtualColumnCount();
+        const int rows = columns > 0
+            ? (count + columns - 1) / columns : 0;
+        setContentHeight(_paddingTop + rows * sparseVirtualRowHeight()
+                         + _paddingBottom);
+        _contentY = qBound<qreal>(
+            0, _contentY, qMax<qreal>(0, _contentHeight - height()));
+        rebuildLayoutBands();
+        if (applyPreparedResetViewport()) {
+            positionViewport();
+        }
+        else {
+            qreal newContentY = _contentY;
+            if (currentIndexOffset != -1 && _currentIndex >= 0
+                && _currentIndex < count) {
+                const QRectF currentGeometry = indexGeometry(_currentIndex);
+                newContentY = qBound<qreal>(
+                    0, currentGeometry.top() + currentIndexOffset,
+                    qMax<qreal>(0, _contentHeight - height()));
+            }
+            else if (_topItem >= 0 && _topItem < count) {
+                const QRectF topGeometry = indexGeometry(_topItem);
+                newContentY = qBound<qreal>(
+                    0, topGeometry.top() - _topItemOffset,
+                    qMax<qreal>(0, _contentHeight - height()));
+            }
+            if (!qFuzzyCompare(newContentY + 1,
+                              _contentY + 1)) {
+                setContentYInternal(newContentY);
+            }
+            positionViewport();
+        }
+        if (!_deferDelegateWindowCommit) {
+            updateProperties(animate);
+        }
+        updateNeedScroll();
+        if (!_deferDelegateWindowCommit
+            && !qFuzzyCompare(oldContentY + 1,
+                              _contentY + 1)) {
+            emit contentYChanged();
         }
         return;
     }
@@ -2592,10 +2807,10 @@ void MasonryLayout::updateViewportIndexSets() {
 void MasonryLayout::planThumbnailForIndex(
     int index, bool highPriority, QList<ImageDecodeRequest> &requests,
     bool force) {
-    if (!_model || index < 0 || index >= _bricks.size()) {
+    if (!_model || index < 0 || index >= logicalBrickCount()) {
         return;
     }
-    MasonryBrick &brick = _bricks[index];
+    MasonryBrick &brick = ensureBrickAt(index);
     ImageFile *image = brick.image;
     if (!image && canUseLightweightRows()) {
         // The layout intentionally keeps non-delegate rows as POD-only
@@ -2744,7 +2959,7 @@ void MasonryLayout::planViewportThumbnails(
     QSet<int> desiredIndexes;
     desiredIndexes.reserve(candidateIndexes.size());
     for (const int index : candidateIndexes) {
-        if (index >= 0 && index < _bricks.size()) {
+        if (index >= 0 && index < logicalBrickCount()) {
             desiredIndexes.insert(index);
         }
     }
@@ -4481,7 +4696,7 @@ void MasonryLayout::updateNeedScroll() {
         }
         return;
     }
-    if (_presentationMode != Masonry) {
+    if (_presentationMode != Masonry || sparseVirtualLayout()) {
         const bool newNeedScroll = _contentHeight > viewportExtent();
         if (newNeedScroll != _needScroll && height() > 0) {
             _needScroll = newNeedScroll;
@@ -4991,7 +5206,7 @@ void MasonryLayout::capturePresentationViewportAnchor(
     }
     *viewportY = 0;
     *wasVisible = false;
-    if (_currentIndex < 0 || _currentIndex >= _bricks.size()) {
+    if (_currentIndex < 0 || _currentIndex >= logicalBrickCount()) {
         return;
     }
     const QRectF geometry = indexGeometry(_currentIndex);
@@ -5087,7 +5302,7 @@ void MasonryLayout::completePresentationModeChange(
     // counts. Preserve the current item's viewport-space Y when possible,
     // then clamp only as much as needed to keep the whole new cell visible.
     // This happens synchronously so the first rendered frame is valid.
-    if (_currentIndex >= 0 && _currentIndex < _bricks.size()) {
+    if (_currentIndex >= 0 && _currentIndex < logicalBrickCount()) {
         const QRectF currentGeometry = indexGeometry(_currentIndex);
         if (currentGeometry.isValid() && !currentGeometry.isEmpty()) {
             qreal targetY = _contentY;

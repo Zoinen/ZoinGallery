@@ -9,6 +9,7 @@
 #include <QSet>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QVector>
 
 #include <atomic>
 
@@ -18,54 +19,55 @@
 class QParallelAnimationGroup;
 class QPropertyAnimation;
 
-// Stable per-delegate visual facade. Its QObject identity never changes, so
-// replacing a catalog row invalidates only bindings for properties whose
-// values actually changed instead of re-evaluating the complete QML tree via
-// one QVariantMap/var dependency.
+// Stable per-delegate visual facade. Its QObject identity never changes and
+// grouped snapshot notifications make every dependent binding observe the
+// same complete row without re-running shared derived bindings once per field.
 class BrickVisualRow final : public QObject {
     Q_OBJECT
-    Q_PROPERTY(bool valid READ valid NOTIFY validChanged)
-    Q_PROPERTY(QString entryId READ entryId NOTIFY entryIdChanged)
-    Q_PROPERTY(int sourceIndex READ sourceIndex NOTIFY sourceIndexChanged)
-    Q_PROPERTY(QString localPath READ localPath NOTIFY localPathChanged)
-    Q_PROPERTY(QString text READ text NOTIFY textChanged)
-    Q_PROPERTY(bool isFolder READ isFolder NOTIFY isFolderChanged)
-    Q_PROPERTY(bool isImage READ isImage NOTIFY isImageChanged)
-    Q_PROPERTY(bool isSelected READ isSelected NOTIFY isSelectedChanged)
-    Q_PROPERTY(QString iconPath READ iconPath NOTIFY iconPathChanged)
-    Q_PROPERTY(QVariantMap highlightStyle READ highlightStyle
-               NOTIFY highlightStyleChanged)
-    Q_PROPERTY(QVariantMap displayFields READ displayFields
-               NOTIFY displayFieldsChanged)
+    Q_PROPERTY(bool valid READ valid NOTIFY identityChanged)
+    Q_PROPERTY(QString entryId READ entryId NOTIFY identityChanged)
+    Q_PROPERTY(int sourceIndex READ sourceIndex NOTIFY identityChanged)
+    Q_PROPERTY(QString localPath READ localPath NOTIFY identityChanged)
+    Q_PROPERTY(QString text READ text NOTIFY identityChanged)
+    Q_PROPERTY(bool isFolder READ isFolder NOTIFY mediaChanged)
+    Q_PROPERTY(bool isImage READ isImage NOTIFY mediaChanged)
+    Q_PROPERTY(bool isSelected READ isSelected NOTIFY stateChanged)
+    Q_PROPERTY(QString iconPath READ iconPath NOTIFY mediaChanged)
     Q_PROPERTY(QString displayBaseName READ displayBaseName
-               NOTIFY displayBaseNameChanged)
+               NOTIFY identityChanged)
     Q_PROPERTY(QString displayExtension READ displayExtension
-               NOTIFY displayExtensionChanged)
-    Q_PROPERTY(QString sizeText READ sizeText NOTIFY sizeTextChanged)
-    Q_PROPERTY(bool isHidden READ isHidden NOTIFY isHiddenChanged)
+               NOTIFY identityChanged)
+    Q_PROPERTY(QString sizeText READ sizeText NOTIFY stateChanged)
+    Q_PROPERTY(bool isHidden READ isHidden NOTIFY stateChanged)
     Q_PROPERTY(QString highlightMarker READ highlightMarker
-               NOTIFY highlightMarkerChanged)
+               NOTIFY styleChanged)
     Q_PROPERTY(QString normalForeground READ normalForeground
-               NOTIFY normalForegroundChanged)
+               NOTIFY styleChanged)
     Q_PROPERTY(QString normalBackground READ normalBackground
-               NOTIFY normalBackgroundChanged)
+               NOTIFY styleChanged)
     Q_PROPERTY(QString selectedForeground READ selectedForeground
-               NOTIFY selectedForegroundChanged)
+               NOTIFY styleChanged)
     Q_PROPERTY(QString selectedBackground READ selectedBackground
-               NOTIFY selectedBackgroundChanged)
+               NOTIFY styleChanged)
     Q_PROPERTY(QString cursorForeground READ cursorForeground
-               NOTIFY cursorForegroundChanged)
+               NOTIFY styleChanged)
     Q_PROPERTY(QString cursorBackground READ cursorBackground
-               NOTIFY cursorBackgroundChanged)
+               NOTIFY styleChanged)
     Q_PROPERTY(QString selectedCursorForeground READ selectedCursorForeground
-               NOTIFY selectedCursorForegroundChanged)
+               NOTIFY styleChanged)
     Q_PROPERTY(QString selectedCursorBackground READ selectedCursorBackground
-               NOTIFY selectedCursorBackgroundChanged)
-    Q_PROPERTY(QString imageIdUrl READ imageIdUrl NOTIFY imageIdUrlChanged)
+               NOTIFY styleChanged)
+    Q_PROPERTY(QString imageIdUrl READ imageIdUrl NOTIFY mediaChanged)
 public:
     explicit BrickVisualRow(QObject *parent = nullptr);
 
-    void applySnapshot(const QVariantMap &snapshot);
+    enum ChangeGroup : quint8 {
+        IdentityChange = 1 << 0,
+        MediaChange = 1 << 1,
+        StateChange = 1 << 2,
+        StyleChange = 1 << 3,
+    };
+    quint8 applySnapshot(const QVariantMap &snapshot);
     bool valid() const;
     QString entryId() const;
     int sourceIndex() const;
@@ -75,8 +77,6 @@ public:
     bool isImage() const;
     bool isSelected() const;
     QString iconPath() const;
-    QVariantMap highlightStyle() const;
-    QVariantMap displayFields() const;
     QString displayBaseName() const;
     QString displayExtension() const;
     QString sizeText() const;
@@ -93,31 +93,10 @@ public:
     QString imageIdUrl() const;
 
 signals:
-    void validChanged();
-    void entryIdChanged();
-    void sourceIndexChanged();
-    void localPathChanged();
-    void textChanged();
-    void isFolderChanged();
-    void isImageChanged();
-    void isSelectedChanged();
-    void iconPathChanged();
-    void highlightStyleChanged();
-    void displayFieldsChanged();
-    void displayBaseNameChanged();
-    void displayExtensionChanged();
-    void sizeTextChanged();
-    void isHiddenChanged();
-    void highlightMarkerChanged();
-    void normalForegroundChanged();
-    void normalBackgroundChanged();
-    void selectedForegroundChanged();
-    void selectedBackgroundChanged();
-    void cursorForegroundChanged();
-    void cursorBackgroundChanged();
-    void selectedCursorForegroundChanged();
-    void selectedCursorBackgroundChanged();
-    void imageIdUrlChanged();
+    void identityChanged();
+    void mediaChanged();
+    void stateChanged();
+    void styleChanged();
 
 private:
     bool _valid = false;
@@ -129,8 +108,6 @@ private:
     bool _isImage = false;
     bool _isSelected = false;
     QString _iconPath;
-    QVariantMap _highlightStyle;
-    QVariantMap _displayFields;
     QString _displayBaseName;
     QString _displayExtension;
     QString _sizeText;
@@ -150,6 +127,10 @@ private:
 
 class BrickItem : public QQuickItem {
     Q_OBJECT
+    Q_PROPERTY(int presentationMode READ presentationMode
+               WRITE setPresentationMode NOTIFY presentationModeChanged)
+    Q_PROPERTY(int viewIndex READ viewIndex NOTIFY viewSourceIndexesChanged)
+    Q_PROPERTY(int sourceIndex READ sourceIndex NOTIFY viewSourceIndexesChanged)
     Q_PROPERTY(int row READ row NOTIFY rowColumnChanged)
     Q_PROPERTY(int column READ column NOTIFY rowColumnChanged)
     Q_PROPERTY(QRectF previewRect READ previewRect NOTIFY previewRectChanged)
@@ -163,11 +144,15 @@ class BrickItem : public QQuickItem {
 public:
     BrickItem(QQuickItem *parent = nullptr);
 
+    void setPresentationMode(int mode);
+    bool prepareViewSourceIndexes(int viewIndex, int sourceIndex);
+    void notifyViewSourceIndexesChanged();
+    void setViewSourceIndexes(int viewIndex, int sourceIndex);
     void setRowColumn(int row, int column);
     void setGeometry(QRectF rect, bool animate, bool snapToLogicalPixels = true);
     void setPreviewRect(const QRectF &previewRect);
     void setIconLabelText(const QString &text);
-    void setVisualRow(const QVariantMap &visualRow);
+    quint8 setVisualRow(const QVariantMap &visualRow);
     void setVisualFacadeReady(bool ready);
     QRectF geometry() const;
     QRectF previewRect() const;
@@ -178,10 +163,15 @@ public:
     bool geometryAnimationRunning() const;
     void stopGeometryAnimation();
 
+    int presentationMode() const;
+    int viewIndex() const;
+    int sourceIndex() const;
     int row() const;
     int column() const;
 
 signals:
+    void presentationModeChanged();
+    void viewSourceIndexesChanged();
     void rowColumnChanged();
     void previewRectChanged();
     void iconLabelTextChanged();
@@ -199,6 +189,9 @@ protected:
 
 private:
     bool _isChangingGeometry;
+    int _presentationMode = 0;
+    int _viewIndex = -1;
+    int _sourceIndex = -1;
     int _row;
     int _column;
     QRectF _previewRect;
@@ -226,6 +219,10 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(QVariantList overscanIndexes READ overscanIndexes NOTIFY overscanIndexesChanged)
     Q_PROPERTY(QVariantList layoutBands READ layoutBands NOTIFY layoutBandsChanged)
     Q_PROPERTY(quint64 layoutRevision READ layoutRevision NOTIFY layoutRevisionChanged)
+    // A lightweight diagnostic counter also gives tests a deterministic way
+    // to reject presentation changes which populate a disposable viewport
+    // before committing the final anchored one.
+    Q_PROPERTY(quint64 delegateCommitRevision READ delegateCommitRevision)
     Q_PROPERTY(int targetHeight READ targetHeight WRITE setTargetHeight NOTIFY targetHeightChanged)
     Q_PROPERTY(qreal contentY READ contentY WRITE setContentY NOTIFY contentYChanged)
     Q_PROPERTY(qreal contentHeight READ contentHeight NOTIFY contentHeightChanged)
@@ -321,6 +318,25 @@ public:
     // one final rewrap instead of exposing intermediate layouts.
     Q_INVOKABLE void beginLayoutUpdate();
     Q_INVOKABLE void endLayoutUpdate();
+    // Stage the destination cursor and viewport before an external model
+    // reset. The reset then lays out only the final visible/overscan window
+    // instead of first populating delegates at the previous path's offset.
+    Q_INVOKABLE void prepareViewportForModelReset(
+        int cursorIndex, qreal savedOffset, bool restoreSavedOffset);
+    // Construct and bind one hidden target-mode slot while the event loop is
+    // idle. Embedded hosts use this bounded primitive to keep the first
+    // presentation switch off the synchronous QML allocation path.
+    Q_INVOKABLE bool setPresentationPrewarmDensity(
+        PresentationMode mode, qreal density);
+    Q_INVOKABLE bool setPresentationPrewarmMetrics(
+        PresentationMode mode, qreal width, qreal height,
+        qreal paddingLeft, qreal paddingRight,
+        qreal paddingTop, qreal paddingBottom);
+    Q_INVOKABLE bool prewarmPresentationItem(PresentationMode mode,
+                                             int viewIndex);
+    Q_INVOKABLE QVariantList presentationPrewarmIndexes(
+        PresentationMode mode, int anchorIndex);
+    Q_INVOKABLE int presentationCacheItemCount(PresentationMode mode) const;
 
     PresentationMode presentationMode() const;
     void setPresentationMode(PresentationMode mode);
@@ -341,6 +357,7 @@ public:
     QVariantList overscanIndexes() const;
     QVariantList layoutBands() const;
     quint64 layoutRevision() const;
+    quint64 delegateCommitRevision() const;
 
     int targetHeight() const;
     void setTargetHeight(int newTargetHeight);
@@ -498,6 +515,7 @@ private:
         int modelSourceIndex = -1;
         bool modelIsImage = false;
         bool modelIsFolder = false;
+        quint64 modelVisualRevision = 1;
 
         QRectF geometry() const;
         QSize thumbnailSize(int spacing) const;
@@ -510,7 +528,41 @@ private:
         QList<int> indexes;
     };
 
-    BrickItem *createComponent();
+    struct PresentationPrewarmGeometry {
+        int row = -1;
+        int column = -1;
+        QRectF geometry;
+        QRectF previewRect;
+        QString iconLabelText;
+    };
+
+    struct PresentationPrewarmLayout {
+        quint64 catalogGeneration = 0;
+        quint64 revision = 0;
+        qreal width = 0;
+        qreal height = 0;
+        qreal paddingLeft = 0;
+        qreal paddingRight = 0;
+        qreal paddingTop = 0;
+        qreal paddingBottom = 0;
+        qreal density = 0;
+        int spacing = 0;
+        int columnCount = 0;
+        QFont iconLabelFont;
+        QVector<PresentationPrewarmGeometry> items;
+    };
+
+    struct PresentationPrewarmMetrics {
+        bool valid = false;
+        qreal width = 0;
+        qreal height = 0;
+        qreal paddingLeft = 0;
+        qreal paddingRight = 0;
+        qreal paddingTop = 0;
+        qreal paddingBottom = 0;
+    };
+
+    BrickItem *createComponent(PresentationMode mode);
 
     bool isEmbedded() const;
     void requestRewrap(bool animate = true);
@@ -519,7 +571,25 @@ private:
     void completePresentationModeChange(qreal previousCurrentViewportY,
                                         bool previousCurrentWasVisible);
     void rewrap(bool animate = true);
+    bool applyPreparedResetViewport();
     void calcFixedLayout();
+    void calcFixedLayout(QList<MasonryBrick> &bricks,
+                         PresentationMode mode, qreal density,
+                         qreal layoutWidth, qreal layoutHeight,
+                         qreal paddingLeft, qreal paddingRight,
+                         qreal paddingTop, qreal paddingBottom) const;
+    bool sparseFixedLayout() const;
+    int logicalBrickCount() const;
+    MasonryBrick *brickAt(int index);
+    const MasonryBrick *brickAt(int index) const;
+    MasonryBrick &ensureBrickAt(int index);
+    void discardSparseBrick(int index);
+    QRectF analyticFixedGeometry(int index) const;
+    void applyAnalyticFixedGeometry(MasonryBrick &brick, int index) const;
+    QList<int> indexesForHorizontalRange(qreal left, qreal right) const;
+    QList<int> materializedModelRows() const;
+    PresentationPrewarmLayout &presentationPrewarmLayout(
+        PresentationMode mode);
     void rebuildLayoutBands();
     QList<int> indexesForVerticalRange(qreal top, qreal bottom) const;
     void positionViewport();
@@ -596,7 +666,7 @@ private:
     void updateNeedScroll();
 
     void pushBrickItem(BrickItem *item);
-    BrickItem *popBrickItem();
+    BrickItem *popBrickItem(int viewIndex = -1);
 
     QSize dp(QSizeF value);
     qreal dp(qreal value);
@@ -604,6 +674,9 @@ private:
 
     QSet<BrickItem *> _usedBrickItems;
     QSet<BrickItem *> _freeBrickItems;
+    quint64 _delegateCatalogGeneration = 1;
+    PresentationPrewarmLayout _presentationPrewarmLayouts[5];
+    PresentationPrewarmMetrics _presentationPrewarmMetrics[5];
     QSet<int> _activeBrickIndexes;
     // A model reset is synchronous on the GUI thread. Keep the currently
     // painted delegate assigned to its visual row until endResetModel(), so
@@ -643,11 +716,18 @@ private:
     int _visualSnapshotRole = -1;
     bool _lightweightRewrapPending = false;
     quint64 _lightweightRewrapGeneration = 0;
+    bool _sparseCatalogRows = false;
 
     QList<MasonryBrick> _bricks;
+    // A paged external catalog has a large logical row count but only a
+    // viewport-sized materialized window.  Never mirror that logical count
+    // with empty MasonryBrick objects: sparse rows exist only while they own
+    // an active/overscan delegate.  The model remains the source of row data.
+    QHash<int, MasonryBrick> _sparseBricks;
     QList<MasonryBrick> _currentLoadingRow;
     QList<LayoutBand> _layoutBands;
     quint64 _layoutRevision = 0;
+    quint64 _delegateCommitRevision = 0;
     QSet<int> _visibleIndexSet;
     QSet<int> _overscanIndexSet;
     QSet<int> _scheduledThumbnailIndexes;
@@ -678,6 +758,12 @@ private:
     bool _layoutUpdatePresentationModeChanged = false;
     qreal _layoutUpdateCurrentViewportY = 0;
     bool _layoutUpdateCurrentWasVisible = false;
+    bool _deferDelegateWindowCommit = false;
+    bool _presentationModeCommitInProgress = false;
+    bool _preparedResetViewportPending = false;
+    bool _preparedResetViewportRestoresOffset = false;
+    int _preparedResetCursorIndex = 0;
+    qreal _preparedResetScrollOffset = 0;
     qreal _modeDensities[5] = {150.0, 30.0, 30.0, 160.0, 128.0};
     qreal _contentY;
     qreal _contentHeight;

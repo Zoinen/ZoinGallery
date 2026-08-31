@@ -11,6 +11,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QVariantList>
+#include <QVariantMap>
 
 class DecodeManager;
 class ProviderImageStore;
@@ -22,6 +23,8 @@ class ThumbnailMemoryCache;
 class ExternalCatalogModel final : public QAbstractListModel,
                                    public ThumbnailsRequestInterface {
     Q_OBJECT
+    Q_PROPERTY(bool sparseCatalog READ sparseCatalog)
+    Q_PROPERTY(QVariantList materializedRows READ materializedRows)
 
 public:
     enum ExternalRole {
@@ -48,10 +51,17 @@ public:
     int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
+    bool sparseCatalog() const;
+    QVariantList materializedRows() const;
 
     bool applyCatalog(const QVariantList &entries,
                       bool metadataDeferred = false,
-                      bool checkEquivalentCatalog = true);
+                      bool checkEquivalentCatalog = true,
+                      int totalCount = -1);
+    bool applyCatalogRows(const QVariantList &entries,
+                          bool metadataDeferred = false);
+    bool appendCatalog(const QVariantList &entries,
+                       bool metadataDeferred = false);
     bool applyMetadata(const QVariantList &entries);
     bool applyAppearance(const QVariantList &entries);
     bool applyState(const QString &cursorEntryId, int cursorIndex,
@@ -120,6 +130,7 @@ private:
     struct Entry {
         QString id;
         int sourceIndex = -1;
+        bool loaded = false;
         QString name;
         ImageSourceDescriptor source;
         QString contentVersion;
@@ -194,6 +205,10 @@ private:
     bool catalogMatches(const QVariantList &values,
                         bool *carriesAppearance,
                         bool metadataDeferred) const;
+    bool applySparseCatalog(const QVariantList &entries,
+                            bool metadataDeferred, int totalCount);
+    bool parseCatalogEntry(const QVariantMap &value, int row,
+                           bool metadataDeferred, Entry *entry) const;
     ImageFile *ensureItem(int row) const;
     QVariantMap visualSnapshot(int row) const;
     void retireItemAfterReset(ImageFile *item);
@@ -230,11 +245,17 @@ private:
     void scheduleViewerDecodeAt(int row, const QSize &viewportSize,
                                 int prefetchCount);
     QList<int> viewerCandidateRows(int row, int count) const;
-    QList<ImageFile *> viewerItems(int centerRow, int prefetchCount) const;
+    QList<ImageFile *> viewerItems(
+        int centerRow, int prefetchCount, int *windowCenterRow = nullptr) const;
     void notifyViewerImageUrlChanged();
     QString viewerRequestKey(const ImageDecodeRequest &request) const;
     QString thumbnailRequestKey(const ImageDecodeRequest &request) const;
     bool validRow(int row) const;
+    int logicalRowCount() const;
+    const Entry *entryAt(int row) const;
+    Entry *entryAt(int row);
+    const Entry &loadedEntry(int row) const;
+    Entry &loadedEntry(int row);
     QString nextImageId(const Entry &entry);
 
     QString _sessionId;
@@ -245,6 +266,11 @@ private:
     DecodeManager *_decodeManager = nullptr; // owned by GalleryRuntime
     ViewerImageCache _viewerImageCache;
     QList<Entry> _entries;
+    // In paged mode _entries contains only materialized viewport rows.
+    // QAbstractItemModel still exposes _virtualRowCount rows; this compact
+    // index avoids constructing tens of thousands of empty Entry objects.
+    int _virtualRowCount = -1;
+    QHash<int, int> _sparseRowToOffset;
     // Removed visible rows must outlive begin/endResetModel so retained QML
     // delegates can rebind directly from old to new. They are deleted on the
     // next event-loop turn, or synchronously during shutdown/destruction.

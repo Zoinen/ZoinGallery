@@ -16,11 +16,22 @@ BrickItem {
     // tree; thumbnails and metadata update the same snapshot role.
     readonly property var effectiveModel:
         visualModel && visualModel.valid === true ? visualModel : model
-    property int viewIndex: -1
-    property int sourceIndex: -1
     property alias thumbnailItem: thumbnail
+    // Delegates are recycled and can move underneath a stationary pointer.
+    // The stable viewport owns hit testing; a delegate only observes the one
+    // current visual index, so hover can never travel with a pooled BrickItem.
+    readonly property bool pointerHovered:
+        panelRoot && panelRoot.hoveredIndex === viewIndex
 
-    readonly property string mode: panelRoot.presentationMode
+    // MasonryLayout assigns mode only to slots participating in the committed
+    // viewport. The much larger hidden recycle pool must not reevaluate this
+    // universal delegate tree on every panel presentation change.
+    readonly property string mode:
+        presentationMode === MasonryLayout.Columns ? "columns"
+        : presentationMode === MasonryLayout.Details ? "details"
+        : presentationMode === MasonryLayout.Grid ? "grid"
+        : presentationMode === MasonryLayout.Icons ? "icons"
+        : "masonry"
     readonly property bool masonryMode: mode === "masonry"
     readonly property bool columnsMode: mode === "columns"
     readonly property bool detailsMode: mode === "details"
@@ -36,6 +47,12 @@ BrickItem {
     // broad, bindable dependency for the non-bindable mapToItem() lookup and
     // translate the leaf only; no ancestor or raster texture is rescaled.
     readonly property real iconPixelAlignmentRevision: {
+        // A presentation switch keeps mode-specific delegate caches under the
+        // same viewport. Hidden slots must retain their last exact alignment
+        // without observing the active viewport origin; they reattach to the
+        // current origin once MasonryLayout makes them visible again.
+        if (!visible)
+            return 0
         const viewport = panelRoot.cursorPixelGridViewportOrigin
         return Number(viewport.x || 0) + Number(viewport.y || 0)
                 + x + y + width + height
@@ -50,7 +67,7 @@ BrickItem {
                            / renderDpr)
     }
     function iconPixelOffsetX(item) {
-        if (!item || !item.parent)
+        if (!visible || !item || !item.parent || !item.visible)
             return 0
         const revision = iconPixelAlignmentRevision
         const scenePoint = item.parent.mapToItem(null, item.x, item.y)
@@ -58,7 +75,7 @@ BrickItem {
                 - scenePoint.x + revision * 0
     }
     function iconPixelOffsetY(item) {
-        if (!item || !item.parent)
+        if (!visible || !item || !item.parent || !item.visible)
             return 0
         const revision = iconPixelAlignmentRevision
         const scenePoint = item.parent.mapToItem(null, item.x, item.y)
@@ -84,9 +101,7 @@ BrickItem {
         !typedVisualModel && effectiveModel && effectiveModel.displayFields
         ? effectiveModel.displayFields : ({})
     readonly property string displayName:
-        visualFacadeReady && model ? model.text
-                                   : (effectiveModel
-                                      ? effectiveModel.text : "")
+        effectiveModel ? effectiveModel.text : ""
     readonly property string displayBaseName:
         typedVisualModel
         ? visualModel.displayBaseName
@@ -156,6 +171,25 @@ BrickItem {
         ? panelRoot.markedTextColor
         : (highlightForegroundValue !== ""
            ? highlightForegroundValue : panelRoot.foregroundColor)
+    readonly property color semanticTextColor:
+        highlightForegroundValue !== ""
+        ? highlightForegroundValue : panelRoot.foregroundColor
+    // Semantic colors still drive icons, markers, and backgrounds. Neutral
+    // mode only stabilizes file/folder labels; selection remains strongest.
+    readonly property color itemTextColor:
+        selected
+        ? panelRoot.markedTextColor
+        : (panelRoot.neutralFileTextColors
+           ? (effectiveModel && effectiveModel.isFolder
+              ? panelRoot.folderTextColor : panelRoot.fileTextColor)
+           : semanticTextColor)
+    readonly property color itemMetadataColor:
+        selected
+        ? panelRoot.markedTextColor
+        : (panelRoot.neutralFileTextColors
+           ? panelRoot.mutedColor
+           : (highlightForegroundValue !== ""
+              ? highlightForeground : panelRoot.mutedColor))
     // Selection is a persistent state and therefore has higher visual
     // priority than the transient cursor. In particular, a selected folder
     // keeps its yellow Lucide icon while the cursor passes over it instead of
@@ -330,14 +364,16 @@ BrickItem {
                     if (!brick.selected
                             && brick.nonCursorHighlightBackgroundValue !== "")
                         return brick.nonCursorHighlightBackgroundValue
-                    return "transparent"
+                } else {
+                    if ((!brick.selected || (brick.current
+                                              && brick.panelRoot.showCursor))
+                            && brick.highlightBackgroundValue !== "")
+                        return brick.highlightBackgroundValue
+                    if (brick.current && brick.panelRoot.showCursor)
+                        return brick.panelRoot.cursorBackgroundColor
                 }
-                if ((!brick.selected || (brick.current
-                                          && brick.panelRoot.showCursor))
-                        && brick.highlightBackgroundValue !== "")
-                    return brick.highlightBackgroundValue
-                if (brick.current && brick.panelRoot.showCursor)
-                    return brick.panelRoot.cursorBackgroundColor
+                if (!brick.selected && brick.pointerHovered)
+                    return brick.panelRoot.itemHoverColor
                 return "transparent"
             }
             if (brick.current && brick.panelRoot.showCursor
@@ -345,7 +381,7 @@ BrickItem {
                 return brick.panelRoot.cursorColor
             if (brick.selected)
                 return "transparent"
-            if (brickPointer.containsMouse && !brick.iconsMode)
+            if (brick.pointerHovered)
                 return brick.panelRoot.itemHoverColor
             if (brick.masonryMode || brick.gridMode)
                 return brick.effectiveModel && brick.effectiveModel.isFolder
@@ -503,18 +539,20 @@ BrickItem {
             id: detailsBaseName
             objectName: brick.detailsMode ? "galleryBaseName-"
                                             + brick.viewIndex : ""
-            text: brick.panelRoot.quickSearchStyledText(
-                brick.panelRoot.separateFileExtensions
-                    ? brick.displayBaseName
-                    : brick.displayBaseName
-                      + (brick.displayExtension !== ""
-                         ? "." + brick.displayExtension : ""),
-                brick.entryId, 0)
-            textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
-                        ? Text.StyledText : Text.AutoText
-            color: brick.highlightForegroundValue !== "" || brick.selected
-                   ? brick.highlightForeground
-                   : brick.panelRoot.foregroundColor
+            text: brick.detailsMode
+                  ? brick.panelRoot.quickSearchStyledText(
+                        brick.panelRoot.separateFileExtensions
+                            ? brick.displayBaseName
+                            : brick.displayBaseName
+                              + (brick.displayExtension !== ""
+                                 ? "." + brick.displayExtension : ""),
+                        brick.entryId, 0)
+                  : ""
+            textFormat: brick.detailsMode
+                        && brick.panelRoot.quickSearchMatch(brick.entryId)
+                        ? Text.StyledText : Text.PlainText
+            color: brick.detailsMode
+                   ? brick.itemTextColor : "transparent"
             elide: Text.ElideMiddle
             font.pixelSize: brick.panelRoot.detailsNameFontPixelSize
             Layout.fillWidth: true
@@ -524,16 +562,18 @@ BrickItem {
             id: detailsExtension
             objectName: brick.detailsMode ? "galleryExtension-"
                                             + brick.viewIndex : ""
-            text: brick.panelRoot.quickSearchStyledText(
-                brick.displayExtension, brick.entryId,
-                brick.panelRoot.codePointLength(brick.displayBaseName) + 1)
-            textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
-                        ? Text.StyledText : Text.AutoText
-            visible: brick.panelRoot.separateFileExtensions
+            text: brick.detailsMode
+                  ? brick.panelRoot.quickSearchStyledSuffix(
+                        brick.displayExtension, brick.displayBaseName,
+                        brick.entryId, 1)
+                  : ""
+            textFormat: brick.detailsMode
+                        && brick.panelRoot.quickSearchMatch(brick.entryId)
+                        ? Text.StyledText : Text.PlainText
+            visible: brick.detailsMode
+                     && brick.panelRoot.separateFileExtensions
                      && text.length > 0
-            color: brick.highlightForegroundValue !== "" || brick.selected
-                   ? brick.highlightForeground
-                   : brick.panelRoot.mutedColor
+            color: brick.itemTextColor
             elide: Text.ElideRight
             horizontalAlignment: Text.AlignLeft
             font.pixelSize: brick.panelRoot.detailsSecondaryFontPixelSize
@@ -547,10 +587,8 @@ BrickItem {
             id: detailsSize
             objectName: brick.detailsMode ? "gallerySize-"
                                             + brick.viewIndex : ""
-            text: brick.displaySize
-            color: brick.highlightForegroundValue !== "" || brick.selected
-                   ? brick.highlightForeground
-                   : brick.panelRoot.mutedColor
+            text: brick.detailsMode ? brick.displaySize : ""
+            color: brick.itemMetadataColor
             horizontalAlignment: Text.AlignRight
             font.pixelSize: brick.panelRoot.detailsSecondaryFontPixelSize
             Layout.preferredWidth: brick.panelRoot.detailsSizeColumnWidth
@@ -831,21 +869,26 @@ BrickItem {
         anchors.bottom: parent.bottom
         anchors.margins: 4
         padding: 6
-        text: brick.panelRoot.quickSearchStyledText(
-            brick.effectiveModel ? brick.displayName : "",
-            brick.entryId, 0)
-        textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
-                    ? Text.StyledText : Text.AutoText
-        color: brick.hiddenEntry
-               ? Qt.rgba(brick.highlightForeground.r,
-                         brick.highlightForeground.g,
-                         brick.highlightForeground.b,
-                         brick.highlightForeground.a * 0.5)
-               : brick.highlightForeground
+        text: brick.masonryMode
+              ? brick.panelRoot.quickSearchStyledText(
+                    brick.effectiveModel ? brick.displayName : "",
+                    brick.entryId, 0)
+              : ""
+        textFormat: brick.masonryMode
+                    && brick.panelRoot.quickSearchMatch(brick.entryId)
+                    ? Text.StyledText : Text.PlainText
+         color: !brick.masonryMode ? "transparent"
+                : brick.hiddenEntry
+                ? Qt.rgba(brick.itemTextColor.r,
+                          brick.itemTextColor.g,
+                          brick.itemTextColor.b,
+                          brick.itemTextColor.a * 0.5)
+                : brick.itemTextColor
         elide: Text.ElideMiddle
         horizontalAlignment: Text.AlignHCenter
         background: Rectangle {
-            color: brick.highlightLabelBackground
+            color: brick.masonryMode
+                   ? brick.highlightLabelBackground : "transparent"
             radius: 3
         }
     }
@@ -864,17 +907,21 @@ BrickItem {
         text: brick.iconsMode
               ? brick.panelRoot.quickSearchStyledElidedText(
                     brick.iconLabelText, brick.displayName, brick.entryId)
-              : brick.panelRoot.quickSearchStyledText(
-                    brick.displayName, brick.entryId, 0)
-        textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
-                    ? Text.StyledText : Text.AutoText
+              : brick.gridMode
+                ? brick.panelRoot.quickSearchStyledText(
+                      brick.displayName, brick.entryId, 0)
+                : ""
+        textFormat: (brick.gridMode || brick.iconsMode)
+                    && brick.panelRoot.quickSearchMatch(brick.entryId)
+                    ? Text.StyledText : Text.PlainText
         font: brick.panelRoot.iconLabelFont
-        color: brick.hiddenEntry
-               ? Qt.rgba(brick.highlightForeground.r,
-                         brick.highlightForeground.g,
-                         brick.highlightForeground.b,
-                         brick.highlightForeground.a * 0.5)
-               : brick.highlightForeground
+         color: !(brick.gridMode || brick.iconsMode) ? "transparent"
+                : brick.hiddenEntry
+                ? Qt.rgba(brick.itemTextColor.r,
+                          brick.itemTextColor.g,
+                          brick.itemTextColor.b,
+                          brick.itemTextColor.a * 0.5)
+                : brick.itemTextColor
         elide: brick.iconsMode ? Text.ElideNone : Text.ElideMiddle
         wrapMode: brick.iconsMode
                   ? Text.WrapAnywhere : Text.NoWrap
@@ -887,16 +934,15 @@ BrickItem {
     Item {
         id: textRow
         visible: brick.columnsMode
-        opacity: brick.hiddenEntry ? 0.5 : 1.0
-        x: brick.detailsMode ? 0
-           : brick.effectivePreviewRect.x
-             + brick.effectivePreviewRect.width + 6
+        opacity: brick.columnsMode && brick.hiddenEntry ? 0.5 : 1.0
+        x: brick.columnsMode
+           ? brick.effectivePreviewRect.x
+             + brick.effectivePreviewRect.width + 6 : 0
         y: 0
-        width: brick.detailsMode ? parent.width
-               : Math.max(0, parent.width - x - 7)
+        width: brick.columnsMode
+               ? Math.max(0, parent.width - x - 7) : 0
         height: parent.height
-        readonly property real gap: brick.detailsMode
-            ? brick.panelRoot.detailsRowSpacing : 4
+        readonly property real gap: 4
         Text {
             id: extensionMeasurement
             visible: false
@@ -904,20 +950,12 @@ BrickItem {
             textFormat: extensionLabel.textFormat
             font: extensionLabel.font
         }
-        readonly property real sizeColumnWidth: brick.detailsMode
-            ? brick.panelRoot.detailsSizeColumnWidth : 0
+        readonly property real sizeColumnWidth: 0
         readonly property real extensionColumnWidth: {
-            if (!brick.panelRoot.separateFileExtensions)
+            if (!brick.columnsMode
+                    || !brick.panelRoot.separateFileExtensions)
                 return 0
-            if (brick.detailsMode) {
-                return Math.min(
-                    brick.panelRoot.detailsExtensionMaximumWidth,
-                    Math.max(brick.panelRoot.detailsExtensionMinimumWidth,
-                             extensionMeasurement.implicitWidth))
-            }
-            const available = Math.max(
-                0, width - sizeColumnWidth
-                   - (brick.detailsMode ? gap : 0))
+            const available = Math.max(0, width - sizeColumnWidth)
             const preferred = Math.max(40, available * 0.28)
             return Math.max(0, Math.min(112, preferred, available * 0.45))
         }
@@ -939,24 +977,22 @@ BrickItem {
                 ? parent.gap : 0
             anchors.top: parent.top
             anchors.bottom: parent.bottom
-            text: brick.panelRoot.quickSearchStyledText(
-                brick.panelRoot.separateFileExtensions
-                    ? brick.displayBaseName
-                    : brick.displayBaseName
-                      + (brick.displayExtension !== ""
-                         ? "." + brick.displayExtension : ""),
-                brick.entryId, 0)
-            textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
-                        ? Text.StyledText : Text.AutoText
-            color: brick.detailsMode
-                   ? (brick.highlightForegroundValue !== "" || brick.selected
-                      ? brick.highlightForeground
-                      : brick.panelRoot.foregroundColor)
-                   : brick.highlightForeground
+            text: brick.columnsMode
+                  ? brick.panelRoot.quickSearchStyledText(
+                        brick.panelRoot.separateFileExtensions
+                            ? brick.displayBaseName
+                            : brick.displayBaseName
+                              + (brick.displayExtension !== ""
+                                 ? "." + brick.displayExtension : ""),
+                        brick.entryId, 0)
+                  : ""
+            textFormat: brick.columnsMode
+                        && brick.panelRoot.quickSearchMatch(brick.entryId)
+                        ? Text.StyledText : Text.PlainText
+            color: brick.columnsMode ? brick.itemTextColor : "transparent"
             elide: Text.ElideMiddle
             verticalAlignment: Text.AlignVCenter
-            font.pixelSize: brick.detailsMode
-                            ? brick.panelRoot.detailsNameFontPixelSize : -1
+            font.pixelSize: -1
         }
 
         Label {
@@ -964,33 +1000,29 @@ BrickItem {
             objectName: brick.detailsMode ? ""
                                          : "galleryExtension-"
                                            + brick.viewIndex
-            visible: brick.panelRoot.separateFileExtensions
+            visible: brick.columnsMode
+                     && brick.panelRoot.separateFileExtensions
                      && brick.displayExtension !== ""
             anchors.right: sizeLabel.visible ? sizeLabel.left : parent.right
             anchors.rightMargin: sizeLabel.visible ? parent.gap : 0
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: parent.extensionColumnWidth
-            text: brick.panelRoot.quickSearchStyledText(
-                brick.displayExtension !== ""
-                    ? (brick.detailsMode ? brick.displayExtension
-                       : "." + brick.displayExtension) : "",
-                brick.entryId,
-                brick.panelRoot.codePointLength(brick.displayBaseName)
-                    + (brick.detailsMode ? 1 : 0))
-            textFormat: brick.panelRoot.quickSearchMatch(brick.entryId)
-                        ? Text.StyledText : Text.AutoText
-            color: brick.detailsMode
-                   ? (brick.highlightForegroundValue !== "" || brick.selected
-                      ? brick.highlightForeground
-                      : brick.panelRoot.mutedColor)
-                   : brick.highlightForeground
-            horizontalAlignment: brick.detailsMode
-                                 ? Text.AlignLeft : Text.AlignRight
+            text: brick.columnsMode
+                  ? brick.panelRoot.quickSearchStyledSuffix(
+                        brick.displayExtension !== ""
+                            ? "." + brick.displayExtension : "",
+                        brick.displayBaseName, brick.entryId, 0)
+                  : ""
+            textFormat: brick.columnsMode
+                        && brick.panelRoot.quickSearchMatch(brick.entryId)
+                        ? Text.StyledText : Text.PlainText
+            color: brick.columnsMode
+                   ? brick.itemTextColor : "transparent"
+            horizontalAlignment: Text.AlignRight
             verticalAlignment: Text.AlignVCenter
-            elide: brick.detailsMode ? Text.ElideRight : Text.ElideLeft
-            font.pixelSize: brick.detailsMode
-                            ? brick.panelRoot.detailsSecondaryFontPixelSize : -1
+            elide: Text.ElideLeft
+            font.pixelSize: -1
         }
 
         Label {
@@ -998,16 +1030,14 @@ BrickItem {
             objectName: brick.detailsMode ? ""
                                          : "gallerySize-"
                                            + brick.viewIndex
-            visible: brick.detailsMode
+            visible: false
             anchors.right: parent.right
             anchors.rightMargin: brick.panelRoot.detailsRowInset
             anchors.top: parent.top
             anchors.bottom: parent.bottom
             width: parent.sizeColumnWidth
-            text: brick.displaySize
-            color: brick.highlightForegroundValue !== "" || brick.selected
-                   ? brick.highlightForeground
-                   : brick.panelRoot.mutedColor
+            text: ""
+            color: "transparent"
             horizontalAlignment: Text.AlignRight
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideNone
@@ -1038,7 +1068,10 @@ BrickItem {
         // contract. Let it bubble to the panel-level GUI auto-scroll or
         // console-forwarding surface instead of turning it into a tile click.
         acceptedButtons: Qt.LeftButton | Qt.RightButton
-        hoverEnabled: true
+        // Hover is owned by GalleryPanel's stable button-transparent surface.
+        // Tracking it here leaves containsMouse stale when this delegate is
+        // recycled and also adds a repaint to every drag event.
+        hoverEnabled: false
         preventStealing: true
         onPressed: mouse => {
             brick.panelRoot.handlePointerPress(brick.viewIndex,

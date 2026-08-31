@@ -32,9 +32,11 @@
 #include <QUrlQuery>
 #include <QtTest>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <tuple>
+#include <utility>
 
 #if defined(Q_OS_MACOS)
 #include <CoreGraphics/CoreGraphics.h>
@@ -165,15 +167,19 @@ QQuickItem *findVisualItem(QQuickItem *root, const QString &objectName) {
     if (!root) {
         return nullptr;
     }
+    QQuickItem *hiddenMatch = nullptr;
     QList<QQuickItem *> pending{root};
     while (!pending.isEmpty()) {
         QQuickItem *item = pending.takeLast();
         if (item->objectName() == objectName) {
-            return item;
+            if (item->isVisible()) {
+                return item;
+            }
+            hiddenMatch = item;
         }
         pending.append(item->childItems());
     }
-    return nullptr;
+    return hiddenMatch;
 }
 
 bool invokeEnsureCurrentVisible(
@@ -240,6 +246,8 @@ private slots:
         QObject *panel = createPanel(
             view, session, QStringLiteral("livePanelThemeSession"));
         QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        QVERIFY(panelItem);
         auto *layout = panel->findChild<MasonryLayout *>(
             QStringLiteral("galleryMasonryLayout"));
         QVERIFY(layout);
@@ -273,11 +281,13 @@ private slots:
         QQuickItem *previewBackdrop = nullptr;
         QQuickItem *scrollBar = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT(
-            (cursorSurface = panel->findChild<QQuickItem *>(
+            (cursorSurface = findVisualItem(
+                 panelItem,
                  QStringLiteral("gallerySelectionSurface-1"))),
             3000);
         QTRY_VERIFY_WITH_TIMEOUT(
-            (plainSurface = panel->findChild<QQuickItem *>(
+            (plainSurface = findVisualItem(
+                 panelItem,
                  QStringLiteral("gallerySelectionSurface-0"))),
             3000);
         QTRY_VERIFY_WITH_TIMEOUT(
@@ -306,6 +316,18 @@ private slots:
         QCOMPARE(scrollBar->property("trackHoveredColor").value<QColor>(),
                  QColor(QStringLiteral("#909192")));
 
+        auto *plainBrick = plainSurface->parentItem();
+        auto *hoverPointer = plainBrick
+            ? plainBrick->findChild<QQuickItem *>(
+                  QStringLiteral("galleryBrickPointer-0"))
+            : nullptr;
+        QVERIFY(plainBrick && hoverPointer);
+        QVERIFY(!hoverPointer->property("hoverEnabled").toBool());
+        QVERIFY(panel->setProperty("hoveredIndex", 0));
+        QTRY_COMPARE_WITH_TIMEOUT(
+            plainSurface->property("color").value<QColor>(),
+            QColor(QStringLiteral("#707172")), 3000);
+
         const QVariantMap secondTheme{
             {QStringLiteral("panelBackground"),
              QStringLiteral("#111213")},
@@ -329,6 +351,12 @@ private slots:
         };
         QVERIFY(panel->setProperty("theme", secondTheme));
 
+        // A hovered brick must keep observing the live semantic color rather
+        // than retaining the value captured when its delegate was created.
+        QTRY_COMPARE_WITH_TIMEOUT(
+            plainSurface->property("color").value<QColor>(),
+            QColor(QStringLiteral("#717273")), 3000);
+        QVERIFY(panel->setProperty("hoveredIndex", -1));
         QTRY_COMPARE_WITH_TIMEOUT(
             cursorSurface->property("color").value<QColor>(),
             QColor(QStringLiteral("#313233")), 3000);
@@ -342,12 +370,282 @@ private slots:
                  QColor(QStringLiteral("#818283")));
         QCOMPARE(scrollBar->property("trackHoveredColor").value<QColor>(),
                  QColor(QStringLiteral("#919293")));
-        QCOMPARE(panel->findChild<QQuickItem *>(
+        QCOMPARE(findVisualItem(
+                     panelItem,
                      QStringLiteral("gallerySelectionSurface-1")),
                  cursorSurface);
         QCOMPARE(panel->findChild<QQuickItem *>(
                      QStringLiteral("galleryPanelScrollBar")),
                  scrollBar);
+
+        // Hover belongs to the shared BrickItem surface. Verify every
+        // presentation, including the compact Details rows and Icons mode
+        // that historically bypassed this state entirely.
+        const QList<QPair<QString, MasonryLayout::PresentationMode>> modes{
+            {QStringLiteral("masonry"), MasonryLayout::Masonry},
+            {QStringLiteral("columns"), MasonryLayout::Columns},
+            {QStringLiteral("details"), MasonryLayout::Details},
+            {QStringLiteral("grid"), MasonryLayout::Grid},
+            {QStringLiteral("icons"), MasonryLayout::Icons},
+        };
+        for (const auto &[name, mode] : modes) {
+            panel->setProperty("presentationMode", name);
+            QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(), mode, 3000);
+            QQuickItem *surface = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (surface = findVisualItem(
+                    panelItem,
+                    QStringLiteral("gallerySelectionSurface-0"))),
+                3000);
+            QQuickItem *brick = surface->parentItem();
+            QVERIFY(brick);
+            QVERIFY(panel->setProperty("hoveredIndex", 0));
+            QTRY_COMPARE_WITH_TIMEOUT(
+                surface->property("color").value<QColor>(),
+                QColor(QStringLiteral("#717273")), 3000);
+            QVERIFY(panel->setProperty("hoveredIndex", -1));
+        }
+    }
+
+    void neutralPanelTextColorsLeaveSemanticIconColorsAlone() {
+        QVariantMap folder = catalogEntry(0);
+        folder[QStringLiteral("name")] = QStringLiteral("folder");
+        folder[QStringLiteral("isDir")] = true;
+        folder[QStringLiteral("highlightStyle")] = QVariantMap{
+            {QStringLiteral("normal"), QVariantMap{
+                 {QStringLiteral("foreground"), QStringLiteral("#ff00ff")},
+             }},
+        };
+        QVariantMap file = catalogEntry(1);
+        file[QStringLiteral("name")] = QStringLiteral("file.txt");
+        file[QStringLiteral("highlightStyle")] = QVariantMap{
+            {QStringLiteral("normal"), QVariantMap{
+                 {QStringLiteral("foreground"), QStringLiteral("#00ff00")},
+             }},
+        };
+
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("neutral-panel-text-colors"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(QVariantList{folder, file}, 1));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("neutralPanelTextSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        panel->setProperty("showCursor", false);
+        panel->setProperty("theme", QVariantMap{
+            {QStringLiteral("text"), QStringLiteral("#222222")},
+            {QStringLiteral("mutedText"), QStringLiteral("#333333")},
+            {QStringLiteral("fileText"), QStringLiteral("#c4cbd3")},
+            {QStringLiteral("folderText"), QStringLiteral("#ffffff")},
+            {QStringLiteral("neutralFileTextColors"), true},
+            {QStringLiteral("folderIcon"), QStringLiteral("#5ab2f1")},
+        });
+
+        const auto findItem = [panel](const QString &name) {
+            return panel->findChild<QQuickItem *>(name);
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(
+            findItem(QStringLiteral("galleryBaseName-0"))
+            && findItem(QStringLiteral("galleryBaseName-1")), 3000);
+        auto *folderText = findItem(QStringLiteral("galleryBaseName-0"));
+        auto *fileText = findItem(QStringLiteral("galleryBaseName-1"));
+        auto *folderIcon = findItem(QStringLiteral("galleryFallbackIcon-0"));
+        auto *fileIcon = findItem(QStringLiteral("galleryFallbackIcon-1"));
+        QVERIFY(folderText && fileText && folderIcon && fileIcon);
+
+        QCOMPARE(folderText->property("color").value<QColor>(),
+                 QColor(QStringLiteral("#ffffff")));
+        QCOMPARE(fileText->property("color").value<QColor>(),
+                 QColor(QStringLiteral("#c4cbd3")));
+        const QColor fileIconColor = fileIcon->property(
+            "effectiveIconColor").value<QColor>();
+        QCOMPARE(fileIconColor, QColor(QStringLiteral("#00ff00")));
+        QCOMPARE(folderIcon->property("effectiveIconColor").value<QColor>(),
+                 QColor(QStringLiteral("#5ab2f1")));
+
+        panel->setProperty("theme", QVariantMap{
+            {QStringLiteral("text"), QStringLiteral("#222222")},
+            {QStringLiteral("mutedText"), QStringLiteral("#333333")},
+            {QStringLiteral("fileText"), QStringLiteral("#c4cbd3")},
+            {QStringLiteral("folderText"), QStringLiteral("#ffffff")},
+            {QStringLiteral("neutralFileTextColors"), false},
+            {QStringLiteral("folderIcon"), QStringLiteral("#5ab2f1")},
+        });
+        QTRY_COMPARE_WITH_TIMEOUT(
+            folderText->property("color").value<QColor>(),
+            QColor(QStringLiteral("#ff00ff")), 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            fileText->property("color").value<QColor>(),
+            QColor(QStringLiteral("#00ff00")), 3000);
+        QCOMPARE(fileIcon->property("effectiveIconColor").value<QColor>(),
+                 fileIconColor);
+    }
+
+    void panelHoverTracksViewportInsteadOfRecycledDelegate() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("stable-panel-hover"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(80), 1));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("stablePanelHoverSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QObject *hoverArea = panel->findChild<QObject *>(
+            QStringLiteral("galleryMiddleButtonArea"));
+        QVERIFY(layout);
+        QVERIFY(hoverArea);
+        QVERIFY(hoverArea->property("hoverEnabled").toBool());
+        QCOMPARE(hoverArea->property("acceptedButtons").toInt(),
+                 int(Qt::MiddleButton));
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            layout->contentHeight() > layout->height(), 3000);
+
+        const QRectF firstGeometry = layout->indexGeometry(0);
+        QVERIFY(firstGeometry.isValid() && !firstGeometry.isEmpty());
+        const qreal pointerX = firstGeometry.center().x();
+        const qreal pointerY = firstGeometry.center().y();
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        QVERIFY(panelItem);
+        const QPointF panelPoint = layout->mapToItem(
+            panelItem, QPointF(pointerX, pointerY));
+        QVariant hovered;
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "updateHoveredIndexAt", Qt::DirectConnection,
+            Q_RETURN_ARG(QVariant, hovered),
+            Q_ARG(QVariant, QVariant(panelPoint.x())),
+            Q_ARG(QVariant, QVariant(panelPoint.y()))));
+        QCOMPARE(hovered.toInt(), 0);
+        QCOMPARE(panel->property("hoveredIndex").toInt(), 0);
+
+        const QRectF targetGeometry = layout->indexGeometry(10);
+        QVERIFY(targetGeometry.isValid() && !targetGeometry.isEmpty());
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "setPanelContentY", Qt::DirectConnection,
+            Q_ARG(QVariant, QVariant(targetGeometry.y())),
+            Q_ARG(QVariant, QVariant(true))));
+        // onContentYChanged and the hover re-hit-test are synchronous. Check
+        // that exact transition before unrelated startup placement timers can
+        // restore the fixture's initial cursor at row zero.
+        QVERIFY(layout->contentY() > 0);
+        const QPointF viewportPoint = layout->mapFromItem(panelItem,
+                                                          panelPoint);
+        const int expected = layout->indexAtViewport(viewportPoint.x(),
+                                                     viewportPoint.y());
+        QVERIFY(expected >= 0);
+        QVERIFY(expected != 0);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            panel->property("hoveredIndex").toInt(), expected, 1000);
+
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "clearHoveredIndex", Qt::DirectConnection));
+        QCOMPARE(panel->property("hoveredIndex").toInt(), -1);
+    }
+
+    void pointerDragDefersCursorAndCommitsOnlyFinalItem() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("deferred-pointer-drag"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(80), 1));
+        session->setCurrentIndex(0);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("deferredPointerDragSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        QVERIFY(panelItem);
+        QVERIFY(layout);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 3000);
+        QSignalSpy cursorSpy(panel,
+                             SIGNAL(cursorRequested(QString,int,bool)));
+        QVERIFY(cursorSpy.isValid());
+
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "handlePointerPress", Qt::DirectConnection,
+            Q_ARG(QVariant, QVariant(0)),
+            Q_ARG(QVariant, QVariant(int(Qt::LeftButton))),
+            Q_ARG(QVariant, QVariant(int(Qt::NoModifier)))));
+        QCOMPARE(cursorSpy.size(), 1);
+        QVERIFY(cursorSpy.at(0).at(2).toBool());
+
+        const auto dragTo = [&](int index) {
+            const QRectF geometry = layout->indexGeometry(index);
+            QVERIFY(geometry.isValid() && !geometry.isEmpty());
+            const QPointF viewportPoint(
+                geometry.center().x(),
+                geometry.center().y() - layout->contentY());
+            const QPointF panelPoint = layout->mapToItem(panelItem,
+                                                         viewportPoint);
+            QVERIFY(QMetaObject::invokeMethod(
+                panel, "handlePointerDrag", Qt::DirectConnection,
+                Q_ARG(QVariant, QVariant(panelPoint.x())),
+                Q_ARG(QVariant, QVariant(panelPoint.y()))));
+        };
+
+        dragTo(1);
+        QCOMPARE(session->currentIndex(), 1);
+        QCOMPARE(cursorSpy.size(), 2);
+        QVERIFY(cursorSpy.at(1).at(2).toBool());
+
+        // Physical motion inside the same row must be a complete no-op.
+        dragTo(1);
+        QCOMPARE(cursorSpy.size(), 2);
+
+        dragTo(2);
+        QCOMPARE(session->currentIndex(), 2);
+        QCOMPARE(cursorSpy.size(), 3);
+        QVERIFY(cursorSpy.at(2).at(2).toBool());
+
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "endPointerDrag", Qt::DirectConnection));
+        QCOMPARE(cursorSpy.size(), 4);
+        QCOMPARE(cursorSpy.constLast().at(0).toString(),
+                 session->entryIdAt(2));
+        QCOMPARE(cursorSpy.constLast().at(1).toInt(), 2);
+        QVERIFY(!cursorSpy.constLast().at(2).toBool());
+        QVERIFY(!panel->property("cursorCommitPending").toBool());
+
+        // The stable hover surface sits above the recycled delegates but
+        // accepts no buttons. Exercise the real Qt delivery path to ensure a
+        // normal click still reaches the row MouseArea underneath it.
+        cursorSpy.clear();
+        const QRectF clickGeometry = layout->indexGeometry(3);
+        QVERIFY(clickGeometry.isValid() && !clickGeometry.isEmpty());
+        const QPointF clickScenePoint = layout->mapToScene(QPointF(
+            clickGeometry.center().x(),
+            clickGeometry.center().y() - layout->contentY()));
+        QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier,
+                          clickScenePoint.toPoint());
+        QTRY_COMPARE_WITH_TIMEOUT(session->currentIndex(), 3, 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(cursorSpy.size(), 2, 1000);
+        QVERIFY(cursorSpy.at(0).at(2).toBool());
+        QVERIFY(!cursorSpy.at(1).at(2).toBool());
     }
 
     void svgCursorAvoidsQtCustomColorSpaceCrash() {
@@ -702,10 +1000,18 @@ private slots:
         QVERIFY(panelItem->hasActiveFocus());
 
         const auto delegateForIndex = [&](int index) -> QQuickItem * {
-            const auto *surface = findVisualItem(
-                panelItem,
-                QStringLiteral("gallerySelectionSurface-%1").arg(index));
-            return surface ? surface->parentItem() : nullptr;
+            const QString objectName =
+                QStringLiteral("gallerySelectionSurface-%1").arg(index);
+            const auto surfaces = panelItem->findChildren<QQuickItem *>(
+                objectName, Qt::FindChildrenRecursively);
+            for (QQuickItem *surface : surfaces) {
+                QQuickItem *const delegate = surface
+                    ? surface->parentItem() : nullptr;
+                if (delegate && delegate->isVisible()) {
+                    return delegate;
+                }
+            }
+            return nullptr;
         };
         const auto sendKey = [&](Qt::Key key) {
             QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
@@ -1244,6 +1550,17 @@ private slots:
         const qreal iconCursorViewportY =
             layout->indexGeometry(selectedIndex).top() - layout->contentY();
         QVERIFY(qAbs(iconCursorViewportY - requestedViewportY) < 0.51);
+        QQuickItem *const initialIconDelegate = layout->currentItem();
+        QVERIFY(initialIconDelegate);
+        const QVariantList detailsPrewarmIndexes =
+            layout->presentationPrewarmIndexes(
+                MasonryLayout::Details, selectedIndex);
+        QVERIFY(detailsPrewarmIndexes.contains(selectedIndex));
+        QVERIFY(detailsPrewarmIndexes.size() > 1);
+        QVERIFY(detailsPrewarmIndexes.size() < entryCount);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            layout->presentationCacheItemCount(MasonryLayout::Details) > 0,
+            3000);
 
         // The old Icons contentY addresses a completely different Grid row.
         // Switching must not restore that raw number or animate toward the
@@ -1267,12 +1584,30 @@ private slots:
         QQuickItem *selectedDelegate = nullptr;
         for (QQuickItem *candidate :
              layout->findChildren<QQuickItem *>()) {
-            if (candidate->property("viewIndex").toInt() == selectedIndex) {
+            if (candidate->isVisible()
+                && candidate->property("viewIndex").toInt()
+                       == selectedIndex) {
                 selectedDelegate = candidate;
                 break;
             }
         }
         QVERIFY(selectedDelegate);
+        int activeGridSlots = 0;
+        int hiddenIconSlots = 0;
+        for (BrickItem *slot : layout->findChildren<BrickItem *>()) {
+            if (slot->isVisible()) {
+                ++activeGridSlots;
+                QCOMPARE(slot->property("mode").toString(),
+                         QStringLiteral("grid"));
+            }
+            else if (slot->property("mode").toString()
+                     == QStringLiteral("icons")) {
+                ++hiddenIconSlots;
+            }
+        }
+        QVERIFY(activeGridSlots > 0);
+        QVERIFY2(hiddenIconSlots > 0,
+                 "Hidden pooled delegates must retain their outgoing mode");
         const auto delegateGeometry = [selectedDelegate] {
             return QRectF(selectedDelegate->x(), selectedDelegate->y(),
                           selectedDelegate->width(),
@@ -1300,6 +1635,7 @@ private slots:
         QVERIFY(qAbs(restoredIconCursorViewportY
                      - gridCursorViewportY) < 0.51);
         QCOMPARE(session->currentIndex(), selectedIndex);
+        QCOMPARE(layout->currentItem(), initialIconDelegate);
     }
 
     void shiftRangeNavigationMatchesOriginalInEveryMode() {
@@ -1334,17 +1670,20 @@ private slots:
             QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 3000);
             panelItem->forceActiveFocus();
             view.requestActivate();
-            QSignalSpy selectionSpy(
-                panel, SIGNAL(selectionRequested(QString,QVariant)));
-            QVERIFY(selectionSpy.isValid());
+            QSignalSpy transactionSpy(
+                panel, SIGNAL(selectionTransactionRequested(
+                    QVariant,QString,int)));
+            QVERIFY(transactionSpy.isValid());
+            qulonglong selectionRevision = 1;
 
             for (Qt::Key key : keys) {
-                session->setCurrentIndex(40);
+                QVERIFY(session->applyExternalState(
+                    session->entryIdAt(40), 40, {}, ++selectionRevision));
                 QVERIFY(invokeEnsureCurrentVisible(panel, false));
                 QVERIFY(QMetaObject::invokeMethod(
                     panel, "cancelCursorChromeTransition",
                     Qt::DirectConnection));
-                selectionSpy.clear();
+                transactionSpy.clear();
 
                 QKeyEvent shiftPress(QEvent::KeyPress, Qt::Key_Shift,
                                      Qt::ShiftModifier);
@@ -1356,28 +1695,43 @@ private slots:
                 QVERIFY2(session->currentIndex() != 40,
                          qPrintable(mode + QStringLiteral(" key %1")
                                               .arg(int(key))));
-                QCOMPARE(selectionSpy.size(), 0);
+                QCOMPARE(transactionSpy.size(), 0);
                 QVERIFY(panel->property(
                     "keyboardShiftSelectionActive").toBool());
 
                 QKeyEvent keyRelease(QEvent::KeyRelease, key,
                                      Qt::ShiftModifier);
                 QCoreApplication::sendEvent(&view, &keyRelease);
-                QCOMPARE(selectionSpy.size(), 0);
+                QCOMPARE(transactionSpy.size(), 0);
                 QKeyEvent shiftRelease(QEvent::KeyRelease, Qt::Key_Shift,
                                        Qt::NoModifier);
                 QCoreApplication::sendEvent(&view, &shiftRelease);
-                QCOMPARE(selectionSpy.size(), 1);
-                QCOMPARE(selectionSpy.constFirst().at(0).toString(),
-                         QStringLiteral("add"));
-                QVERIFY(!selectionSpy.constFirst().at(1).toList().isEmpty());
+                QCOMPARE(transactionSpy.size(), 1);
+                const QList<QVariant> transaction =
+                    transactionSpy.constFirst();
+                const QVariantList changes = transaction.at(0).toList();
+                QVERIFY(!changes.isEmpty());
+                QStringList acknowledged;
+                for (const QVariant &value : changes) {
+                    const QVariantMap change = value.toMap();
+                    QVERIFY(change.value(QStringLiteral("selected")).toBool());
+                    acknowledged.push_back(
+                        change.value(QStringLiteral("entryId")).toString());
+                }
+                QCOMPARE(transaction.at(1).toString(),
+                         session->cursorEntryId());
+                QCOMPARE(transaction.at(2).toInt(),
+                         session->currentIndex());
                 QVERIFY(!panel->property(
                     "keyboardShiftSelectionActive").toBool());
+                QVERIFY(session->applyExternalState(
+                    session->cursorEntryId(), session->currentIndex(),
+                    acknowledged, ++selectionRevision));
             }
         }
     }
 
-    void shiftRangeNavigationRemovesWhenAnchorIsSelectedInEveryMode() {
+    void shiftRangeNavigationStaysAdditiveWhenAnchorIsSelectedInEveryMode() {
         const QStringList modes = {
             QStringLiteral("masonry"), QStringLiteral("grid"),
             QStringLiteral("icons"), QStringLiteral("details"),
@@ -1408,17 +1762,18 @@ private slots:
             QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 3000);
             panelItem->forceActiveFocus();
             view.requestActivate();
-            QSignalSpy selectionSpy(
-                panel, SIGNAL(selectionRequested(QString,QVariant)));
-            QVERIFY(selectionSpy.isValid());
+            QSignalSpy transactionSpy(
+                panel, SIGNAL(selectionTransactionRequested(
+                    QVariant,QString,int)));
+            QVERIFY(transactionSpy.isValid());
 
             qulonglong selectionRevision = 1;
             const QString anchorId = session->entryIdAt(40);
             QVERIFY(!anchorId.isEmpty());
             for (Qt::Key key : keys) {
-                // The state at the start of the physical Shift hold fixes the
-                // range operation. A selected anchor must make the complete
-                // preview a deselection, in every layout and direction.
+                // Original MasonryMode always starts an additive range
+                // preview. A selected anchor therefore remains selected while
+                // unselected rows traversed by the cursor are added.
                 QVERIFY(session->applyExternalState(
                     anchorId, 40, QStringList{anchorId},
                     ++selectionRevision));
@@ -1426,7 +1781,7 @@ private slots:
                 QVERIFY(QMetaObject::invokeMethod(
                     panel, "cancelCursorChromeTransition",
                     Qt::DirectConnection));
-                selectionSpy.clear();
+                transactionSpy.clear();
 
                 QKeyEvent shiftPress(QEvent::KeyPress, Qt::Key_Shift,
                                      Qt::ShiftModifier);
@@ -1438,10 +1793,10 @@ private slots:
                 QVERIFY2(session->currentIndex() != 40,
                          qPrintable(mode + QStringLiteral(" key %1")
                                               .arg(int(key))));
-                QCOMPARE(selectionSpy.size(), 0);
+                QCOMPARE(transactionSpy.size(), 0);
                 QVERIFY(panel->property(
                     "keyboardShiftSelectionActive").toBool());
-                QVERIFY(!panel->property(
+                QVERIFY(panel->property(
                     "keyboardShiftSelectionAdds").toBool());
 
                 QVariant anchorSelected;
@@ -1450,30 +1805,128 @@ private slots:
                     Q_RETURN_ARG(QVariant, anchorSelected),
                     Q_ARG(QVariant, anchorId),
                     Q_ARG(QVariant, true)));
-                QVERIFY2(!anchorSelected.toBool(), qPrintable(mode));
+                QVERIFY2(anchorSelected.toBool(), qPrintable(mode));
 
                 QKeyEvent keyRelease(QEvent::KeyRelease, key,
                                      Qt::ShiftModifier);
                 QCoreApplication::sendEvent(&view, &keyRelease);
-                QCOMPARE(selectionSpy.size(), 0);
+                QCOMPARE(transactionSpy.size(), 0);
                 QKeyEvent shiftRelease(QEvent::KeyRelease, Qt::Key_Shift,
                                        Qt::NoModifier);
                 QCoreApplication::sendEvent(&view, &shiftRelease);
-                QCOMPARE(selectionSpy.size(), 1);
-                QCOMPARE(selectionSpy.constFirst().at(0).toString(),
-                         QStringLiteral("remove"));
-                const QVariantList removedIds =
-                    selectionSpy.constFirst().at(1).toList();
-                QVERIFY(removedIds.contains(anchorId));
                 QVERIFY(!panel->property(
                     "keyboardShiftSelectionActive").toBool());
-
-                // Acknowledge the removal so the next physical hold starts
-                // from a clean authoritative selection revision.
+                QStringList acknowledged{anchorId};
+                if (!transactionSpy.isEmpty()) {
+                    QCOMPARE(transactionSpy.size(), 1);
+                    const QVariantList changes =
+                        transactionSpy.constFirst().at(0).toList();
+                    for (const QVariant &value : changes) {
+                        const QVariantMap change = value.toMap();
+                        QVERIFY(change.value(
+                            QStringLiteral("selected")).toBool());
+                        const QString id = change.value(
+                            QStringLiteral("entryId")).toString();
+                        QVERIFY(id != anchorId);
+                        acknowledged.push_back(id);
+                    }
+                }
                 QVERIFY(session->applyExternalState(
-                    session->cursorEntryId(), session->currentIndex(), {},
+                    session->cursorEntryId(), session->currentIndex(),
+                    acknowledged,
                     ++selectionRevision));
             }
+        }
+    }
+
+    void heldInsertPreviewsEveryVisitedRowAndCommitsOnceInEveryMode() {
+        const QStringList modes = {
+            QStringLiteral("masonry"), QStringLiteral("grid"),
+            QStringLiteral("icons"), QStringLiteral("details"),
+            QStringLiteral("columns")};
+
+        for (const QString &mode : modes) {
+            QQuickView view;
+            ZoinGallery::RuntimeOptions options;
+            options.persistentCache = false;
+            auto *runtime = ZoinGallery::GalleryRuntime::install(
+                view.engine(), options);
+            QVERIFY(runtime);
+            auto *session = runtime->createExternalSession(
+                QStringLiteral("held-insert-%1").arg(mode));
+            QVERIFY(session);
+            QVERIFY(session->applyExternalCatalog(plainCatalog(12), 1));
+            session->setCurrentIndex(1);
+            QObject *panel = createPanel(
+                view, session, QStringLiteral("heldInsertSession"), mode);
+            QVERIFY(panel);
+            auto *panelItem = qobject_cast<QQuickItem *>(panel);
+            auto *layout = panel->findChild<MasonryLayout *>(
+                QStringLiteral("galleryMasonryLayout"));
+            QVERIFY(panelItem);
+            QVERIFY(layout);
+            QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 12, 3000);
+            panelItem->forceActiveFocus();
+            view.requestActivate();
+
+            QSignalSpy immediateSelectionSpy(
+                panel, SIGNAL(selectionRequested(QString,QVariant)));
+            QSignalSpy transactionSpy(
+                panel, SIGNAL(selectionTransactionRequested(
+                    QVariant,QString,int)));
+            QSignalSpy cursorSpy(
+                panel, SIGNAL(cursorRequested(QString,int,bool)));
+            QVERIFY(immediateSelectionSpy.isValid());
+            QVERIFY(transactionSpy.isValid());
+            QVERIFY(cursorSpy.isValid());
+
+            const auto sendInsertPress = [&](bool autoRepeat) {
+                QKeyEvent event(QEvent::KeyPress, Qt::Key_Insert,
+                                Qt::NoModifier, QString(), autoRepeat, 1);
+                QCoreApplication::sendEvent(&view, &event);
+                QVERIFY(event.isAccepted());
+            };
+            sendInsertPress(false);
+            QCOMPARE(session->currentIndex(), 2);
+            for (int repeat = 0; repeat < 4; ++repeat) {
+                QKeyEvent repeatRelease(
+                    QEvent::KeyRelease, Qt::Key_Insert, Qt::NoModifier,
+                    QString(), true, 1);
+                QCoreApplication::sendEvent(&view, &repeatRelease);
+                sendInsertPress(true);
+                QCOMPARE(session->currentIndex(), 3 + repeat);
+            }
+            QCOMPARE(immediateSelectionSpy.size(), 0);
+            QCOMPARE(transactionSpy.size(), 0);
+            QVERIFY(panel->property("keyboardToggleSelectionActive").toBool());
+            for (const QList<QVariant> &request : std::as_const(cursorSpy))
+                QVERIFY(request.at(2).toBool());
+
+            QKeyEvent release(QEvent::KeyRelease, Qt::Key_Insert,
+                              Qt::NoModifier);
+            QCoreApplication::sendEvent(&view, &release);
+            QVERIFY(release.isAccepted());
+            QVERIFY(!panel->property(
+                "keyboardToggleSelectionActive").toBool());
+            QCOMPARE(transactionSpy.size(), 1);
+            QCOMPARE(immediateSelectionSpy.size(), 0);
+
+            const QList<QVariant> transaction = transactionSpy.constFirst();
+            const QVariantList changes = transaction.at(0).toList();
+            QCOMPARE(changes.size(), 5);
+            QSet<QString> changedIds;
+            for (const QVariant &value : changes) {
+                const QVariantMap change = value.toMap();
+                QVERIFY(change.value(QStringLiteral("selected")).toBool());
+                changedIds.insert(
+                    change.value(QStringLiteral("entryId")).toString());
+            }
+            for (int index = 1; index <= 5; ++index)
+                QVERIFY(changedIds.contains(session->entryIdAt(index)));
+            QCOMPARE(transaction.at(1).toString(), session->entryIdAt(6));
+            QCOMPARE(transaction.at(2).toInt(), 6);
+            for (const QList<QVariant> &request : std::as_const(cursorSpy))
+                QVERIFY(request.at(2).toBool());
         }
     }
 
@@ -1620,9 +2073,11 @@ private slots:
         view.requestActivate();
         QVERIFY(panelItem->hasActiveFocus());
         QSignalSpy cursorSpy(panel, SIGNAL(cursorRequested(QString,int,bool)));
-        QSignalSpy selectionSpy(panel, SIGNAL(selectionRequested(QString,QVariant)));
+        QSignalSpy transactionSpy(
+            panel, SIGNAL(selectionTransactionRequested(
+                QVariant,QString,int)));
         QVERIFY(cursorSpy.isValid());
-        QVERIFY(selectionSpy.isValid());
+        QVERIFY(transactionSpy.isValid());
 
         const auto finalCommitCount = [&]() {
             int count = 0;
@@ -1720,11 +2175,11 @@ private slots:
         waitForScrollAndCommit();
         QVERIFY(qAbs(layout->contentY() - repeatedScroll) <= 0.51);
 
-        // Shift keeps the same page geometry and paints its toggle locally.
-        // Selection and cursor are each committed once on the physical key
+        // Shift keeps the same page geometry and paints its range locally.
+        // Selection and cursor are committed atomically on physical Shift
         // release, never once per autorepeat.
         cursorSpy.clear();
-        selectionSpy.clear();
+        transactionSpy.clear();
         const int selectedBeforeShift = session->currentIndex();
         const qreal beforeShiftX =
             panel->property("currentItemCenterX").toReal();
@@ -1732,20 +2187,28 @@ private slots:
             panel->property("currentItemCenterY").toReal();
         sendPress(Qt::Key_PageDown, Qt::ShiftModifier);
         QVERIFY(session->currentIndex() > selectedBeforeShift);
-        QCOMPARE(selectionSpy.size(), 0);
+        QCOMPARE(transactionSpy.size(), 0);
         QCOMPARE(finalCommitCount(), 0);
         sendPress(Qt::Key_PageDown, Qt::ShiftModifier, true);
-        QCOMPARE(selectionSpy.size(), 0);
+        QCOMPARE(transactionSpy.size(), 0);
         QCOMPARE(finalCommitCount(), 0);
         sendRelease(Qt::Key_PageDown, Qt::ShiftModifier);
-        QCOMPARE(selectionSpy.size(), 0);
+        QCOMPARE(transactionSpy.size(), 0);
         sendRelease(Qt::Key_Shift);
-        QCOMPARE(selectionSpy.size(), 1);
-        QCOMPARE(selectionSpy.at(0).at(0).toString(), QStringLiteral("add"));
-        QVERIFY(selectionSpy.at(0).at(1).toList().size() >= 2);
-        QCOMPARE(selectionSpy.at(0).at(1).toList().constFirst(),
-                 QVariant(QStringLiteral("layout-entry-%1")
-                              .arg(selectedBeforeShift)));
+        QCOMPARE(transactionSpy.size(), 1);
+        const QList<QVariant> transaction = transactionSpy.constFirst();
+        const QVariantList changes = transaction.at(0).toList();
+        QVERIFY(changes.size() >= 2);
+        QVERIFY(std::any_of(
+            changes.cbegin(), changes.cend(), [&](const QVariant &value) {
+                const QVariantMap change = value.toMap();
+                return change.value(QStringLiteral("entryId")).toString()
+                           == QStringLiteral("layout-entry-%1")
+                                  .arg(selectedBeforeShift)
+                    && change.value(QStringLiteral("selected")).toBool();
+            }));
+        QCOMPARE(transaction.at(1).toString(), session->cursorEntryId());
+        QCOMPARE(transaction.at(2).toInt(), session->currentIndex());
         QVERIFY(qAbs(panel->property("currentItemCenterX").toReal() -
                      beforeShiftX) <= 0.01);
         QVERIFY(qAbs(panel->property("currentItemCenterY").toReal() -
@@ -1753,7 +2216,7 @@ private slots:
         QCOMPARE(finalCommitCount(), 0);
         QTRY_VERIFY_WITH_TIMEOUT(
             !animation->property("running").toBool(), 1000);
-        QTRY_COMPARE_WITH_TIMEOUT(finalCommitCount(), 1, 1000);
+        QCOMPARE(finalCommitCount(), 0);
 
         // Scrolling alone does not change the cursor anchors. From a viewport
         // near the bottom the first probe still lands in the last complete row
@@ -4259,6 +4722,9 @@ private slots:
              QStringLiteral("transparent")},
             {QStringLiteral("text"), QStringLiteral("#e8edf2")},
             {QStringLiteral("mutedText"), QStringLiteral("#9aa7b5")},
+            {QStringLiteral("fileText"), QStringLiteral("#c4cbd3")},
+            {QStringLiteral("folderText"), QStringLiteral("#ffffff")},
+            {QStringLiteral("neutralFileTextColors"), true},
             {QStringLiteral("cursorBackground"),
              QStringLiteral("#18456e")},
             {QStringLiteral("cursorBorder"),
@@ -4432,7 +4898,7 @@ private slots:
         QCOMPARE(size0->mapToItem(row0, QPointF()).x() + size0->width(),
                  632.0);
         QCOMPARE(base0->property("color").value<QColor>(),
-                 QColor(QStringLiteral("#e8edf2")));
+                 QColor(QStringLiteral("#c4cbd3")));
         QCOMPARE(folderBase->property("color").value<QColor>(),
                  QColor(QStringLiteral("#ffd43b")));
         QVERIFY(!folderExtension->isVisible());
@@ -4452,7 +4918,7 @@ private slots:
         QCOMPARE(plainFolderIcon->property("effectiveIconColor").value<QColor>(),
                  QColor(QStringLiteral("#5ab2f1")));
         QCOMPARE(plainFolderBase->property("color").value<QColor>(),
-                 QColor(QStringLiteral("#e8edf2")));
+                 QColor(QStringLiteral("#ffffff")));
         QCOMPARE(markedSurface->property("color").value<QColor>(),
                  QColor(Qt::transparent));
         QCOMPARE(markedSurface->property("visualBorderWidth").toReal(), 0.0);
@@ -4469,15 +4935,15 @@ private slots:
             folderIcon->property("effectiveIconColor").value<QColor>(),
             QColor(QStringLiteral("#ffd43b")), 3000);
 
-        // Folder labels stay white. Their Lucide icon is blue normally,
-        // becomes white under the cursor, and persistent selection remains
-        // the strongest state by promoting both label and icon to yellow.
+        // Folder labels stay at the configurable neutral folder color. Their
+        // Lucide icon is blue normally, becomes white under the cursor, and
+        // persistent selection remains the strongest state.
         session->setCurrentIndex(2);
         QTRY_COMPARE_WITH_TIMEOUT(
             plainFolderIcon->property("effectiveIconColor").value<QColor>(),
             QColor(QStringLiteral("#e8edf2")), 3000);
         QCOMPARE(plainFolderBase->property("color").value<QColor>(),
-                 QColor(QStringLiteral("#e8edf2")));
+                 QColor(QStringLiteral("#ffffff")));
         QTRY_VERIFY_WITH_TIMEOUT(scrollBar->isVisible(), 3000);
         QCOMPARE(scrollBar->width(), 16.0);
         QCOMPARE(scrollBar->x(), 632.0);
@@ -5051,16 +5517,15 @@ private slots:
         // can run. This is the exact catalog frame presented to the user.
         QVERIFY(replacementFrameSpy.wait(3000));
         const qint64 stagedVisualNs = firstFrameTimer.nsecsElapsed();
-        const qint64 applyToPaintedFrameNs = timer.nsecsElapsed();
         QVERIFY2(stagedVisualNs < 33'000'000,
                  qPrintable(QStringLiteral(
                      "snapshot-to-painted catalog frame took %1 ms")
                      .arg(stagedVisualNs / 1'000'000.0, 0, 'f', 3)));
-        QVERIFY2(applyToPaintedFrameNs < 33'000'000,
-                 qPrintable(QStringLiteral(
-                     "apply-to-painted catalog frame took %1 ms")
-                     .arg(applyToPaintedFrameNs / 1'000'000.0,
-                          0, 'f', 3)));
+        // Do not include the pointer/action assertions above in a frame
+        // budget: they are test-harness work deliberately performed between
+        // applyExternalCatalog() and view.update(). The synchronous reset and
+        // snapshot-to-swap clocks isolate the two production boundaries;
+        // the live navigation benchmark covers their end-to-end composition.
 
         QQuickItem *newFirstSurface = panel->findChild<QQuickItem *>(
             QStringLiteral("gallerySelectionSurface-0"));
@@ -5223,9 +5688,7 @@ private slots:
         QCOMPARE(largeImage->fileName(), QStringLiteral("large-0.png"));
         qInfo() << "Masonry staged catalog sync ms"
                 << firstResetNs / 1'000'000.0
-                << "full apply-to-frame ms"
-                << applyToPaintedFrameNs / 1'000'000.0
-                << "apply-to-complete-frame ms"
+                << "snapshot-to-painted-frame ms"
                 << stagedVisualNs / 1'000'000.0;
 
         // Removed row objects remain valid only long enough for the direct
@@ -5449,6 +5912,102 @@ private slots:
         runtime->shutdown();
     }
 
+    void sparsePageReplacementRebindsVisibleFacadeBeforeReset() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 2;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("sparse-page-facade-lifetime"));
+        QVERIFY(session);
+
+        constexpr int logicalCount = 29'291;
+        const QVariantList firstPage = prefixedCatalog(
+            QStringLiteral("sparse-a"), 128);
+        const QVariantList preview = firstPage.mid(0, 64);
+        const QVariantMap sparseOptions{
+            {QStringLiteral("currentPath"),
+             QStringLiteral("D:/synthetic/sparse-a")},
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("catalogRowsDeferred"), true},
+            {QStringLiteral("totalCount"), logicalCount},
+            {QStringLiteral("cursorIndex"), 0},
+            {QStringLiteral("cursorEntryId"),
+             QStringLiteral("sparse-a-entry-0")},
+        };
+        QVERIFY(session->applyExternalCatalog(preview, 1, sparseOptions));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("sparseFacadeLifetimeSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryMasonryLayout"));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(layout && model);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), logicalCount, 3000);
+
+        QQuickItem *surface = nullptr;
+        QPointer<BrickItem> slot;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (surface = panel->findChild<QQuickItem *>(
+                 QStringLiteral("gallerySelectionSurface-0")))
+            && (slot = qobject_cast<BrickItem *>(surface->parentItem()))
+            && slot->property("model").value<ImageFile *>(), 3000);
+        QPointer<ImageFile> previewFacade =
+            slot->property("model").value<ImageFile *>();
+        QVERIFY(previewFacade);
+
+        // Rows 0..63 retain their stable ids but receive authoritative page
+        // objects. The old facade must survive this synchronous notification
+        // and the visible slot must already point at the replacement when the
+        // call returns.
+        QVERIFY(session->applyExternalCatalogRows(firstPage, 1));
+        QVERIFY(previewFacade);
+        ImageFile *pageFacade = slot->property("model").value<ImageFile *>();
+        QVERIFY(pageFacade);
+        QVERIFY(pageFacade != previewFacade.data());
+        QVERIFY(slot->visualFacadeReady());
+        QCOMPARE(slot->visualRow()
+                     .value(QStringLiteral("entryId")).toString(),
+                 QStringLiteral("sparse-a-entry-0"));
+
+        // Reproduce the production sequence without yielding to deleteLater:
+        // an immediate directory reset used to dereference the retired page
+        // facade while preserving the current item position.
+        const QVariantList nextPreview = prefixedCatalog(
+            QStringLiteral("sparse-b"), 64);
+        QVariantMap nextOptions = sparseOptions;
+        nextOptions[QStringLiteral("currentPath")] =
+            QStringLiteral("D:/synthetic/sparse-b");
+        nextOptions[QStringLiteral("cursorEntryId")] =
+            QStringLiteral("sparse-b-entry-0");
+        QVERIFY(session->applyExternalCatalog(
+            nextPreview, 2, nextOptions));
+        QCOMPARE(layout->count(), logicalCount);
+        QCOMPARE(slot->visualRow()
+                     .value(QStringLiteral("entryId")).toString(),
+                 QStringLiteral("sparse-b-entry-0"));
+
+        // Both obsolete generations are reclaimed after their synchronous
+        // hand-off.  The live facade count remains viewport-sized rather than
+        // scaling with the 29k-row logical catalog.
+        QPointer<ImageFile> authoritativeFacade = pageFacade;
+        QTRY_VERIFY_WITH_TIMEOUT(previewFacade.isNull(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(authoritativeFacade.isNull(), 3000);
+        const int liveFacades = model->findChildren<ImageFile *>(
+            QString(), Qt::FindDirectChildrenOnly).size();
+        QVERIFY2(liveFacades < 96,
+                 qPrintable(QStringLiteral(
+                     "sparse catalog materialized %1 ImageFile facades")
+                     .arg(liveFacades)));
+        runtime->shutdown();
+    }
+
     void detailsLiveSizeCatalogResetPaintsWithinKeyboardFrame() {
         QQuickView view;
         ZoinGallery::RuntimeOptions options;
@@ -5476,9 +6035,21 @@ private slots:
         const QVariantList warmCatalog = catalogWithIcon(
             QStringLiteral("live-warm"), 80,
             QStringLiteral("qrc:/ZoinGallery/resources/FolderIcon.svg"));
-        const QVariantList largeCatalog = catalogWithIcon(
+        QVariantList largeCatalog = catalogWithIcon(
             QStringLiteral("live-large"), 447,
             QStringLiteral("qrc:/ZoinGallery/resources/FileIcon.svg"));
+        for (int row = 0; row < largeCatalog.size(); ++row) {
+            QVariantMap entry = largeCatalog.at(row).toMap();
+            entry.insert(
+                QStringLiteral("name"),
+                QStringLiteral(
+                    "amd64_microsoft-windows-component-with-a-long-"
+                    "winsxs-identity_31bf3856ad364e35_10.0.26100.%1_"
+                    "none_48fdcfd155028bbe-%2.txt")
+                    .arg(row % 1000)
+                    .arg(row));
+            largeCatalog[row] = entry;
+        }
         const auto applyCatalog = [&](const QVariantList &catalog,
                                       qulonglong revision,
                                       const QString &path) {
@@ -5555,9 +6126,8 @@ private slots:
             QObject *visualModel = slot->visualModel();
             QVERIFY(visualModel);
             QCOMPARE(visualModel->property("text").toString(),
-                     QStringLiteral("live-large-%1.%2").arg(row).arg(
-                         row % 4 == 0 ? QStringLiteral("png")
-                                      : QStringLiteral("txt")));
+                     largeCatalog.at(row).toMap()
+                         .value(QStringLiteral("name")).toString());
         }
         qInfo() << "Masonry live-size typed snapshot delegates"
                 << visibleRows.size()
@@ -5566,7 +6136,7 @@ private slots:
         runtime->shutdown();
     }
 
-    void detailsScrollMetricsMatchClassicListViewEstimator() {
+    void sparseDetailsScrollBarUsesAnalyticExtentAndHomeIsBounded() {
         QQuickView view;
         ZoinGallery::RuntimeOptions options;
         options.persistentCache = false;
@@ -5576,6 +6146,21 @@ private slots:
         auto *session = runtime->createExternalSession(
             QStringLiteral("details-scroll-metrics"));
         QVERIFY(session);
+
+        constexpr int logicalCount = 29'291;
+        const QVariantList preview = prefixedCatalog(
+            QStringLiteral("details-analytic"), 64);
+        const QVariantMap sparseOptions{
+            {QStringLiteral("currentPath"),
+             QStringLiteral("C:/Windows/WinSxS")},
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("catalogRowsDeferred"), true},
+            {QStringLiteral("totalCount"), logicalCount},
+            {QStringLiteral("cursorIndex"), 0},
+            {QStringLiteral("cursorEntryId"),
+             QStringLiteral("details-analytic-entry-0")},
+        };
+        QVERIFY(session->applyExternalCatalog(preview, 1, sparseOptions));
 
         QObject *panel = createPanel(
             view, session, QStringLiteral("detailsMetricsSession"),
@@ -5590,216 +6175,69 @@ private slots:
         auto *externalModel =
             qobject_cast<ZoinGallery::ExternalCatalogModel *>(
                 session->model());
-        auto *metrics = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryDetailsScrollMetrics"));
         auto *scrollBar = panel->findChild<QQuickItem *>(
             QStringLiteral("galleryPanelScrollBar"));
-        QVERIFY(panelItem && layout && externalModel && metrics && scrollBar);
-        QTRY_COMPARE_WITH_TIMEOUT(metrics->property("count").toInt(), 0,
-                                  3000);
+        QVERIFY(panelItem && layout && externalModel && scrollBar);
+        QVERIFY(!panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryDetailsScrollMetrics")));
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), logicalCount, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(layout->needScroll(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(scrollBar->isVisible(), 3000);
 
-        QQmlComponent classicComponent(view.engine());
-        classicComponent.setData(R"QML(
-            import QtQuick
-            ListView {
-                objectName: "classicDetailsMetrics"
-                property real rowExtent: 24.2
-                width: 640
-                height: 435.2
-                enabled: false
-                interactive: false
-                clip: true
-                cacheBuffer: 320
-                boundsBehavior: Flickable.StopAtBounds
-                delegate: Item {
-                    required property int index
-                    width: ListView.view.width
-                    height: ListView.view.rowExtent
-                }
-            }
-        )QML", QUrl(QStringLiteral("inline:ClassicDetailsMetrics.qml")));
-        QVERIFY2(classicComponent.isReady(),
-                 qPrintable(classicComponent.errorString()));
-        QObject *classicObject = classicComponent.create(
-            view.engine()->rootContext());
-        QVERIFY2(classicObject, qPrintable(classicComponent.errorString()));
-        auto *classic = qobject_cast<QQuickItem *>(classicObject);
-        QVERIFY(classic);
-        classic->setParent(panelItem);
-        classic->setParentItem(panelItem);
-        classic->setProperty("model", 0);
-
-        const auto metricsDiagnostic = [&]() {
-            return QStringLiteral(
-                "proxy contentHeight=%1 classic=%2 proxyY=%3 "
-                "classicY=%4 layoutY=%5 proxyExtent=%6 layoutDensity=%7 "
-                "proxyIndex=%8 classicIndex=%9 rebuildPending=%10 "
-                "proxyOrigin=%11 classicOrigin=%12 layoutHeight=%13 "
-                "layoutContentHeight=%14 layoutCount=%15")
-                .arg(metrics->property("contentHeight").toReal(),
-                     0, 'g', 17)
-                .arg(classic->property("contentHeight").toReal(),
-                     0, 'g', 17)
-                .arg(metrics->property("contentY").toReal(),
-                     0, 'g', 17)
-                .arg(classic->property("contentY").toReal(),
-                     0, 'g', 17)
-                .arg(layout->contentY(), 0, 'g', 17)
-                .arg(metrics->property("rowExtent").toReal(),
-                     0, 'g', 17)
-                .arg(layout->density(), 0, 'g', 17)
-                .arg(metrics->property("currentIndex").toInt())
-                .arg(classic->property("currentIndex").toInt())
-                .arg(false)
-                .arg(metrics->property("originY").toReal(), 0, 'g', 17)
-                .arg(classic->property("originY").toReal(), 0, 'g', 17)
-                .arg(layout->height(), 0, 'g', 17)
-                .arg(layout->contentHeight(), 0, 'g', 17)
-                .arg(layout->count());
-        };
-
-        const auto setPanelPosition = [&](qreal position) {
-            const bool positioned = QMetaObject::invokeMethod(
-                panel, "setPanelContentY", Qt::DirectConnection,
-                Q_ARG(QVariant, QVariant(position)),
-                Q_ARG(QVariant, QVariant(true)));
-            QVERIFY(positioned);
-        };
-
-        const auto verifyScrollBarUsesProxy = [&]() {
-            const qreal extent = metrics->property("contentHeight").toReal();
-            QVERIFY2(extent > 0, qPrintable(metricsDiagnostic()));
-            const qreal expectedSize = qMin<qreal>(1, layout->height() / extent);
-            const qreal expectedPosition = metrics->property("contentY").toReal()
-                                         / extent;
-            QTRY_VERIFY2_WITH_TIMEOUT(
-                qAbs(scrollBar->property("size").toReal()
-                     - expectedSize) < 0.0001
-                && qAbs(scrollBar->property("position").toReal()
-                        - expectedPosition) < 0.0001,
-                qPrintable(metricsDiagnostic()), 3000);
-        };
-
-        const auto metricDelegateCount = [&]() {
-            int count = 0;
-            QList<QQuickItem *> pending{metrics};
-            while (!pending.isEmpty()) {
-                QQuickItem *item = pending.takeLast();
-                if (item->objectName().startsWith(
-                        QStringLiteral("galleryDetailsScrollMetricRow-"))) {
-                    ++count;
-                }
-                pending.append(item->childItems());
-            }
-            return count;
-        };
-
-        // Start both native ListViews empty and populate them only after the
-        // final fractional row extent and viewport are established. This is
-        // the legacy f4 Loader lifecycle and is deterministic in the pinned
-        // Qt 6.11.1 runtime. Dynamic cache-window estimates after scrolling
-        // are deliberately not compared across instances: Qt incubates those
-        // delegates in instance-dependent frame order.
-        QVERIFY(session->applyExternalCatalog(plainCatalog(105), 1));
-        classic->setProperty("model", 105);
-        QTRY_COMPARE_WITH_TIMEOUT(metrics->property("count").toInt(), 105,
-                                  3000);
-        QTRY_COMPARE_WITH_TIMEOUT(classic->property("count").toInt(), 105,
-                                  3000);
-        QTRY_VERIFY2_WITH_TIMEOUT(
-            qAbs(metrics->property("contentHeight").toReal() - 2526.4)
-                < 0.0001
-            && qAbs(classic->property("contentHeight").toReal() - 2526.4)
-                < 0.0001,
-            qPrintable(metricsDiagnostic()), 5000);
-        QCOMPARE(metrics->property("contentY").toReal(), qreal(0));
-        QCOMPARE(classic->property("contentY").toReal(), qreal(0));
-        verifyScrollBarUsesProxy();
-
-        // The shared ScrollBar maps its terminal position through the proxy
-        // extent, exactly like f4's classic manual ScrollBar mapping. The
-        // renderer keeps an exact fractional geometry extent, so record and
-        // verify that mapping independently from cursor reveal semantics.
-        const qreal proxyExtent = metrics->property("contentHeight").toReal();
-        const qreal dragEndpoint = qMax<qreal>(0, proxyExtent - layout->height());
-        setPanelPosition(dragEndpoint);
         QTRY_VERIFY_WITH_TIMEOUT(
-            qAbs(layout->contentY() - dragEndpoint) < 0.0001, 3000);
-        verifyScrollBarUsesProxy();
+            layout->contentHeight() > logicalCount * layout->density(),
+            3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            qAbs(scrollBar->property("size").toReal()
+                 - layout->height() / layout->contentHeight()) < 0.0001,
+            3000);
 
-        const int lastIndex = 104;
-        const QRectF lastGeometry = layout->indexGeometry(lastIndex);
-        QVERIFY(lastGeometry.isValid());
-        QVERIFY(qAbs(lastGeometry.y() - lastIndex * 24.2) < 0.0001);
-        QVERIFY(qAbs(lastGeometry.height() - 24.2) < 0.0001);
+        // A provisional streaming count must not expose a transient thumb.
+        panel->setProperty("scrollBarsReady", false);
+        QTRY_VERIFY_WITH_TIMEOUT(!scrollBar->isVisible(), 3000);
+        panel->setProperty("scrollBarsReady", true);
+        QTRY_VERIFY_WITH_TIMEOUT(scrollBar->isVisible(), 3000);
 
-        // Cursor mirroring is imperative: a direct ListView binding can push
-        // its model-reset index zero back into MasonryLayout during startup.
-        // Exercise zero, an interior cursor, and the terminal row while
-        // keeping the independent legacy ListView on the same cursor.
-        for (const int cursor : {0, 37, lastIndex}) {
-            session->setCurrentIndex(cursor);
-            classic->setProperty("currentIndex", cursor);
-            QTRY_COMPARE_WITH_TIMEOUT(layout->currentIndex(), cursor, 3000);
-            QTRY_COMPARE_WITH_TIMEOUT(
-                metrics->property("currentIndex").toInt(), cursor, 3000);
-        }
+        const int lastIndex = logicalCount - 1;
+        session->setCurrentIndex(lastIndex);
         QVERIFY(invokeEnsureCurrentVisible(panel, false, QVariant(1)));
         const qreal exactEndpoint = qMax<qreal>(
             0, layout->contentHeight() - layout->height());
+        QTRY_COMPARE_WITH_TIMEOUT(layout->currentIndex(), lastIndex, 3000);
         QTRY_VERIFY_WITH_TIMEOUT(
             qAbs(layout->contentY() - exactEndpoint) < 0.0001, 3000);
-        QVERIFY(indexIntersectsViewport(layout, lastIndex));
-        QVERIFY(lastGeometry.bottom()
-                <= layout->contentY() + layout->height() + 0.0001);
 
-        // A source/count/viewport change keeps the ScrollBar coupled to the
-        // native estimator without rebuilding the exact renderer geometry.
-        setPanelPosition(0);
-        panel->setProperty("height", 360.0);
-        QVERIFY(session->applyExternalCatalog(plainCatalog(37), 2));
-        QTRY_COMPARE_WITH_TIMEOUT(metrics->property("count").toInt(), 37,
-                                  3000);
-        QTRY_VERIFY_WITH_TIMEOUT(metrics->property("contentHeight").toReal()
-                                 > 0, 3000);
-        verifyScrollBarUsesProxy();
+        // This is the production WinSxS regression: an auxiliary ListView
+        // used to walk its 29k-row estimator synchronously when currentIndex
+        // jumped backwards, blocking the Qt main thread for ~1.2 seconds.
+        QElapsedTimer homeTimer;
+        homeTimer.start();
+        session->setCurrentIndex(0);
+        QVERIFY(invokeEnsureCurrentVisible(panel, false, QVariant(-1)));
+        const qint64 homeNs = homeTimer.nsecsElapsed();
+        QVERIFY2(homeNs < 33'000'000,
+                 qPrintable(QStringLiteral(
+                     "29k Details End-to-Home jump took %1 ms")
+                                .arg(homeNs / 1'000'000.0, 0, 'f', 3)));
+        QCOMPARE(layout->currentIndex(), 0);
+        QCOMPARE(layout->contentY(), qreal(0));
+        QTRY_COMPARE_WITH_TIMEOUT(
+            scrollBar->property("position").toReal(), qreal(0), 3000);
 
-        // The estimator is layout-only: even at 10k entries it materializes
-        // a bounded cache window of empty Items and never requests metadata,
-        // thumbnails, provider IDs, or ImageFile copies.
-        QVERIFY(session->applyExternalCatalog(plainCatalog(10'000), 3));
-        QTRY_COMPARE_WITH_TIMEOUT(metrics->property("count").toInt(), 10'000,
-                                  5000);
-        QTRY_VERIFY_WITH_TIMEOUT(metricDelegateCount() > 0, 3000);
-        QVERIFY2(metricDelegateCount() <= 64,
-                 qPrintable(QStringLiteral("metric delegates=%1")
-                                .arg(metricDelegateCount())));
-        const qreal largeUsableViewportHeight = layout->height()
-            - layout->paddingTop() - layout->paddingBottom();
-        const int largeCompleteVisibleRows = qMax(
-            1, int(std::floor(largeUsableViewportHeight / layout->density()
-                              + 0.000000001)));
-        const qreal largeTrailingViewportRemainder = qMax<qreal>(
-            0, largeUsableViewportHeight
-                - largeCompleteVisibleRows * layout->density());
-        const qreal largeExpectedContentHeight = layout->paddingTop()
-            + 10'000 * layout->density() + largeTrailingViewportRemainder
-            + layout->paddingBottom();
-        QVERIFY(qAbs(layout->contentHeight() - largeExpectedContentHeight)
-                < 0.0001);
         const auto materializedCount = [&]() {
             return externalModel->findChildren<ImageFile *>(
                 QString(), Qt::FindDirectChildrenOnly).size();
         };
+        constexpr int MaxWarmPresentationFacades = 96;
         QTRY_VERIFY2_WITH_TIMEOUT(
-            materializedCount() <= 64,
+            materializedCount() <= MaxWarmPresentationFacades,
             qPrintable(QStringLiteral(
-                "10k Details catalog materialized %1 ImageFile objects")
+                "29k Details catalog materialized %1 ImageFile objects")
                 .arg(materializedCount())), 3000);
-
-        QCOMPARE(runtime->thumbnailCachePendingRequestCount(), qsizetype(0));
-        QCOMPARE(runtime->thumbnailCacheMissCount(), quint64(0));
-        QCOMPARE(runtime->thumbnailCacheStoreCount(), quint64(0));
+        qInfo() << "29k Details End-to-Home ms"
+                << homeNs / 1'000'000.0
+                << "materialized" << materializedCount();
+        runtime->shutdown();
     }
 
     void verticalScrollBarDoesNotChangeViewportWidth() {

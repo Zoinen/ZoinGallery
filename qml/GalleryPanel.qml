@@ -32,12 +32,14 @@ FocusScope {
     // The public string API keeps embedders independent from the native enum
     // while the underlying renderer remains a single reusable C++ type.
     property string presentationMode: "masonry"
-    // Columns and Details are text presentations with a host-owned row pitch.
-    // They intentionally do not expose a user zoom gesture. Grid and Icons
-    // remain zoomable, but their wheel/key steps are delegated to
-    // MasonryLayout so each step crosses one cell-count boundary.
-    readonly property bool densityAdjustmentEnabled:
-        presentationMode !== "columns" && presentationMode !== "details"
+    // A bounded host-owned map lets the native layout prepare another mode
+    // with its real saved zoom before that mode becomes active. Compact text
+    // modes use the host's fractional font-derived row pitch here as well.
+    property var presentationDensities: ({})
+    // All five presentations expose the same zoom paths. Compact text modes
+    // adjust row pitch in two-pixel steps; Grid and Icons delegate their steps
+    // to MasonryLayout so each action crosses one cell-count boundary.
+    readonly property bool densityAdjustmentEnabled: true
     // GUI mode owns smooth wheel scrolling and the reusable middle-button
     // auto-scroll gesture. The host can opt into the terminal contract.
     property string mouseWheelMode: "gui"
@@ -49,6 +51,10 @@ FocusScope {
     // A host may keep its own column header outside the reusable viewport.
     // Standalone users retain the module-local header by default.
     property bool showDetailsHeader: true
+    // A streaming embedder may know that the current logical count is only a
+    // bounded preview. Keep scrollbar geometry hidden until that count is
+    // authoritative instead of flashing a confidently wrong thumb.
+    property bool scrollBarsReady: true
     // Hosts that already split displayBaseName/displayExtension may align the
     // extension to the trailing edge of the name field. Standalone keeps the
     // established combined filename by default.
@@ -68,6 +74,49 @@ FocusScope {
     // see keyboardShiftSelectionActive below, which that gesture reuses.
     property bool dragCursorActive: false
     property int dragCursorLastIndex: -1
+    // Hover belongs to this stable viewport, never to its recycled delegates.
+    // Keep the last pointer position in stable panel coordinates so a scroll
+    // or layout/header change can recompute the item underneath a stationary
+    // mouse without waiting for another move.
+    property int hoveredIndex: -1
+    property bool hoverPointerInside: false
+    property real hoverPointerX: Number.NaN
+    property real hoverPointerY: Number.NaN
+
+    function updateHoveredIndexAt(panelX, panelY) {
+        const x = Number(panelX)
+        const y = Number(panelY)
+        hoverPointerX = x
+        hoverPointerY = y
+        hoverPointerInside = Number.isFinite(x) && Number.isFinite(y)
+        return refreshHoveredIndex()
+    }
+
+    function refreshHoveredIndex() {
+        if (!hoverPointerInside || customContent || dragCursorActive
+                || !galleryLayout.visible || galleryLayout.count <= 0) {
+            hoveredIndex = -1
+            return hoveredIndex
+        }
+        const point = galleryLayout.mapFromItem(root, hoverPointerX,
+                                                hoverPointerY)
+        if (point.x < 0 || point.y < 0
+                || point.x >= galleryLayout.width
+                || point.y >= galleryLayout.height) {
+            hoveredIndex = -1
+            return hoveredIndex
+        }
+        const index = galleryLayout.indexAtViewport(point.x, point.y)
+        hoveredIndex = index >= 0 && index < galleryLayout.count ? index : -1
+        return hoveredIndex
+    }
+
+    function clearHoveredIndex() {
+        hoverPointerInside = false
+        hoverPointerX = Number.NaN
+        hoverPointerY = Number.NaN
+        hoveredIndex = -1
+    }
     // Shift+navigation is a local transaction. Sending selection and cursor
     // actions for every autorepeat makes the semantic host trail the painted
     // cursor, so preview one add/remove range here and batch it on physical
@@ -80,6 +129,13 @@ FocusScope {
     property bool keyboardShiftSelectionAdds: true
     property int keyboardShiftSelectionFirst: -1
     property int keyboardShiftSelectionLast: -1
+    // Insert and Space use the same local selection-preview transaction as
+    // Shift navigation. Native key repeat must never wait for (or be rewound
+    // by) an authoritative host scene; one final stable-ID change set is sent
+    // only on the physical key release.
+    property int keyboardToggleSelectionKey: 0
+    readonly property bool keyboardToggleSelectionActive:
+        keyboardToggleSelectionKey !== 0
     property bool restoringScrollOffset: false
     property bool viewportUpdateEnsuresCursor: false
     // Masonry/Icons/Columns take the generic ensureCursor reveal path (not
@@ -109,37 +165,102 @@ FocusScope {
     property int thumbnailPinchStartHeight: 0
     property bool densityViewportTransaction: false
     property bool suppressScrollAnimationPersistence: false
-    // The Details scrollbar uses a hidden ListView only to reproduce Qt's
-    // fractional-row extent. Populating its delegates during modelReset adds
-    // pure auxiliary work to the input-to-first-frame path, so publish the
-    // proxy count after the new catalog has painted (with a bounded fallback
-    // for windowless/offscreen embedders).
-    property int detailsMetricCount: 0
-    property int detailsMetricTargetCount: 0
-    property bool detailsMetricAwaitingFrame: false
-    function deferDetailsMetricPopulation() {
-        const target = !customContent && presentationMode === "details"
-                ? galleryLayout.count : 0
-        detailsMetricTargetCount = target
-        if (target <= 0) {
-            detailsMetricAwaitingFrame = false
-            detailsMetricCount = 0
-            detailsMetricFallback.stop()
+    // During a host-bracketed mode switch the old and new delegate windows
+    // must never observe intermediate parent geometry. The flag is raised and
+    // lowered in one event stack, so no rendered frame is blank.
+    property bool presentationLayoutHidden: false
+    property bool presentationStateHidesLayout: false
+    // Details and Icons have bounded but materially different delegate
+    // windows. Build their hidden mode-specific caches in small idle chunks so
+    // the first Ctrl+3/Ctrl+5 switch never constructs dozens or hundreds of
+    // QML objects synchronously. The native primitive accepts only
+    // snapshot-backed external catalogs.
+    property int presentationPrewarmModeIndex: 0
+    property int presentationPrewarmOrdinal: 0
+    property int presentationPrewarmCount: 0
+    property int presentationPrewarmAnchor: 0
+    property var presentationPrewarmTargetIndexes: []
+    property bool presentationPrewarmTargetReady: false
+    function syncPresentationPrewarmDensities() {
+        if (!galleryLayout)
             return
-        }
-        detailsMetricAwaitingFrame = true
-        detailsMetricFallback.restart()
-        if (root.Window.window)
-            root.Window.window.update()
+        const values = presentationDensities || ({})
+        const detailsDensity = Number(values.details || 0)
+        const iconsDensity = Number(values.icons || 0)
+        if (Number.isFinite(detailsDensity) && detailsDensity > 0)
+            galleryLayout.setPresentationPrewarmDensity(
+                        MasonryLayout.Details, detailsDensity)
+        if (Number.isFinite(iconsDensity) && iconsDensity > 0)
+            galleryLayout.setPresentationPrewarmDensity(
+                        MasonryLayout.Icons, iconsDensity)
+        galleryLayout.setPresentationPrewarmMetrics(
+                    MasonryLayout.Details,
+                    width,
+                    Math.max(0, height - (showDetailsHeader
+                                          ? detailsHeaderHeight : 0)),
+                    0, 0, 0, 0)
+        galleryLayout.setPresentationPrewarmMetrics(
+                    MasonryLayout.Icons,
+                    Math.max(0, width - 12), height,
+                    0, 0, 6, 6)
     }
-    function publishDeferredDetailsMetrics() {
-        if (!detailsMetricAwaitingFrame)
+    function schedulePresentationCachePrewarm() {
+        if (!galleryLayout)
             return
-        detailsMetricAwaitingFrame = false
-        detailsMetricFallback.stop()
-        detailsMetricCount = detailsMetricTargetCount
-        detailsScrollMetrics.applySourceCurrentIndex()
-        detailsScrollMetrics.syncContentY()
+        presentationCachePrewarmTimer.stop()
+        presentationPrewarmModeIndex = 0
+        presentationPrewarmOrdinal = 0
+        presentationPrewarmCount = galleryLayout.count
+        presentationPrewarmAnchor = session
+                ? Math.max(0, Number(session.currentIndex || 0)) : 0
+        presentationPrewarmTargetIndexes = []
+        presentationPrewarmTargetReady = false
+        if (!customContent && presentationPrewarmCount > 0
+                && (!session
+                    || typeof session.catalogReady === "undefined"
+                    || session.catalogReady))
+            presentationCachePrewarmTimer.restart()
+    }
+    function prewarmPresentationCacheChunk() {
+        if (customContent || galleryLayout.count <= 0
+                || galleryLayout.count !== presentationPrewarmCount
+                || presentationSwitchPending || pathViewportPlacementPending
+                || (session && typeof session.catalogReady !== "undefined"
+                    && !session.catalogReady))
+            return
+        const modes = [MasonryLayout.Details, MasonryLayout.Icons]
+        var completed = 0
+        while (completed < 6 && presentationPrewarmModeIndex < modes.length) {
+            const mode = modes[presentationPrewarmModeIndex]
+            if (mode === galleryLayout.presentationMode) {
+                ++presentationPrewarmModeIndex
+                presentationPrewarmOrdinal = 0
+                presentationPrewarmTargetIndexes = []
+                presentationPrewarmTargetReady = false
+                continue
+            }
+            if (!presentationPrewarmTargetReady) {
+                presentationPrewarmTargetIndexes =
+                        galleryLayout.presentationPrewarmIndexes(
+                            mode, presentationPrewarmAnchor)
+                presentationPrewarmTargetReady = true
+            }
+            if (presentationPrewarmOrdinal
+                    >= presentationPrewarmTargetIndexes.length) {
+                ++presentationPrewarmModeIndex
+                presentationPrewarmOrdinal = 0
+                presentationPrewarmTargetIndexes = []
+                presentationPrewarmTargetReady = false
+                continue
+            }
+            const viewIndex = Number(
+                presentationPrewarmTargetIndexes[presentationPrewarmOrdinal])
+            ++presentationPrewarmOrdinal
+            galleryLayout.prewarmPresentationItem(mode, viewIndex)
+            ++completed
+        }
+        if (presentationPrewarmModeIndex < modes.length)
+            presentationCachePrewarmTimer.restart()
     }
     property bool localCursorNavigation: false
     property bool cursorCommitPending: false
@@ -263,6 +384,8 @@ FocusScope {
     signal openRequested(string entryId, int index, bool isImage,
                          bool autoRepeat)
     signal selectionRequested(string mode, var entryIds)
+    signal selectionTransactionRequested(var changes, string cursorEntryId,
+                                         int cursorIndex)
     signal densityChangeRequested(string mode, real density, bool finalChange)
 
     signal sortRequested(string sortMode, bool contextMenu)
@@ -305,6 +428,15 @@ FocusScope {
     readonly property color directoryTextColor:
         theme && theme.directoryText !== undefined
             ? theme.directoryText : foregroundColor
+    readonly property bool neutralFileTextColors:
+        theme && theme.neutralFileTextColors !== undefined
+            ? theme.neutralFileTextColors : true
+    readonly property color fileTextColor:
+        theme && theme.fileText !== undefined
+            ? theme.fileText : "#c4cbd3"
+    readonly property color folderTextColor:
+        theme && theme.folderText !== undefined
+            ? theme.folderText : "#ffffff"
     readonly property color folderIconColor:
         theme && theme.folderIcon !== undefined
             ? theme.folderIcon : mutedColor
@@ -385,11 +517,12 @@ FocusScope {
     // sourceRuneOffset locates a displayed fragment (for example a separately
     // aligned extension) within the complete filename matched by the host.
     function quickSearchStyledText(value, entryId, sourceRuneOffset) {
-        const characters = codePoints(value)
-        const offset = Math.max(0, Number(sourceRuneOffset) || 0)
         const match = quickSearchMatch(entryId)
         if (!match)
-            return characters.join("")
+            return String(value === undefined || value === null ? "" : value)
+
+        const characters = codePoints(value)
+        const offset = Math.max(0, Number(sourceRuneOffset) || 0)
 
         const localStart = Math.max(0, match.start - offset)
         const localEnd = Math.min(characters.length,
@@ -407,10 +540,25 @@ FocusScope {
             + "\">" + highlighted + "</font>" + suffix
     }
 
+    // Avoid walking the complete base name merely to calculate an extension
+    // offset when fast find is inactive. Long WinSxS directory names made this
+    // otherwise dominate an ordinary Details catalog replacement.
+    function quickSearchStyledSuffix(value, prefix, entryId,
+                                     prefixSeparatorLength) {
+        if (!quickSearchMatch(entryId))
+            return String(value === undefined || value === null ? "" : value)
+        return quickSearchStyledText(
+                    value, entryId, codePointLength(prefix)
+                    + Math.max(0, Number(prefixSeparatorLength) || 0))
+    }
+
     // Icons mode can middle-elide very long names before QML paints them.
     // Preserve match offsets for the retained prefix and suffix around that
     // synthetic ellipsis.
     function quickSearchStyledElidedText(value, sourceValue, entryId) {
+        if (!quickSearchMatch(entryId))
+            return String(value === undefined || value === null ? "" : value)
+
         const shown = codePoints(value)
         const source = codePoints(sourceValue)
         if (shown.join("") === source.join(""))
@@ -735,9 +883,25 @@ FocusScope {
         if ((button & Qt.MiddleButton) !== 0)
             return
 
+        if (keyboardShiftSelectionActive || keyboardToggleSelectionActive)
+            finishKeyboardSelectionGesture()
+        // While either button remains held, handlePointerDrag() carries the
+        // cursor to the tile under the pointer. Left never marks/unmarks by
+        // itself; Right also paints selection via the transaction below.
+        dragCursorActive = (button & (Qt.LeftButton | Qt.RightButton)) !== 0
+        dragCursorLastIndex = dragCursorActive ? viewIndex : -1
+        // A pressed item uses the cursor/selection chrome. Hide hover for the
+        // complete gesture, but retain the last viewport position so release
+        // can restore it without waiting for another mouse move.
+        hoveredIndex = -1
         const previousVisualIndex = visualCursorIndex
         localCursorNavigation = true
-        selectIndex(viewIndex, false)
+        // Pointer drags are optimistic just like held-key navigation. Sending
+        // an authoritative cursor action for every crossed tile rebuilds the
+        // host scene repeatedly and makes the cursor visibly fight the mouse.
+        // Keep only the newest stable ID in the bridge and commit once when
+        // the button is released.
+        selectIndex(viewIndex, false, true)
         localCursorNavigation = false
         // Match MasonryMode.handleItemPressed(): selecting a partially visible
         // tile by mouse reveals the whole tile. The authoritative f4 cursor
@@ -754,9 +918,6 @@ FocusScope {
         const commandModifier = Boolean(modifiers &
             (Qt.ControlModifier | Qt.MetaModifier))
         const shiftModifier = Boolean(modifiers & Qt.ShiftModifier)
-        dragCursorActive = false
-        if (keyboardShiftSelectionActive)
-            finishKeyboardShiftSelection()
 
         if ((button & Qt.RightButton) !== 0) {
             if (scrollingMode)
@@ -788,14 +949,6 @@ FocusScope {
             selectionAnchorIndex = viewIndex
         }
 
-        if ((button & (Qt.LeftButton | Qt.RightButton)) !== 0) {
-            // Holding either button and dragging carries the cursor to
-            // whatever tile is under the pointer. Left never marks/unmarks
-            // anything by itself (matching a plain click); Right also paints
-            // the selection via keyboardShiftSelectionActive above.
-            dragCursorActive = true
-            dragCursorLastIndex = viewIndex
-        }
     }
 
     // Right double-click inverts the whole panel's selection (mirrors FAR's
@@ -817,19 +970,21 @@ FocusScope {
             return
         if (!dragCursorActive && !keyboardShiftSelectionActive)
             return
+        // Preserve the real viewport position while hover remains suppressed
+        // for the active gesture. endPointerDrag() re-evaluates this point.
+        updateHoveredIndexAt(panelX, panelY)
         const point = galleryLayout.mapFromItem(root, panelX, panelY)
         const clampedX = Math.max(0, Math.min(galleryLayout.width - 0.01, point.x))
         const clampedY = Math.max(0, Math.min(galleryLayout.height - 0.01, point.y))
-        const index = presentationMode === "columns"
-                ? galleryLayout.indexAtViewport(clampedX, clampedY)
-                : galleryLayout.indexAt(clampedX, galleryLayout.contentY + clampedY)
+        const index = galleryLayout.indexAtViewport(clampedX, clampedY)
         if (index < 0)
             return
-        if (dragCursorActive && index !== dragCursorLastIndex) {
+        const indexChanged = index !== dragCursorLastIndex
+        if (dragCursorActive && indexChanged) {
             dragCursorLastIndex = index
             const previousVisualIndex = visualCursorIndex
             localCursorNavigation = true
-            selectIndex(index, false)
+            selectIndex(index, false, true)
             localCursorNavigation = false
             // A drag gesture already shows exactly where the pointer is; do
             // not additionally animate the viewport toward it.
@@ -837,14 +992,22 @@ FocusScope {
             resetCurrentItemCenter(index)
             coordinateVisualCursor(index, previousVisualIndex)
         }
-        if (keyboardShiftSelectionActive)
+        // MouseArea reports every physical pixel. Repainting the same range
+        // for all of those events used to bump every delegate's visual
+        // revision even when the pointer had not crossed into another item.
+        if (keyboardShiftSelectionActive && indexChanged)
             updateDragPaintSelection(index)
     }
 
     function endPointerDrag() {
+        const commitCursor = dragCursorActive && cursorCommitPending
         dragCursorActive = false
+        let selectionCommitted = false
         if (keyboardShiftSelectionActive)
-            finishKeyboardShiftSelection()
+            selectionCommitted = finishKeyboardShiftSelection()
+        if (commitCursor && !selectionCommitted)
+            commitPendingCursor()
+        refreshHoveredIndex()
     }
 
     // Fixed compact modes use two different coordinate systems for their
@@ -1112,15 +1275,24 @@ FocusScope {
     // native mode, density, insets and the resulting anchored viewport size
     // produce one layout revision and one paintable state.
     function beginPresentationStateUpdate(switchingMode) {
-        if (switchingMode)
+        if (switchingMode) {
             beginPresentationSwitch()
+            presentationStateHidesLayout = true
+            presentationLayoutHidden = true
+        }
         galleryLayout.beginLayoutUpdate()
     }
 
     function endPresentationStateUpdate(publishVisibleRange) {
         galleryLayout.endLayoutUpdate()
-        if (publishVisibleRange)
-            publishMetadataVisibleRange()
+        if (presentationStateHidesLayout) {
+            presentationStateHidesLayout = false
+            presentationLayoutHidden = false
+        }
+        // updateViewportIndexSets() emits visibleIndexesChanged whenever the
+        // published range really changes. Its handler above is the one
+        // authoritative metadata notification; sending it again here doubled
+        // the synchronous QML/C++ work for every presentation switch.
     }
 
     function restoreScrollOffset() {
@@ -1354,7 +1526,16 @@ FocusScope {
                     ? root.session.currentIndex : -1
             root.pendingVisualCursorIndex = -1
             root.resetCurrentItemCenter(root.visualCursorIndex)
+            root.schedulePresentationCachePrewarm()
         }
+    }
+
+    Timer {
+        id: presentationCachePrewarmTimer
+        objectName: "galleryPresentationCachePrewarmTimer"
+        interval: 0
+        repeat: false
+        onTriggered: root.prewarmPresentationCacheChunk()
     }
 
     // Key auto-repeat can outpace a full f4 semantic-scene round-trip for a
@@ -1369,7 +1550,13 @@ FocusScope {
         interval: 5000
         repeat: false
         onTriggered: {
-            root.finishKeyboardShiftSelection()
+            // A physical selection gesture owns its commit boundary. Focus
+            // loss below is the recovery path for a dropped release; a timer
+            // must not split a long Shift/Insert hold into intermediate Go
+            // scenes.
+            if (root.keyboardShiftSelectionActive
+                    || root.keyboardToggleSelectionActive)
+                return
             root.commitPendingCursor()
         }
     }
@@ -1939,7 +2126,7 @@ FocusScope {
         const previousIndex = session.currentIndex
         const bounded = Math.max(0, Math.min(galleryLayout.count - 1, index))
         if (togglePrevious)
-            beginKeyboardShiftSelection(previousIndex)
+            beginKeyboardShiftSelection(previousIndex, true)
         if (bounded === previousIndex) {
             if (togglePrevious)
                 updateKeyboardShiftSelection(bounded)
@@ -1962,16 +2149,19 @@ FocusScope {
         return Boolean(map && map["$" + entryId] !== undefined)
     }
 
-    function beginKeyboardShiftSelection(anchorIndex) {
+    function beginKeyboardShiftSelection(anchorIndex, selectionAdds) {
         if (keyboardShiftSelectionActive)
             return
         keyboardShiftSelectionActive = true
         keyboardShiftSelectionAnchorIndex = anchorIndex
-        // Match the original range-preview contract: the anchor's state fixes
-        // the operation for the entire physical Shift hold. Starting on an
-        // unselected item adds the range; starting on a selected item removes
-        // it, even if the cursor later reverses direction.
-        keyboardShiftSelectionAdds = !session.isSelectedAt(anchorIndex)
+        // Original MasonryMode starts an additive preview on physical Shift
+        // down, irrespective of the anchor's current selection state. Right
+        // pointer painting deliberately keeps its FAR-style add/remove choice
+        // by omitting selectionAdds and sampling the anchor before its toggle
+        // acknowledgement returns.
+        keyboardShiftSelectionAdds = selectionAdds === undefined
+                ? !session.isSelectedAt(anchorIndex)
+                : Boolean(selectionAdds)
         keyboardShiftSelectionFirst = -1
         keyboardShiftSelectionLast = -1
         pendingKeyboardSelectionToggles = ({})
@@ -2005,6 +2195,47 @@ FocusScope {
         applyShiftSelectionRange(first, last)
     }
 
+    function baseEntrySelected(entryId, index) {
+        const awaiting = awaitingKeyboardSelectionToggles["$" + entryId]
+        if (awaiting !== undefined)
+            return Boolean(awaiting.desired)
+        return session ? session.isSelectedAt(index) : false
+    }
+
+    function setPendingKeyboardSelection(index, desired) {
+        if (!session || index < 0 || index >= galleryLayout.count)
+            return
+        const id = session.entryIdAt(index)
+        if (id === "" || session.entryNameAt(index) === "..")
+            return
+        const key = "$" + id
+        const pending = pendingKeyboardSelectionToggles
+        const previous = pending[key]
+        const base = previous !== undefined
+                ? Boolean(previous.base) : baseEntrySelected(id, index)
+        if (Boolean(desired) === base) {
+            delete pending[key]
+        } else {
+            pending[key] = {
+                entryId: id,
+                base: base,
+                desired: Boolean(desired)
+            }
+        }
+    }
+
+    function togglePendingKeyboardSelection(index) {
+        if (!session || index < 0 || index >= galleryLayout.count)
+            return
+        const id = session.entryIdAt(index)
+        if (id === "" || session.entryNameAt(index) === "..")
+            return
+        const selected = effectiveEntrySelected(
+                    id, session.isSelectedAt(index))
+        setPendingKeyboardSelection(index, !selected)
+        keyboardSelectionVisualRevision++
+    }
+
     function applyShiftSelectionRange(first, last) {
         const pending = pendingKeyboardSelectionToggles
         const oldFirst = keyboardShiftSelectionFirst
@@ -2021,12 +2252,8 @@ FocusScope {
             for (let index = first; index <= last; ++index) {
                 if (oldFirst >= 0 && index >= oldFirst && index <= oldLast)
                     continue
-                const id = session.entryIdAt(index)
-                if (id !== "" && session.entryNameAt(index) !== "..")
-                    pending["$" + id] = {
-                        entryId: id,
-                        desired: keyboardShiftSelectionAdds
-                    }
+                setPendingKeyboardSelection(index,
+                                            keyboardShiftSelectionAdds)
             }
         }
         keyboardShiftSelectionFirst = first
@@ -2052,18 +2279,37 @@ FocusScope {
     function commitPendingKeyboardSelection() {
         const keys = Object.keys(pendingKeyboardSelectionToggles)
         if (keys.length === 0)
-            return
-        const ids = []
+            return false
+        const changes = []
         const awaiting = Object.assign({}, awaitingKeyboardSelectionToggles)
         for (let i = 0; i < keys.length; ++i) {
             const intent = pendingKeyboardSelectionToggles[keys[i]]
-            ids.push(intent.entryId)
+            changes.push({
+                entryId: intent.entryId,
+                selected: Boolean(intent.desired)
+            })
             awaiting[keys[i]] = intent
         }
         pendingKeyboardSelectionToggles = ({})
         awaitingKeyboardSelectionToggles = awaiting
         keyboardSelectionVisualRevision++
-        selectionRequested(keyboardShiftSelectionAdds ? "add" : "remove", ids)
+
+        // Selection and its final cursor are one user operation. Consuming the
+        // deferred cursor here lets the host apply both in one Go action and
+        // produce one authoritative scene, so no intermediate old-cursor
+        // scene can flash between them.
+        let cursorEntryId = ""
+        let cursorIndex = -1
+        if (cursorCommitPending && session && session.currentIndex >= 0) {
+            cursorEntryId = session.entryIdAt(session.currentIndex)
+            cursorIndex = sourceIndex(session.currentIndex)
+            cursorCommitPending = false
+            cursorCommitAfterScroll = false
+            cursorCommitAfterScrollTimer.stop()
+            cursorCommitTimer.stop()
+        }
+        selectionTransactionRequested(changes, cursorEntryId, cursorIndex)
+        return true
     }
 
     function reconcileAcknowledgedKeyboardSelection() {
@@ -2089,17 +2335,43 @@ FocusScope {
         keyboardShiftSelectionAdds = true
         keyboardShiftSelectionFirst = -1
         keyboardShiftSelectionLast = -1
+        keyboardToggleSelectionKey = 0
     }
 
     function finishKeyboardShiftSelection() {
         if (!keyboardShiftSelectionActive)
-            return
-        commitPendingKeyboardSelection()
+            return false
+        const committed = commitPendingKeyboardSelection()
         keyboardShiftSelectionActive = false
         keyboardShiftSelectionAnchorIndex = -1
         keyboardShiftSelectionAdds = true
         keyboardShiftSelectionFirst = -1
         keyboardShiftSelectionLast = -1
+        return committed
+    }
+
+    function beginKeyboardToggleSelection(key) {
+        if (keyboardToggleSelectionKey === key)
+            return
+        keyboardToggleSelectionKey = key
+        pendingKeyboardSelectionToggles = ({})
+    }
+
+    function finishKeyboardToggleSelection() {
+        if (!keyboardToggleSelectionActive)
+            return false
+        const committed = commitPendingKeyboardSelection()
+        keyboardToggleSelectionKey = 0
+        return committed
+    }
+
+    function finishKeyboardSelectionGesture() {
+        let committed = false
+        if (keyboardShiftSelectionActive)
+            committed = finishKeyboardShiftSelection() || committed
+        if (keyboardToggleSelectionActive)
+            committed = finishKeyboardToggleSelection() || committed
+        return committed
     }
 
     function commitCursorAfterNavigation() {
@@ -2727,6 +2999,7 @@ FocusScope {
         clip: true
         persistSettings: false
         visible: !root.customContent
+                 && !root.presentationLayoutHidden
         enabled: !root.customContent
         opacity: root.pathViewportPlacementPending ? 0 : 1
         anchors {
@@ -2794,8 +3067,12 @@ FocusScope {
                 root.schedulePathViewportPlacement("layout-reset")
             else if (!root.densityViewportTransaction)
                 root.scheduleViewportUpdate(false)
+            root.refreshHoveredIndex()
         }
-        onVisibleIndexesChanged: root.publishMetadataVisibleRange()
+        onVisibleIndexesChanged: {
+            root.publishMetadataVisibleRange()
+            root.refreshHoveredIndex()
+        }
         onCountChanged: {
             root.traceBenchmarkStage("layout.count.changed", {})
             root.cancelCursorChromeTransition()
@@ -2810,6 +3087,7 @@ FocusScope {
                 root.schedulePathViewportPlacement("count-changed")
             else
                 root.scheduleViewportUpdate(false)
+            root.schedulePresentationCachePrewarm()
         }
         onContentHeightChanged: {
             root.traceBenchmarkStage("layout.content-height.changed", {})
@@ -2821,15 +3099,24 @@ FocusScope {
         }
         onContentYChanged: {
             root.updateVisualCursorForViewport()
+            root.refreshHoveredIndex()
             if (root.pathViewportPlacementPending)
                 root.traceBenchmarkStage("layout.content-y.changed", {})
         }
         onWidthChanged: {
+            root.refreshHoveredIndex()
             root.resetMasonryPageSequence()
             if (width > 0 && count > 0)
                 thumbnailResizeDecodeTimer.restart()
+            root.syncPresentationPrewarmDensities()
+            root.schedulePresentationCachePrewarm()
         }
-        onHeightChanged: root.invalidateMasonryPageGeometry()
+        onHeightChanged: {
+            root.refreshHoveredIndex()
+            root.invalidateMasonryPageGeometry()
+            root.syncPresentationPrewarmDensities()
+            root.schedulePresentationCachePrewarm()
+        }
         onDensityChanged: {
             root.resetMasonryPageSequence()
         }
@@ -2851,6 +3138,7 @@ FocusScope {
                 panelRoot: root
             }
         }
+
     }
 
     // Fill remains below the native viewport, exactly where every delegate's
@@ -2900,111 +3188,6 @@ FocusScope {
         }
     }
 
-    // Qt's classic ListView intentionally estimates unseen fractional-height
-    // delegates at an integer extent. Keep the unified renderer's exact
-    // content geometry, but reuse that estimator for the Details scrollbar so
-    // its thumb and drag mapping remain pixel-identical to f4's old Detailed
-    // list. This proxy is noninteractive and materializes only ListView's
-    // bounded visible/cache window of empty Items.
-    Timer {
-        id: detailsMetricFallback
-        interval: 50
-        repeat: false
-        onTriggered: root.publishDeferredDetailsMetrics()
-    }
-
-    Connections {
-        target: root.Window.window
-        enabled: root.detailsMetricAwaitingFrame
-        ignoreUnknownSignals: true
-        function onFrameSwapped() {
-            root.publishDeferredDetailsMetrics()
-        }
-    }
-
-    Connections {
-        target: galleryLayout
-        function onCountChanged() {
-            root.deferDetailsMetricPopulation()
-        }
-    }
-
-    onCustomContentChanged: deferDetailsMetricPopulation()
-
-    ListView {
-        id: detailsScrollMetrics
-        objectName: "galleryDetailsScrollMetrics"
-        x: galleryLayout.x
-        y: galleryLayout.y
-        width: galleryLayout.width
-        height: galleryLayout.height
-        z: -1000
-        visible: !root.customContent
-                 && root.presentationMode === "details"
-        enabled: false
-        interactive: false
-        clip: true
-        // f4's production ListView keeps a 320 logical-pixel cache window.
-        // State it explicitly because empty proxy delegates have no rendering
-        // demand that would otherwise keep the same buffer populated.
-        cacheBuffer: 320
-        readonly property real rowExtent: galleryLayout.density
-        readonly property int sourceCount: visible
-                                           ? root.detailsMetricCount : 0
-        // Do not observe the renderer's cursor while this Details-only proxy
-        // is dormant. MasonryLayout establishes its model/currentIndex
-        // bindings during component completion; forcing an eager read from a
-        // hidden ListView can snapshot the model-reset value (zero) before
-        // the authoritative session cursor binding settles.
-        readonly property int sourceCurrentIndex:
-            visible ? galleryLayout.currentIndex : -1
-        function applySourceCurrentIndex() {
-            if (sourceCount <= 0) {
-                currentIndex = -1
-                return
-            }
-            currentIndex = Math.max(
-                        0, Math.min(sourceCount - 1,
-                                    sourceCurrentIndex))
-        }
-        function syncContentY() {
-            contentY = galleryLayout.contentY
-        }
-        onSourceCountChanged: {
-            applySourceCurrentIndex()
-            syncContentY()
-        }
-        onRowExtentChanged: syncContentY()
-        onSourceCurrentIndexChanged: {
-            applySourceCurrentIndex()
-            syncContentY()
-        }
-        Component.onCompleted: {
-            root.deferDetailsMetricPopulation()
-            applySourceCurrentIndex()
-            syncContentY()
-        }
-        model: sourceCount
-        boundsBehavior: Flickable.StopAtBounds
-
-        Connections {
-            target: galleryLayout
-            function onContentYChanged() {
-                detailsScrollMetrics.syncContentY()
-            }
-            function onContentHeightChanged() {
-                detailsScrollMetrics.syncContentY()
-            }
-        }
-
-        delegate: Item {
-            required property int index
-            objectName: "galleryDetailsScrollMetricRow-" + index
-            width: detailsScrollMetrics.width
-            height: detailsScrollMetrics.rowExtent
-        }
-    }
-
     Label {
         anchors.centerIn: parent
         visible: root.emptyStateEnabled && !root.customContent &&
@@ -3042,6 +3225,19 @@ FocusScope {
         acceptedButtons: Qt.MiddleButton
         enabled: !root.customContent
         hoverEnabled: true
+
+        // This existing topmost, button-selective surface is also the one
+        // stable hover source for every presentation. Left/right input still
+        // passes to row delegates because only the middle button is accepted.
+        onPositionChanged: mouse => {
+            root.updateHoveredIndexAt(mouse.x, mouse.y)
+        }
+        onContainsMouseChanged: {
+            if (containsMouse)
+                root.updateHoveredIndexAt(mouseX, mouseY)
+            else
+                root.clearHoveredIndex()
+        }
 
         onPressed: mouse => {
             root.handlePanelMiddlePress(mouse.x, mouse.y, mouse.modifiers)
@@ -3209,7 +3405,8 @@ FocusScope {
         // apparent padding strip to the right of the scrollbar.
         anchors.rightMargin: -8
         z: 10
-        visible: !root.customContent && root.presentationMode !== "columns"
+        visible: root.scrollBarsReady && !root.customContent
+                 && root.presentationMode !== "columns"
                  && galleryLayout.needScroll
         width: galleryLayout.needScroll
                ? (root.presentationMode === "details"
@@ -3218,27 +3415,12 @@ FocusScope {
 
         onPositionChanged: {
             if (pressed)
-                root.setPanelContentY(position * scrollContentHeight(),
+                root.setPanelContentY(position * galleryLayout.contentHeight,
                                       true)
         }
 
-        function scrollContentHeight() {
-            if (root.presentationMode === "details"
-                    && detailsScrollMetrics.count === galleryLayout.count
-                    && detailsScrollMetrics.contentHeight > 0)
-                return detailsScrollMetrics.contentHeight
-            return galleryLayout.contentHeight
-        }
-
-        function scrollContentY() {
-            if (root.presentationMode === "details"
-                    && detailsScrollMetrics.count === galleryLayout.count)
-                return detailsScrollMetrics.contentY
-            return galleryLayout.contentY
-        }
-
         function updateSize() {
-            const extent = scrollContentHeight()
+            const extent = galleryLayout.contentHeight
             size = extent > 0
                     ? Math.min(1, galleryLayout.height / extent) : 1
         }
@@ -3247,29 +3429,19 @@ FocusScope {
             target: galleryLayout
 
             function onContentYChanged() {
-                const extent = galleryScroll.scrollContentHeight()
+                const extent = galleryLayout.contentHeight
                 galleryScroll.position = extent > 0
-                        ? galleryScroll.scrollContentY() / extent : 0
+                        ? galleryLayout.contentY / extent : 0
             }
             function onContentHeightChanged() { galleryScroll.updateSize() }
             function onHeightChanged() { galleryScroll.updateSize() }
         }
 
-        Connections {
-            target: detailsScrollMetrics
-            function onContentHeightChanged() { galleryScroll.updateSize() }
-            function onContentYChanged() {
-                const extent = galleryScroll.scrollContentHeight()
-                galleryScroll.position = extent > 0
-                        ? galleryScroll.scrollContentY() / extent : 0
-            }
-        }
-
         Component.onCompleted: {
-            const extent = scrollContentHeight()
+            const extent = galleryLayout.contentHeight
             size = extent > 0
                     ? Math.min(1, galleryLayout.height / extent) : 1
-            position = extent > 0 ? scrollContentY() / extent : 0
+            position = extent > 0 ? galleryLayout.contentY / extent : 0
         }
     }
 
@@ -3285,7 +3457,8 @@ FocusScope {
         anchors.bottom: parent.bottom
         z: 10
         height: visible ? 16 : 0
-        visible: !root.customContent && root.presentationMode === "columns"
+        visible: root.scrollBarsReady && !root.customContent
+                 && root.presentationMode === "columns"
                  && galleryLayout.needScroll
         orientation: Qt.Horizontal
         size: galleryLayout.contentHeight > 0
@@ -3304,6 +3477,9 @@ FocusScope {
         if (root.customContent || !root.session)
             return
         if (event.key === Qt.Key_Shift) {
+            if (!event.isAutoRepeat)
+                root.beginKeyboardShiftSelection(
+                            root.session.currentIndex, true)
             event.accepted = true
             return
         }
@@ -3402,15 +3578,23 @@ FocusScope {
             event.accepted = true
         } else if (event.key === Qt.Key_Space || event.key === Qt.Key_Insert) {
             root.cancelCursorChromeTransition()
-            root.commitPendingCursor()
+            if (!event.isAutoRepeat) {
+                if (root.keyboardShiftSelectionActive)
+                    root.finishKeyboardShiftSelection()
+                root.beginKeyboardToggleSelection(event.key)
+                root.navigationKeyHeld = true
+            } else if (root.keyboardToggleSelectionKey !== event.key) {
+                // Defensive recovery for platforms which can deliver a repeat
+                // after focus changed without the original press reaching QML.
+                root.beginKeyboardToggleSelection(event.key)
+                root.navigationKeyHeld = true
+            }
             const currentIndex = root.session.currentIndex
-            const id = root.session.entryIdAt(currentIndex)
-            if (id !== "" && root.session.entryNameAt(currentIndex) !== "..")
-                root.selectionRequested("toggle", [id])
+            root.togglePendingKeyboardSelection(currentIndex)
             // Match the f4/Far panel contract: Insert marks the current item
             // and advances, while Space only toggles in place.
             if (event.key === Qt.Key_Insert && currentIndex + 1 < galleryLayout.count)
-                root.moveCursor(currentIndex + 1, false, false, false, false, 1)
+                root.moveCursor(currentIndex + 1, false, false, true, false, 1)
             event.accepted = true
         } else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
             root.stepDensity(true)
@@ -3437,10 +3621,24 @@ FocusScope {
             if (event.isAutoRepeat)
                 return
             root.navigationKeyHeld = false
-            root.finishKeyboardShiftSelection()
-            root.commitCursorAfterNavigation()
+            const selectionCommitted = root.finishKeyboardShiftSelection()
+            if (!selectionCommitted)
+                root.commitCursorAfterNavigation()
             event.accepted = true
             return
+        }
+        if (event.key === Qt.Key_Space || event.key === Qt.Key_Insert) {
+            if (event.isAutoRepeat)
+                return
+            if (root.keyboardToggleSelectionKey === event.key) {
+                root.navigationKeyHeld = false
+                const selectionCommitted =
+                        root.finishKeyboardToggleSelection()
+                if (!selectionCommitted)
+                    root.commitCursorAfterNavigation()
+                event.accepted = true
+                return
+            }
         }
         if (!root.ownsKey(event)) {
             event.accepted = false
@@ -3484,10 +3682,14 @@ FocusScope {
             root.coordinateVisualCursor(root.session.currentIndex,
                                         root.visualCursorIndex)
             root.schedulePathViewportPlacement("catalog-revision-changed")
+            root.schedulePresentationCachePrewarm()
         }
         function onSelectionRevisionChanged() {
             root.reconcileAcknowledgedKeyboardSelection()
             if (!root.navigationKeyHeld
+                    && !root.keyboardShiftSelectionActive
+                    && !root.keyboardToggleSelectionActive
+                    && !root.dragCursorActive
                     && Object.keys(root.pendingKeyboardSelectionToggles).length)
                 Qt.callLater(root.commitPendingKeyboardSelection)
         }
@@ -3512,9 +3714,21 @@ FocusScope {
                     root.scheduleViewportUpdate(true)
                 }
             }
+            if (!root.navigationKeyHeld)
+                root.schedulePresentationCachePrewarm()
         }
         function onCurrentPathChanged() {
             root.traceBenchmarkStage("session.path.changed", {})
+            // GallerySession primes the incoming cursor before announcing the
+            // path. Hand that cursor and any remembered offset to the native
+            // layout now, before the following synchronous model reset. This
+            // makes the reset populate only the destination viewport.
+            galleryLayout.prepareViewportForModelReset(
+                        root.session.currentIndex,
+                        root.session.panelScrollOffset,
+                        typeof root.session.panelViewportStateAvailable
+                            !== "undefined"
+                            && root.session.panelViewportStateAvailable)
             root.pathViewportPlacementPending =
                     root.presentationMode === "details"
             root.pathViewportCatalogReady =
@@ -3545,6 +3759,8 @@ FocusScope {
                     && !root.placeViewportForPathChange()) {
                 root.schedulePathViewportPlacement("catalog-ready-changed")
             }
+            if (root.session.catalogReady)
+                root.schedulePresentationCachePrewarm()
         }
         function onPanelScrollOffsetChanged() {
             if (!root.restoringScrollOffset
@@ -3574,6 +3790,7 @@ FocusScope {
         ensureSessionPreviews()
         selectionAnchorIndex = session ? session.currentIndex : -1
         scheduleViewportUpdate(false)
+        schedulePresentationCachePrewarm()
     }
 
     onPresentationModeChanged: {
@@ -3582,7 +3799,20 @@ FocusScope {
         // keep BrickItem geometry updates synchronous until the new mode,
         // its density and declarative anchors have all settled.
         beginPresentationSwitch()
-        deferDetailsMetricPopulation()
+        syncPresentationPrewarmDensities()
+        schedulePresentationCachePrewarm()
+    }
+    onPresentationDensitiesChanged: {
+        syncPresentationPrewarmDensities()
+        schedulePresentationCachePrewarm()
+    }
+    onShowDetailsHeaderChanged: {
+        syncPresentationPrewarmDensities()
+        schedulePresentationCachePrewarm()
+    }
+    onDetailsHeaderHeightChanged: {
+        syncPresentationPrewarmDensities()
+        schedulePresentationCachePrewarm()
     }
     onShowCursorChanged: {
         if (!showCursor)
@@ -3597,7 +3827,9 @@ FocusScope {
         if (!activeFocus) {
             navigationKeyHeld = false
             cancelCursorChromeTransition()
-            commitPendingCursor()
+            const selectionCommitted = finishKeyboardSelectionGesture()
+            if (!selectionCommitted)
+                commitPendingCursor()
         }
     }
 
@@ -3606,6 +3838,8 @@ FocusScope {
         pendingVisualCursorIndex = -1
         ensureSessionPreviews()
         scheduleViewportUpdate(false)
+        syncPresentationPrewarmDensities()
+        schedulePresentationCachePrewarm()
         if (autoFocus && !customContent)
             forceActiveFocus()
     }

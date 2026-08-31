@@ -5,8 +5,11 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QThread>
 #include <QVariantMap>
 
@@ -85,7 +88,42 @@ inline void eventAt(const QString &name, qint64 monotonicNs,
     object.insert(QStringLiteral("thread"), threadName);
     const QByteArray json = QJsonDocument(object).toJson(
         QJsonDocument::Compact);
-    qInfo().noquote() << "F4_MEDIA_TIMING_TRACE" << json;
+    // Navigation profiling also needs the library-internal catalog phases.
+    // Keep this opt-in and share the host's existing output file so a live
+    // cross-process trace does not depend on a console sink being present.
+    static const QString outputPath = qEnvironmentVariable(
+        "F4_NAV_BENCHMARK_QT_OUTPUT");
+    if (outputPath.isEmpty()) {
+        qInfo().noquote() << "F4_MEDIA_TIMING_TRACE" << json;
+    }
+    else {
+        static QMutex outputMutex;
+        static QFile *output = []() -> QFile * {
+            auto *file = new QFile(qEnvironmentVariable(
+                "F4_NAV_BENCHMARK_QT_OUTPUT"));
+            if (!file->open(QIODevice::WriteOnly | QIODevice::Append)) {
+                delete file;
+                return nullptr;
+            }
+            if (QCoreApplication *application =
+                    QCoreApplication::instance()) {
+                QObject::connect(
+                    application, &QCoreApplication::aboutToQuit,
+                    application, [file]() { file->flush(); },
+                    Qt::DirectConnection);
+            }
+            return file;
+        }();
+        const QMutexLocker locker(&outputMutex);
+        if (output) {
+            output->write("F4_NAV_BENCHMARK_TRACE ");
+            output->write(json);
+            output->write("\n");
+        }
+        else {
+            qInfo().noquote() << "F4_MEDIA_TIMING_TRACE" << json;
+        }
+    }
 }
 
 inline void event(const QString &name, QVariantMap fields = {})

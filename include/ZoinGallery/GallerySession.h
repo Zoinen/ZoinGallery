@@ -98,6 +98,11 @@ public:
     Q_INVOKABLE bool applyExternalCatalog(
         const QVariantList &entries, qulonglong catalogRevision,
         const QVariantMap &options = QVariantMap());
+    Q_INVOKABLE bool appendExternalCatalog(
+        const QVariantList &entries, qulonglong catalogRevision,
+        int offset, bool final);
+    Q_INVOKABLE bool applyExternalCatalogRows(
+        const QVariantList &entries, qulonglong catalogRevision);
     Q_INVOKABLE void setExternalCatalogReady(bool ready);
     Q_INVOKABLE bool applyExternalAppearance(
         const QVariantList &entries, qulonglong highlightRevision);

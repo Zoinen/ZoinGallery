@@ -32,6 +32,7 @@ public:
     qulonglong metadataRevision = 0;
     bool metadataDeferred = false;
     bool metadataCompleted = false;
+    bool catalogStreaming = false;
     bool catalogReady = true;
     qulonglong highlightRevision = 0;
     qulonglong selectionRevision = 0;
@@ -358,7 +359,10 @@ bool GallerySession::shutdownComplete() const {
 bool GallerySession::applyExternalCatalog(
     const QVariantList &entries, qulonglong revision,
     const QVariantMap &options) {
-    if (d->shutdown || !d->external || revision < d->catalogRevision) {
+    const bool sourceIdentityChanged = options.value(
+        QStringLiteral("sourceIdentityChanged")).toBool();
+    if (d->shutdown || !d->external
+        || (!sourceIdentityChanged && revision < d->catalogRevision)) {
         return false;
     }
 
@@ -367,8 +371,21 @@ bool GallerySession::applyExternalCatalog(
         && !options.value(QStringLiteral("deferCatalogReady")).toBool();
     const bool metadataDeferred =
         options.value(QStringLiteral("metadataDeferred")).toBool();
+    const bool catalogRowsDeferred = options.value(
+        QStringLiteral("catalogRowsDeferred")).toBool();
+    const int totalCount = catalogRowsDeferred
+        ? options.value(QStringLiteral("totalCount"), entries.size()).toInt()
+        : -1;
     const qulonglong metadataRevision = options.value(
         QStringLiteral("metadataRevision"), qulonglong(0)).toULongLong();
+    const QString previousCursorId = cursorEntryId();
+    const int previousIndex = d->currentIndex;
+    const bool carriesCursor = options.contains(
+        QStringLiteral("cursorIndex"));
+    const int requestedCursorIndex = options.value(
+        QStringLiteral("cursorIndex"), previousIndex).toInt();
+    const QString requestedCursorId = options.value(
+        QStringLiteral("cursorEntryId")).toString();
 
     const bool carriesPath = options.contains(QStringLiteral("currentPath"))
         || options.contains(QStringLiteral("path"));
@@ -377,7 +394,8 @@ bool GallerySession::applyExternalCatalog(
         const QString path = options.value(
             QStringLiteral("currentPath"), options.value(QStringLiteral("path")))
             .toString();
-        if (d->currentPath != path) {
+        const bool actualPathChanged = d->currentPath != path;
+        if (actualPathChanged || sourceIdentityChanged) {
             pathChanged = true;
             // A path replacement is never paint-ready until its model and
             // remapped cursor have been installed, even when the host sends
@@ -388,8 +406,21 @@ bool GallerySession::applyExternalCatalog(
             }
             d->currentPath = path;
             clearViewerPreviousState(true);
+            if (sourceIdentityChanged) {
+                d->panelViewportStates.clear();
+            }
             restorePanelViewportStateForPath(path);
-            emit currentPathChanged();
+            if (carriesCursor) {
+                const int logicalCount = catalogRowsDeferred
+                    ? qMax(totalCount, entries.size()) : entries.size();
+                d->currentIndex = logicalCount > 0
+                    ? qBound(0, requestedCursorIndex, logicalCount - 1)
+                    : -1;
+                d->stableCursorEntryId = requestedCursorId;
+            }
+            if (actualPathChanged) {
+                emit currentPathChanged();
+            }
         }
     }
 
@@ -409,22 +440,46 @@ bool GallerySession::applyExternalCatalog(
         return true;
     }
 
-    const QString previousCursorId = cursorEntryId();
-    const int previousIndex = d->currentIndex;
     // A directory transition necessarily replaces the current catalog. Skip
     // the additional O(N) equivalence pass; it remains enabled for same-path
     // revision bumps where retaining image objects and decode work matters.
     if (!d->external->applyCatalog(entries, metadataDeferred,
-                                   !pathChanged)) {
+                                   !pathChanged, totalCount)) {
         return false;
     }
     d->catalogRevision = revision;
     d->metadataRevision = metadataRevision;
     d->metadataDeferred = metadataDeferred;
     d->metadataCompleted = false;
+    d->catalogStreaming = options.value(
+        QStringLiteral("catalogStreaming")).toBool();
 
-    const int remapped = d->external->rowForEntryId(previousCursorId);
-    setCurrentIndex(remapped >= 0 ? remapped : previousIndex);
+    if (pathChanged && carriesCursor) {
+        const int rowCount = d->external->rowCount();
+        const int remapped = d->external->rowForEntryId(requestedCursorId);
+        const int target = rowCount > 0
+            ? qBound(0, remapped >= 0 ? remapped : requestedCursorIndex,
+                     rowCount - 1)
+            : -1;
+        const QString materializedId = entryIdAt(target);
+        const QString targetId = materializedId.isEmpty()
+            ? requestedCursorId : materializedId;
+        const bool cursorChanged = previousIndex != target
+            || previousCursorId != targetId;
+        d->currentIndex = target;
+        d->stableCursorEntryId = targetId;
+        if (d->viewerOpen && cursorChanged) {
+            d->external->setViewerIndex(target);
+        }
+        if (cursorChanged) {
+            emit currentIndexChanged();
+            emit viewerSourceChanged();
+        }
+    }
+    else {
+        const int remapped = d->external->rowForEntryId(previousCursorId);
+        setCurrentIndex(remapped >= 0 ? remapped : previousIndex);
+    }
     sanitizeViewerPreviousStateForCatalog();
     const bool readyChanged = d->catalogReady != requestedCatalogReady;
     if (readyChanged) {
@@ -435,6 +490,35 @@ bool GallerySession::applyExternalCatalog(
         emit catalogReadyChanged();
     }
     return true;
+}
+
+bool GallerySession::appendExternalCatalog(
+    const QVariantList &entries, qulonglong revision, int offset, bool final) {
+    if (d->shutdown || !d->external || !d->catalogStreaming
+        || revision != d->catalogRevision || entries.isEmpty()
+        || offset != d->external->rowCount()) {
+        return false;
+    }
+    if (!d->external->appendCatalog(entries, d->metadataDeferred)) {
+        return false;
+    }
+    if (final) {
+        d->catalogStreaming = false;
+        if (!d->catalogReady) {
+            d->catalogReady = true;
+            emit catalogReadyChanged();
+        }
+    }
+    return true;
+}
+
+bool GallerySession::applyExternalCatalogRows(
+    const QVariantList &entries, qulonglong revision) {
+    if (d->shutdown || !d->external || entries.isEmpty()
+        || revision != d->catalogRevision) {
+        return false;
+    }
+    return d->external->applyCatalogRows(entries, d->metadataDeferred);
 }
 
 void GallerySession::setExternalCatalogReady(bool ready) {

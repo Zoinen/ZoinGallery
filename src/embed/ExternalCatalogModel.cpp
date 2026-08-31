@@ -337,7 +337,64 @@ ExternalCatalogModel::~ExternalCatalogModel() {
 }
 
 int ExternalCatalogModel::rowCount(const QModelIndex &parent) const {
-    return parent.isValid() ? 0 : _entries.size();
+    return parent.isValid() ? 0 : logicalRowCount();
+}
+
+bool ExternalCatalogModel::sparseCatalog() const {
+    return _virtualRowCount >= 0;
+}
+
+QVariantList ExternalCatalogModel::materializedRows() const {
+    QVariantList rows;
+    rows.reserve(_entries.size());
+    for (const Entry &entry : _entries) {
+        if (entry.loaded && entry.sourceIndex >= 0) {
+            rows.append(entry.sourceIndex);
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const QVariant &left,
+                                           const QVariant &right) {
+        return left.toInt() < right.toInt();
+    });
+    return rows;
+}
+
+int ExternalCatalogModel::logicalRowCount() const {
+    return _virtualRowCount >= 0 ? _virtualRowCount : _entries.size();
+}
+
+const ExternalCatalogModel::Entry *ExternalCatalogModel::entryAt(
+    int row) const {
+    if (row < 0 || row >= logicalRowCount()) {
+        return nullptr;
+    }
+    if (_virtualRowCount < 0) {
+        return &_entries.at(row);
+    }
+    const auto offset = _sparseRowToOffset.constFind(row);
+    if (offset == _sparseRowToOffset.cend()
+        || offset.value() < 0 || offset.value() >= _entries.size()) {
+        return nullptr;
+    }
+    return &_entries.at(offset.value());
+}
+
+ExternalCatalogModel::Entry *ExternalCatalogModel::entryAt(int row) {
+    return const_cast<Entry *>(
+        std::as_const(*this).entryAt(row));
+}
+
+const ExternalCatalogModel::Entry &ExternalCatalogModel::loadedEntry(
+    int row) const {
+    const Entry *entry = entryAt(row);
+    Q_ASSERT(entry && entry->loaded);
+    return *entry;
+}
+
+ExternalCatalogModel::Entry &ExternalCatalogModel::loadedEntry(int row) {
+    Entry *entry = entryAt(row);
+    Q_ASSERT(entry && entry->loaded);
+    return *entry;
 }
 
 QString snapshotFileSize(qint64 size) {
@@ -368,18 +425,18 @@ QString snapshotFileSize(qint64 size) {
 }
 
 ImageFile *ExternalCatalogModel::ensureItem(int row) const {
-    if (!validRow(row)) {
+    Entry *entry = const_cast<ExternalCatalogModel *>(this)->entryAt(row);
+    if (!entry || !entry->loaded) {
         return nullptr;
     }
-    Entry &entry = const_cast<Entry &>(_entries.at(row));
-    if (entry.item) {
-        return entry.item;
+    if (entry->item) {
+        return entry->item;
     }
 
     QString folder;
-    QString fileName = entry.name;
-    if (!entry.localPath.isEmpty()) {
-        const QFileInfo pathInfo(entry.localPath);
+    QString fileName = entry->name;
+    if (!entry->localPath.isEmpty()) {
+        const QFileInfo pathInfo(entry->localPath);
         folder = pathInfo.absolutePath();
         if (fileName.isEmpty()) {
             fileName = pathInfo.fileName();
@@ -388,65 +445,71 @@ ImageFile *ExternalCatalogModel::ensureItem(int row) const {
     auto *item = new ImageFile(
         const_cast<ExternalCatalogModel *>(this));
     item->initializeExternalCatalogRow(
-        folder, fileName, row, entry.directory, entry.image,
-        entry.iconPath.isEmpty()
-            ? defaultIconPath(entry.directory, entry.image)
-            : entry.iconPath,
-        entry.selected, _thumbnailProviderName, entry.imageInfo,
-        entry.highlightStyle, entry.displayFields,
-        entry.metadataDeferred);
+        folder, fileName, row, entry->directory, entry->image,
+        entry->iconPath.isEmpty()
+            ? defaultIconPath(entry->directory, entry->image)
+            : entry->iconPath,
+        entry->selected, _thumbnailProviderName, entry->imageInfo,
+        entry->highlightStyle, entry->displayFields,
+        entry->metadataDeferred);
     // A retained provider frame belongs to this current catalog entry even
     // when its QObject facade is created only after the first painted frame.
     // Restore that identity before exposing the facade so thumbnail planning
     // cannot mistake an already-published frame for an empty request.
-    if (!entry.thumbnailProviderId.isEmpty()) {
-        item->setImageId(entry.thumbnailProviderId);
+    if (!entry->thumbnailProviderId.isEmpty()) {
+        item->setImageId(entry->thumbnailProviderId);
     }
-    if (entry.originalSize.isValid()) {
-        item->setFullSize(entry.originalSize);
+    if (entry->originalSize.isValid()) {
+        item->setFullSize(entry->originalSize);
     }
-    entry.item = item;
+    entry->item = item;
     return item;
 }
 
 QVariantMap ExternalCatalogModel::visualSnapshot(int row) const {
-    if (!validRow(row)) {
+    if (row < 0 || row >= logicalRowCount()) {
         return {};
     }
-    const Entry &entry = _entries.at(row);
+    const Entry *entry = entryAt(row);
+    if (!entry || !entry->loaded) {
+        return {
+            {QStringLiteral("valid"), false},
+            {QStringLiteral("sourceIndex"), row},
+        };
+    }
     QString imageIdUrl;
-    if (!entry.thumbnailProviderId.isEmpty()) {
+    if (!entry->thumbnailProviderId.isEmpty()) {
         imageIdUrl = QStringLiteral("image://") + _thumbnailProviderName
-            + QLatin1Char('/') + entry.thumbnailProviderId;
+            + QLatin1Char('/') + entry->thumbnailProviderId;
     }
-    else if (entry.item) {
-        imageIdUrl = entry.item->imageIdUrl();
+    else if (entry->item) {
+        imageIdUrl = entry->item->imageIdUrl();
     }
-    QVariantMap visualFields = entry.displayFields;
-    const QFileInfo nameInfo(entry.name);
+    QVariantMap visualFields = entry->displayFields;
+    const QFileInfo nameInfo(entry->name);
     if (!visualFields.contains(QStringLiteral("displayBaseName"))) {
-        QString baseName = entry.directory
-            ? entry.name : nameInfo.completeBaseName();
+        QString baseName = entry->directory
+            ? entry->name : nameInfo.completeBaseName();
         if (baseName.isEmpty()) {
-            baseName = entry.name;
+            baseName = entry->name;
         }
         visualFields.insert(QStringLiteral("displayBaseName"), baseName);
     }
     if (!visualFields.contains(QStringLiteral("displayExtension"))) {
         visualFields.insert(QStringLiteral("displayExtension"),
-                            entry.directory ? QString() : nameInfo.suffix());
+                            entry->directory ? QString() : nameInfo.suffix());
     }
     if (!visualFields.contains(QStringLiteral("sizeText"))) {
-        const qint64 effectiveSize = entry.size >= 0
-            ? entry.size : entry.imageInfo.fileSize;
+        const qint64 effectiveSize = entry->size >= 0
+            ? entry->size : entry->imageInfo.fileSize;
         visualFields.insert(QStringLiteral("sizeText"),
                             snapshotFileSize(effectiveSize));
     }
     if (!visualFields.contains(QStringLiteral("mtimeText"))) {
         visualFields.insert(
             QStringLiteral("mtimeText"),
-            entry.imageInfo.lastModified.isValid()
-                ? QLocale().toString(entry.imageInfo.lastModified,
+            entry->imageInfo.lastModified.isValid()
+                ? QLocale().toString(entry->imageInfo.lastModified,
                                      QLocale::ShortFormat)
                 : QString());
     }
@@ -455,15 +518,15 @@ QVariantMap ExternalCatalogModel::visualSnapshot(int row) const {
     }
     return {
         {QStringLiteral("valid"), true},
-        {QStringLiteral("entryId"), entry.id},
-        {QStringLiteral("sourceIndex"), entry.sourceIndex},
-        {QStringLiteral("localPath"), entry.localPath},
-        {QStringLiteral("text"), entry.name},
-        {QStringLiteral("isFolder"), entry.directory},
-        {QStringLiteral("isImage"), entry.image},
-        {QStringLiteral("isSelected"), entry.selected},
-        {QStringLiteral("iconPath"), entry.iconPath},
-        {QStringLiteral("highlightStyle"), entry.highlightStyle},
+        {QStringLiteral("entryId"), entry->id},
+        {QStringLiteral("sourceIndex"), entry->sourceIndex},
+        {QStringLiteral("localPath"), entry->localPath},
+        {QStringLiteral("text"), entry->name},
+        {QStringLiteral("isFolder"), entry->directory},
+        {QStringLiteral("isImage"), entry->image},
+        {QStringLiteral("isSelected"), entry->selected},
+        {QStringLiteral("iconPath"), entry->iconPath},
+        {QStringLiteral("highlightStyle"), entry->highlightStyle},
         {QStringLiteral("displayFields"), visualFields},
         {QStringLiteral("imageIdUrl"), imageIdUrl},
     };
@@ -489,17 +552,27 @@ void ExternalCatalogModel::deleteRetiredItems() {
 }
 
 QVariant ExternalCatalogModel::data(const QModelIndex &index, int role) const {
-    if (!index.isValid() || !validRow(index.row())) {
+    if (!index.isValid() || index.row() < 0
+        || index.row() >= logicalRowCount()) {
         return {};
     }
-    const Entry &entry = _entries.at(index.row());
+    const Entry *entry = entryAt(index.row());
+    if (!entry || !entry->loaded) {
+        if (role == SourceIndexRole) {
+            return index.row();
+        }
+        if (role == VisualSnapshotRole) {
+            return visualSnapshot(index.row());
+        }
+        return {};
+    }
     ImageFile *item = nullptr;
     switch (role) {
     case FileListModel::ImageIdUrlRole:
         item = ensureItem(index.row());
         return item ? item->imageIdUrl() : QString();
     case FileListModel::SelectedRole:
-        return entry.selected;
+        return entry->selected;
     case FileListModel::SelectionGroupIdRole:
         item = ensureItem(index.row());
         return item ? item->selectionGroupId() : QString();
@@ -509,29 +582,29 @@ QVariant ExternalCatalogModel::data(const QModelIndex &index, int role) const {
     case FileListModel::ImageFileRole:
         return QVariant::fromValue(ensureItem(index.row()));
     case FileListModel::FolderRole:
-        return entry.directory;
+        return entry->directory;
     case FileListModel::IsImageRole:
-        return entry.image;
+        return entry->image;
     case FileListModel::ImageFullSizeRole:
-        return entry.originalSize;
+        return entry->originalSize;
     case FileListModel::FolderViewRole:
         return false;
     case FileListModel::LastModifiedRole:
-        return entry.imageInfo.lastModified;
+        return entry->imageInfo.lastModified;
     case FileListModel::FileSizeRole:
-        return entry.size;
+        return entry->size;
     case EntryIdRole:
-        return entry.id;
+        return entry->id;
     case SourceIndexRole:
-        return entry.sourceIndex;
+        return entry->sourceIndex;
     case LocalPathRole:
-        return entry.localPath;
+        return entry->localPath;
     case VersionTokenRole:
-        return entry.contentVersion;
+        return entry->contentVersion;
     case EntryNameRole:
-        return entry.name;
+        return entry->name;
     case KnownImageSizeRole:
-        return entry.originalSize;
+        return entry->originalSize;
     case VisualSnapshotRole:
         // This POD-only role is the first-frame facade for embedded views.
         // It never constructs an ImageFile and contains only the current
@@ -571,7 +644,7 @@ bool ExternalCatalogModel::catalogMatches(
     if (carriesAppearance) {
         *carriesAppearance = false;
     }
-    if (values.size() != _entries.size()) {
+    if (_virtualRowCount >= 0 || values.size() != _entries.size()) {
         return false;
     }
 
@@ -582,7 +655,7 @@ bool ExternalCatalogModel::catalogMatches(
             && map.contains(QStringLiteral("highlightStyle"))) {
             *carriesAppearance = true;
         }
-        const Entry &current = _entries.at(row);
+        const Entry &current = loadedEntry(row);
         const int sourceIndex =
             map.value(QStringLiteral("index"), row).toInt();
         const QString name = map.value(QStringLiteral("name")).toString();
@@ -636,9 +709,244 @@ bool ExternalCatalogModel::catalogMatches(
     return true;
 }
 
+bool ExternalCatalogModel::parseCatalogEntry(
+    const QVariantMap &map, int row, bool metadataDeferred,
+    Entry *entry) const {
+    if (!entry || row < 0) {
+        return false;
+    }
+    bool indexOK = false;
+    const int sourceIndex = map.value(
+        QStringLiteral("index"), row).toInt(&indexOK);
+    const QString id = map.value(QStringLiteral("entryId")).toString();
+    if (!indexOK || sourceIndex != row || id.isEmpty()
+        || map.value(QStringLiteral("name")).metaType().id()
+            != QMetaType::QString) {
+        return false;
+    }
+
+    Entry parsed;
+    parsed.loaded = true;
+    parsed.id = id;
+    parsed.sourceIndex = sourceIndex;
+    parsed.name = map.value(QStringLiteral("name")).toString();
+    parsed.localPath = map.value(
+        QStringLiteral("localPath"), map.value(QStringLiteral("path")))
+                           .toString();
+    parsed.directory = map.value(
+        QStringLiteral("isDir"), map.value(QStringLiteral("directory")))
+                           .toBool();
+    parsed.image = map.contains(QStringLiteral("isImage"))
+        ? map.value(QStringLiteral("isImage")).toBool()
+        : (!metadataDeferred && !parsed.directory
+           && FileListModel::isImage(parsed.name));
+    parsed.selected = map.value(QStringLiteral("selected")).toBool();
+    if (metadataDeferred) {
+        parsed.mtimeNs = 0;
+        parsed.size = -1;
+    }
+    else {
+        parsed.mtimeNs = integerValue(
+            map, QStringLiteral("mtimeNs"),
+            QStringLiteral("mtimeNanos"), 0);
+        parsed.size = sourceSizeValue(map);
+    }
+    parsed.source = sourceDescriptor(
+        map, parsed.name, parsed.size, parsed.mtimeNs);
+    parsed.contentVersion = parsed.source.contentVersion;
+    parsed.sourceIdentity = parsed.source.runtimeIdentity();
+    parsed.displayFields = catalogDisplayFields(map, metadataDeferred);
+    parsed.metadataDeferred = metadataDeferred;
+    parsed.imageInfo.path = parsed.sourceIdentity;
+    parsed.imageInfo.source = parsed.source;
+    parsed.imageInfo.requestNamespace = _sessionId;
+    parsed.imageInfo.sourceVersionToken = parsed.contentVersion;
+    parsed.imageInfo.lastModified = parsed.mtimeNs != 0
+        ? QDateTime::fromMSecsSinceEpoch(
+              parsed.mtimeNs / 1000000, QTimeZone::UTC)
+        : QDateTime{};
+    parsed.imageInfo.fileSize = parsed.size;
+    parsed.iconPath = defaultIconPath(parsed.directory, parsed.image);
+    if (map.contains(QStringLiteral("highlightStyle"))) {
+        parsed.highlightStyle = map.value(
+            QStringLiteral("highlightStyle")).toMap();
+        const QString styledIcon = parsed.highlightStyle.value(
+            QStringLiteral("icon")).toString();
+        if (!styledIcon.isEmpty()) {
+            parsed.iconPath = styledIcon;
+        }
+    }
+    *entry = std::move(parsed);
+    return true;
+}
+
+bool ExternalCatalogModel::applySparseCatalog(
+    const QVariantList &values, bool metadataDeferred, int totalCount) {
+    if (_shutdown || totalCount < 0 || values.size() > totalCount) {
+        return false;
+    }
+
+    QList<Entry> next;
+    next.reserve(values.size());
+    QHash<int, int> nextRows;
+    nextRows.reserve(values.size());
+    QSet<QString> seenIds;
+    seenIds.reserve(values.size());
+    for (const QVariant &value : values) {
+        if (value.metaType().id() != QMetaType::QVariantMap) {
+            return false;
+        }
+        const QVariantMap map = value.toMap();
+        bool indexOK = false;
+        const int row = map.value(QStringLiteral("index")).toInt(&indexOK);
+        const QString id = map.value(QStringLiteral("entryId")).toString();
+        Entry parsed;
+        if (!indexOK || row < 0 || row >= totalCount || id.isEmpty()
+            || seenIds.contains(id) || nextRows.contains(row)
+            || !parseCatalogEntry(map, row, metadataDeferred, &parsed)) {
+            return false;
+        }
+        seenIds.insert(id);
+        nextRows.insert(row, next.size());
+        next.push_back(std::move(parsed));
+    }
+
+    cancelAllRunners();
+    clearViewer();
+    beginResetModel();
+    for (Entry &old : _entries) {
+        if (!old.loaded) {
+            continue;
+        }
+        clearPublishedImage(old);
+        if (old.item) {
+            retireItemAfterReset(old.item);
+            old.item = nullptr;
+        }
+    }
+    _entries = std::move(next);
+    _virtualRowCount = totalCount;
+    _sparseRowToOffset = std::move(nextRows);
+    _idToRow.clear();
+    _pathToRow.clear();
+    _sourceToRow.clear();
+    _sourceEntryIds.clear();
+    _providerEntryIds.clear();
+    for (const Entry &entry : std::as_const(_entries)) {
+        const int row = entry.sourceIndex;
+        _idToRow.insert(entry.id, row);
+        if (!entry.localPath.isEmpty()) {
+            _pathToRow.insert(QDir::cleanPath(entry.localPath), row);
+        }
+        if (!entry.sourceIdentity.isEmpty()) {
+            _sourceToRow.insert(entry.sourceIdentity, row);
+            _sourceEntryIds.insert(entry.sourceIdentity, entry.id);
+        }
+        if (!entry.thumbnailProviderId.isEmpty()) {
+            _providerEntryIds.insert(entry.thumbnailProviderId, entry.id);
+        }
+    }
+    _cursorRow = totalCount > 0 ? qBound(0, _cursorRow, totalCount - 1) : -1;
+    endResetModel();
+    return true;
+}
+
+bool ExternalCatalogModel::applyCatalogRows(
+    const QVariantList &values, bool metadataDeferred) {
+    if (_shutdown || values.isEmpty()) {
+        return false;
+    }
+    struct PendingRow {
+        int row = -1;
+        Entry entry;
+    };
+    QList<PendingRow> pending;
+    pending.reserve(values.size());
+    QSet<QString> ids;
+    QSet<int> rows;
+    for (const QVariant &value : values) {
+        if (value.metaType().id() != QMetaType::QVariantMap) {
+            return false;
+        }
+        const QVariantMap map = value.toMap();
+        bool indexOK = false;
+        const int row = map.value(QStringLiteral("index")).toInt(&indexOK);
+        const QString id = map.value(QStringLiteral("entryId")).toString();
+        Entry parsed;
+        const Entry *existing = entryAt(row);
+        if (!indexOK || row < 0 || row >= logicalRowCount() || id.isEmpty()
+            || rows.contains(row) || ids.contains(id)
+            || (existing && existing->loaded && existing->id != id)
+            || (_idToRow.contains(id) && _idToRow.value(id) != row)
+            || !parseCatalogEntry(map, row, metadataDeferred, &parsed)) {
+            return false;
+        }
+        rows.insert(row);
+        ids.insert(id);
+        pending.append({row, std::move(parsed)});
+    }
+
+    int first = logicalRowCount();
+    int last = -1;
+    for (PendingRow &update : pending) {
+        Entry *target = entryAt(update.row);
+        if (target && target->loaded) {
+            clearPublishedImage(*target);
+            // dataChanged() is delivered synchronously.  Keep the previous
+            // facade alive until every materialized delegate has rebound to
+            // the replacement row; MasonryLayout may still hold this exact
+            // pointer while handling the notification below.
+            ImageFile *previousItem = target->item;
+            target->item = nullptr;
+            retireItemAfterReset(previousItem);
+            _idToRow.remove(target->id);
+            if (!target->localPath.isEmpty()) {
+                _pathToRow.remove(QDir::cleanPath(target->localPath));
+            }
+            if (!target->sourceIdentity.isEmpty()) {
+                _sourceToRow.remove(target->sourceIdentity);
+                _sourceEntryIds.remove(target->sourceIdentity, target->id);
+            }
+        } else {
+            _sparseRowToOffset.insert(update.row, _entries.size());
+            _entries.push_back(Entry{});
+            target = &_entries.last();
+        }
+        *target = std::move(update.entry);
+        _idToRow.insert(target->id, update.row);
+        if (!target->localPath.isEmpty()) {
+            _pathToRow.insert(QDir::cleanPath(target->localPath), update.row);
+        }
+        if (!target->sourceIdentity.isEmpty()) {
+            _sourceToRow.insert(target->sourceIdentity, update.row);
+            _sourceEntryIds.insert(target->sourceIdentity, target->id);
+        }
+        if (!target->thumbnailProviderId.isEmpty()) {
+            _providerEntryIds.insert(
+                target->thumbnailProviderId, target->id);
+        }
+        first = qMin(first, update.row);
+        last = qMax(last, update.row);
+    }
+    if (last >= first) {
+        emit dataChanged(index(first), index(last));
+    }
+    // A sparse catalog-wide pass can only process rows that have arrived.
+    // A newly materialized page extends that compact work list without ever
+    // walking (or allocating storage for) the logical unloaded catalog.
+    if (_catalogProbeRequested) {
+        _probePassComplete = false;
+        scheduleProbePump();
+    }
+    if (_catalogMetadataRequested) {
+        scheduleMetadataPump();
+    }
+    return true;
+}
+
 bool ExternalCatalogModel::applyCatalog(
     const QVariantList &values, bool metadataDeferred,
-    bool checkEquivalentCatalog) {
+    bool checkEquivalentCatalog, int totalCount) {
     MediaTimingTrace::Span timingSpan(
         QStringLiteral("qt.gallery.model.catalog_apply"), {
             {QStringLiteral("sessionId"), _sessionId},
@@ -648,6 +956,15 @@ bool ExternalCatalogModel::applyCatalog(
     if (_shutdown) {
         timingSpan.set(QStringLiteral("outcome"), QStringLiteral("shutdown"));
         return false;
+    }
+    if (totalCount >= 0 && totalCount != values.size()) {
+        const bool applied = applySparseCatalog(
+            values, metadataDeferred, totalCount);
+        timingSpan.set(QStringLiteral("outcome"),
+                       applied ? QStringLiteral("sparse-reset")
+                               : QStringLiteral("invalid-sparse"));
+        timingSpan.set(QStringLiteral("outputEntries"), totalCount);
+        return applied;
     }
     const bool traceCatalog = qEnvironmentVariableIsSet(
         "F4_NAV_BENCHMARK_TRACE");
@@ -678,8 +995,7 @@ bool ExternalCatalogModel::applyCatalog(
     bool activeViewerWasImage = false;
     const int activeViewerRow = rowForEntryId(activeViewerEntryId);
     if (validRow(activeViewerRow)) {
-        const Entry &entry = _entries.at(activeViewerRow);
-        activeViewerWasImage = entry.image;
+        activeViewerWasImage = entryAt(activeViewerRow)->image;
     }
     invalidateNativeDwell();
 
@@ -729,6 +1045,7 @@ bool ExternalCatalogModel::applyCatalog(
     for (int row = 0; row < values.size(); ++row) {
         const QVariantMap map = values.at(row).toMap();
         Entry &entry = next[row];
+        entry.loaded = true;
         entry.sourceIndex = map.value(QStringLiteral("index"), row).toInt();
         entry.name = map.value(QStringLiteral("name")).toString();
         entry.localPath = map.value(QStringLiteral("localPath"),
@@ -929,13 +1246,15 @@ bool ExternalCatalogModel::applyCatalog(
     }
 
     _entries = std::move(next);
+    _virtualRowCount = -1;
+    _sparseRowToOffset.clear();
     _idToRow = std::move(nextIdToRow);
     _pathToRow = std::move(nextPathToRow);
     _sourceEntryIds = std::move(nextSourceEntryIds);
     _providerEntryIds = std::move(nextProviderEntryIds);
     _sourceToRow.clear();
     for (int row = 0; row < _entries.size(); ++row) {
-        const Entry &entry = _entries.at(row);
+        const Entry &entry = loadedEntry(row);
         if (!entry.sourceIdentity.isEmpty()) {
             _sourceToRow.insert(entry.sourceIdentity, row);
         }
@@ -949,7 +1268,7 @@ bool ExternalCatalogModel::applyCatalog(
         }
         const int row = _sourceToRow.value(sourceIdentity, -1);
         return validRow(row) &&
-            _entries.at(row).contentVersion == version;
+            loadedEntry(row).contentVersion == version;
     };
     for (auto it = _metadataPendingVersions.begin();
          it != _metadataPendingVersions.end();) {
@@ -1136,10 +1455,10 @@ bool ExternalCatalogModel::applyCatalog(
         _deferredNativeEntryId.clear();
         invalidateNativeDwell();
     }
-    if (_entries.isEmpty()) {
+    if (logicalRowCount() == 0) {
         _cursorRow = -1;
     } else {
-        _cursorRow = qBound(0, _cursorRow, _entries.size() - 1);
+        _cursorRow = qBound(0, _cursorRow, logicalRowCount() - 1);
     }
     if (traceCatalog) {
         resetStartedNs = catalogTimer.nsecsElapsed();
@@ -1153,6 +1472,14 @@ bool ExternalCatalogModel::applyCatalog(
     }
     if (traceCatalog) {
         const qint64 completedNs = catalogTimer.nsecsElapsed();
+        timingSpan.set(QStringLiteral("rowsNs"), rowsCompletedNs);
+        timingSpan.set(QStringLiteral("leftoversNs"),
+                       leftoversCompletedNs - rowsCompletedNs);
+        timingSpan.set(QStringLiteral("lookupCommitNs"),
+                       resetStartedNs - leftoversCompletedNs);
+        timingSpan.set(QStringLiteral("endResetNs"),
+                       completedNs - resetStartedNs);
+        timingSpan.set(QStringLiteral("totalNs"), completedNs);
         qInfo().nospace()
             << "F4_NAV_BENCHMARK_TRACE catalog.model rowsNs="
             << rowsCompletedNs << " leftoversNs="
@@ -1180,7 +1507,7 @@ bool ExternalCatalogModel::applyCatalog(
     const int refreshedViewerRow = rowForEntryId(activeViewerEntryId);
     const bool viewerStillAvailable = activeViewerWasImage &&
         validRow(refreshedViewerRow) &&
-        _entries.at(refreshedViewerRow).image;
+        loadedEntry(refreshedViewerRow).image;
     if (!viewerStillAvailable) {
         clearViewer();
     }
@@ -1200,6 +1527,134 @@ bool ExternalCatalogModel::applyCatalog(
                    retainedSourceIdentities.size());
     timingSpan.set(QStringLiteral("invalidatedSources"),
                    invalidatedSourceIdentities.size());
+    return true;
+}
+
+bool ExternalCatalogModel::appendCatalog(const QVariantList &values,
+                                         bool metadataDeferred) {
+    MediaTimingTrace::Span timingSpan(
+        QStringLiteral("qt.gallery.model.catalog_append"), {
+            {QStringLiteral("sessionId"), _sessionId},
+            {QStringLiteral("inputEntries"), values.size()},
+            {QStringLiteral("previousEntries"), _entries.size()},
+        });
+    if (_shutdown || _virtualRowCount >= 0 || values.isEmpty()) {
+        timingSpan.set(QStringLiteral("outcome"),
+                       _shutdown ? QStringLiteral("shutdown")
+                       : _virtualRowCount >= 0 ? QStringLiteral("sparse")
+                                               : QStringLiteral("empty"));
+        return false;
+    }
+    const int firstRow = _entries.size();
+    QList<Entry> appended;
+    appended.reserve(values.size());
+    QSet<QString> newIds;
+    newIds.reserve(values.size());
+
+    // Parse and validate the whole chunk before beginInsertRows(). A malformed
+    // or stale chunk must be an atomic no-op; in particular, never leave half
+    // of a catalog visible to QML.
+    for (int offset = 0; offset < values.size(); ++offset) {
+        const QVariant &value = values.at(offset);
+        if (value.metaType().id() != QMetaType::QVariantMap) {
+            timingSpan.set(QStringLiteral("outcome"),
+                           QStringLiteral("invalid-row"));
+            return false;
+        }
+        const QVariantMap map = value.toMap();
+        bool indexOK = false;
+        const int row = map.value(QStringLiteral("index"))
+                            .toInt(&indexOK);
+        const QString entryId = map.value(
+            QStringLiteral("entryId")).toString();
+        if (!indexOK || row != firstRow + offset || entryId.isEmpty()
+            || _idToRow.contains(entryId) || newIds.contains(entryId)
+            || map.value(QStringLiteral("name")).metaType().id()
+                != QMetaType::QString) {
+            timingSpan.set(QStringLiteral("outcome"),
+                           QStringLiteral("invalid-row"));
+            return false;
+        }
+
+        Entry entry;
+        entry.loaded = true;
+        entry.id = entryId;
+        entry.sourceIndex = row;
+        entry.name = map.value(QStringLiteral("name")).toString();
+        entry.localPath = map.value(
+            QStringLiteral("localPath"),
+            map.value(QStringLiteral("path"))).toString();
+        entry.directory = map.value(
+            QStringLiteral("isDir"),
+            map.value(QStringLiteral("directory"))).toBool();
+        entry.image = map.contains(QStringLiteral("isImage"))
+            ? map.value(QStringLiteral("isImage")).toBool()
+            : (!metadataDeferred && !entry.directory
+               && FileListModel::isImage(entry.name));
+        entry.selected = map.value(QStringLiteral("selected")).toBool();
+        if (metadataDeferred) {
+            entry.mtimeNs = 0;
+            entry.size = -1;
+        }
+        else {
+            entry.mtimeNs = integerValue(
+                map, QStringLiteral("mtimeNs"),
+                QStringLiteral("mtimeNanos"), 0);
+            entry.size = sourceSizeValue(map);
+        }
+        entry.source = sourceDescriptor(
+            map, entry.name, entry.size, entry.mtimeNs);
+        entry.contentVersion = entry.source.contentVersion;
+        entry.sourceIdentity = entry.source.runtimeIdentity();
+        entry.displayFields = catalogDisplayFields(map, metadataDeferred);
+        entry.metadataDeferred = metadataDeferred;
+        entry.imageInfo.path = entry.sourceIdentity;
+        entry.imageInfo.source = entry.source;
+        entry.imageInfo.requestNamespace = _sessionId;
+        entry.imageInfo.sourceVersionToken = entry.contentVersion;
+        entry.imageInfo.lastModified = entry.mtimeNs != 0
+            ? QDateTime::fromMSecsSinceEpoch(
+                  entry.mtimeNs / 1000000, QTimeZone::UTC)
+            : QDateTime{};
+        entry.imageInfo.fileSize = entry.size;
+
+        entry.iconPath = defaultIconPath(entry.directory, entry.image);
+        if (map.contains(QStringLiteral("highlightStyle"))) {
+            entry.highlightStyle = map.value(
+                QStringLiteral("highlightStyle")).toMap();
+            const QString styledIcon = entry.highlightStyle.value(
+                QStringLiteral("icon")).toString();
+            if (!styledIcon.isEmpty()) {
+                entry.iconPath = styledIcon;
+            }
+        }
+        newIds.insert(entry.id);
+        appended.append(std::move(entry));
+    }
+
+    const int lastRow = firstRow + appended.size() - 1;
+    beginInsertRows(QModelIndex(), firstRow, lastRow);
+    for (Entry &entry : appended) {
+        const int row = _entries.size();
+        _idToRow.insert(entry.id, row);
+        if (!entry.localPath.isEmpty()) {
+            _pathToRow.insert(QDir::cleanPath(entry.localPath), row);
+        }
+        if (!entry.sourceIdentity.isEmpty()) {
+            _sourceToRow.insert(entry.sourceIdentity, row);
+            _sourceEntryIds.insert(entry.sourceIdentity, entry.id);
+        }
+        if (!entry.thumbnailProviderId.isEmpty()) {
+            _providerEntryIds.insert(entry.thumbnailProviderId, entry.id);
+        }
+        _entries.append(std::move(entry));
+    }
+    endInsertRows();
+    if (_cursorRow < 0 && !_entries.isEmpty()) {
+        _cursorRow = 0;
+    }
+    timingSpan.set(QStringLiteral("outcome"), QStringLiteral("inserted"));
+    timingSpan.set(QStringLiteral("outputEntries"), _entries.size());
     return true;
 }
 
@@ -1228,7 +1683,7 @@ bool ExternalCatalogModel::applyMetadata(const QVariantList &values) {
         }
         if (map.contains(QStringLiteral("index"))
             && map.value(QStringLiteral("index")).toInt() !=
-                _entries.at(row).sourceIndex) {
+                entryAt(row)->sourceIndex) {
             return false;
         }
         seenRows.insert(row);
@@ -1239,7 +1694,7 @@ bool ExternalCatalogModel::applyMetadata(const QVariantList &values) {
     changedRows.reserve(updates.size());
     bool viewerSourceInvalidated = false;
     for (const RowUpdate &update : std::as_const(updates)) {
-        Entry &entry = _entries[update.row];
+        Entry &entry = *entryAt(update.row);
         const QVariantMap &map = update.value;
 
         const bool oldImage = entry.image;
@@ -1481,7 +1936,7 @@ bool ExternalCatalogModel::applyAppearance(const QVariantList &values) {
         if (!validRow(row)) {
             continue;
         }
-        Entry &entry = _entries[row];
+        Entry &entry = *entryAt(row);
         const QVariantMap style = map.value(QStringLiteral("highlightStyle")).toMap();
         const QString styledIcon = style.value(QStringLiteral("icon")).toString();
         const QString fallbackIcon = defaultIconPath(
@@ -1534,8 +1989,8 @@ bool ExternalCatalogModel::applyState(
                                      selectedEntryIds.end());
         int firstChanged = -1;
         int lastChanged = -1;
-        for (int row = 0; row < _entries.size(); ++row) {
-            Entry &entry = _entries[row];
+        for (Entry &entry : _entries) {
+            const int row = entry.sourceIndex;
             const bool shouldSelect = selected.contains(entry.id);
             if (entry.selected == shouldSelect) {
                 continue;
@@ -1557,7 +2012,7 @@ bool ExternalCatalogModel::applyState(
     if (newCursor < 0 && validRow(cursorIndex)) {
         newCursor = cursorIndex;
     }
-    if (newCursor < 0 && !_entries.isEmpty()) {
+    if (newCursor < 0 && logicalRowCount() > 0) {
         newCursor = 0;
     }
     _cursorRow = newCursor;
@@ -1597,7 +2052,7 @@ bool ExternalCatalogModel::applyStateDelta(
         if (!indexOK || entryIdValue.metaType().id() != QMetaType::QString
             || entryId.isEmpty()
             || selectedValue.metaType().id() != QMetaType::Bool
-            || !validRow(row) || _entries.at(row).sourceIndex != sourceIndex
+            || !validRow(row) || entryAt(row)->sourceIndex != sourceIndex
             || changedRows.contains(row)) {
             return false;
         }
@@ -1608,7 +2063,7 @@ bool ExternalCatalogModel::applyStateDelta(
     QList<int> updatedRows;
     updatedRows.reserve(validatedChanges.size());
     for (const auto &[row, selected] : validatedChanges) {
-        Entry &entry = _entries[row];
+        Entry &entry = *entryAt(row);
         if (entry.selected == selected) {
             continue;
         }
@@ -1636,7 +2091,7 @@ bool ExternalCatalogModel::applyStateDelta(
     if (newCursor < 0 && validRow(cursorIndex)) {
         newCursor = cursorIndex;
     }
-    if (newCursor < 0 && !_entries.isEmpty()) {
+    if (newCursor < 0 && logicalRowCount() > 0) {
         newCursor = 0;
     }
     _cursorRow = newCursor;
@@ -1644,35 +2099,43 @@ bool ExternalCatalogModel::applyStateDelta(
 }
 
 QString ExternalCatalogModel::entryIdAt(int row) const {
-    return validRow(row) ? _entries.at(row).id : QString();
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded ? entry->id : QString();
 }
 
 QString ExternalCatalogModel::entryNameAt(int row) const {
-    return validRow(row) ? _entries.at(row).name : QString();
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded ? entry->name : QString();
 }
 
 QString ExternalCatalogModel::localPathAt(int row) const {
-    return validRow(row) ? _entries.at(row).localPath : QString();
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded ? entry->localPath : QString();
 }
 
 bool ExternalCatalogModel::isImageAt(int row) const {
-    return validRow(row) && _entries.at(row).image;
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded && entry->image;
 }
 
 bool ExternalCatalogModel::isDirectoryAt(int row) const {
-    return validRow(row) && _entries.at(row).directory;
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded && entry->directory;
 }
 
 int ExternalCatalogModel::sourceIndexAt(int row) const {
-    return validRow(row) ? _entries.at(row).sourceIndex : -1;
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded ? entry->sourceIndex : -1;
 }
 
 QSize ExternalCatalogModel::imageOriginalSizeAt(int row) const {
-    return validRow(row) ? _entries.at(row).originalSize : QSize();
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded ? entry->originalSize : QSize();
 }
 
 QVariantMap ExternalCatalogModel::highlightStyleAt(int row) const {
-    return validRow(row) ? _entries.at(row).highlightStyle : QVariantMap();
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded ? entry->highlightStyle : QVariantMap();
 }
 
 int ExternalCatalogModel::rowForEntryId(const QString &entryId) const {
@@ -1717,7 +2180,7 @@ QString ExternalCatalogModel::viewerImageUrlAt(int row) const {
     if (!validRow(row)) {
         return {};
     }
-    const Entry &entry = _entries.at(row);
+    const Entry &entry = loadedEntry(row);
     if (entry.id == _viewerEntryId) {
         const auto sources = viewerImageSourcesAt(row);
         return sources.isEmpty() ? QString() : sources.constLast().first;
@@ -1738,7 +2201,7 @@ QList<QPair<QString, int>> ExternalCatalogModel::viewerImageSourcesAt(
     }
 
     QSize viewerSize = _viewerViewportSize;
-    const Entry &entry = _entries.at(row);
+    const Entry &entry = loadedEntry(row);
     const auto plan = _viewerPlans.constFind(entry.id);
     if (plan != _viewerPlans.constEnd()) {
         viewerSize = plan->viewportSize;
@@ -1752,13 +2215,13 @@ QList<QPair<QString, int>> ExternalCatalogModel::viewerImageSourcesAt(
 
 void ExternalCatalogModel::requestViewer(
     int row, const QSize &viewportSize) {
-    if (_shutdown || !validRow(row) || !_entries.at(row).image ||
+    if (_shutdown || !validRow(row) || !loadedEntry(row).image ||
         !viewportSize.isValid()) {
         clearViewer();
         return;
     }
 
-    const QString entryId = _entries.at(row).id;
+    const QString entryId = loadedEntry(row).id;
     const bool entryChanged = _viewerEntryId != entryId;
     const bool viewportChanged = _viewerViewportSize != viewportSize;
     if (entryChanged || viewportChanged) {
@@ -1798,12 +2261,12 @@ void ExternalCatalogModel::requestViewer(
 
 void ExternalCatalogModel::requestViewerAt(
     int row, const QSize &viewportSize) {
-    if (_shutdown || !validRow(row) || !_entries.at(row).image ||
+    if (_shutdown || !validRow(row) || !loadedEntry(row).image ||
         !viewportSize.isValid()) {
         return;
     }
 
-    const QString entryId = _entries.at(row).id;
+    const QString entryId = loadedEntry(row).id;
     const bool nativeRequest = viewportSize.isEmpty();
     const int prefetchCount = entryId == _viewerEntryId
         ? (nativeRequest ? 5 : 16) : 1;
@@ -1832,12 +2295,12 @@ void ExternalCatalogModel::requestViewerAt(
 }
 
 void ExternalCatalogModel::setViewerIndex(int row) {
-    if (_shutdown || !validRow(row) || !_entries.at(row).image) {
+    if (_shutdown || !validRow(row) || !loadedEntry(row).image) {
         clearViewer();
         return;
     }
 
-    const QString entryId = _entries.at(row).id;
+    const QString entryId = loadedEntry(row).id;
     if (_viewerEntryId == entryId) {
         scheduleViewerDecode();
         return;
@@ -1921,11 +2384,11 @@ void ExternalCatalogModel::decodeImages(
         }
         const int row = _sourceToRow.value(
             request.info.sourceIdentity(), -1);
-        if (!validRow(row) || !_entries.at(row).image) {
+        if (!validRow(row) || !loadedEntry(row).image) {
             continue;
         }
 
-        Entry &entry = _entries[row];
+        Entry &entry = loadedEntry(row);
         ImageFile *item = ensureItem(row);
         if (!item) {
             continue;
@@ -2109,7 +2572,7 @@ void ExternalCatalogModel::requestImageMetadata(
     scheduleProbePump();
     const bool hasProbeEligibleRow = std::any_of(
         normalized.cbegin(), normalized.cend(), [this](int row) {
-            return validRow(row) && probeResolvedFor(_entries.at(row));
+            return validRow(row) && probeResolvedFor(loadedEntry(row));
         });
     if (!_catalogProbeRequested || _probePassComplete ||
         hasProbeEligibleRow) {
@@ -2199,7 +2662,7 @@ void ExternalCatalogModel::handleImageInfos(
         return;
     }
 
-    int firstChangedRow = _entries.size();
+    int firstChangedRow = logicalRowCount();
     int lastChangedRow = -1;
     bool flushRequested = false;
     bool catalogFitChanged = false;
@@ -2223,7 +2686,7 @@ void ExternalCatalogModel::handleImageInfos(
         if (!validRow(row)) {
             continue;
         }
-        Entry &entry = _entries[row];
+        Entry &entry = loadedEntry(row);
         if (!entry.image ||
             entry.contentVersion != info.sourceVersionToken ||
             !sourceAuthorityMatches(entry.source, info.source)) {
@@ -2332,7 +2795,7 @@ void ExternalCatalogModel::handleImageReady(
     const int authorityRow = _sourceToRow.value(
         request.info.sourceIdentity(), -1);
     if (!validRow(authorityRow) ||
-        !sourceAuthorityMatches(_entries.at(authorityRow).source,
+        !sourceAuthorityMatches(loadedEntry(authorityRow).source,
                                 request.info.source)) {
         return;
     }
@@ -2373,7 +2836,7 @@ void ExternalCatalogModel::handleImageReady(
     if (!validRow(row)) {
         return;
     }
-    Entry &entry = _entries[row];
+    Entry &entry = loadedEntry(row);
     if (!entry.image ||
         !sourceAuthorityMatches(entry.source, request.info.source) ||
         !versionMatches(entry.contentVersion, entry.mtimeNs,
@@ -2460,7 +2923,7 @@ void ExternalCatalogModel::handleImageReadFailed(
     const int authorityRow = _sourceToRow.value(
         request.info.sourceIdentity(), -1);
     if (!validRow(authorityRow) ||
-        !sourceAuthorityMatches(_entries.at(authorityRow).source,
+        !sourceAuthorityMatches(loadedEntry(authorityRow).source,
                                 request.info.source)) {
         return;
     }
@@ -2559,8 +3022,8 @@ void ExternalCatalogModel::scheduleSourceDecodeRetry(
         }
         const int row = _sourceToRow.value(sourceIdentity, -1);
         if (!validRow(row) ||
-            _entries.at(row).contentVersion != contentVersion ||
-            _entries.at(row).source.resourceId != resourceId) {
+            loadedEntry(row).contentVersion != contentVersion ||
+            loadedEntry(row).source.resourceId != resourceId) {
             _sourceDecodeRetryAttempts.remove(retryKey);
             return;
         }
@@ -2598,7 +3061,7 @@ void ExternalCatalogModel::attachThumbnail(
     if (!validRow(row) || providerId.isEmpty()) {
         return;
     }
-    Entry &entry = _entries[row];
+    Entry &entry = loadedEntry(row);
     ImageFile *item = ensureItem(row);
     if (!item) {
         return;
@@ -2676,7 +3139,7 @@ bool ExternalCatalogModel::adoptCachedThumbnail(int row) {
     if (!_thumbnailCache || !validRow(row)) {
         return false;
     }
-    const Entry &entry = _entries.at(row);
+    const Entry &entry = loadedEntry(row);
     if (!entry.image || !entry.thumbnailRequestedSize.isValid()) {
         return false;
     }
@@ -2704,7 +3167,7 @@ void ExternalCatalogModel::handleThumbnailFrameAvailable(
         if (!validRow(row)) {
             continue;
         }
-        Entry &entry = _entries[row];
+        Entry &entry = loadedEntry(row);
         if (entry.contentVersion != versionToken ||
             (entry.size >= 0 && sourceFileSize >= 0 &&
              entry.size != sourceFileSize)) {
@@ -2789,7 +3252,7 @@ void ExternalCatalogModel::handleThumbnailFrameEvicted(
         if (!validRow(row)) {
             continue;
         }
-        Entry &entry = _entries[row];
+        Entry &entry = loadedEntry(row);
         if (entry.thumbnailProviderId != providerId) {
             continue;
         }
@@ -2821,7 +3284,7 @@ void ExternalCatalogModel::handleThumbnailRequestReleased(
         if (!validRow(row)) {
             continue;
         }
-        Entry &entry = _entries[row];
+        Entry &entry = loadedEntry(row);
         if (entry.contentVersion != versionToken ||
             (entry.size >= 0 && sourceFileSize >= 0 &&
              entry.size != sourceFileSize) ||
@@ -2863,7 +3326,7 @@ void ExternalCatalogModel::enqueueProbeRows(
         if (!validRow(row)) {
             continue;
         }
-        const Entry &entry = _entries.at(row);
+        const Entry &entry = loadedEntry(row);
         if (!entry.image || !entry.source.isValid() ||
             !expensiveSource(entry.source)) {
             continue;
@@ -2945,7 +3408,7 @@ void ExternalCatalogModel::pumpProbeRequests() {
         if (available <= 0 || !validRow(row)) {
             return;
         }
-        const Entry &entry = _entries.at(row);
+        const Entry &entry = loadedEntry(row);
         if (!entry.image || !entry.source.isValid() ||
             probeResolvedFor(entry) ||
             _probePendingVersions.contains(entry.sourceIdentity)) {
@@ -2973,7 +3436,8 @@ void ExternalCatalogModel::pumpProbeRequests() {
     drain(_probeOverscanRows, false, backgroundRequests);
     if (_catalogProbeRequested) {
         while (available > 0 && _catalogProbeCursor < _entries.size()) {
-            appendRow(_catalogProbeCursor++, false, backgroundRequests);
+            const int row = _entries.at(_catalogProbeCursor++).sourceIndex;
+            appendRow(row, false, backgroundRequests);
         }
     }
 
@@ -3023,7 +3487,7 @@ void ExternalCatalogModel::handleImageProbe(
     }
     const int authorityRow = _sourceToRow.value(sourceIdentity, -1);
     if (!validRow(authorityRow) ||
-        !sourceAuthorityMatches(_entries.at(authorityRow).source,
+        !sourceAuthorityMatches(loadedEntry(authorityRow).source,
                                 result.request.source)) {
         return;
     }
@@ -3061,7 +3525,7 @@ void ExternalCatalogModel::handleImageProbe(
                 if (!validRow(row)) {
                     return;
                 }
-                const Entry &entry = _entries.at(row);
+                const Entry &entry = loadedEntry(row);
                 if (entry.contentVersion != version ||
                     entry.source.resourceId != resourceId) {
                     return;
@@ -3103,7 +3567,7 @@ void ExternalCatalogModel::handleImageProbe(
         if (!validRow(row)) {
             continue;
         }
-        Entry &entry = _entries[row];
+        Entry &entry = loadedEntry(row);
         if (entry.contentVersion != version) {
             continue;
         }
@@ -3185,7 +3649,7 @@ void ExternalCatalogModel::beginCatalogFitPass() {
     _catalogFitStarted = true;
     QSet<int> seen;
     const auto append = [this, &seen](int row) {
-        if (validRow(row) && _entries.at(row).image &&
+        if (validRow(row) && loadedEntry(row).image &&
             !seen.contains(row)) {
             seen.insert(row);
             _catalogFitRows.append(row);
@@ -3196,26 +3660,39 @@ void ExternalCatalogModel::beginCatalogFitPass() {
         append(row);
     }
     for (const int row : std::as_const(_metadataVisibleRows)) {
-        if (validRow(row) && expensiveSource(_entries.at(row).source)) {
+        if (validRow(row) && expensiveSource(loadedEntry(row).source)) {
             append(row);
         }
     }
     for (const int row : std::as_const(_metadataOverscanRows)) {
-        if (validRow(row) && expensiveSource(_entries.at(row).source)) {
+        if (validRow(row) && expensiveSource(loadedEntry(row).source)) {
             append(row);
         }
     }
-    for (int row = 0; row < _entries.size(); ++row) {
-        if (expensiveSource(_entries.at(row).source)) {
-            append(row);
+    for (const Entry &entry : std::as_const(_entries)) {
+        if (expensiveSource(entry.source)) {
+            append(entry.sourceIndex);
         }
     }
 
     if (!_entries.isEmpty()) {
         // Wake rows which intentionally deferred their normal thumbnail
         // decode while pass 1 was still filling provisional frames.
-        emit dataChanged(index(0), index(_entries.size() - 1),
-                         {FileListModel::ImageIdUrlRole});
+        QList<int> rows;
+        rows.reserve(_entries.size());
+        for (const Entry &entry : std::as_const(_entries)) {
+            rows.append(entry.sourceIndex);
+        }
+        std::sort(rows.begin(), rows.end());
+        for (qsizetype offset = 0; offset < rows.size();) {
+            const int first = rows.at(offset++);
+            int last = first;
+            while (offset < rows.size() && rows.at(offset) == last + 1) {
+                last = rows.at(offset++);
+            }
+            emit dataChanged(index(first), index(last),
+                             {FileListModel::ImageIdUrlRole});
+        }
     }
     scheduleMetadataPump();
     scheduleCatalogFitPump();
@@ -3227,7 +3704,7 @@ ImageDecodeRequest ExternalCatalogModel::catalogFitRequestForRow(
     if (!validRow(row)) {
         return {};
     }
-    const Entry &entry = _entries.at(row);
+    const Entry &entry = loadedEntry(row);
     const QSize originalSize = entry.originalSize.isValid()
         ? entry.originalSize
         : entry.item ? entry.item->fullSize() : QSize();
@@ -3263,7 +3740,7 @@ void ExternalCatalogModel::stabilizeViewerFitRequest(
     if (!validRow(row)) {
         return;
     }
-    const Entry &entry = _entries.at(row);
+    const Entry &entry = loadedEntry(row);
     const QSize previous = _viewerImageCache.entryForPath(
         entry.sourceIdentity, false).requestedSize;
     request.targetSize = stableDecodeTarget(
@@ -3303,7 +3780,7 @@ void ExternalCatalogModel::pumpCatalogFitRequests() {
         if (!validRow(row)) {
             continue;
         }
-        const Entry &entry = _entries.at(row);
+        const Entry &entry = loadedEntry(row);
         if (!entry.image ||
             _catalogFitResolvedSources.contains(entry.sourceIdentity)) {
             continue;
@@ -3365,7 +3842,7 @@ bool ExternalCatalogModel::viewerFitWindowReady(
         if (!validRow(candidateRow)) {
             continue;
         }
-        const Entry &entry = _entries.at(candidateRow);
+        const Entry &entry = loadedEntry(candidateRow);
         const QSize originalSize = entry.originalSize.isValid()
             ? entry.originalSize
             : entry.item ? entry.item->fullSize() : QSize();
@@ -3459,7 +3936,7 @@ void ExternalCatalogModel::requestImageMetadataForRow(
     if (!queue.contains(row)) {
         queue.append(row);
     }
-    if (!probeResolvedFor(_entries.at(row))) {
+    if (!probeResolvedFor(loadedEntry(row))) {
         QList<int> &probeQueue = highPriority
             ? _probeUrgentRows : _probeOverscanRows;
         if (!probeQueue.contains(row)) {
@@ -3470,7 +3947,7 @@ void ExternalCatalogModel::requestImageMetadataForRow(
     // Before the catalog barrier only an explicit high-priority viewer row
     // may materialize. Masonry visible/overscan requests stay in their queues
     // until every bounded probe has produced an outcome.
-    const Entry &entry = _entries.at(row);
+    const Entry &entry = loadedEntry(row);
     const bool explicitCurrentViewer = highPriority &&
         entry.id == _viewerEntryId;
     if (!_catalogProbeRequested || _probePassComplete ||
@@ -3499,7 +3976,7 @@ void ExternalCatalogModel::pumpMetadataRequests() {
         if (!validRow(row)) {
             return false;
         }
-        const Entry &entry = _entries.at(row);
+        const Entry &entry = loadedEntry(row);
         if (!entry.image || !entry.source.isValid() ||
             entry.originalSize.isValid() ||
             (entry.item && entry.item->fullSize().isValid())) {
@@ -3543,7 +4020,7 @@ void ExternalCatalogModel::pumpMetadataRequests() {
         if (available <= 0 || !validRow(row)) {
             return;
         }
-        const Entry &entry = _entries.at(row);
+        const Entry &entry = loadedEntry(row);
         if (!entry.image || !entry.source.isValid() ||
             entry.originalSize.isValid() ||
             (entry.item && entry.item->fullSize().isValid())) {
@@ -3576,8 +4053,8 @@ void ExternalCatalogModel::pumpMetadataRequests() {
         while (available > 0 && candidates-- > 0 && !rows.isEmpty()) {
             const int row = rows.takeFirst();
             if (!validRow(row) ||
-                _entries.at(row).id != _viewerEntryId ||
-                !probeResolvedFor(_entries.at(row))) {
+                loadedEntry(row).id != _viewerEntryId ||
+                !probeResolvedFor(loadedEntry(row))) {
                 rows.append(row);
                 continue;
             }
@@ -3605,7 +4082,8 @@ void ExternalCatalogModel::pumpMetadataRequests() {
 
     if (_catalogMetadataRequested) {
         while (available > 0 && _catalogMetadataCursor < _entries.size()) {
-            appendRow(_catalogMetadataCursor++, backgroundRequests);
+            const int row = _entries.at(_catalogMetadataCursor++).sourceIndex;
+            appendRow(row, backgroundRequests);
         }
     }
 
@@ -3667,7 +4145,7 @@ void ExternalCatalogModel::scheduleMetadataRetry(
             _metadataRetryAttempts.remove(retryKey);
             return;
         }
-        const Entry &entry = _entries.at(row);
+        const Entry &entry = loadedEntry(row);
         if (!entry.image || entry.contentVersion != contentVersion ||
             entry.source.resourceId != resourceId ||
             _metadataResolvedPaths.contains(sourceIdentity) ||
@@ -3728,7 +4206,7 @@ void ExternalCatalogModel::processBackgroundRetries() {
             _metadataRetryAttempts.remove(retryKey);
             continue;
         }
-        const Entry &entry = _entries.at(row);
+        const Entry &entry = loadedEntry(row);
         if (!entry.image ||
             entry.contentVersion != retry.contentVersion ||
             entry.source.resourceId != retry.resourceId ||
@@ -3754,9 +4232,9 @@ void ExternalCatalogModel::processBackgroundRetries() {
         const QString sourceIdentity = request.info.sourceIdentity();
         const int row = _sourceToRow.value(sourceIdentity, -1);
         if (!validRow(row) ||
-            _entries.at(row).contentVersion !=
+            loadedEntry(row).contentVersion !=
                 request.info.sourceVersionToken ||
-            _entries.at(row).source.resourceId !=
+            loadedEntry(row).source.resourceId !=
                 request.info.source.resourceId) {
             _sourceDecodeRetryAttempts.remove(retryKey);
             continue;
@@ -3823,7 +4301,7 @@ void ExternalCatalogModel::scheduleViewerDecode() {
 
 void ExternalCatalogModel::scheduleViewerDecodeAt(
     int row, const QSize &viewportSize, int prefetchCount) {
-    if (_shutdown || !validRow(row) || !_entries.at(row).image ||
+    if (_shutdown || !validRow(row) || !loadedEntry(row).image ||
         !viewportSize.isValid() || prefetchCount <= 0) {
         return;
     }
@@ -3831,11 +4309,11 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
     const bool probeBarrierActive =
         _catalogProbeRequested && !_probePassComplete;
     const int effectivePrefetchCount = probeBarrierActive ? 1 : prefetchCount;
-    const bool explicitCurrentPlan = _entries.at(row).id == _viewerEntryId;
+    const bool explicitCurrentPlan = loadedEntry(row).id == _viewerEntryId;
     const QList<int> candidates = viewerCandidateRows(
         row, effectivePrefetchCount);
     for (const int candidateRow : candidates) {
-        const Entry &candidate = _entries.at(candidateRow);
+        const Entry &candidate = loadedEntry(candidateRow);
         if (!candidate.originalSize.isValid() &&
             (!candidate.item || !candidate.item->fullSize().isValid())) {
             requestImageMetadataForRow(
@@ -3844,15 +4322,18 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
         }
     }
 
+    int windowCenterRow = -1;
+    const QList<ImageFile *> windowItems = viewerItems(
+        row, effectivePrefetchCount, &windowCenterRow);
     ViewerImageCache::RequestPlan plan = _viewerImageCache.planRequest(
-        viewerItems(row, effectivePrefetchCount), row, viewportSize,
+        windowItems, windowCenterRow, viewportSize,
         effectivePrefetchCount,
         [this](ImageDecodeRequest &request) {
             stabilizeViewerFitRequest(request);
         });
     if (!plan.cachedImages.isEmpty()) {
         emit viewerSourceAtChanged(row);
-        if (_entries.at(row).id == _viewerEntryId) {
+        if (loadedEntry(row).id == _viewerEntryId) {
             notifyViewerImageUrlChanged();
         }
     }
@@ -3865,7 +4346,7 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
         const int requestRow = _sourceToRow.value(
             request.info.sourceIdentity(), -1);
         if (validRow(requestRow)) {
-            const Entry &sourceEntry = _entries.at(requestRow);
+            const Entry &sourceEntry = loadedEntry(requestRow);
             request.info.source = sourceEntry.source;
             request.info.path = sourceEntry.sourceIdentity;
             request.info.sourceVersionToken =
@@ -3913,10 +4394,10 @@ QList<int> ExternalCatalogModel::viewerCandidateRows(
         if (candidate < 0) {
             hitStart = true;
         }
-        if (candidate >= _entries.size()) {
+        if (candidate >= logicalRowCount()) {
             hitEnd = true;
         }
-        if (validRow(candidate) && _entries.at(candidate).image) {
+        if (validRow(candidate) && loadedEntry(candidate).image) {
             result.append(candidate);
         }
     }
@@ -3924,11 +4405,22 @@ QList<int> ExternalCatalogModel::viewerCandidateRows(
 }
 
 QList<ImageFile *> ExternalCatalogModel::viewerItems(
-    int centerRow, int prefetchCount) const {
-    QList<ImageFile *> result;
-    result.resize(_entries.size());
-    for (const int row : viewerCandidateRows(centerRow, prefetchCount)) {
-        result[row] = ensureItem(row);
+    int centerRow, int prefetchCount, int *windowCenterRow) const {
+    if (windowCenterRow) {
+        *windowCenterRow = -1;
+    }
+    const QList<int> rows = viewerCandidateRows(centerRow, prefetchCount);
+    if (rows.isEmpty()) {
+        return {};
+    }
+    const auto [minimum, maximum] = std::minmax_element(
+        rows.cbegin(), rows.cend());
+    QList<ImageFile *> result(*maximum - *minimum + 1, nullptr);
+    for (const int row : rows) {
+        result[row - *minimum] = ensureItem(row);
+    }
+    if (windowCenterRow) {
+        *windowCenterRow = centerRow - *minimum;
     }
     return result;
 }
@@ -3971,7 +4463,8 @@ QString ExternalCatalogModel::thumbnailRequestKey(
 }
 
 bool ExternalCatalogModel::validRow(int row) const {
-    return row >= 0 && row < _entries.size();
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded;
 }
 
 QString ExternalCatalogModel::nextImageId(const Entry &entry) {

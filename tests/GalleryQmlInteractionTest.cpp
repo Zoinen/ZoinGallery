@@ -594,13 +594,24 @@ private slots:
             QTRY_COMPARE_WITH_TIMEOUT(
                 layout->property("paddingBottom").toReal(), inset, 3000);
 
-            QQuickItem *pointer = nullptr;
+            const auto activeTile = [&]() -> QQuickItem * {
+                const auto pointers = rootObject->findChildren<QQuickItem *>(
+                    QStringLiteral("galleryBrickPointer-0"),
+                    Qt::FindChildrenRecursively);
+                for (QQuickItem *pointer : pointers) {
+                    QQuickItem *const candidate = pointer
+                        ? pointer->parentItem() : nullptr;
+                    if (candidate && candidate->isVisible()
+                        && candidate->property("mode").toString() == mode) {
+                        return candidate;
+                    }
+                }
+                return nullptr;
+            };
+            QQuickItem *tile = nullptr;
             QTRY_VERIFY_WITH_TIMEOUT(
-                (pointer = rootObject->findChild<QQuickItem *>(
-                     QStringLiteral("galleryBrickPointer-0"))) != nullptr,
+                (tile = activeTile()) != nullptr,
                 5000);
-            QQuickItem *const tile = pointer->parentItem();
-            QVERIFY(tile);
             QTRY_VERIFY_WITH_TIMEOUT(qAbs(tile->y() - inset) < 0.01, 3000);
             QTRY_VERIFY_WITH_TIMEOUT(tile->height() > 0.0, 3000);
 

@@ -169,7 +169,7 @@ class GalleryPanelGestureTest : public QObject {
     Q_OBJECT
 
 private slots:
-    void gridAndIconsWheelZoomChangesCellCountAndListsStayFixed() {
+    void gridAndIconsWheelZoomChangesCellCountAndCompactModesUseRowSteps() {
         QVariantList catalog;
         for (int index = 0; index < 120; ++index) {
             catalog.append(folderEntry(
@@ -223,8 +223,8 @@ private slots:
         QVERIFY(invokeWheel(panel, -120, -120, int(Qt::ControlModifier), 0, 0));
         QTRY_COMPARE(firstRowColumnCount(layout), 5);
 
-        // Columns and Details retain their host-supplied row pitch. Their
-        // wheel and shared +/- key path are both harmless no-ops.
+        // Columns and Details share the compact two-pixel zoom step across
+        // wheel and +/- paths.
         for (const QString &mode : {QStringLiteral("columns"),
                                     QStringLiteral("details")}) {
             panel->setProperty("presentationMode", mode);
@@ -235,14 +235,14 @@ private slots:
             layout->setProperty("density", 31.0);
             QTRY_VERIFY(qAbs(layout->property("density").toReal() - 31.0)
                         < 0.001);
-            QVERIFY(!panel->property("densityAdjustmentEnabled").toBool());
+            QVERIFY(panel->property("densityAdjustmentEnabled").toBool());
             QVERIFY(invokeWheel(panel, 120, 120, int(Qt::ControlModifier),
                                 0, 0));
-            QCOMPARE(layout->property("density").toReal(), qreal(31.0));
+            QCOMPARE(layout->property("density").toReal(), qreal(33.0));
             QVERIFY(invoke(panel, "stepDensity", true));
-            QCOMPARE(layout->property("density").toReal(), qreal(31.0));
+            QCOMPARE(layout->property("density").toReal(), qreal(35.0));
             QVERIFY(invoke(panel, "stepDensity", false));
-            QCOMPARE(layout->property("density").toReal(), qreal(31.0));
+            QCOMPARE(layout->property("density").toReal(), qreal(33.0));
         }
 
         runtime->shutdown();

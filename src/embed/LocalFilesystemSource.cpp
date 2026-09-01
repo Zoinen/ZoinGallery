@@ -199,6 +199,13 @@ void LocalFilesystemSource::toggleSelection(int viewIndex) {
     }
 }
 
+void LocalFilesystemSource::setSelection(int viewIndex, bool selected) {
+    const int sourceIndex = sourceIndexAt(viewIndex);
+    if (_fileListModel && sourceIndex >= 0) {
+        _fileListModel->setSelection(sourceIndex, selected);
+    }
+}
+
 void LocalFilesystemSource::ensurePreviews() {
     // FileListModel requests metadata as part of cd() and watcher refreshes;
     // MasonryLayout requests only the currently visible decode sizes.

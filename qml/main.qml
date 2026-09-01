@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Window
 import QtQuick.Layouts
@@ -28,9 +30,6 @@ MainWindow {
     readonly property int thumbnailsTitleBarSidePadding: 8
     color: useTransparentWindowBackground ? "transparent" : (isQWKLegacy ? Style.windowBackgroundQWKLegacy : Style.windowBackgroundNoQWK)
     title: "Zoin Gallery"
-
-    property bool viewerDirty: false
-    property bool thumbnailsDirty: false
 
     onClosing: (closeEvent) => {
         console.info("[Shutdown] QML onClosing explicitQuitRequested=" + viewerController.explicitQuitRequested
@@ -117,31 +116,33 @@ MainWindow {
             console.log("main window resized", topLevelWindow.width, topLevelWindow.height)
             if (root.state === "thumbnails") {
                 if (isWidthChanged) {
-                    masonryLayout.view.reReadAndDecodeThumbnails()
+                    root.masonryLayout.view.reReadAndDecodeThumbnails()
                 }
-                viewerDirty = true
+                shellController.viewerDirty = true
             }
             else {
                 if (viewerMode.zoomFitView && !viewerMode.sphericViewerMode) {
                     // console.log("onMainWindowResized")
                     viewerMode.imageContainer.zoomToFit(true)
-                    root.viewerDecodeModel.cancelAllDecodeViewerRunners()
+                    shellController.viewerDecodeModel.cancelAllDecodeViewerRunners()
                     viewerMode.requestCurrentViewer(
                                 viewerMode.width * dpr,
                                 viewerMode.height * dpr)
-                    viewerDirty = false
+                    shellController.viewerDirty = false
                 }
                 else {
-                    viewerDirty = true
+                    shellController.viewerDirty = true
                 }
-                thumbnailsDirty = true
+                shellController.thumbnailsDirty = true
             }
             })
         }
 
         function onWindowIsReady() {
-            masonryZoomSlider.updateTargetSize()
+            root.masonryZoomSlider.updateTargetSize()
             viewerController.initialCd(Math.round(viewerMode.width * dpr), Math.round(viewerMode.height * dpr))
+            if (root.state === "thumbnails")
+                root.masonryLayout.focusView()
             schedulePlatformWindowEffects()
         }
 
@@ -153,7 +154,7 @@ MainWindow {
     Connections {
         target: viewerMode
         function onZoomFitViewChanged() {
-            root.viewerDecodeModel.cancelAllDecodeViewerRunners()
+            shellController.viewerDecodeModel.cancelAllDecodeViewerRunners()
             if (viewerMode.zoomFitView) {
                 // The requested decode tier must follow the actual viewer
                 // mode even when the current image was already clean.  A
@@ -162,7 +163,7 @@ MainWindow {
                 viewerMode.requestCurrentViewer(
                             viewerMode.width * dpr,
                             viewerMode.height * dpr)
-                viewerDirty = false
+                shellController.viewerDirty = false
             }
             else {
                 viewerMode.requestCurrentViewer()
@@ -173,7 +174,7 @@ MainWindow {
     Connections {
         target: viewerController
         function onCurrentPathChanged() {
-            masonryZoomSlider.updateTargetSize()
+            root.masonryZoomSlider.updateTargetSize()
         }
 
         function onExternalActivateRequested() {
@@ -188,8 +189,8 @@ MainWindow {
         function onSetCurrentIndex(index) {
             if (viewerController.pendingOpenInViewer) {
                 viewerController.clearPendingOpenInViewer()
-                root.useMainViewerSource()
-                Qt.callLater(() => root.tryOpenExternalInViewer(index))
+                shellController.useMainViewerSource()
+                Qt.callLater(() => shellController.tryOpenExternalInViewer(index))
             }
         }
     }
@@ -200,602 +201,39 @@ MainWindow {
         anchors.fill: parent
         color: topLevelWindow.useMacNativeTitleBar ? Style.macGlassWindowColor : Style.windowColor
 
-        property bool viewerPinchCloseActive: false
-        property bool selectedImagesPanelOpen: false
-        property var pendingCreateDropUrls: []
-        property int pendingCreateDropAction: Qt.CopyAction
-        property bool createFolderForDrop: false
-        property var viewerSourceContext: ({
-            "masonry": masonryLayout,
-            "mapper": galleryViewModel,
-            "decodeModel": fileListModel,
-            "selectionModel": fileListModel,
-            "filmstripModel": imageModel
-        })
-        readonly property var viewerSourceMasonry:
-            viewerSourceContext.masonry
-        readonly property var viewerSourceMapper:
-            viewerSourceContext.mapper
-        readonly property var viewerDecodeModel:
-            viewerSourceContext.decodeModel
-        readonly property var viewerSelectionModel:
-            viewerSourceContext.selectionModel
-        readonly property var viewerFilmstripModel:
-            viewerSourceContext.filmstripModel
-        property bool viewerPinchCloseReturning: false
-        property bool viewerPinchCloseFinishingCommit: false
-        property real viewerPinchCloseProgress: 0
+        readonly property alias masonryLayout: thumbnailsPanels.masonry
+        readonly property alias toolbarLayout: thumbnailToolbar.controlLayout
+        readonly property alias masonryZoomSlider: thumbnailToolbar.zoomSlider
 
-        function currentSourceIndex() {
-            return galleryViewModel.mapToSourceRow(masonryLayout.view.currentIndex)
+        StandaloneShellController {
+            id: shellController
+            shell: root
+            hostWindow: topLevelWindow
+            viewer: viewerMode
+            galleryLayout: root.masonryLayout
+            toolbarControlLayout: root.toolbarLayout
+            thumbnailSurface: thumbnailsView
+            thumbnailsBackground: thumbnailsViewBackground
+            viewerBackgroundItem: viewerBackground
+            titleBarItem: titleBar
+            navigationController: viewerController
+            catalogModel: fileListModel
+            viewModel: galleryViewModel
+            previewModel: imageModel
+            createFolderDialog: shellOverlays.createDialog
+            createFolderNameField: shellOverlays.nameField
+            createFolderErrorLabel: shellOverlays.errorLabel
+            dropErrorDialog: shellOverlays.dropDialog
         }
-
-        function showFileDropError(title, message) {
-            fileDropErrorPopup.titleText = title || "File operation failed"
-            fileDropErrorPopup.messageText = message || "The operation could not be completed."
-            fileDropErrorPopup.open()
-        }
-
-        function beginFolderCreation(urls, action) {
-            pendingCreateDropUrls = urls || []
-            pendingCreateDropAction = action === Qt.MoveAction
-                                      ? Qt.MoveAction : Qt.CopyAction
-            createFolderForDrop = pendingCreateDropUrls.length > 0
-            createFolderName.text = ""
-            createFolderError.text = ""
-            createFolderPopup.open()
-            Qt.callLater(() => createFolderName.forceActiveFocus())
-        }
-
-        function confirmFolderCreation() {
-            const result = createFolderForDrop
-                         ? fileListModel.createFolderAndDropUrls(
-                               pendingCreateDropUrls,
-                               viewerController.currentPath,
-                               createFolderName.text,
-                               pendingCreateDropAction)
-                         : fileListModel.createFolder(
-                               viewerController.currentPath,
-                               createFolderName.text)
-            if (result.success) {
-                createFolderPopup.close()
-                pendingCreateDropUrls = []
-                masonryLayout.focusProxy.forceActiveFocus()
-            }
-            else {
-                createFolderError.text = result.message || result.title
-                createFolderName.selectAll()
-                createFolderName.forceActiveFocus()
-            }
-        }
-
-        function viewerSourceIndex() {
-            return viewerSourceMapper.mapToSourceRow(
-                        viewerSourceMasonry.view.currentIndex)
-        }
-
-        function setViewerSource(masonry, mapper, decodeModel,
-                                 selectionModel, filmstripModel) {
-            viewerSourceContext = {
-                "masonry": masonry,
-                "mapper": mapper,
-                "decodeModel": decodeModel,
-                "selectionModel": selectionModel,
-                "filmstripModel": filmstripModel
-            }
-        }
-
-        function useMainViewerSource() {
-            setViewerSource(masonryLayout, galleryViewModel, fileListModel,
-                            fileListModel, imageModel)
-        }
-
-        function openViewerFrom(masonry, mapper, decodeModel,
-                                selectionModel, filmstripModel) {
-            if (root.state !== "thumbnails") {
-                return
-            }
-            setViewerSource(masonry, mapper, decodeModel,
-                            selectionModel, filmstripModel)
-            toggleViewer()
-        }
-        property rect viewerPinchCloseStartGeometry: Qt.rect(0, 0, 0, 0)
-        property rect viewerPinchCloseTargetGeometry: Qt.rect(0, 0, 0, 0)
-        property bool viewerShowAnimationRunning: viewerMode.animation.running || viewerPinchCloseActive
-
-        onViewerPinchCloseProgressChanged: {
-            applyViewerPinchCloseProgress()
-            if (viewerPinchCloseFinishingCommit && viewerPinchCloseProgress >= 0.999) {
-                Qt.callLater(() => {
-                    if (viewerPinchCloseFinishingCommit) {
-                        completeViewerPinchClose()
-                    }
-                })
-            }
-        }
-
-        function toggleViewer() {
-            if (root.state === "thumbnails") {
-                if (viewerDirty) {
-                    viewerDirty = false
-                    console.log("viewer dirty")
-                }
-                switchToViewer()
-            }
-            else {
-                closeViewer()
-            }
-        }
-
-        function closeViewer(startGeometry) {
-            viewerController.clearPendingOpenInViewer()
-            viewerDecodeModel.cancelAllDecodeViewerRunnersForViewerClose()
-            switchToThumbnails(startGeometry)
-            if (thumbnailsDirty) {
-                thumbnailsDirty = false
-                viewerSourceMasonry.view.reReadAndDecodeThumbnails()
-            }
-        }
-
-        function validGeometry(geometry) {
-            return geometry !== undefined && geometry.width > 1 && geometry.height > 1
-        }
-
-        function currentThumbnailGeometry() {
-            if (!viewerSourceMasonry.view.currentItem) {
-                return undefined
-            }
-
-            return root.mapFromItem(viewerSourceMasonry.view,
-                                    viewerSourceMasonry.currentItemImageGeometry())
-        }
-
-        function currentThumbnailImageGeometry() {
-            let thumbnailGeometry = currentThumbnailGeometry()
-            if (!validGeometry(thumbnailGeometry)) {
-                return undefined
-            }
-
-            return viewerMode.imageContainer.imageRectFittedInRect(thumbnailGeometry)
-        }
-
-        function lerp(start, end, progress) {
-            return start + (end - start) * progress
-        }
-
-        function easeViewerPinchCloseProgress(progress) {
-            return Math.sin(Math.max(0, Math.min(1, progress)) * Math.PI / 2)
-        }
-
-        function beginViewerPinchClose() {
-            if (viewerPinchCloseActive) {
-                return true
-            }
-
-            if (root.state !== "viewer") {
-                return false
-            }
-
-            let startGeometry = currentViewerImageGeometry()
-            let targetGeometry = currentThumbnailImageGeometry()
-            if (!validGeometry(startGeometry) || !validGeometry(targetGeometry)) {
-                return false
-            }
-
-            viewerMode.animation.stop()
-            viewerPinchCloseProgressAnimation.stop()
-            viewerPinchCloseFinalizeTimer.stop()
-            viewerPinchCloseStartGeometry = startGeometry
-            viewerPinchCloseTargetGeometry = targetGeometry
-            viewerPinchCloseReturning = false
-            viewerPinchCloseFinishingCommit = false
-            viewerPinchCloseActive = true
-            toolbarLayout.visible = true
-
-            viewerMode.imageContainer.x = 0
-            viewerMode.imageContainer.y = 0
-            viewerMode.imageContainer.width = Qt.binding(() => viewerMode.width)
-            viewerMode.imageContainer.height = Qt.binding(() => viewerMode.height)
-            viewerMode.imageContainer.setImageRect(startGeometry)
-            return true
-        }
-
-        function cancelViewerPinchCloseDuringGesture() {
-            viewerPinchCloseProgressAnimation.stop()
-            viewerPinchCloseFinalizeTimer.stop()
-            viewerPinchCloseActive = false
-            viewerPinchCloseReturning = false
-            viewerPinchCloseFinishingCommit = false
-            viewerPinchCloseProgress = 0
-            toolbarLayout.visible = false
-            viewerMode.imageContainer.x = 0
-            viewerMode.imageContainer.y = 0
-            viewerMode.imageContainer.width = Qt.binding(() => viewerMode.width)
-            viewerMode.imageContainer.height = Qt.binding(() => viewerMode.height)
-        }
-
-        function completeViewerPinchCloseReturn() {
-            viewerPinchCloseProgressAnimation.stop()
-            viewerPinchCloseFinalizeTimer.stop()
-            viewerPinchCloseActive = false
-            viewerPinchCloseReturning = false
-            viewerPinchCloseFinishingCommit = false
-            viewerPinchCloseProgress = 0
-            toolbarLayout.visible = false
-            viewerMode.imageContainer.zoomToFit()
-        }
-
-        function updateViewerPinchClose(progress) {
-            if (viewerPinchCloseFinishingCommit) {
-                return
-            }
-
-            let clampedProgress = Math.max(0, Math.min(1, progress))
-            if (clampedProgress <= 0) {
-                if (viewerPinchCloseActive) {
-                    cancelViewerPinchCloseDuringGesture()
-                }
-                return
-            }
-
-            if (!beginViewerPinchClose()) {
-                return
-            }
-
-            viewerPinchCloseReturning = false
-            viewerPinchCloseFinishingCommit = false
-            viewerPinchCloseProgressAnimation.stop()
-            viewerPinchCloseFinalizeTimer.stop()
-            viewerPinchCloseProgress = clampedProgress
-        }
-
-        function applyViewerPinchCloseProgress() {
-            if (!viewerPinchCloseActive ||
-                    !validGeometry(viewerPinchCloseStartGeometry) ||
-                    !validGeometry(viewerPinchCloseTargetGeometry)) {
-                return
-            }
-
-            let progress = easeViewerPinchCloseProgress(viewerPinchCloseProgress)
-            viewerMode.imageContainer.setImageRect(Qt.rect(
-                    lerp(viewerPinchCloseStartGeometry.x, viewerPinchCloseTargetGeometry.x, progress),
-                    lerp(viewerPinchCloseStartGeometry.y, viewerPinchCloseTargetGeometry.y, progress),
-                    lerp(viewerPinchCloseStartGeometry.width, viewerPinchCloseTargetGeometry.width, progress),
-                    lerp(viewerPinchCloseStartGeometry.height, viewerPinchCloseTargetGeometry.height, progress)))
-        }
-
-        function enterThumbnailsAfterViewerPinchClose() {
-            viewerController.clearPendingOpenInViewer()
-            viewerDecodeModel.cancelAllDecodeViewerRunnersForViewerClose()
-            viewerSourceMasonry.focusView()
-            if (root.state !== "thumbnails") {
-                root.state = "thumbnails"
-            }
-
-            toolbarLayout.visible = true
-            if (thumbnailsDirty) {
-                thumbnailsDirty = false
-                viewerSourceMasonry.view.reReadAndDecodeThumbnails()
-            }
-            viewerMode.panelsVisible = false
-            topLevelWindow.title = "ZoinGallery"
-            thumbnailsView.opacity = 1
-            thumbnailsViewBackground.opacity = 1
-            viewerBackground.opacity = 0
-            titleBar.opacity = 1
-        }
-
-        function completeViewerPinchClose() {
-            viewerPinchCloseProgressAnimation.stop()
-            viewerPinchCloseFinalizeTimer.stop()
-            enterThumbnailsAfterViewerPinchClose()
-            viewerMode.visible = false
-            viewerPinchCloseActive = false
-            viewerPinchCloseReturning = false
-            viewerPinchCloseFinishingCommit = false
-            viewerPinchCloseProgress = 0
-            viewerMode.imageContainer.x = 0
-            viewerMode.imageContainer.y = 0
-            viewerMode.imageContainer.width = Qt.binding(() => viewerMode.width)
-            viewerMode.imageContainer.height = Qt.binding(() => viewerMode.height)
-            viewerMode.imageContainer.zoomToFit(true)
-            viewerMode.zoomFitView = true
-        }
-
-        function finishViewerPinchClose(commit) {
-            if (!viewerPinchCloseActive) {
-                return
-            }
-
-            let targetGeometry = currentThumbnailImageGeometry()
-            if (commit && validGeometry(targetGeometry)) {
-                viewerPinchCloseReturning = false
-                viewerPinchCloseFinishingCommit = true
-                viewerPinchCloseTargetGeometry = targetGeometry
-                viewerPinchCloseProgressAnimation.stop()
-                viewerPinchCloseFinalizeTimer.stop()
-                if (viewerPinchCloseProgress >= 0.999) {
-                    viewerPinchCloseProgress = 1
-                    Qt.callLater(() => {
-                        if (viewerPinchCloseFinishingCommit) {
-                            completeViewerPinchClose()
-                        }
-                    })
-                    return
-                }
-
-                viewerPinchCloseProgressAnimation.to = 1
-                viewerPinchCloseProgressAnimation.restart()
-                viewerPinchCloseFinalizeTimer.restart()
-                return
-            }
-
-            completeViewerPinchCloseReturn()
-        }
-
-        NumberAnimation {
-            id: viewerPinchCloseProgressAnimation
-            target: root
-            property: "viewerPinchCloseProgress"
-            duration: viewerMode.animationDuration
-            easing.type: viewerMode.easingType
-
-            onFinished: {
-                if (viewerPinchCloseFinishingCommit) {
-                    completeViewerPinchClose()
-                }
-                else if (viewerPinchCloseReturning && root.state === "viewer") {
-                    completeViewerPinchCloseReturn()
-                }
-            }
-        }
-
-        Timer {
-            id: viewerPinchCloseFinalizeTimer
-            interval: viewerMode.animationDuration + 50
-            repeat: false
-            onTriggered: {
-                if (viewerPinchCloseFinishingCommit) {
-                    completeViewerPinchClose()
-                }
-                else if (viewerPinchCloseReturning && root.state === "viewer") {
-                    completeViewerPinchCloseReturn()
-                }
-            }
-        }
-
-        function tryOpenExternalInViewer(targetIndex, attempts) {
-            if (attempts === undefined) {
-                attempts = 0
-            }
-            if (masonryLayout.view.currentIndex !== targetIndex) {
-                if (attempts < 300) {
-                    Qt.callLater(() => root.tryOpenExternalInViewer(targetIndex, attempts + 1))
-                }
-                else {
-                    console.warn("External image open did not reach target index", targetIndex,
-                                 "current", masonryLayout.view.currentIndex)
-                }
-                return
-            }
-            let size = masonryLayout.view.indexOriginalSize(masonryLayout.view.currentIndex)
-            if ((size.width <= 1 || size.height <= 1) && attempts < 300) {
-                Qt.callLater(() => root.tryOpenExternalInViewer(targetIndex, attempts + 1))
-                return
-            }
-            root.switchToViewer(false)
-        }
-
-        function switchToViewer(animated = true) {
-            let currentItem = viewerSourceMasonry.view.currentItem
-            if (!currentItem || !currentItem.model) {
-                return
-            }
-
-            viewerPinchCloseProgressAnimation.stop()
-            viewerPinchCloseFinalizeTimer.stop()
-            viewerPinchCloseActive = false
-            viewerPinchCloseReturning = false
-            viewerPinchCloseFinishingCommit = false
-            viewerPinchCloseProgress = 0
-            viewerMode.forceActiveFocus()
-            root.state = "viewer"
-            viewerMode.zoomFitView = true
-
-            if (animated) {
-                if (!viewerMode.animation.running) {
-                    let mappedGeometry = root.mapFromItem(
-                                viewerSourceMasonry.view,
-                                viewerSourceMasonry.currentItemImageGeometry())
-
-                    viewerMode.imageContainer.x = mappedGeometry.x
-                    viewerMode.imageContainer.y = mappedGeometry.y
-                    viewerMode.imageContainer.width = mappedGeometry.width
-                    viewerMode.imageContainer.height = mappedGeometry.height
-                }
-            }
-            else {
-                viewerMode.imageContainer.x = 0
-                viewerMode.imageContainer.y = 0
-                viewerMode.imageContainer.width = viewerMode.width
-                viewerMode.imageContainer.height = viewerMode.height
-            }
-
-            viewerMode.setImage(currentItem.model.imageIdUrl,
-                                viewerSourceMasonry.view.indexOriginalSize(
-                                    viewerSourceMasonry.view.currentIndex),
-                                viewerSourceMasonry.view.currentIndex, 0)
-            let exif = viewerSourceMasonry.view.indexExif(
-                        viewerSourceMasonry.view.currentIndex)
-            viewerMode.show(exif["Panorama"])
-
-            if (animated) {
-                viewerMode.animation.x = 0
-                viewerMode.animation.y = 0
-                viewerMode.animation.width = viewerMode.width
-                viewerMode.animation.height = viewerMode.height
-                viewerMode.animation.restart()
-            }
-            else {
-                viewerMode.completeInstantOpen()
-            }
-        }
-
-        function currentViewerImageGeometry() {
-            let image = viewerMode.imageContainer.image
-            if (image.width <= 1 || image.height <= 1) {
-                return undefined
-            }
-
-            return root.mapFromItem(viewerMode.imageContainer,
-                                    Qt.rect(image.x, image.y, image.width, image.height))
-        }
-
-        function switchToThumbnails(startGeometry) {
-            viewerSourceMasonry.focusView()
-            root.state = "thumbnails"
-
-            if (viewerSourceMasonry.view.currentItem) {
-                let mappedGeometry = root.mapFromItem(
-                            viewerSourceMasonry.view,
-                            viewerSourceMasonry.currentItemImageGeometry())
-
-                if (startGeometry !== undefined && startGeometry.width > 1 && startGeometry.height > 1) {
-                    viewerMode.animation.stop()
-                    viewerMode.imageContainer.x = startGeometry.x
-                    viewerMode.imageContainer.y = startGeometry.y
-                    viewerMode.imageContainer.width = startGeometry.width
-                    viewerMode.imageContainer.height = startGeometry.height
-                    viewerMode.imageContainer.zoomToFit(true)
-                }
-                else if (!viewerMode.zoomFitView) {
-                    viewerMode.imageContainer.zoomToFit(true) // TODO: Smooth animation
-                }
-
-                viewerMode.animation.x = mappedGeometry.x
-                viewerMode.animation.y = mappedGeometry.y
-                viewerMode.animation.width = mappedGeometry.width
-                viewerMode.animation.height = mappedGeometry.height
-                viewerMode.animation.restart()
-            }
-            else {
-                viewerMode.visible = false
-                viewerMode.completeInstantOpen()
-            }
-
-            topLevelWindow.title = "ZoinGallery"
-        }
-
-        Item {
+        StandaloneTitleBar {
             id: titleBar
-            anchors {
-                left: parent.left
-                right: parent.right
-                top: parent.top
-            }
-            property int viewerHeight: 32
-            property int thumbnailsHeight: 48
-
-            height: root.state === "thumbnails" ? thumbnailsHeight : viewerHeight
-            Behavior on height {
-                NumberAnimation {
-                    duration: viewerMode.animationDuration
-                    easing.type: viewerMode.easingType
-                }
-            }
-
-            z: 1
-            visible: isQWK
-
-            Item {
-                id: macSystemButtonArea
-                visible: false
-                x: topLevelWindow.macSystemButtonAreaLeftMargin
-                y: 0
-                width: 70
-                height: titleBar.height
-            }
-
-            RowLayout {
-                id: titleBarButtonsLayout
-                anchors {
-                    top: parent.top
-                    right: parent.right
-                    bottom: parent.bottom
-                }
-                spacing: 0
-                visible: !topLevelWindow.useMacNativeTitleBar
-
-                TitleButton {
-                    id: minButton
-
-                    Layout.alignment: Qt.AlignTop
-
-                    source: "qrc:/ZoinGallery/resources/WindowMinimize.svg"
-                    onClicked: topLevelWindow.showMinimized()
-                    Component.onCompleted: {
-                        if (!topLevelWindow.useMacNativeTitleBar) {
-                            windowAgent.setSystemButton(WindowAgent.Minimize, minButton)
-                        }
-                    }
-                }
-
-                TitleButton {
-                    id: maxButton
-
-                    Layout.alignment: Qt.AlignTop
-
-                    source: topLevelWindow.visibility === Window.Maximized ? "qrc:/ZoinGallery/resources/WindowRestore.svg" :
-                            topLevelWindow.visibility === Window.FullScreen ? "qrc:/ZoinGallery/resources/WindowFullscreen.svg" :"qrc:/ZoinGallery/resources/WindowMaximize.svg"
-                    onClicked: {
-                        if (topLevelWindow.visibility === Window.FullScreen) {
-                            topLevelWindow.toggleFullscreen()
-                        }
-                        else if (topLevelWindow.visibility === Window.Maximized) {
-                            topLevelWindow.showNormal()
-                        }
-                        else {
-                            topLevelWindow.showMaximized()
-                        }
-                    }
-                    Component.onCompleted: {
-                        if (!topLevelWindow.useMacNativeTitleBar) {
-                            windowAgent.setSystemButton(WindowAgent.Maximize, maxButton)
-                        }
-                    }
-                }
-
-                TitleButton {
-                    id: closeButton
-
-                    Layout.alignment: Qt.AlignTop
-
-                    source: "qrc:/ZoinGallery/resources/WindowClose.svg"
-                    icon.color: closeButton.hovered ? Style.closeButtonHoveredIcon : Style.text
-                    backgroundColor: {
-                        if (!closeButton.enabled) {
-                            return "gray";
-                        }
-                        if (closeButton.pressed) {
-                            return Style.closeButtonPressed;
-                        }
-                        if (closeButton.hovered) {
-                            return Style.closeButtonHovered;
-                        }
-                        return "transparent";
-                    }
-                    onClicked: topLevelWindow.close()
-
-                    Component.onCompleted: {
-                        if (!topLevelWindow.useMacNativeTitleBar) {
-                            windowAgent.setSystemButton(WindowAgent.Close, closeButton)
-                        }
-                    }
-                }
-            }
-
+            hostWindow: topLevelWindow
+            windowAgentObject: windowAgent
+            quickWindowKitEnabled: isQWK
+            shellState: root.state
+            animationDuration: viewerMode.animationDuration
+            easingType: viewerMode.easingType
         }
-
         Rectangle {
             id: thumbnailsViewBackground
             anchors {
@@ -829,995 +267,63 @@ MainWindow {
             Component.onCompleted: {
                 windowAgent.setTitleBar(titleBar)
                 if (topLevelWindow.useMacNativeTitleBar) {
-                    windowAgent.setSystemButtonArea(macSystemButtonArea)
+                    windowAgent.setSystemButtonArea(titleBar.macSystemButtonRegion)
                 }
 
-                for (var i = 0; i < titleBarButtonsLayout.children.length; i++) {
-                    if (typeof titleBarButtonsLayout.children[i].isPartOfTitleBar === "undefined") {
-                        windowAgent.setHitTestVisible(titleBarButtonsLayout.children[i])
+                for (var i = 0; i < titleBar.systemButtonsLayout.children.length; i++) {
+                    if (typeof titleBar.systemButtonsLayout.children[i].isPartOfTitleBar === "undefined") {
+                        windowAgent.setHitTestVisible(titleBar.systemButtonsLayout.children[i])
                     }
                 }
 
-                for (var i = 0; i < toolbarLayout.children.length; i++) {
-                    if (typeof toolbarLayout.children[i].isPartOfTitleBar === "undefined") {
-                        windowAgent.setHitTestVisible(toolbarLayout.children[i])
+                for (var i = 0; i < root.toolbarLayout.children.length; i++) {
+                    if (typeof root.toolbarLayout.children[i].isPartOfTitleBar === "undefined") {
+                        windowAgent.setHitTestVisible(root.toolbarLayout.children[i])
                     }
                 }
             }
 
-            Item {
-                id: toolbar
+            StandaloneToolbar {
+                id: thumbnailToolbar
                 Layout.fillWidth: true
                 Layout.preferredHeight: titleBar.thumbnailsHeight
-                z: 1
-
-                MultiEffect {
-                    id: titleBarBlurBehind
-                    source: ShaderEffectSource {
-                        sourceItem: masonryLayout
-                        width: titleBarBlurBehind.width
-                        height: titleBarBlurBehind.height
-                        sourceRect: Qt.rect(0, -height, width, height)
-                    }
-
-                    anchors.fill: parent
-                    opacity: 0.3
-                    contrast: Style.isDarkTheme ? -0.5 : 0
-                    brightness: Style.isDarkTheme ? 0 : 0.3
-                    saturation: topLevelWindow.active ? 0 : -1
-                    Behavior on saturation {
-                        NumberAnimation {
-                            duration: 300
-                            easing.type: Easing.InOutQuad
-                        }
-                    }
-
-                    colorization: Style.isDarkTheme ? 0.4 : 0
-                    colorizationColor: Style.windowBackgroundNoQWK
-                    autoPaddingEnabled: false
-                    blurEnabled: true
-                    blurMax: 64
-                    blur: 1.0
-                }
-
-                RowLayout {
-                    id: toolbarLayout
-                    anchors.fill: parent
-                    anchors.leftMargin: topLevelWindow.macTitleBarLeftPadding + topLevelWindow.thumbnailsTitleBarSidePadding
-                    anchors.rightMargin: (isQWK && !topLevelWindow.useMacNativeTitleBar ? titleBarButtonsLayout.width : 0) + topLevelWindow.thumbnailsTitleBarSidePadding
-                    spacing: 0
-                    clip: true
-
-                    component Separator : Rectangle {
-                        Layout.leftMargin: 14
-                        Layout.rightMargin: 14
-                        implicitWidth: 1
-                        implicitHeight: 32
-                        color: Style.lighter2
-                    }
-
-                    component ToolbarButton : Button {
-                        id: toolbarButton
-                        Layout.alignment: Qt.AlignVCenter
-
-                        implicitWidth: 36
-                        implicitHeight: titleBar.thumbnailsHeight
-
-                        signal rightReleased
-
-                        MouseArea {
-                            anchors.fill: parent
-                            acceptedButtons: Qt.RightButton
-                            onClicked: toolbarButton.rightReleased()
-                        }
-                    }
-
-                    Button {
-                        id: appIcon
-                        implicitWidth: 46
-                        implicitHeight: parent.height
-                        visible: isQWK && !topLevelWindow.useMacNativeTitleBar
-
-                        icon.width: 18
-                        icon.height: 18
-
-                        colorfulIcon: true
-                        icon.source: "qrc:/ZoinGallery/resources/Logo.svg"
-                        onClicked: {
-                            // windowAgent.showSystemMenu(mapToGlobal(0, height))
-                            // fileListModel.startScanner()
-                            settingsDialog.open()
-                        }
-                        // Component.onCompleted: windowAgent.setSystemButton(WindowAgent.WindowIcon, appIcon)
-                    }
-
-                    Text {
-                        property bool isPartOfTitleBar: true
-                        visible: isQWK
-
-                        Layout.rightMargin: 15
-
-                        text: "ZoinGallery"
-                        color: Style.text
-
-                        opacity: topLevelWindow.active ? 1 : 0.5
-                        Behavior on opacity {
-                            NumberAnimation { duration: 150; easing.type: Easing.InOutQuad }
-                        }
-                    }
-
-                    ToolbarButton {
-                        icon.source: "qrc:/ZoinGallery/resources/Back.svg"
-                        ToolTip.text: "Go Back\tAlt+←"
-                        inactive: !viewerController.canBack
-
-                        implicitWidth: 46
-                        centerOffset: 5
-                        leftPadding: 18
-
-                        onReleased: {
-                            if (inactive) {
-                                return
-                            }
-
-                            viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
-                            viewerController.back()
-                            masonryLayout.view.loadSavedState()
-                        }
-
-                        onRightReleased: {
-                            if (inactive) {
-                                return
-                            }
-
-                            backMenu.popup()
-                        }
-
-                        Menu {
-                            id: backMenu
-
-                            Timer {
-                                id: delayedBackRightClick
-                                property int index: -1
-                                interval: 0
-                                onTriggered: {
-                                    viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
-                                    viewerController.jumpBack(index)
-                                    masonryLayout.view.loadSavedState()
-                                }
-                            }
-
-                            Repeater {
-                                model: viewerController.backMenu
-
-                                MenuItem {
-                                    text: modelData
-                                    onTriggered: {
-                                        delayedBackRightClick.index = index
-                                        delayedBackRightClick.start()
-                                        masonryLayout.focusProxy.forceActiveFocus()
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ToolbarButton {
-                        icon.source: "qrc:/ZoinGallery/resources/Forward.svg"
-                        ToolTip.text: "Go Forward\tAlt+→"
-                        inactive: !viewerController.canForward
-
-                        onReleased: {
-                            if (inactive) {
-                                return
-                            }
-
-                            viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
-                            viewerController.forward()
-                            masonryLayout.view.loadSavedState()
-                        }
-
-                        onRightReleased: {
-                            if (inactive) {
-                                return
-                            }
-
-                            forwardMenu.popup()
-                        }
-
-                        Menu {
-                            id: forwardMenu
-
-                            Timer {
-                                id: delayedForwardRightClick
-                                property int index: -1
-                                interval: 0
-                                onTriggered: {
-                                    viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
-                                    viewerController.jumpForward(index)
-                                    masonryLayout.view.loadSavedState()
-                                }
-                            }
-
-                            Repeater {
-                                model: viewerController.forwardMenu
-
-                                MenuItem {
-                                    text: modelData
-                                    onTriggered: {
-                                        delayedForwardRightClick.index = index
-                                        delayedForwardRightClick.start()
-                                        masonryLayout.focusProxy.forceActiveFocus()
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    ToolbarButton {
-                        icon.source: "qrc:/ZoinGallery/resources/Up.svg"
-                        ToolTip.text: "Go Up\tBackspace"
-                        inactive: !viewerController.canUp
-
-                        onReleased: {
-                            masonryLayout.disableAnimation = true
-                            viewerController.saveCurrentState(masonryLayout.view.contentY, masonryLayout.view.currentIndex)
-                            masonryLayout.setCurrentIndex(viewerController.up())
-                            masonryLayout.disableAnimation = false
-                            masonryLayout.view.loadSavedState()
-                        }
-                    }
-
-                    PathControl {
-                        Layout.leftMargin: 14
-                        Layout.rightMargin: 14
-                        clip: true
-
-                        onEditModeChanged: {
-                            if (!editMode) {
-                                masonryLayout.focusProxy.forceActiveFocus()
-                            }
-                        }
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 32
-
-                        text: viewerController.currentPath
-                    }
-
-                    ToolbarButton {
-                        id: createButton
-                        implicitWidth: 44
-                        icon.source: "qrc:/ZoinGallery/resources/FolderIcon.svg"
-                        ToolTip.text: fileListModel.fileDragActive
-                                      ? "Drop here to create a folder for these items"
-                                      : "Create…"
-
-                        onReleased: createMenu.popup()
-
-                        Rectangle {
-                            anchors.fill: parent
-                            anchors.margins: 2
-                            z: 10
-                            radius: 6
-                            color: Style.persistentSelectionBorder
-                            opacity: createDropArea.containsDrag
-                                     ? 0.3
-                                     : (fileListModel.fileDragActive ? 0.12 : 0)
-                            border.width: createDropArea.containsDrag ? 2 : 1
-                            border.color: Style.persistentSelectionBorder
-                            visible: opacity > 0
-
-                            Behavior on opacity {
-                                NumberAnimation {
-                                    duration: 140
-                                    easing.type: Easing.OutQuad
-                                }
-                            }
-                        }
-
-                        Text {
-                            anchors.right: parent.right
-                            anchors.rightMargin: 7
-                            anchors.bottom: parent.bottom
-                            anchors.bottomMargin: 7
-                            z: 11
-                            text: "+"
-                            color: Style.text
-                            font.bold: true
-                            font.pixelSize: 13
-                        }
-
-                        DropArea {
-                            id: createDropArea
-                            anchors.fill: parent
-                            z: 20
-
-                            function proposedFileAction(drag) {
-                                if (drag.proposedAction === Qt.MoveAction &&
-                                        (drag.supportedActions & Qt.MoveAction)) {
-                                    return Qt.MoveAction
-                                }
-                                if (drag.supportedActions & Qt.CopyAction) {
-                                    return Qt.CopyAction
-                                }
-                                if (drag.supportedActions & Qt.MoveAction) {
-                                    return Qt.MoveAction
-                                }
-                                return Qt.IgnoreAction
-                            }
-
-                            onEntered: (drag) => {
-                                const action = proposedFileAction(drag)
-                                if (!drag.hasUrls || action === Qt.IgnoreAction) {
-                                    drag.accepted = false
-                                }
-                                else {
-                                    drag.accept(action)
-                                }
-                            }
-                            onPositionChanged: (drag) => {
-                                const action = proposedFileAction(drag)
-                                if (drag.hasUrls && action !== Qt.IgnoreAction) {
-                                    drag.accept(action)
-                                }
-                                else {
-                                    drag.accepted = false
-                                }
-                            }
-                            onDropped: (drop) => {
-                                const action = proposedFileAction(drop)
-                                if (!drop.hasUrls || action === Qt.IgnoreAction) {
-                                    drop.accepted = false
-                                    return
-                                }
-                                const urls = drop.urls
-                                // The actual move is deferred until the name dialog is
-                                // confirmed. Report Copy (or Ignore) now so the drag
-                                // source cannot delete the originals prematurely.
-                                if (drop.supportedActions & Qt.CopyAction) {
-                                    drop.accept(Qt.CopyAction)
-                                }
-                                else {
-                                    drop.accepted = false
-                                }
-                                root.beginFolderCreation(urls, action)
-                            }
-                        }
-
-                        Menu {
-                            id: createMenu
-
-                            MenuItem {
-                                text: "Folder…"
-                                onTriggered: root.beginFolderCreation([], Qt.CopyAction)
-                            }
-
-                            MenuSeparator {}
-
-                            MenuItem {
-                                text: "Selection group"
-                                enabled: fileListModel.canAddSelectionGroup
-                                onTriggered: {
-                                    fileListModel.addSelectionGroup()
-                                    root.selectedImagesPanelOpen = true
-                                }
-                            }
-                        }
-                    }
-
-                    Shortcut {
-                        sequence: "F12"
-                        onActivated: {
-                            fileListModel.runningTasksDebug = !fileListModel.runningTasksDebug
-                        }
-                    }
-
-                    Component {
-                        id: runningTasksDebugView
-                        Text {
-                            id: runningTasks
-
-                            Connections {
-                                target: fileListModel
-                                function onRunningTasksChanged(tasks, tasksInfo) {
-                                    runningTasks.text = tasks
-                                    infoWindow.title = tasks
-                                    infoList.model = tasksInfo
-                                }
-                            }
-                            text: "0/0"
-                            color: Style.text
-                            Layout.preferredWidth: 45
-                            Layout.rightMargin: 5
-                            horizontalAlignment: Text.AlignRight
-
-                            Window {
-                                id: infoWindow
-                                x: topLevelWindow.x + topLevelWindow.width
-                                y: 20
-                                width: 700
-                                height: 1000
-                                visible: true
-                                color: Style.windowBackgroundNoQWK
-
-                                ListView {
-                                    id: infoList
-                                    anchors {
-                                        fill: parent
-                                        margins: 10
-                                    }
-                                    delegate: Text {
-                                        height: 12
-                                        color: modelData.endsWith(" E") ? "#80ff80" : Style.text
-                                        text: modelData
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Loader {
-                        sourceComponent: fileListModel.runningTasksDebug ? runningTasksDebugView : undefined
-                    }
-
-                    Slider {
-                        id: masonryZoomSlider
-                        Layout.preferredWidth: 100
-                        implicitHeight: 30 // To work around a warning
-                        Layout.preferredHeight: 30
-                        Layout.alignment: Qt.AlignVCenter
-                        from: masonryLayout.view.presentationMode === MasonryLayout.Columns
-                              || masonryLayout.view.presentationMode === MasonryLayout.Details
-                              ? 22
-                              : masonryLayout.view.presentationMode === MasonryLayout.Grid
-                                ? 96
-                                : masonryLayout.view.presentationMode === MasonryLayout.Icons
-                                  ? 72 : 30
-                        value: masonryLayout.view.density
-                        to: masonryLayout.view.presentationMode === MasonryLayout.Columns
-                            || masonryLayout.view.presentationMode === MasonryLayout.Details
-                            ? 72
-                            : masonryLayout.view.presentationMode === MasonryLayout.Grid
-                              ? 320
-                              : masonryLayout.view.presentationMode === MasonryLayout.Icons
-                                ? 256 : 500
-                        stepSize: 1
-
-                        function updateTargetSize() {
-                            if (masonryLayout.view.presentationMode
-                                    !== MasonryLayout.Masonry)
-                                return
-                            if (masonryLayout.view.listView) {
-                                // 36 is hardcoded and comes from BrickDelegate's layout folderViewDelegate
-                                fileListModel.setFolderViewImageSize(0, (masonryZoomSlider.value - 36) * dpr)
-                            }
-                            else {
-                                // this is taken from commented out actualGridSize item in BrickDelegate
-
-                                let spacing = 2
-                                let canvasWidth = (masonryLayout.view.width - 1) - masonryLayout.view.paddingLeft - masonryLayout.view.paddingRight
-                                let columns = Math.floor(canvasWidth / masonryLayout.view.targetHeight)
-                                let averageCellWidth = canvasWidth / columns
-                                // console.log("ZZ COLUMNS", columns, canvasWidth, masonryLayout.view.targetHeight)
-                                if (columns >= masonryLayout.view.count) {
-                                    // console.log("ZZ TOO FEW" , columns, masonryLayout.view.count)
-                                    averageCellWidth = masonryLayout.view.targetHeight
-                                }
-
-                                let targetWidth = averageCellWidth - masonryLayout.view.spacing - spacing
-                                let targetHeight = averageCellWidth - masonryLayout.view.spacing * 2 - spacing - Math.round(targetWidth/20) - 17
-
-                                let dimensions = targetWidth < 80 ? 1 :
-                                                 targetWidth < 150 ? 2 :
-                                                 targetWidth < 300 ? 3 : 4
-
-                                targetWidth = (targetWidth - spacing * (dimensions + 1)) / dimensions
-                                targetHeight = (targetHeight - spacing * (dimensions + 1)) / dimensions
-
-                                if (targetWidth > 0 && targetHeight > 0) {
-                                    // console.log("qml dimens", Math.round(targetWidth * dpr), Math.round(targetHeight * dpr), dimensions)
-
-                                    fileListModel.setFolderViewImageSize(Math.round(targetWidth * dpr), Math.round(targetHeight * dpr))
-                                }
-                            }
-                        }
-
-                        onValueChanged: {
-                            masonryLayout.view.density = masonryZoomSlider.value
-                            updateTargetSize()
-                        }
-                        property int lastValue: value
-                        onPressedChanged: {
-                            if (pressed) {
-                                lastValue = value
-                            }
-                            else if (lastValue !== value) {
-                                masonryLayout.view.reReadAndDecodeThumbnails()
-                            }
-                        }
-                    }
-
-                    Separator {
-                    }
-
-                    ToolbarButton {
-                        id: collectionLayoutButton
-                        icon.source: "qrc:/ZoinGallery/resources/GridView.svg"
-                        icon.width: 16
-                        icon.height: 16
-                        ToolTip.text: "Collection layout"
-
-                        function choose(mode, columns) {
-                            masonryLayout.view.columnCount = columns || 2
-                            masonryLayout.view.presentationMode = mode
-                            masonryLayout.focusView()
-                        }
-
-                        onReleased: collectionLayoutMenu.open()
-
-                        Platform.Menu {
-                            id: collectionLayoutMenu
-
-                            Platform.MenuItemGroup {
-                                id: collectionLayoutMenuGroup
-                                exclusive: true
-                            }
-
-                            Platform.MenuItem {
-                                text: "Masonry"
-                                checkable: true
-                                group: collectionLayoutMenuGroup
-                                checked: masonryLayout.view.presentationMode
-                                         === MasonryLayout.Masonry
-                                onTriggered: collectionLayoutButton.choose(
-                                                 MasonryLayout.Masonry, 2)
-                            }
-                            Platform.MenuItem {
-                                text: "Columns (2)"
-                                checkable: true
-                                group: collectionLayoutMenuGroup
-                                checked: masonryLayout.view.presentationMode
-                                         === MasonryLayout.Columns
-                                         && masonryLayout.view.columnCount === 2
-                                onTriggered: collectionLayoutButton.choose(
-                                                 MasonryLayout.Columns, 2)
-                            }
-                            Platform.MenuItem {
-                                text: "Columns (3)"
-                                checkable: true
-                                group: collectionLayoutMenuGroup
-                                checked: masonryLayout.view.presentationMode
-                                         === MasonryLayout.Columns
-                                         && masonryLayout.view.columnCount === 3
-                                onTriggered: collectionLayoutButton.choose(
-                                                 MasonryLayout.Columns, 3)
-                            }
-                            Platform.MenuItem {
-                                text: "Details"
-                                checkable: true
-                                group: collectionLayoutMenuGroup
-                                checked: masonryLayout.view.presentationMode
-                                         === MasonryLayout.Details
-                                onTriggered: collectionLayoutButton.choose(
-                                                 MasonryLayout.Details, 1)
-                            }
-                            Platform.MenuItem {
-                                text: "Uniform grid"
-                                checkable: true
-                                group: collectionLayoutMenuGroup
-                                checked: masonryLayout.view.presentationMode
-                                         === MasonryLayout.Grid
-                                onTriggered: collectionLayoutButton.choose(
-                                                 MasonryLayout.Grid, 1)
-                            }
-                            Platform.MenuItem {
-                                text: "Large icons"
-                                checkable: true
-                                group: collectionLayoutMenuGroup
-                                checked: masonryLayout.view.presentationMode
-                                         === MasonryLayout.Icons
-                                onTriggered: collectionLayoutButton.choose(
-                                                 MasonryLayout.Icons, 1)
-                            }
-                        }
-                    }
-
-                    Separator {
-                    }
-
-                    TabBar {
-                        spacing: 0
-                        Layout.alignment: Qt.AlignVCenter
-
-                        Shortcut {
-                            sequence: "F8"
-                            onActivated: {
-                                masonryLayout.view.listView = !masonryLayout.view.listView
-                            }
-                        }
-
-                        TabButton {
-                            implicitWidth: 32
-                            implicitHeight: titleBar.thumbnailsHeight
-
-                            icon.source: "qrc:/ZoinGallery/resources/ListView.svg"
-                            icon.width: 16
-                            icon.height: 16
-                            ToolTip.text: "Folder preview list\tF8"
-
-                            checked: masonryLayout.view.listView
-
-                            onReleased: {
-                                if (!masonryLayout.view.listView) {
-                                    masonryLayout.view.listView = true
-                                    masonryZoomSlider.updateTargetSize()
-                                    masonryLayout.view.layoutReset()
-                                }
-                            }
-                        }
-                        TabButton {
-                            implicitWidth: 32
-                            implicitHeight: titleBar.thumbnailsHeight
-
-                            icon.source: "qrc:/ZoinGallery/resources/GridView.svg"
-                            icon.width: 16
-                            icon.height: 16
-                            ToolTip.text: "Folder preview grid\tF8"
-
-                            checked: !masonryLayout.view.listView
-
-                            onReleased: {
-                                if (masonryLayout.view.listView) {
-                                    masonryLayout.view.listView = false
-                                    masonryZoomSlider.updateTargetSize()
-                                    masonryLayout.view.layoutReset()
-                                }
-                            }
-                        }
-                    }
-
-                    ToolbarButton {
-                        id: sortButton
-                        Layout.leftMargin: 8
-                        icon.source: "qrc:/ZoinGallery/resources/Sort.svg"
-                        ToolTip.text: "Sort: " + galleryViewModel.sortModeLabel +
-                                      (galleryViewModel.selectedOnly ? "\nShowing selected only" : "")
-
-                        onReleased: {
-                            sortMenu.open()
-                        }
-
-                        Platform.Menu {
-                            id: sortMenu
-
-                            Platform.MenuItemGroup {
-                                id: sortModeMenuGroup
-                                exclusive: true
-                            }
-
-                            Platform.MenuItem {
-                                text: "Show selected items only"
-                                checkable: true
-                                checked: galleryViewModel.selectedOnly
-                                shortcut: "Ctrl+\\"
-                                onTriggered: galleryViewModel.selectedOnly = !galleryViewModel.selectedOnly
-                            }
-
-                            Platform.MenuSeparator {}
-
-                            Platform.MenuItem {
-                                text: "Name A-Z"
-                                group: sortModeMenuGroup
-                                checkable: true
-                                checked: galleryViewModel.sortMode === 0
-                                onTriggered: galleryViewModel.sortMode = 0
-                            }
-
-                            Platform.MenuItem {
-                                text: "Name Z-A"
-                                group: sortModeMenuGroup
-                                checkable: true
-                                checked: galleryViewModel.sortMode === 1
-                                onTriggered: galleryViewModel.sortMode = 1
-                            }
-
-                            Platform.MenuItem {
-                                text: "Modified oldest first"
-                                group: sortModeMenuGroup
-                                checkable: true
-                                checked: galleryViewModel.sortMode === 2
-                                onTriggered: galleryViewModel.sortMode = 2
-                            }
-
-                            Platform.MenuItem {
-                                text: "Modified newest first"
-                                group: sortModeMenuGroup
-                                checkable: true
-                                checked: galleryViewModel.sortMode === 3
-                                onTriggered: galleryViewModel.sortMode = 3
-                            }
-
-                            Platform.MenuItem {
-                                text: "Extension A-Z"
-                                group: sortModeMenuGroup
-                                checkable: true
-                                checked: galleryViewModel.sortMode === 4
-                                onTriggered: galleryViewModel.sortMode = 4
-                            }
-
-                            Platform.MenuItem {
-                                text: "Extension Z-A"
-                                group: sortModeMenuGroup
-                                checkable: true
-                                checked: galleryViewModel.sortMode === 5
-                                onTriggered: galleryViewModel.sortMode = 5
-                            }
-
-                            Platform.MenuItem {
-                                text: "Size smallest first"
-                                group: sortModeMenuGroup
-                                checkable: true
-                                checked: galleryViewModel.sortMode === 6
-                                onTriggered: galleryViewModel.sortMode = 6
-                            }
-
-                            Platform.MenuItem {
-                                text: "Size largest first"
-                                group: sortModeMenuGroup
-                                checkable: true
-                                checked: galleryViewModel.sortMode === 7
-                                onTriggered: galleryViewModel.sortMode = 7
-                            }
-                        }
-                    }
-
-                    ToolbarButton {
-                        Layout.leftMargin: 8
-                        icon.source: "qrc:/ZoinGallery/resources/RecursiveView.svg"
-                        ToolTip.text: "Recursive View\tF10"
-
-                        onReleased: {
-                            viewerController.enterRecursiveView()
-                        }
-                    }
-
-                    ToolbarButton {
-                        icon.source: "qrc:/ZoinGallery/resources/SelectionCheck.svg"
-                        ToolTip.text: (root.selectedImagesPanelOpen ? "Hide" : "Show") +
-                                      " selected images panel (" +
-                                      fileListModel.totalSelectedCount + ")"
-                        checked: root.selectedImagesPanelOpen
-
-                        onReleased: root.selectedImagesPanelOpen = !root.selectedImagesPanelOpen
-                    }
-
-                    ToolbarButton {
-                        icon.source: "qrc:/ZoinGallery/resources/SelectionHistory.svg"
-                        ToolTip.text: "Selection history\tCtrl+Shift+H"
-                        Layout.rightMargin: isQWK ? 0 : 7
-
-                        onReleased: {
-                            selectionHistoryWindow.visible = !selectionHistoryWindow.visible
-                            if (selectionHistoryWindow.visible) {
-                                selectionHistoryWindow.refresh(true)
-                            }
-                        }
-                    }
-
-                    Separator {
-                        Layout.rightMargin: 7
-                        visible: isQWK && !topLevelWindow.useMacNativeTitleBar
-                    }
-                }
-
-                // Rectangle {
-                //     anchors {
-                //         left: parent.left
-                //         right: parent.right
-                //         bottom: parent.bottom
-                //         bottomMargin: -4
-                //     }
-                //     height: 4
-                //     gradient: Gradient {
-                //         GradientStop { position: 0.0; color: Style.isDarkTheme ? "#fff" : "#000" }
-                //         GradientStop { position: 0.5; color: Style.isDarkTheme ? Qt.rgba(1, 1, 1, 0.2) : Qt.rgba(0, 0, 0, 0.2) }
-                //         GradientStop { position: 1.0; color: "transparent" }
-                //     }
-
-                //     opacity: masonryLayout.scrolled ? (Style.isDarkTheme ? 0.08 : 0.10) : 0
-                //     Behavior on opacity {
-                //         NumberAnimation {
-                //             duration: 300
-                //             easing.type: Easing.InOutQuad
-                //         }
-                //     }
-                // }
+                shell: shellController
+                hostWindow: topLevelWindow
+                titleBarItem: titleBar
+                systemButtonsLayout: titleBar.systemButtonsLayout
+                windowAgentObject: windowAgent
+                galleryLayout: root.masonryLayout
+                navigationController: viewerController
+                catalogModel: fileListModel
+                viewModel: galleryViewModel
+                settingsWindow: settingsDialog
+                historyWindow: selectionHistoryWindow
+                quickWindowKitEnabled: isQWK
+                devicePixelRatio: topLevelWindow.dpr
             }
-
-            SplitView {
-                id: thumbnailsSplitView
+            StandalonePanelsSurface {
+                id: thumbnailsPanels
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                orientation: Qt.Horizontal
+                catalogSession: gallerySession
+                navigationController: viewerController
+                catalogModel: fileListModel
+                viewModel: galleryViewModel
+                previewModel: imageModel
+                selectedCatalogModel: selectedImagesModel
+                selectedImagesPanelOpen: shellController.selectedImagesPanelOpen
+                viewerShowAnimationRunning: shellController.viewerShowAnimationRunning
+                viewerSourceMasonry: shellController.viewerSourceMasonry
 
-                handle: Rectangle {
-                    id: thumbnailsSplitHandle
-                    implicitWidth: Math.min(
-                                       8,
-                                       Math.max(
-                                           0,
-                                           Math.round(
-                                               selectedImagesPanelSlot.width /
-                                               10)))
-                    enabled: !selectedImagesPanelSlot.transitioning
-                    z: 10
-                    color: "transparent"
-                    readonly property bool handleHovered: SplitHandle.hovered
-                    readonly property bool handlePressed: SplitHandle.pressed
-
-                    Rectangle {
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        width: thumbnailsSplitHandle.handlePressed ? 3 : 1
-                        color: thumbnailsSplitHandle.handlePressed
-                               || thumbnailsSplitHandle.handleHovered
-                               ? Style.persistentSelectionBorder
-                               : Style.lighter2
-
-                        Behavior on width {
-                            NumberAnimation { duration: 80 }
-                        }
-                    }
-                }
-
-                onResizingChanged: {
-                    if (!resizing &&
-                            root.selectedImagesPanelOpen &&
-                            !selectedImagesPanelSlot.transitioning &&
-                            selectedImagesPanelSlot.width >= 240) {
-                        selectedImagesPanelSlot.contentWidth =
-                                selectedImagesPanelSlot.width
-                        AppSettings.selectedImagesPanelWidth =
-                                selectedImagesPanelSlot.width
-                    }
-                }
-
-                GalleryPanel {
-                    id: standaloneGalleryPanel
-                    objectName: "standaloneGalleryPanel"
-                    SplitView.fillWidth: true
-                    SplitView.minimumWidth: 320
-                    session: gallerySession
-                    autoFocus: false
-                    // GalleryPanel is a FocusScope. Keep it focused so the
-                    // original MasonryMode's focused quick-search proxy remains
-                    // the standalone shell's startup keyboard surface.
-                    focus: true
-                    customContent: masonryLayout
-
-                    MasonryMode {
-                        id: masonryLayout
-                        objectName: "standaloneMasonryMode"
-                        anchors.fill: parent
-                        viewerTransitionActive:
-                            root.viewerShowAnimationRunning &&
-                            root.viewerSourceMasonry === masonryLayout
-
-                        onToggleViewer: root.openViewerFrom(
-                                            masonryLayout, galleryViewModel,
-                                            fileListModel, fileListModel,
-                                            imageModel)
-                        onFileDropFailed: (title, message) =>
-                                              root.showFileDropError(title, message)
-                    }
-                }
-
-                Item {
-                    id: selectedImagesPanelSlot
-
-                    property real contentWidth: Math.max(
-                                                    240,
-                                                    AppSettings.selectedImagesPanelWidth)
-                    property bool transitionVisible: false
-                    property bool transitioning: false
-                    readonly property real availableWidth: Math.max(
-                                                               0,
-                                                               thumbnailsSplitView.width -
-                                                               320 - 8)
-                    readonly property real minimumOpenWidth: Math.min(
-                                                                 240,
-                                                                 availableWidth)
-
-                    SplitView.preferredWidth: 0
-                    SplitView.minimumWidth: transitioning
-                                            ? 0
-                                            : (root.selectedImagesPanelOpen
-                                               ? minimumOpenWidth
-                                               : 0)
-                    SplitView.maximumWidth: availableWidth
-                    visible: transitionVisible
-                    clip: true
-
-                    function setOpen(open) {
-                        const currentWidth = Math.max(0, width)
-                        const wasTransitioning = transitioning
-
-                        panelWidthAnimation.stop()
-                        transitioning = true
-                        transitionVisible = true
-
-                        if (open) {
-                            contentWidth = Math.min(
-                                        Math.max(
-                                            minimumOpenWidth,
-                                            AppSettings.selectedImagesPanelWidth),
-                                        SplitView.maximumWidth)
-                            panelWidthAnimation.from = currentWidth
-                            panelWidthAnimation.to = contentWidth
-                        }
-                        else {
-                            if (!wasTransitioning) {
-                                contentWidth = currentWidth
-                            }
-                            panelWidthAnimation.from = currentWidth
-                            panelWidthAnimation.to = 0
-                        }
-
-                        SplitView.preferredWidth = currentWidth
-                        panelWidthAnimation.restart()
-                    }
-
-                    NumberAnimation {
-                        id: panelWidthAnimation
-                        target: selectedImagesPanelSlot.SplitView
-                        property: "preferredWidth"
-                        duration: 220
-                        easing.type: Easing.InOutCubic
-
-                        onStopped: {
-                            selectedImagesPanelSlot.transitioning = false
-                            if (!root.selectedImagesPanelOpen &&
-                                    selectedImagesPanelSlot.width < 1) {
-                                selectedImagesPanelSlot.transitionVisible = false
-                            }
-                        }
-                    }
-
-                    SelectedImagesPanel {
-                        id: selectedImagesPanel
-                        anchors {
-                            left: parent.left
-                            top: parent.top
-                            bottom: parent.bottom
-                        }
-                        width: selectedImagesPanelSlot.transitioning
-                               ? selectedImagesPanelSlot.contentWidth
-                               : selectedImagesPanelSlot.width
-                        transparentGrid: masonryLayout.view.showTransparentGrid
-                        viewerTransitionActive:
-                            root.viewerShowAnimationRunning &&
-                            root.viewerSourceMasonry ===
-                                selectedImagesPanel.masonryMode
-
-                        onCloseRequested: root.selectedImagesPanelOpen = false
-                        onImageActivated: root.openViewerFrom(
-                                              selectedImagesPanel.masonryMode,
-                                              selectedImagesModel,
-                                              selectedImagesModel,
-                                              selectedImagesModel,
-                                              selectedImagesModel)
-                    }
-                }
-
-                Connections {
-                    target: root
-
-                    function onSelectedImagesPanelOpenChanged() {
-                        selectedImagesPanelSlot.setOpen(
-                                    root.selectedImagesPanelOpen)
-                    }
-                }
+                onOpenViewerRequested:
+                    (source, mapper, decode, selection, filmstrip) =>
+                        shellController.openViewerFrom(source, mapper, decode,
+                                            selection, filmstrip)
+                onFileDropFailed: (title, message) =>
+                                      shellController.showFileDropError(title, message)
+                onFullscreenRequested: topLevelWindow.toggleFullscreen()
+                onCloseSelectedImagesRequested:
+                    shellController.selectedImagesPanelOpen = false
             }
         }
 
@@ -1832,339 +338,42 @@ MainWindow {
                 id: viewerMode
                 objectName: "standaloneViewerMode"
                 anchors.fill: parent
+                devicePixelRatio: topLevelWindow.dpr
+                shell: shellController
+                hostWindow: topLevelWindow
+                standaloneController: viewerController
+                titleBarItem: titleBar
+                viewerBackgroundItem: viewerBackground
+                minimizeButton: titleBar.minimizeControl
+                maximizeButton: titleBar.maximizeControl
+                closeButton: titleBar.closeControl
+                quickWindowKitEnabled: isQWK
 
-                sourceContext: root.viewerSourceContext
+                sourceContext: shellController.viewerSourceContext
 
-                onPinchZoomOutToThumbnailsProgressed: (progress) => root.updateViewerPinchClose(progress)
-                onPinchZoomOutToThumbnailsFinished: (commit) => root.finishViewerPinchClose(commit)
+                onPinchZoomOutToThumbnailsProgressed: (progress) => shellController.updateViewerPinchClose(progress)
+                onPinchZoomOutToThumbnailsFinished: (commit) => shellController.finishViewerPinchClose(commit)
             }
         }
 
         SettingsDialog {
             id: settingsDialog
+            galleryLayout: root.masonryLayout
         }
 
-        Popup {
-            id: createFolderPopup
-            anchors.centerIn: parent
-            width: Math.min(420, parent.width - 40)
-            modal: true
-            focus: true
-            closePolicy: Popup.CloseOnEscape
-            padding: 18
-
-            background: Rectangle {
-                radius: 8
-                color: Style.popupBackground
-                border.width: 1
-                border.color: Style.popupBorder
-            }
-
-            contentItem: ColumnLayout {
-                spacing: 12
-
-                Text {
-                    Layout.fillWidth: true
-                    text: root.createFolderForDrop
-                          ? "Create folder and move items"
-                          : "Create folder"
-                    color: Style.text
-                    font.pixelSize: 17
-                    font.bold: true
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: root.createFolderForDrop
-                          ? "The dropped items will be placed in the new folder."
-                          : "The folder will be created in the current path."
-                    color: Style.viewerSecondaryText
-                    wrapMode: Text.Wrap
-                }
-
-                TextField {
-                    id: createFolderName
-                    Layout.fillWidth: true
-                    placeholderText: "Folder name"
-                    selectByMouse: true
-                    onAccepted: root.confirmFolderCreation()
-                }
-
-                Text {
-                    id: createFolderError
-                    Layout.fillWidth: true
-                    visible: text.length > 0
-                    color: "#e76565"
-                    wrapMode: Text.Wrap
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Item { Layout.fillWidth: true }
-
-                    Button {
-                        text: "Cancel"
-                        onClicked: createFolderPopup.close()
-                    }
-
-                    Button {
-                        text: "Create"
-                        inactive: createFolderName.text.trim().length === 0
-                        onClicked: {
-                            if (!inactive) {
-                                root.confirmFolderCreation()
-                            }
-                        }
-                    }
-                }
-            }
+        StandaloneShellOverlays {
+            id: shellOverlays
+            anchors.fill: parent
+            stateController: shellController
         }
-
-        Popup {
-            id: fileDropErrorPopup
-            property string titleText: ""
-            property string messageText: ""
-
-            anchors.centerIn: parent
-            width: Math.min(460, parent.width - 40)
-            modal: true
-            focus: true
-            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-            padding: 18
-
-            background: Rectangle {
-                radius: 8
-                color: Style.popupBackground
-                border.width: 1
-                border.color: Style.popupBorder
-            }
-
-            contentItem: ColumnLayout {
-                spacing: 12
-
-                Text {
-                    Layout.fillWidth: true
-                    text: fileDropErrorPopup.titleText
-                    color: Style.text
-                    font.pixelSize: 17
-                    font.bold: true
-                    wrapMode: Text.Wrap
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: fileDropErrorPopup.messageText
-                    color: Style.text
-                    wrapMode: Text.Wrap
-                }
-
-                Button {
-                    Layout.alignment: Qt.AlignRight
-                    text: "OK"
-                    onClicked: fileDropErrorPopup.close()
-                }
-            }
-        }
-
-        Shortcut {
-            sequence: "Ctrl+Shift+H"
-            onActivated: {
-                selectionHistoryWindow.visible = !selectionHistoryWindow.visible
-                if (selectionHistoryWindow.visible) {
-                    selectionHistoryWindow.refresh(true)
-                }
-            }
-        }
-
-        Window {
+        StandaloneSelectionHistoryWindow {
             id: selectionHistoryWindow
-            width: 520
-            height: 620
-            x: topLevelWindow.x + Math.max(0, topLevelWindow.width - width - 40)
-            y: topLevelWindow.y + 80
-            title: "Selection history"
-            visible: false
-            color: Style.windowBackgroundNoQWK
-
-            property var historyModel: []
-            property int historyIndex: -1
-
-            function refresh(scrollToNewest = false) {
-                historyModel = fileListModel.selectionHistoryForIndex(root.currentSourceIndex())
-                historyIndex = fileListModel.selectionHistoryIndexForIndex(root.currentSourceIndex())
-                if (scrollToNewest) {
-                    scrollHistoryToBottom()
-                }
-            }
-
-            function scrollHistoryToBottom() {
-                Qt.callLater(function() {
-                    if (selectionHistoryList.count > 0) {
-                        selectionHistoryList.positionViewAtEnd()
-                    }
-                })
-            }
-
-            Connections {
-                target: fileListModel
-                function onSelectionHistoryChanged() {
-                    if (selectionHistoryWindow.visible) {
-                        selectionHistoryWindow.refresh(true)
-                    }
-                }
-            }
-
-            Connections {
-                target: masonryLayout.view
-                function onCurrentIndexChanged() {
-                    if (selectionHistoryWindow.visible) {
-                        selectionHistoryWindow.refresh()
-                    }
-                }
-            }
-
-            Connections {
-                target: viewerController
-                function onCurrentPathChanged() {
-                    if (selectionHistoryWindow.visible) {
-                        selectionHistoryWindow.refresh()
-                    }
-                }
-            }
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 14
-                spacing: 10
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 2
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: fileListModel.selectionContainerForIndex(root.currentSourceIndex())
-                            color: Style.text
-                            elide: Text.ElideMiddle
-                            maximumLineCount: 1
-                        }
-
-                        Text {
-                            text: fileListModel.selectedCount + " selected"
-                            color: Style.viewerSecondaryText
-                            font.pixelSize: 12
-                        }
-                    }
-
-                    Button {
-                        implicitWidth: 36
-                        implicitHeight: 32
-                        icon.source: "qrc:/ZoinGallery/resources/Back.svg"
-                        inactive: selectionHistoryWindow.historyIndex <= 0
-                        onClicked: {
-                            if (!inactive) {
-                                fileListModel.selectionHistoryBack(root.currentSourceIndex())
-                            }
-                        }
-                    }
-
-                    Button {
-                        implicitWidth: 36
-                        implicitHeight: 32
-                        icon.source: "qrc:/ZoinGallery/resources/Forward.svg"
-                        inactive: selectionHistoryWindow.historyIndex < 0 ||
-                                  selectionHistoryWindow.historyIndex >= selectionHistoryWindow.historyModel.length - 1
-                        onClicked: {
-                            if (!inactive) {
-                                fileListModel.selectionHistoryForward(root.currentSourceIndex())
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 1
-                    color: Style.lighter2
-                }
-
-                ListView {
-                    id: selectionHistoryList
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    clip: true
-                    model: selectionHistoryWindow.historyModel
-                    rightMargin: selectionHistoryScrollBar.width
-
-                    ScrollBar.vertical: ScrollBar {
-                        id: selectionHistoryScrollBar
-                        policy: ScrollBar.AlwaysOn
-                    }
-
-                    delegate: Rectangle {
-                        width: selectionHistoryList.width - selectionHistoryScrollBar.width
-                        height: 48
-                        radius: 4
-                        color: modelData.current ? Style.brickSelected : historyMouse.containsMouse ? Style.lighter : "transparent"
-
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: 10
-                            anchors.rightMargin: 10
-                            spacing: 10
-
-                            Text {
-                                Layout.preferredWidth: 34
-                                text: modelData.index
-                                color: Style.viewerSecondaryText
-                                horizontalAlignment: Text.AlignRight
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: modelData.description
-                                    color: Style.text
-                                    elide: Text.ElideRight
-                                }
-
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: modelData.timestamp
-                                    color: Style.viewerSecondaryText
-                                    font.pixelSize: 11
-                                    elide: Text.ElideRight
-                                }
-                            }
-
-                            Text {
-                                Layout.preferredWidth: 86
-                                text: modelData.selectedCount + " selected"
-                                color: Style.viewerSecondaryText
-                                horizontalAlignment: Text.AlignRight
-                            }
-                        }
-
-                        MouseArea {
-                            id: historyMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            onClicked: fileListModel.jumpSelectionHistory(root.currentSourceIndex(), modelData.index)
-                        }
-                    }
-                }
-            }
+            hostWindow: topLevelWindow
+            stateController: shellController
+            galleryLayout: root.masonryLayout
+            navigationController: viewerController
+            catalogModel: fileListModel
         }
-
         state: "thumbnails"
 
         transitions: [
@@ -2174,7 +383,7 @@ MainWindow {
                 SequentialAnimation {
                     PropertyAnimation { properties: "opacity"; duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
                     PropertyAction {
-                        target: toolbarLayout
+                        target: root.toolbarLayout
                         property: "visible"
                         value: false
                     }
@@ -2185,7 +394,7 @@ MainWindow {
                 to: "thumbnails"
                 SequentialAnimation {
                     PropertyAction {
-                        target: toolbarLayout
+                        target: root.toolbarLayout
                         property: "visible"
                         value: true
                     }
@@ -2203,19 +412,19 @@ MainWindow {
                 name: "viewer"
                 PropertyChanges {
                     target: thumbnailsView
-                    opacity: root.viewerPinchCloseActive ? root.viewerPinchCloseProgress : 0
+                    opacity: shellController.viewerPinchCloseActive ? shellController.viewerPinchCloseProgress : 0
                 }
                 PropertyChanges {
                     target: thumbnailsViewBackground
-                    opacity: root.viewerPinchCloseActive ? root.viewerPinchCloseProgress : 0
+                    opacity: shellController.viewerPinchCloseActive ? shellController.viewerPinchCloseProgress : 0
                 }
                 PropertyChanges {
                     target: viewerBackground
-                    opacity: root.viewerPinchCloseActive ? 1 - root.viewerPinchCloseProgress : 1
+                    opacity: shellController.viewerPinchCloseActive ? 1 - shellController.viewerPinchCloseProgress : 1
                 }
                 PropertyChanges {
                     target: titleBar
-                    opacity: root.viewerPinchCloseActive ? root.viewerPinchCloseProgress : 0
+                    opacity: shellController.viewerPinchCloseActive ? shellController.viewerPinchCloseProgress : 0
                 }
             }
         ]

@@ -114,7 +114,9 @@ private slots:
                     anchors.fill: parent
                     session: transitionSession
                     sourcePanel: sourcePanel
-                    theme: ({ "viewerBackground": "transparent" })
+                    theme: GalleryThemePalette {
+                        viewerBackground: "transparent"
+                    }
                     animationDuration: 300
                     onCloseCompleted: parent.closeCount++
                 }
@@ -233,7 +235,9 @@ private slots:
                     anchors.fill: parent
                     session: testSession
                     sourcePanel: sourcePanel
-                    theme: ({ "viewerBackground": "transparent" })
+                    theme: GalleryThemePalette {
+                        viewerBackground: "transparent"
+                    }
                     animationDuration: 100
                     onCloseCompleted: parent.closeCount++
                 }
@@ -272,8 +276,36 @@ private slots:
 
         QTRY_COMPARE_WITH_TIMEOUT(
             viewer->property("transitionProgress").toReal(), 1.0, 1000);
-        QTRY_VERIFY_WITH_TIMEOUT(
-            viewport->property("imageTextureReady").toBool(), 5000);
+        auto *baseImage = viewport->findChild<QObject *>(
+            QStringLiteral("galleryViewerBaseImage"));
+        auto *nativeImage = viewport->findChild<QObject *>(
+            QStringLiteral("galleryViewerNativeImage"));
+        QVERIFY(baseImage);
+        QVERIFY(nativeImage);
+        const auto textureDiagnostic = [&]() {
+            return QStringLiteral(
+                       "base(source=%1,status=%2,implicit=%3x%4,sourceSize=%5x%6) "
+                       "native(source=%7,status=%8,implicit=%9x%10) "
+                       "viewer(source=%11,level=%12,tiers=%13,original=%14x%15)")
+                .arg(baseImage->property("source").toUrl().toString())
+                .arg(baseImage->property("status").toInt())
+                .arg(baseImage->property("implicitWidth").toReal())
+                .arg(baseImage->property("implicitHeight").toReal())
+                .arg(baseImage->property("sourceSize").toSize().width())
+                .arg(baseImage->property("sourceSize").toSize().height())
+                .arg(nativeImage->property("source").toUrl().toString())
+                .arg(nativeImage->property("status").toInt())
+                .arg(nativeImage->property("implicitWidth").toReal())
+                .arg(nativeImage->property("implicitHeight").toReal())
+                .arg(viewer->property("currentSourceValue").toUrl().toString())
+                .arg(viewer->property("currentSourceLevelValue").toInt())
+                .arg(session->viewerSourcesAt(0).size())
+                .arg(session->imageOriginalSizeAt(0).width())
+                .arg(session->imageOriginalSizeAt(0).height());
+        };
+        QTRY_VERIFY2_WITH_TIMEOUT(
+            viewport->property("imageTextureReady").toBool(),
+            qPrintable(textureDiagnostic()), 5000);
         viewer->forceActiveFocus();
 
         // The original continuous-motion branch does not consume arrow auto
@@ -499,7 +531,7 @@ private slots:
         view.show();
 
         auto *layout = rootObject->findChild<QQuickItem *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *scrollBar = rootObject->findChild<QQuickItem *>(
             QStringLiteral("galleryPanelScrollBar"));
         QVERIFY(layout);
@@ -571,7 +603,7 @@ private slots:
 
         auto *panel = qobject_cast<QQuickItem *>(rootObject);
         auto *layout = rootObject->findChild<QQuickItem *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(panel);
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->property("count").toInt(), 1, 5000);
@@ -596,7 +628,7 @@ private slots:
 
             const auto activeTile = [&]() -> QQuickItem * {
                 const auto pointers = rootObject->findChildren<QQuickItem *>(
-                    QStringLiteral("galleryBrickPointer-0"),
+                    QStringLiteral("gallerySelectionSurface-0"),
                     Qt::FindChildrenRecursively);
                 for (QQuickItem *pointer : pointers) {
                     QQuickItem *const candidate = pointer
@@ -679,11 +711,19 @@ private slots:
         view.show();
 
         auto *layout = rootObject->findChild<QQuickItem *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->property("count").toInt(), 30, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(
             layout->property("contentHeight").toReal() > layout->height(), 5000);
+        // Every logical entry deliberately references the same physical test
+        // image. Wait for the shared metadata result to fan out before
+        // capturing geometry; otherwise the legitimate masonry rewrap can
+        // race the pointer-reveal assertion below.
+        QTRY_COMPARE_WITH_TIMEOUT(
+            session->imageOriginalSizeAt(0), QSize(320, 240), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            session->imageOriginalSizeAt(29), QSize(320, 240), 5000);
 
         constexpr int targetIndex = 15;
         QRectF geometry;
@@ -1452,9 +1492,9 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(
             thumbnailImage->property("status").toInt(), 1, 5000);
 
-        // Every renderer shares one source/effect pair. Masonry retains its
-        // justified Crop behavior; every fixed presentation keeps the whole
-        // source visible with PreserveAspectFit.
+        // Every presentation owns only its active visual subtree. Masonry
+        // and Grid use the shader path; Icons and the compact modes use one
+        // direct Image and must not retain a hidden shader subtree.
         const int padMode = rootObject->property("imagePadMode").toInt();
         const int cropMode = rootObject->property("imageCropMode").toInt();
         const int fitMode = rootObject->property("imageFitMode").toInt();
@@ -1468,65 +1508,133 @@ private slots:
         };
         for (const auto &[mode, scaledFillMode] : modes) {
             panel->setProperty("presentationMode", mode);
-            QTRY_VERIFY_WITH_TIMEOUT(thumbnailShader->isVisible(), 3000);
-            QVERIFY(!thumbnailImage->isVisible());
-            QCOMPARE(thumbnailImage->property("asynchronous").toBool(),
-                     false);
-            QCOMPARE(thumbnailImage->property("cache").toBool(), false);
-            QCOMPARE(thumbnailShader->property("source").value<QObject *>(),
-                     static_cast<QObject *>(thumbnailImage));
-            // Icons now uses its whole preview area directly, without the
-            // dark card/checkerboard treatment reserved for Grid/Masonry.
-            const bool largePreviewMode = mode == QStringLiteral("masonry")
-                || mode == QStringLiteral("grid");
-            QCOMPARE(thumbnailShader->property("showCheckerboard").toBool(),
-                     largePreviewMode);
-            QCOMPARE(thumbnailBackdrop->property(
-                         "enabledForPresentation").toBool(),
-                     largePreviewMode);
-            QVERIFY(qAbs(thumbnail->width() * 2 -
-                         qRound(thumbnail->width() * 2)) <= 0.001);
-            QVERIFY(qAbs(thumbnail->height() * 2 -
-                         qRound(thumbnail->height() * 2)) <= 0.001);
+            QTRY_COMPARE_WITH_TIMEOUT(
+                panel->property("presentationMode").toString(), mode, 3000);
             QTRY_VERIFY_WITH_TIMEOUT(
-                thumbnailImage->property("fillMode").toInt() ==
-                    (thumbnailImage->property("diffIsSmall").toBool()
-                         ? padMode : scaledFillMode),
+                !panel->property("presentationSwitchPending").toBool(),
                 3000);
-            if (mode != QStringLiteral("masonry")) {
-                QTRY_VERIFY_WITH_TIMEOUT(thumbnailShader->height() > 0,
-                                         3000);
-                const qreal renderedAspect = thumbnailShader->width()
-                    / thumbnailShader->height();
-                const qreal decodedAspect = thumbnailImage->implicitWidth()
-                    / thumbnailImage->implicitHeight();
+
+            const auto activeVisual = [rootObject, &view](
+                                          const QString &objectName)
+                -> QQuickItem * {
+                const auto candidates = rootObject->findChildren<QQuickItem *>(
+                    objectName, Qt::FindChildrenRecursively);
+                for (QQuickItem *candidate : candidates) {
+                    // Loader replacement uses deleteLater(). The outgoing
+                    // subtree can still be discoverable as a QObject during
+                    // this event turn, but only the committed visual remains
+                    // attached to the active scene graph window.
+                    if (candidate->window() == &view) {
+                        return candidate;
+                    }
+                }
+                return nullptr;
+            };
+            QQuickItem *modeThumbnail = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (modeThumbnail = activeVisual(
+                     QStringLiteral("galleryThumbnail-0")))
+                    && modeThumbnail->isVisible(),
+                3000);
+            auto *modeImage = activeVisual(
+                QStringLiteral("galleryThumbnailImage-0"));
+            QVERIFY(modeImage);
+            QTRY_COMPARE_WITH_TIMEOUT(
+                modeImage->property("status").toInt(), 1, 5000);
+            QCOMPARE(modeImage->property("asynchronous").toBool(),
+                     false);
+            QCOMPARE(modeImage->property("cache").toBool(), false);
+            QVERIFY(qAbs(modeThumbnail->width() * 2 -
+                         qRound(modeThumbnail->width() * 2)) <= 0.001);
+            QVERIFY(qAbs(modeThumbnail->height() * 2 -
+                         qRound(modeThumbnail->height() * 2)) <= 0.001);
+            QVERIFY(!modeThumbnail->property("source").toUrl().isEmpty());
+
+            const bool shaderMode = mode == QStringLiteral("masonry")
+                || mode == QStringLiteral("grid");
+            auto *modeShader = activeVisual(
+                QStringLiteral("galleryThumbnailShader-0"));
+            auto *modeBackdrop = activeVisual(
+                QStringLiteral("galleryThumbnailBackdrop-0"));
+            if (shaderMode) {
+                QVERIFY(modeShader);
+                QVERIFY(modeBackdrop);
+                QTRY_VERIFY_WITH_TIMEOUT(modeShader->isVisible(), 3000);
+                QVERIFY(!modeImage->isVisible());
+                QCOMPARE(modeShader->property("source").value<QObject *>(),
+                         static_cast<QObject *>(modeImage));
+                QCOMPARE(modeShader->property(
+                             "showCheckerboard").toBool(), true);
+                QCOMPARE(modeBackdrop->property(
+                             "enabledForPresentation").toBool(), true);
+                QTRY_VERIFY_WITH_TIMEOUT(
+                    modeImage->property("fillMode").toInt() ==
+                        (modeImage->property("diffIsSmall").toBool()
+                             ? padMode : scaledFillMode),
+                    3000);
+            } else {
+                QVERIFY(!modeShader);
+                QTRY_VERIFY_WITH_TIMEOUT(modeImage->isVisible(), 3000);
+                QCOMPARE(modeImage->property("fillMode").toInt(), fitMode);
+                // The one shared preview primitive survives presentation
+                // changes. Compact modes retain its lightweight backdrop
+                // object but never enable or paint it.
+                QVERIFY(modeBackdrop);
+                QVERIFY(!modeBackdrop->property(
+                             "enabledForPresentation").toBool());
+                QVERIFY(!modeBackdrop->isVisible());
+            }
+            if (mode == QStringLiteral("grid")) {
+                QVERIFY(modeShader->height() > 0);
+                const qreal renderedAspect = modeShader->width()
+                    / modeShader->height();
+                const qreal decodedAspect = modeImage->implicitWidth()
+                    / modeImage->implicitHeight();
                 QVERIFY2(qAbs(renderedAspect - decodedAspect) < 0.001
                              && qAbs(decodedAspect - sourceAspect) < 0.02,
                          qPrintable(QStringLiteral(
                              "%1 shader %2x%3 aspect %4; source image "
                              "implicit %5x%6")
                              .arg(mode)
-                             .arg(thumbnailShader->width())
-                             .arg(thumbnailShader->height())
+                             .arg(modeShader->width())
+                             .arg(modeShader->height())
                              .arg(renderedAspect)
-                             .arg(thumbnailImage->implicitWidth())
-                             .arg(thumbnailImage->implicitHeight())));
+                             .arg(modeImage->implicitWidth())
+                             .arg(modeImage->implicitHeight())));
             }
-            QVERIFY(!thumbnail->property("source").toUrl().isEmpty());
         }
         panel->setProperty("presentationMode", QStringLiteral("details"));
-        QTRY_VERIFY_WITH_TIMEOUT(thumbnail->isVisible(), 3000);
-        QVERIFY(thumbnailShader->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (thumbnail = rootObject->findChild<QQuickItem *>(
+                 QStringLiteral("galleryThumbnail-0")))
+                && thumbnail->isVisible(),
+            3000);
         QVERIFY(thumbnail->parentItem());
-        QVERIFY(thumbnail->parentItem()->parentItem());
-        QCOMPARE(thumbnail->parentItem()->parentItem()->objectName(),
-                 QStringLiteral("galleryDetailsIconSlot-0"));
+        auto *detailsSlot = rootObject->findChild<QQuickItem *>(
+            QStringLiteral("galleryDetailsIconSlot-0"));
+        QVERIFY(detailsSlot);
+        const QPointF thumbnailPosition = thumbnail->mapToItem(
+            detailsSlot->parentItem(), QPointF());
+        const QPointF slotPosition = detailsSlot->mapToItem(
+            detailsSlot->parentItem(), QPointF());
+        QVERIFY(QLineF(thumbnailPosition, slotPosition).length() < 0.01);
+        QCOMPARE(thumbnail->width(), detailsSlot->width());
+        QCOMPARE(thumbnail->height(), detailsSlot->height());
         auto *detailsIcon = rootObject->findChild<QQuickItem *>(
             QStringLiteral("galleryFallbackIcon-0"));
         QVERIFY(detailsIcon);
         QTRY_VERIFY_WITH_TIMEOUT(!detailsIcon->isVisible(), 3000);
         panel->setProperty("presentationMode", QStringLiteral("masonry"));
-        QTRY_VERIFY_WITH_TIMEOUT(thumbnailShader->isVisible(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (thumbnail = rootObject->findChild<QQuickItem *>(
+                 QStringLiteral("galleryThumbnail-0")))
+                && thumbnail->isVisible(),
+            3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (thumbnailShader = rootObject->findChild<QQuickItem *>(
+                 QStringLiteral("galleryThumbnailShader-0")))
+                && thumbnailShader->isVisible(),
+            3000);
 
         QVariant geometry;
         QVERIFY(QMetaObject::invokeMethod(rootObject, "tileGeometry",

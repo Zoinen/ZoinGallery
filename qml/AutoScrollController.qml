@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 
 // The middle-button auto-scroll gesture used by the original MasonryMode.

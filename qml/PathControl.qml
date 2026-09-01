@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Window
 import QtQuick.Layouts
@@ -356,6 +358,8 @@ Item {
                 model: breadcrumbs.slice(1)
 
                 FolderDelegate {
+                    required property int index
+                    required property var modelData
                     objectName: "pathBreadcrumb-" + index
                     text: modelData
                     needArrow: index !== repeater.model.length - 1

@@ -193,7 +193,7 @@ private slots:
         QObject *panel = createPanel(view);
         QVERIFY(panel);
         auto *layout = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         view.show();
 
@@ -273,7 +273,7 @@ private slots:
         QVERIFY(panel);
         panel->setProperty("presentationMode", QStringLiteral("grid"));
         auto *layout = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *scrollAnimation = panel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QVERIFY(layout);
@@ -311,9 +311,18 @@ private slots:
         const auto assertAnchor = [&] {
             const QRectF geometry = indexGeometry(layout, anchorIndex);
             QVERIFY(geometry.isValid());
-            QVERIFY(qAbs((geometry.top() -
-                          layout->property("contentY").toReal()) -
-                         beforeViewportY) < 0.01);
+            const qreal currentContentY =
+                layout->property("contentY").toReal();
+            const qreal currentViewportY = geometry.top() - currentContentY;
+            QVERIFY2(qAbs(currentViewportY - beforeViewportY) < 0.01,
+                     qPrintable(QStringLiteral(
+                         "density=%1 geometryTop=%2 contentY=%3 "
+                         "viewportY=%4 expected=%5")
+                         .arg(layout->property("density").toReal())
+                         .arg(geometry.top())
+                         .arg(currentContentY)
+                         .arg(currentViewportY)
+                         .arg(beforeViewportY)));
             QVERIFY(!scrollAnimation->property("running").toBool());
             QVERIFY(qAbs(session->panelScrollOffset() -
                          layout->property("contentY").toReal()) < 0.01);
@@ -370,7 +379,7 @@ private slots:
         QObject *panel = createPanel(view);
         QVERIFY(panel);
         panel->setProperty("presentationMode", QStringLiteral("columns"));
-        auto *layout = panel->findChild<QQuickItem *>(QStringLiteral("galleryMasonryLayout"));
+        auto *layout = panel->findChild<QQuickItem *>(QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_VERIFY(layout->property("contentHeight").toReal() > layout->width());
 
@@ -462,7 +471,7 @@ private slots:
         QVERIFY(initialAnimationSpy);
         QVERIFY(initialAnimationSpy->isValid());
         auto *initialLayout = initialPanel->findChild<QObject *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *initialAnimation = initialPanel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QVERIFY(initialLayout);
@@ -497,7 +506,7 @@ private slots:
         QVERIFY(topAnimationSpy);
         QVERIFY(topAnimationSpy->isValid());
         auto *topLayout = topPanel->findChild<QObject *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *topAnimation = topPanel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QVERIFY(topLayout);
@@ -520,7 +529,7 @@ private slots:
         QVERIFY(recreatedAnimationSpy);
         QVERIFY(recreatedAnimationSpy->isValid());
         auto *recreatedLayout = recreatedPanel->findChild<QObject *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *recreatedAnimation = recreatedPanel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QVERIFY(recreatedLayout);
@@ -573,7 +582,7 @@ private slots:
         panel->setProperty("presentationMode", QStringLiteral("details"));
         panel->setProperty("density", 30.0);
         auto *layout = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *scrollAnimation = panel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QVERIFY(layout);
@@ -682,7 +691,7 @@ private slots:
         panel->setProperty("presentationMode", QStringLiteral("details"));
         panel->setProperty("density", 30.0);
         auto *layout = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *placementTimer = panel->findChild<QObject *>(
             QStringLiteral("galleryPathViewportPlacementTimer"));
         QVERIFY(layout);
@@ -757,7 +766,7 @@ private slots:
         view.show();
 
         auto *layout = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *scrollAnimation = panel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         auto *pinchArea = panel->findChild<QObject *>(

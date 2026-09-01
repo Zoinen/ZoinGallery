@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QSharedPointer>
 #include <QSize>
+#include <QStringList>
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
@@ -163,6 +164,8 @@ public:
     Q_INVOKABLE void requestCursor(int index);
     Q_INVOKABLE void requestOpen(int index);
     Q_INVOKABLE void requestToggleSelection(int index);
+    void applySelectionIntent(const QStringList &selectedEntryIds,
+                              const QStringList &deselectedEntryIds);
     Q_INVOKABLE void resetExternalSource();
     Q_INVOKABLE void shutdown();
 
@@ -184,6 +187,22 @@ signals:
     void viewerRequested(int index, const QUrl &source);
 
 private:
+    struct ExternalCatalogApplyContext {
+        bool sourceIdentityChanged = false;
+        bool requestedCatalogReady = false;
+        bool metadataDeferred = false;
+        bool catalogRowsDeferred = false;
+        int totalCount = -1;
+        qulonglong metadataRevision = 0;
+        QString previousCursorId;
+        int previousIndex = -1;
+        bool carriesCursor = false;
+        int requestedCursorIndex = -1;
+        QString requestedCursorId;
+        bool carriesPath = false;
+        bool pathChanged = false;
+    };
+
     class Private;
     friend class GalleryRuntime;
     GallerySession(const QString &sessionId,
@@ -199,6 +218,21 @@ private:
     void sanitizeViewerPreviousStateForCatalog();
     void restorePanelViewportStateForPath(const QString &path);
     void rememberPanelViewportStateForCurrentPath();
+    ExternalCatalogApplyContext externalCatalogContext(
+        const QVariantList &entries, const QVariantMap &options) const;
+    void prepareExternalCatalogPath(
+        ExternalCatalogApplyContext &context,
+        const QVariantList &entries, const QVariantMap &options);
+    bool applySameExternalCatalogRevision(
+        const ExternalCatalogApplyContext &context,
+        qulonglong revision);
+    void commitExternalCatalogState(
+        const ExternalCatalogApplyContext &context,
+        qulonglong revision, const QVariantMap &options);
+    void reconcileExternalCatalogCursor(
+        const ExternalCatalogApplyContext &context);
+    void finishExternalCatalogApply(
+        const ExternalCatalogApplyContext &context);
     Private *d;
 };
 

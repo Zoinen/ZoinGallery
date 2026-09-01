@@ -365,131 +365,163 @@ bool GallerySession::applyExternalCatalog(
         || (!sourceIdentityChanged && revision < d->catalogRevision)) {
         return false;
     }
-
-    const bool requestedCatalogReady =
-        !options.value(QStringLiteral("catalogProvisional")).toBool()
-        && !options.value(QStringLiteral("deferCatalogReady")).toBool();
-    const bool metadataDeferred =
-        options.value(QStringLiteral("metadataDeferred")).toBool();
-    const bool catalogRowsDeferred = options.value(
-        QStringLiteral("catalogRowsDeferred")).toBool();
-    const int totalCount = catalogRowsDeferred
-        ? options.value(QStringLiteral("totalCount"), entries.size()).toInt()
-        : -1;
-    const qulonglong metadataRevision = options.value(
-        QStringLiteral("metadataRevision"), qulonglong(0)).toULongLong();
-    const QString previousCursorId = cursorEntryId();
-    const int previousIndex = d->currentIndex;
-    const bool carriesCursor = options.contains(
-        QStringLiteral("cursorIndex"));
-    const int requestedCursorIndex = options.value(
-        QStringLiteral("cursorIndex"), previousIndex).toInt();
-    const QString requestedCursorId = options.value(
-        QStringLiteral("cursorEntryId")).toString();
-
-    const bool carriesPath = options.contains(QStringLiteral("currentPath"))
-        || options.contains(QStringLiteral("path"));
-    bool pathChanged = false;
-    if (carriesPath) {
-        const QString path = options.value(
-            QStringLiteral("currentPath"), options.value(QStringLiteral("path")))
-            .toString();
-        const bool actualPathChanged = d->currentPath != path;
-        if (actualPathChanged || sourceIdentityChanged) {
-            pathChanged = true;
-            // A path replacement is never paint-ready until its model and
-            // remapped cursor have been installed, even when the host sends
-            // the authoritative catalog in the same call.
-            if (d->catalogReady) {
-                d->catalogReady = false;
-                emit catalogReadyChanged();
-            }
-            d->currentPath = path;
-            clearViewerPreviousState(true);
-            if (sourceIdentityChanged) {
-                d->panelViewportStates.clear();
-            }
-            restorePanelViewportStateForPath(path);
-            if (carriesCursor) {
-                const int logicalCount = catalogRowsDeferred
-                    ? qMax(totalCount, entries.size()) : entries.size();
-                d->currentIndex = logicalCount > 0
-                    ? qBound(0, requestedCursorIndex, logicalCount - 1)
-                    : -1;
-                d->stableCursorEntryId = requestedCursorId;
-            }
-            if (actualPathChanged) {
-                emit currentPathChanged();
-            }
-        }
-    }
-
-    if (!pathChanged && revision == d->catalogRevision && revision != 0) {
-        const bool alreadyCompleted = metadataDeferred
-            && metadataRevision == d->metadataRevision
-            && d->metadataCompleted;
-        d->metadataRevision = metadataRevision;
-        if (!alreadyCompleted) {
-            d->metadataDeferred = metadataDeferred;
-            d->metadataCompleted = false;
-        }
-        if (d->catalogReady != requestedCatalogReady) {
-            d->catalogReady = requestedCatalogReady;
-            emit catalogReadyChanged();
-        }
+    ExternalCatalogApplyContext context = externalCatalogContext(
+        entries, options);
+    prepareExternalCatalogPath(context, entries, options);
+    if (applySameExternalCatalogRevision(context, revision)) {
         return true;
     }
-
-    // A directory transition necessarily replaces the current catalog. Skip
-    // the additional O(N) equivalence pass; it remains enabled for same-path
-    // revision bumps where retaining image objects and decode work matters.
-    if (!d->external->applyCatalog(entries, metadataDeferred,
-                                   !pathChanged, totalCount)) {
+    if (!d->external->applyCatalog(
+            entries, context.metadataDeferred,
+            !context.pathChanged, context.totalCount)) {
         return false;
     }
+    commitExternalCatalogState(context, revision, options);
+    reconcileExternalCatalogCursor(context);
+    finishExternalCatalogApply(context);
+    return true;
+}
+
+GallerySession::ExternalCatalogApplyContext
+GallerySession::externalCatalogContext(
+    const QVariantList &entries, const QVariantMap &options) const {
+    ExternalCatalogApplyContext context;
+    context.sourceIdentityChanged = options.value(
+        QStringLiteral("sourceIdentityChanged")).toBool();
+    context.requestedCatalogReady =
+        !options.value(QStringLiteral("catalogProvisional")).toBool()
+        && !options.value(QStringLiteral("deferCatalogReady")).toBool();
+    context.metadataDeferred = options.value(
+        QStringLiteral("metadataDeferred")).toBool();
+    context.catalogRowsDeferred = options.value(
+        QStringLiteral("catalogRowsDeferred")).toBool();
+    context.totalCount = context.catalogRowsDeferred
+        ? options.value(QStringLiteral("totalCount"), entries.size()).toInt()
+        : -1;
+    context.metadataRevision = options.value(
+        QStringLiteral("metadataRevision"), qulonglong(0)).toULongLong();
+    context.previousCursorId = cursorEntryId();
+    context.previousIndex = d->currentIndex;
+    context.carriesCursor = options.contains(QStringLiteral("cursorIndex"));
+    context.requestedCursorIndex = options.value(
+        QStringLiteral("cursorIndex"), context.previousIndex).toInt();
+    context.requestedCursorId = options.value(
+        QStringLiteral("cursorEntryId")).toString();
+    context.carriesPath = options.contains(QStringLiteral("currentPath"))
+        || options.contains(QStringLiteral("path"));
+    return context;
+}
+
+void GallerySession::prepareExternalCatalogPath(
+    ExternalCatalogApplyContext &context, const QVariantList &entries,
+    const QVariantMap &options) {
+    if (!context.carriesPath) {
+        return;
+    }
+    const QString path = options.value(
+        QStringLiteral("currentPath"), options.value(QStringLiteral("path")))
+        .toString();
+    const bool actualPathChanged = d->currentPath != path;
+    if (!actualPathChanged && !context.sourceIdentityChanged) {
+        return;
+    }
+    context.pathChanged = true;
+    if (d->catalogReady) {
+        d->catalogReady = false;
+        emit catalogReadyChanged();
+    }
+    d->currentPath = path;
+    clearViewerPreviousState(true);
+    if (context.sourceIdentityChanged) {
+        d->panelViewportStates.clear();
+    }
+    restorePanelViewportStateForPath(path);
+    if (context.carriesCursor) {
+        const int logicalCount = context.catalogRowsDeferred
+            ? qMax(context.totalCount, entries.size()) : entries.size();
+        d->currentIndex = logicalCount > 0
+            ? qBound(0, context.requestedCursorIndex, logicalCount - 1) : -1;
+        d->stableCursorEntryId = context.requestedCursorId;
+    }
+    if (actualPathChanged) {
+        emit currentPathChanged();
+    }
+}
+
+bool GallerySession::applySameExternalCatalogRevision(
+    const ExternalCatalogApplyContext &context, qulonglong revision) {
+    if (context.pathChanged || revision != d->catalogRevision
+        || revision == 0) {
+        return false;
+    }
+    const bool alreadyCompleted = context.metadataDeferred
+        && context.metadataRevision == d->metadataRevision
+        && d->metadataCompleted;
+    d->metadataRevision = context.metadataRevision;
+    if (!alreadyCompleted) {
+        d->metadataDeferred = context.metadataDeferred;
+        d->metadataCompleted = false;
+    }
+    if (d->catalogReady != context.requestedCatalogReady) {
+        d->catalogReady = context.requestedCatalogReady;
+        emit catalogReadyChanged();
+    }
+    return true;
+}
+
+void GallerySession::commitExternalCatalogState(
+    const ExternalCatalogApplyContext &context, qulonglong revision,
+    const QVariantMap &options) {
     d->catalogRevision = revision;
-    d->metadataRevision = metadataRevision;
-    d->metadataDeferred = metadataDeferred;
+    d->metadataRevision = context.metadataRevision;
+    d->metadataDeferred = context.metadataDeferred;
     d->metadataCompleted = false;
     d->catalogStreaming = options.value(
         QStringLiteral("catalogStreaming")).toBool();
+}
 
-    if (pathChanged && carriesCursor) {
-        const int rowCount = d->external->rowCount();
-        const int remapped = d->external->rowForEntryId(requestedCursorId);
-        const int target = rowCount > 0
-            ? qBound(0, remapped >= 0 ? remapped : requestedCursorIndex,
-                     rowCount - 1)
-            : -1;
-        const QString materializedId = entryIdAt(target);
-        const QString targetId = materializedId.isEmpty()
-            ? requestedCursorId : materializedId;
-        const bool cursorChanged = previousIndex != target
-            || previousCursorId != targetId;
-        d->currentIndex = target;
-        d->stableCursorEntryId = targetId;
-        if (d->viewerOpen && cursorChanged) {
-            d->external->setViewerIndex(target);
-        }
-        if (cursorChanged) {
-            emit currentIndexChanged();
-            emit viewerSourceChanged();
-        }
+void GallerySession::reconcileExternalCatalogCursor(
+    const ExternalCatalogApplyContext &context) {
+    if (!context.pathChanged || !context.carriesCursor) {
+        const int remapped = d->external->rowForEntryId(
+            context.previousCursorId);
+        setCurrentIndex(remapped >= 0 ? remapped : context.previousIndex);
+        return;
     }
-    else {
-        const int remapped = d->external->rowForEntryId(previousCursorId);
-        setCurrentIndex(remapped >= 0 ? remapped : previousIndex);
+    const int rowCount = d->external->rowCount();
+    const int remapped = d->external->rowForEntryId(
+        context.requestedCursorId);
+    const int target = rowCount > 0
+        ? qBound(0, remapped >= 0 ? remapped
+                                 : context.requestedCursorIndex,
+                 rowCount - 1)
+        : -1;
+    const QString materializedId = entryIdAt(target);
+    const QString targetId = materializedId.isEmpty()
+        ? context.requestedCursorId : materializedId;
+    const bool changed = context.previousIndex != target
+        || context.previousCursorId != targetId;
+    d->currentIndex = target;
+    d->stableCursorEntryId = targetId;
+    if (d->viewerOpen && changed) {
+        d->external->setViewerIndex(target);
     }
+    if (changed) {
+        emit currentIndexChanged();
+        emit viewerSourceChanged();
+    }
+}
+
+void GallerySession::finishExternalCatalogApply(
+    const ExternalCatalogApplyContext &context) {
     sanitizeViewerPreviousStateForCatalog();
-    const bool readyChanged = d->catalogReady != requestedCatalogReady;
-    if (readyChanged) {
-        d->catalogReady = requestedCatalogReady;
-    }
+    const bool readyChanged =
+        d->catalogReady != context.requestedCatalogReady;
+    d->catalogReady = context.requestedCatalogReady;
     emit catalogRevisionChanged();
     if (readyChanged) {
         emit catalogReadyChanged();
     }
-    return true;
 }
 
 bool GallerySession::appendExternalCatalog(
@@ -898,6 +930,26 @@ void GallerySession::requestToggleSelection(int index) {
     }
     emit actionRequested(QStringLiteral("panel.toggleSelection"),
                          actionPayload(this, d->currentIndex));
+}
+
+void GallerySession::applySelectionIntent(
+    const QStringList &selectedEntryIds,
+    const QStringList &deselectedEntryIds) {
+    if (d->shutdown || !d->local) {
+        return;
+    }
+    for (const QString &entryId : selectedEntryIds) {
+        const int index = indexForEntryId(entryId);
+        if (index >= 0 && !isSelectedAt(index)) {
+            d->local->setSelection(index, true);
+        }
+    }
+    for (const QString &entryId : deselectedEntryIds) {
+        const int index = indexForEntryId(entryId);
+        if (index >= 0 && isSelectedAt(index)) {
+            d->local->setSelection(index, false);
+        }
+    }
 }
 
 void GallerySession::resetExternalSource() {

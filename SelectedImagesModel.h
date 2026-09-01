@@ -12,7 +12,8 @@
 
 class DecodeManager;
 
-class SelectedImagesModel : public QAbstractListModel, public ThumbnailsRequestInterface {
+class SelectedImagesModel : public QAbstractListModel,
+                            public ZoinGallery::GalleryCatalogSource {
     Q_OBJECT
     Q_PROPERTY(int selectedCount READ selectedCount NOTIFY panelSelectionChanged)
     Q_PROPERTY(int totalPathCount READ totalPathCount NOTIFY activeGroupContentsChanged)
@@ -72,6 +73,8 @@ public:
     Q_INVOKABLE void selectRange(int anchorIndex, int targetIndex, bool preserveExisting);
     Q_INVOKABLE void clearSelection();
     Q_INVOKABLE void setAllSelection(bool selected);
+    void applySelectionChanges(const QList<int> &selectedIndexes,
+                               const QList<int> &deselectedIndexes);
     Q_INVOKABLE void removeFromCollection(int index);
     Q_INVOKABLE int mapToSourceRow(int viewRow) const;
     Q_INVOKABLE int mapFromSourceRow(int sourceRow) const;
@@ -89,6 +92,9 @@ public:
     Q_INVOKABLE QVariantList dragUrlsForIndex(int index, bool singleItemOnly = false) const;
     Q_INVOKABLE QVariantMap dragPreviewItemsForIndex(int index, int limit,
                                                      bool singleItemOnly = false) const;
+    QVariantMap finalizeExternalDrag(
+        const QVariantList &urls, int dropAction);
+    void configureNativeDragCursors(QObject *dragSource);
     Q_INVOKABLE void requestViewer(int index, int width = -1, int height = -1);
     Q_INVOKABLE void requestViewerInOrder(
         int index, const QVariantList &orderedSourceRows,

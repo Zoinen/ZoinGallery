@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -591,213 +593,36 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
-            MasonryMode {
+            SelectedImagesPanelBackend {
+                id: selectedImagesBackend
+                sourceModel: selectedImagesModel
+            }
+
+            GalleryPanelController {
+                id: selectedImagesController
+                backend: selectedImagesBackend
+            }
+
+            StandaloneGalleryPanel {
                 id: selectedMasonry
                 anchors.fill: parent
 
+                suppliedController: selectedImagesController
+                viewerController: viewerController
                 primaryView: false
                 selectionInteractionEnabled: true
                 quickSearchEnabled: false
-                masonryModel: selectedImagesModel
                 selectionModel: selectedImagesModel
-                selectionMapper: selectedImagesModel
                 targetHeight: 112
                 masonrySpacing: 8
                 selectionAccentColor: fileListModel.activeSelectionGroupColor
-                view.showTransparentGrid: panel.transparentGrid
+                showTransparentGrid: panel.transparentGrid
+                emptyStateEnabled: false
 
                 onCurrentSelectionToggleRequested: (index) => {
                     selectedImagesModel.toggleSelection(index)
                 }
                 onCurrentIndexActivated: (index) => panel.imageActivated(index)
-
-                masonryDelegate: BrickItem {
-                    id: selectedBrick
-
-                    property var model
-                    property int viewIndex: -1
-                    property int sourceIndex: -1
-
-                    Item {
-                        id: dragItem
-                        anchors.fill: parent
-                        visible: !(viewIndex ===
-                                   selectedMasonry.view.currentIndex &&
-                                   selectedMasonry.viewerTransitionActive)
-
-                        property var urls: []
-                        property var previewItems: []
-                        property int remainingCount: 0
-
-                        Drag.active: selectedMouse.drag.active
-                        Drag.dragType: Drag.Automatic
-                        Drag.supportedActions: Qt.CopyAction | Qt.MoveAction
-                        Drag.mimeData: ({ "text/uri-list": urls })
-                        Drag.onDragStarted: fileListModel.configureNativeDragCursors(dragItem)
-                        Drag.onDragFinished: (dropAction) => {
-                            fileListModel.finalizeExternalDrag(urls, dropAction)
-                        }
-
-                        function prepareDrag(singleItemOnly) {
-                            urls = selectedImagesModel.dragUrlsForIndex(viewIndex, singleItemOnly)
-                            const preview = selectedImagesModel.dragPreviewItemsForIndex(
-                                viewIndex, 4, singleItemOnly)
-                            previewItems = preview.items || []
-                            remainingCount = preview.remainingCount || 0
-                            dragPreview.visible = true
-                            Qt.callLater(function() {
-                                dragPreview.grabToImage(function(result) {
-                                    dragItem.Drag.imageSource = result.url
-                                    dragPreview.visible = false
-                                })
-                            })
-                        }
-
-                        Rectangle {
-                            id: currentOutline
-                            anchors.fill: selectedContent
-                            anchors.margins: -2
-                            radius: 5
-                            color: Style.brickImageSelected
-                            visible: viewIndex === selectedMasonry.view.currentIndex
-                        }
-
-                        Rectangle {
-                            id: selectedContent
-                            anchors.fill: parent
-                            anchors.margins: selectedMasonry.view.spacing / 2
-                            radius: 5
-                            color: Style.darker
-                            border.width: 1
-                            border.color: Style.lighter2
-                            clip: true
-
-                            Image {
-                                anchors.fill: parent
-                                anchors.margins: 2
-                                source: model ? model.imageIdUrl : ""
-                                fillMode: Image.PreserveAspectCrop
-                                cache: false
-                            }
-
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.bottom: parent.bottom
-                                height: selectedName.height + 10
-                                color: Style.opaqueMasonryViewBackgroundWithOpacity
-
-                                Text {
-                                    id: selectedName
-                                    anchors.left: parent.left
-                                    anchors.right: removeButton.left
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    anchors.leftMargin: 6
-                                    anchors.rightMargin: 4
-                                    text: model ? model.text : ""
-                                    color: Style.text
-                                    elide: Text.ElideMiddle
-                                    maximumLineCount: 1
-                                }
-
-                                Button {
-                                    id: removeButton
-                                    anchors.right: parent.right
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: 28
-                                    height: 28
-                                    icon.source: "qrc:/ZoinGallery/resources/WindowClose.svg"
-                                    onClicked: selectedImagesModel.removeFromCollection(viewIndex)
-                                    ToolTip.text: "Remove from selected images"
-                                    z: 3
-                                }
-                            }
-
-                            Rectangle {
-                                anchors.fill: parent
-                                color: "transparent"
-                                border.width: 3
-                                border.color: fileListModel.activeSelectionGroupColor
-                                radius: 5
-                                visible: Boolean(model && model.isSelected)
-                                z: 4
-                            }
-                        }
-
-                        Item {
-                            id: dragPreview
-                            x: -width - 1000
-                            y: -height - 1000
-                            width: previewRow.implicitWidth + 12
-                            height: 56
-                            visible: false
-
-                            Rectangle {
-                                anchors.fill: parent
-                                radius: 6
-                                color: Style.popupBackground
-                                border.width: 1
-                                border.color: Style.popupBorder
-                            }
-
-                            Row {
-                                id: previewRow
-                                anchors.centerIn: parent
-                                spacing: 5
-
-                                Repeater {
-                                    model: dragItem.previewItems
-
-                                    Image {
-                                        width: 44
-                                        height: 44
-                                        source: modelData.imageIdUrl
-                                        fillMode: Image.PreserveAspectCrop
-                                    }
-                                }
-
-                                Rectangle {
-                                    width: 44
-                                    height: 44
-                                    radius: 4
-                                    visible: dragItem.remainingCount > 0
-                                    color: Style.lighter
-                                    border.width: 1
-                                    border.color: fileListModel.activeSelectionGroupColor
-
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: "+" + dragItem.remainingCount
-                                        color: Style.text
-                                        font.bold: true
-                                    }
-                                }
-                            }
-                        }
-
-                        MouseArea {
-                            id: selectedMouse
-                            anchors.fill: parent
-                            z: -1
-                            hoverEnabled: true
-                            drag.target: dragItem
-
-                            onPressed: (mouse) => {
-                                dragItem.prepareDrag(
-                                            selectedMasonry.singleItemDragRequested(
-                                                mouse.modifiers))
-                                dragItem.Drag.hotSpot.x = 18
-                                dragItem.Drag.hotSpot.y = 18
-                                selectedMasonry.handleItemPressed(viewIndex, mouse.modifiers)
-                            }
-
-                            onDoubleClicked: {
-                                selectedMasonry.setCurrentIndex(viewIndex)
-                                panel.imageActivated(viewIndex)
-                            }
-                        }
-                    }
-                }
             }
 
             Column {

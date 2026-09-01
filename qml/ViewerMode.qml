@@ -7,6 +7,8 @@ import QtQuick.Effects
 import ZoinGallery 1.0
 import ZoinGallery.Native 1.0
 
+pragma ComponentBehavior: Bound
+
 Item {
     id: viewerMode
 
@@ -49,6 +51,32 @@ Item {
 
     property int animationDuration: 150
     property int easingType: Easing.OutSine
+    property real devicePixelRatio: 1.0
+    required property Item shell
+    required property QtObject hostWindow
+    required property QtObject standaloneController
+    required property Item titleBarItem
+    required property Item viewerBackgroundItem
+    required property Item minimizeButton
+    required property Item maximizeButton
+    required property Item closeButton
+    required property bool quickWindowKitEnabled
+
+    readonly property alias flickableArea: viewerSurface.viewport
+    readonly property alias flickableAreaContainer: viewerSurface.viewportContainer
+    readonly property alias delegateOutline: viewerSurface.outline
+    readonly property alias imageInfoPanel: viewerSurface.imageInfo
+    readonly property alias sphericViewerLoader: viewerSurface.sphereLoader
+    readonly property alias sphericViewerComponent: viewerSurface.sphereComponent
+    readonly property alias viewerNavigationNeighborImage: viewerSurface.neighborImage
+    readonly property alias viewerNavigationFinishTimer: viewerSurface.navigationFinishTimer
+    readonly property alias viewerWheelPanFinishTimer: viewerSurface.wheelPanFinishTimer
+    readonly property alias viewerNavigationGestureEndTimer: viewerSurface.gestureEndTimer
+    readonly property alias viewerNavigationResidualQuietTimer: viewerSurface.residualQuietTimer
+    readonly property alias viewerNavigationOffsetAnimation: viewerSurface.navigationOffsetAnimation
+    readonly property alias topPanel: viewerChrome.topChrome
+    readonly property alias rightPanel: viewerChrome.rightChrome
+    readonly property alias leftPanel: viewerChrome.leftChrome
 
     property real sphericViewerOpacity: 1
     property bool sphericViewerMode: false
@@ -64,12 +92,12 @@ Item {
     }
 
     property bool panelsVisible: false
-    property alias zoomFitView: flickableArea.zoomFitView
-    readonly property real viewerChromeOpacity: root.state === "viewer" ?
-            (root.viewerPinchCloseActive ? 1 - root.viewerPinchCloseProgress : 1) : 0
+    property alias zoomFitView: viewerSurface.zoomFitView
+    readonly property real viewerChromeOpacity: shell.state === "viewer" ?
+            (shell.viewerPinchCloseActive ? 1 - shell.viewerPinchCloseProgress : 1) : 0
 
-    property alias animation: viewerAnimation
-    property alias imageContainer: flickableArea
+    property alias animation: viewerSurface.animation
+    property alias imageContainer: viewerSurface.viewport
 
     signal pinchZoomOutToThumbnailsProgressed(real progress)
     signal pinchZoomOutToThumbnailsFinished(bool commit)
@@ -125,7 +153,7 @@ Item {
                selectionModel.selectionGroupColorForIndex(
                    sourceIndexForViewIndex(viewerNavigationTargetIndex))
     }
-    readonly property real viewerBackgroundOpacity: viewerBackground.opacity
+    readonly property real viewerBackgroundOpacity: viewerBackgroundItem.opacity
     readonly property real currentSelectionHighlightPresence: !viewerNavigationActive || viewerNavigationTargetIndex === -1 ? 1 :
             (viewerNavigationDirection < 0 ? viewerNavigationCurrentOpacity : 1 - viewerNavigationProgress)
     readonly property real targetSelectionHighlightPresence: viewerNavigationActive && viewerNavigationTargetIndex !== -1 ?
@@ -134,114 +162,6 @@ Item {
             Math.min(1, (currentItemSelected ? currentSelectionHighlightPresence : 0) +
                         (viewerNavigationTargetSelected ? targetSelectionHighlightPresence : 0))
     property bool selectionHighlightAnimationSuppressed: false
-
-    component BlurBackground : MultiEffect {
-        id: blurItem
-        source: ShaderEffectSource {
-            sourceItem: sphericViewerMode ? sphericViewerLoader.item : flickableAreaContainer
-            width: blurItem.width
-            height: blurItem.height
-            sourceRect: Qt.rect(blurItem.parent.x, blurItem.parent.y, blurItem.parent.width, blurItem.parent.height)
-        }
-
-        anchors.fill: parent
-        // opacity: 0.5
-        contrast: Style.isDarkTheme ? -0.5 : -0.7
-        brightness: Style.isDarkTheme ? 0 : 0.35
-        // saturation: -0.5
-
-        colorization: 0.6
-        colorizationColor: Style.viewerPanelBackground
-        autoPaddingEnabled: false
-        blurEnabled: true
-        blurMax: 64
-        blur: 0.3
-
-        maskThresholdMin: 0.5
-        maskSpreadAtMin: 1.0
-    }
-
-    component CanvasText : Item {
-        id: canvasTextControl
-        implicitWidth: canvasText.width
-        implicitHeight: canvasText.height
-
-        property string text
-        property alias font: canvasDummyText.font
-        property alias texture: canvasText
-        property bool elide: false
-
-        Text {
-            id: canvasDummyText
-            text: canvasTextControl.text
-            font.pixelSize: 14
-            visible: false
-            width: canvasTextControl.elide ? parent.width : implicitWidth
-
-            onTextChanged: canvasText.requestPaint()
-        }
-
-        Canvas {
-            id: canvasText
-            width: canvasDummyText.width
-            height: canvasDummyText.height
-            onWidthChanged: requestPaint()
-
-            onPaint: {
-                var ctx = getContext("2d");
-                ctx.reset();
-
-                var text = canvasDummyText.text;
-                var fontSize = canvasDummyText.font.pixelSize;
-                var fontFamily = canvasDummyText.font.family;
-                var fillColor = Style.viewerMainText;
-
-                ctx.font = fontSize + "px \"" + fontFamily + "\"";
-                ctx.textBaseline = "top";
-                ctx.lineJoin = 'miter';
-                ctx.miterLimit = 2;
-
-                ctx.fillStyle = fillColor;
-
-                if (canvasTextControl.elide) {
-                    var ellipsis = "...";
-                    var ellipsisWidth = ctx.measureText(ellipsis).width;
-                    var textWidth = ctx.measureText(text).width;
-
-                    // Check if text fits
-                    if (textWidth > width) {
-                        // Split text into start and end parts
-                        var startText = text;
-                        var endText = text;
-
-                        // Remove characters from the middle until text fits with ellipsis
-                        while (ctx.measureText(startText + ellipsis + endText).width > width && startText.length > 0 && endText.length > 0) {
-                            startText = startText.slice(0, -1);  // Shorten the start
-                            endText = endText.slice(1);          // Shorten the end
-                        }
-
-                        // Combine start, ellipsis, and end parts
-                        text = startText + ellipsis + endText;
-                    }
-                }
-                ctx.fillText(text, 0, 0);
-            }
-        }
-    }
-
-    component OutlineAndShadowEffect : ShaderEffect {
-        property var source
-        property color outlineColor: Style.viewerMainTextOutline
-        property real outlineWidth: 0.5
-        property real outlineOpacity: 0.6
-        property size textureSize: Qt.size(width, height)
-
-        property real blurRadius: 2.0
-        property color blurColor: Style.viewerMainTextOutline
-        property real blurOpacity: 0.7
-
-        fragmentShader: "qrc:/ZoinGallery/resources/outline.frag.qsb"
-    }
 
     // ZZZ: Viewer size request takes current image's full size for all future images!!!
 
@@ -332,7 +252,7 @@ Item {
     }
 
     function updateTitle() {
-        topLevelWindow.title = sourceMasonry.view.indexText(sourceMasonry.view.currentIndex) + " [" +
+        hostWindow.title = sourceMasonry.view.indexText(sourceMasonry.view.currentIndex) + " [" +
                 (sourceMasonry.view.currentImageIndex + 1) + "/" + sourceMasonry.view.imageCount + "] - ZoinGallery"
     }
 
@@ -394,2299 +314,216 @@ Item {
     // regression observable to the standalone shell test.
     property size viewerNavigationLastAdoptedOriginalSize: Qt.size(0, 0)
     function viewerNavigationOriginalSize(index) {
-        if (index === -1) {
-            return Qt.size(0, 0)
-        }
-        const layoutSize = sourceMasonry.view.indexOriginalSize(index)
-        if (layoutSize.width > 1 && layoutSize.height > 1) {
-            return layoutSize
-        }
-        // Off-screen masonry bricks can still carry their provisional 0x0
-        // geometry even though FileListModel already has metadata and an
-        // prepared viewer frame. Read that authoritative metadata so
-        // the swipe layer uses the same fitted rectangle as the main viewer.
-        if (decodeModel &&
-                typeof decodeModel.viewerImageOriginalSizeForIndex ===
-                    "function") {
-            return decodeModel.viewerImageOriginalSizeForIndex(
-                        sourceIndexForViewIndex(index))
-        }
-        return Qt.size(0, 0)
+        return standaloneNavigation.viewerNavigationOriginalSize(index)
     }
-    readonly property size viewerNavigationTargetOriginalSize:
-            viewerNavigationOriginalSize(viewerNavigationTargetIndex)
-    readonly property bool viewerNavigationTargetHasSize: viewerNavigationTargetOriginalSize.width > 1 &&
-            viewerNavigationTargetOriginalSize.height > 1 && viewerMode.width > 0 && viewerMode.height > 0
-    readonly property size viewerNavigationTargetDisplayOriginalSize: viewerNavigationTargetHasSize ?
-            Qt.size(viewerNavigationTargetOriginalSize.width / dpr, viewerNavigationTargetOriginalSize.height / dpr) :
-            Qt.size(0, 0)
-    readonly property size viewerNavigationTargetEffectiveOriginalSize: viewerNavigationTargetHasSize ?
-            (flickableArea.rotationMode % 2 === 1 ?
-                 Qt.size(viewerNavigationTargetDisplayOriginalSize.height, viewerNavigationTargetDisplayOriginalSize.width) :
-                 viewerNavigationTargetDisplayOriginalSize) : Qt.size(0, 0)
-    readonly property bool viewerNavigationTargetKeepsZoom: viewerNavigationTargetHasSize && !flickableArea.zoomFitView
-    readonly property real viewerNavigationTargetAspect: viewerNavigationTargetHasSize ?
-            viewerNavigationTargetEffectiveOriginalSize.width / viewerNavigationTargetEffectiveOriginalSize.height : 1
-    readonly property bool viewerNavigationTargetFitToHeight: viewerNavigationTargetHasSize ?
-            viewerNavigationTargetAspect <= viewerMode.width / viewerMode.height : false
-    readonly property real viewerNavigationTargetScale: !viewerNavigationTargetHasSize ? 1 : viewerNavigationTargetKeepsZoom ?
-            flickableArea.zoomScale :
-            (viewerNavigationTargetFitToHeight ?
-                 viewerMode.height / viewerNavigationTargetEffectiveOriginalSize.height :
-                 viewerMode.width / viewerNavigationTargetEffectiveOriginalSize.width)
-    readonly property real viewerNavigationTargetDisplayWidth: viewerNavigationTargetHasSize ?
-            viewerNavigationTargetEffectiveOriginalSize.width * viewerNavigationTargetScale :
-            viewerMode.width
-    readonly property real viewerNavigationTargetDisplayHeight: viewerNavigationTargetHasSize ?
-            viewerNavigationTargetEffectiveOriginalSize.height * viewerNavigationTargetScale :
-            viewerMode.height
-    readonly property real viewerNavigationTargetPreservedImageX: viewerNavigationTargetDisplayWidth < viewerMode.width ?
-            (viewerMode.width - viewerNavigationTargetDisplayWidth) * 0.5 :
-            Math.min(0, Math.max(flickableArea.image.x, viewerMode.width - viewerNavigationTargetDisplayWidth))
-    readonly property real viewerNavigationTargetLeftAlignedImageX: viewerNavigationTargetDisplayWidth < viewerMode.width ?
-            (viewerMode.width - viewerNavigationTargetDisplayWidth) * 0.5 :
-            0
-    readonly property real viewerNavigationTargetRightAlignedImageX: viewerNavigationTargetDisplayWidth < viewerMode.width ?
-            (viewerMode.width - viewerNavigationTargetDisplayWidth) * 0.5 :
-            viewerMode.width - viewerNavigationTargetDisplayWidth
-    readonly property real viewerNavigationTargetFinalImageX: viewerNavigationTargetKeepsZoom ?
-            (viewerNavigationDirection < 0 ? viewerNavigationTargetRightAlignedImageX :
-                 viewerNavigationDirection > 0 ? viewerNavigationTargetLeftAlignedImageX :
-                     viewerNavigationTargetPreservedImageX) : viewerNavigationTargetPreservedImageX
-    readonly property real viewerNavigationTargetFinalImageY: viewerNavigationTargetDisplayHeight < viewerMode.height ?
-            (viewerMode.height - viewerNavigationTargetDisplayHeight) * 0.5 :
-            Math.min(0, Math.max(flickableArea.image.y, viewerMode.height - viewerNavigationTargetDisplayHeight))
-    readonly property real viewerNavigationTargetTravelDistance: viewerNavigationDirection < 0 ?
-            Math.max(1, viewerNavigationTargetDisplayWidth + viewerNavigationTargetFinalImageX) : Math.max(1, viewerMode.width)
-    readonly property real viewerNavigationProgress: Math.min(1, Math.abs(viewerNavigationOffsetX) / Math.max(1, viewerMode.width * 0.5))
-    readonly property real viewerNavigationCoverProgress: Math.min(1, Math.abs(viewerNavigationOffsetX) / viewerNavigationTargetTravelDistance)
-    readonly property real viewerNavigationTargetOpacity: viewerNavigationDirection < 0 ? 1 : viewerNavigationProgress
-    readonly property real viewerNavigationCurrentOpacity: viewerNavigationDirection < 0 && viewerNavigationTargetIndex !== -1 ? 1 - viewerNavigationCoverProgress : 1
-    readonly property real viewerNavigationCurrentOffsetX: viewerNavigationDirection < 0 && viewerNavigationTargetIndex !== -1 ? 0 : viewerNavigationOffsetX
-    readonly property real viewerNavigationTargetImageX: viewerNavigationDirection < 0 ?
-            -viewerNavigationTargetDisplayWidth + Math.min(Math.max(viewerNavigationOffsetX, 0), viewerNavigationTargetTravelDistance) :
-            viewerNavigationTargetFinalImageX
-    readonly property real viewerNavigationTargetImageY: viewerNavigationTargetFinalImageY
-    readonly property real viewerNavigationOverdragThreshold: Math.min(48, viewerMode.width * 0.08)
-    readonly property real viewerNavigationCommitThreshold: Math.min(120,
-            Math.max(viewerNavigationOverdragThreshold * 1.35, viewerMode.width * 0.12))
-
     function isTildeKey(event) {
-        return event.key === Qt.Key_QuoteLeft || event.key === Qt.Key_AsciiTilde || event.key === 1025
+        return standaloneNavigation.isTildeKey(event)
     }
-
     function viewerGestureNumber(value) {
-        return Number(value).toFixed(2)
+        return standaloneNavigation.viewerGestureNumber(value)
     }
-
     function viewerGesturePhaseName(phase) {
-        if (phase === ViewerWheelArea.ScrollBegin) {
-            return "begin"
-        }
-        if (phase === ViewerWheelArea.ScrollUpdate) {
-            return "update"
-        }
-        if (phase === ViewerWheelArea.ScrollEnd) {
-            return "end"
-        }
-        if (phase === ViewerWheelArea.ScrollMomentum) {
-            return "momentum"
-        }
-        return "none"
+        return standaloneNavigation.viewerGesturePhaseName(phase)
     }
-
     function viewerGestureDirectionName(direction) {
-        if (direction > 0) {
-            return "next"
-        }
-        if (direction < 0) {
-            return "previous"
-        }
-        return "none"
+        return standaloneNavigation.viewerGestureDirectionName(direction)
     }
-
     function viewerGestureSnapshot() {
-        return "gesture=" + viewerNavigationGestureSerial +
-                " gestureActive=" + viewerNavigationGestureActive +
-                " committed=" + viewerNavigationGestureCommitted +
-                " phaseAware=" + viewerNavigationGestureHasPhase +
-                " suppressMomentum=" + viewerNavigationSuppressMomentum +
-                " navActive=" + viewerNavigationActive +
-                " revealed=" + viewerNavigationRevealed +
-                " dir=" + viewerGestureDirectionName(viewerNavigationDirection) +
-                " offset=" + viewerGestureNumber(viewerNavigationOffsetX) +
-                " overdrag=" + viewerGestureNumber(viewerNavigationOverdrag) +
-                " velocity=" + viewerGestureNumber(viewerNavigationVelocityX) +
-                " current=" + sourceMasonry.view.currentIndex +
-                " target=" + viewerNavigationTargetIndex +
-                " zoomFit=" + flickableArea.zoomFitView
+        return standaloneNavigation.viewerGestureSnapshot()
     }
-
     function logViewerGesture(message) {
-        if (!viewerGestureLogging) {
-            return
-        }
-        console.log("[ViewerGesture] " + message + " | " + viewerGestureSnapshot())
+        return standaloneNavigation.logViewerGesture(message)
     }
-
     function resetViewerNavigation(reason) {
-        if (reason !== undefined && (viewerNavigationActive || Math.abs(viewerNavigationOffsetX) > 0.1 ||
-                viewerNavigationOverdrag > 0.1 || viewerNavigationTargetIndex !== -1)) {
-            logViewerGesture("reset reason=" + reason)
-        }
-        viewerNavigationFinishTimer.stop()
-        viewerNavigationOffsetAnimation.stop()
-        viewerNavigationOffsetX = 0
-        viewerNavigationOverdrag = 0
-        viewerNavigationVelocityX = 0
-        viewerNavigationLastTime = 0
-        viewerNavigationActive = false
-        viewerNavigationRevealed = false
-        viewerNavigationCommitAfterAnimation = false
-        viewerNavigationDirection = 0
-        viewerNavigationTargetIndex = -1
-        viewerNavigationTargetPath = ""
-        viewerNavigationTargetSource = ""
-        viewerNavigationTargetSourceLevel = -1
-        viewerNavigationTargetRequestWidth = -1
-        viewerNavigationTargetRequestHeight = -1
+        return standaloneNavigation.resetViewerNavigation(reason)
     }
-
     function beginViewerNavigationGesture(forceNew, hasPhase) {
-        if (hasPhase) {
-            viewerNavigationGestureEndTimer.stop()
-        }
-        if (forceNew || !viewerNavigationGestureActive) {
-            viewerNavigationResidualQuietTimer.stop()
-            viewerNavigationGestureSerial += 1
-            viewerNavigationGestureActive = true
-            viewerNavigationGestureCommitted = false
-            viewerNavigationSuppressMomentum = false
-            viewerNavigationLastTime = 0
-            logViewerGesture("gesture begin forceNew=" + forceNew + " phaseAware=" + hasPhase)
-        }
-        viewerNavigationGestureHasPhase = hasPhase
+        return standaloneNavigation.beginViewerNavigationGesture(forceNew, hasPhase)
     }
-
     function continueViewerNavigationGesture(hasPhase) {
-        beginViewerNavigationGesture(false, hasPhase)
-        if (!hasPhase) {
-            viewerNavigationGestureEndTimer.restart()
-        }
+        return standaloneNavigation.continueViewerNavigationGesture(hasPhase)
     }
-
     function endViewerNavigationGesture(clearCommitted) {
-        logViewerGesture("gesture end clearCommitted=" + (clearCommitted === undefined ? true : clearCommitted))
-        viewerNavigationGestureEndTimer.stop()
-        viewerNavigationGestureActive = false
-        viewerNavigationGestureHasPhase = false
-        if (clearCommitted === undefined || clearCommitted) {
-            viewerNavigationGestureCommitted = false
-            viewerNavigationSuppressMomentum = false
-            viewerNavigationResidualQuietTimer.stop()
-        }
-        viewerNavigationLastTime = 0
+        return standaloneNavigation.endViewerNavigationGesture(clearCommitted)
     }
-
     function startViewerNavigationResidualSuppression(reason) {
-        if (!viewerNavigationSuppressMomentum) {
-            logViewerGesture("residual suppression begin reason=" + reason)
-        }
-        viewerNavigationSuppressMomentum = true
-        viewerNavigationResidualQuietTimer.restart()
+        return standaloneNavigation.startViewerNavigationResidualSuppression(reason)
     }
-
     function clearViewerNavigationResidualSuppression(reason) {
-        if (!viewerNavigationSuppressMomentum) {
-            return
-        }
-
-        if (viewerNavigationOffsetAnimation.running || viewerNavigationCommitAfterAnimation) {
-            viewerNavigationResidualQuietTimer.restart()
-            return
-        }
-
-        logViewerGesture("residual suppression clear reason=" + reason)
-        viewerNavigationSuppressMomentum = false
-        if (!viewerNavigationGestureActive) {
-            viewerNavigationGestureCommitted = false
-        }
+        return standaloneNavigation.clearViewerNavigationResidualSuppression(reason)
     }
-
     function hiddenNavigationOffset(overdrag) {
-        return Math.min(overdrag * 0.35, viewerNavigationOverdragThreshold * 0.5)
+        return standaloneNavigation.hiddenNavigationOffset(overdrag)
     }
-
     function updateViewerNavigationTargetSource() {
-        if (viewerNavigationTargetIndex === -1 || !decodeModel) {
-            viewerNavigationTargetSource = ""
-            viewerNavigationTargetSourceLevel = -1
-            return
-        }
-
-        const sourceIndex = sourceIndexForViewIndex(
-                              viewerNavigationTargetIndex)
-        if (typeof decodeModel.preparedViewerImageUrlForIndex === "function") {
-            viewerNavigationTargetSource =
-                    decodeModel.preparedViewerImageUrlForIndex(
-                        sourceIndex,
-                        viewerNavigationTargetRequestWidth,
-                        viewerNavigationTargetRequestHeight)
-            viewerNavigationTargetSourceLevel =
-                    viewerNavigationTargetSource !== ""
-                    ? (viewerNavigationTargetRequestWidth > 0 &&
-                       viewerNavigationTargetRequestHeight > 0 ? 1 : 2)
-                    : -1
-        }
-        else {
-            viewerNavigationTargetSource =
-                    decodeModel.bestViewerImageUrlForIndex(sourceIndex)
-            viewerNavigationTargetSourceLevel =
-                    viewerNavigationTargetSource !== "" ? 0 : -1
-        }
+        return standaloneNavigation.updateViewerNavigationTargetSource()
     }
-
     function prepareViewerNavigationTarget() {
-        if (viewerNavigationTargetIndex === -1 || !decodeModel) {
-            return
-        }
-
-        const fitRequest = flickableArea.zoomFitView && !sphericViewerMode
-        viewerNavigationTargetRequestWidth = fitRequest
-                ? Math.max(1, Math.ceil(viewerMode.width * dpr)) : -1
-        viewerNavigationTargetRequestHeight = fitRequest
-                ? Math.max(1, Math.ceil(viewerMode.height * dpr)) : -1
-        const sourceIndex = sourceIndexForViewIndex(
-                              viewerNavigationTargetIndex)
-        if (typeof decodeModel.requestViewerAt === "function") {
-            decodeModel.requestViewerAt(
-                        sourceIndex,
-                        viewerNavigationTargetRequestWidth,
-                        viewerNavigationTargetRequestHeight)
-        }
-        updateViewerNavigationTargetSource()
+        return standaloneNavigation.prepareViewerNavigationTarget()
     }
-
     function beginViewerNavigation(direction) {
-        let currentIndex = sourceMasonry.view.currentIndex
-        let targetIndex = sourceMasonry.view.nextImageIndex(direction > 0, false)
-
-        viewerNavigationLastAdoptedOriginalSize = Qt.size(0, 0)
-        viewerNavigationActive = true
-        viewerNavigationDirection = direction
-        viewerNavigationTargetIndex = targetIndex !== currentIndex ? targetIndex : -1
-        viewerNavigationTargetPath = pathForIndex(viewerNavigationTargetIndex)
-        viewerNavigationTargetSource = ""
-        viewerNavigationTargetSourceLevel = -1
-        flickableArea.cancelWheelPan()
-        prepareViewerNavigationTarget()
-        logViewerGesture("navigation begin direction=" + viewerGestureDirectionName(direction) +
-                         " current=" + currentIndex + " target=" + viewerNavigationTargetIndex +
-                         " sourceReady=" + (viewerNavigationTargetSource !== ""))
+        return standaloneNavigation.beginViewerNavigation(direction)
     }
-
     function applyViewerNavigationDelta(deltaX) {
-        if (Math.abs(deltaX) < 0.1) {
-            return
-        }
-
-        let direction = deltaX < 0 ? 1 : -1
-        if (!viewerNavigationActive || viewerNavigationDirection !== direction && !viewerNavigationRevealed) {
-            resetViewerNavigation("new-direction direction=" + viewerGestureDirectionName(direction))
-            beginViewerNavigation(direction)
-        }
-
-        let signedDelta = -viewerNavigationDirection * deltaX
-        viewerNavigationOverdrag = Math.max(0, viewerNavigationOverdrag + signedDelta)
-
-        if (viewerNavigationOverdrag <= 0.1) {
-            resetViewerNavigation("overdrag-cleared deltaX=" + viewerGestureNumber(deltaX))
-            return
-        }
-
-        if (viewerNavigationTargetIndex === -1) {
-            viewerNavigationRevealed = false
-            viewerNavigationOffsetX = -viewerNavigationDirection *
-                    Math.min(viewerNavigationOverdrag * 0.25, viewerNavigationOverdragThreshold * 0.6)
-            logViewerGesture("edge resistance noTarget deltaX=" + viewerGestureNumber(deltaX))
-            return
-        }
-
-        if (viewerNavigationOverdrag < viewerNavigationOverdragThreshold) {
-            viewerNavigationRevealed = false
-            viewerNavigationOffsetX = viewerNavigationDirection < 0 ?
-                    viewerNavigationOverdrag : -viewerNavigationDirection * hiddenNavigationOffset(viewerNavigationOverdrag)
-            logViewerGesture("hidden overdrag deltaX=" + viewerGestureNumber(deltaX) +
-                             " threshold=" + viewerGestureNumber(viewerNavigationOverdragThreshold))
-            return
-        }
-
-        if (!viewerNavigationRevealed) {
-            logViewerGesture("neighbor reveal")
-        }
-        viewerNavigationRevealed = true
-        let visibleDistance = viewerNavigationDirection < 0 ?
-                viewerNavigationOverdrag :
-                hiddenNavigationOffset(viewerNavigationOverdragThreshold) +
-                viewerNavigationOverdrag - viewerNavigationOverdragThreshold
-        let maxOffset = viewerNavigationDirection < 0 ? viewerNavigationTargetTravelDistance : viewerMode.width
-        viewerNavigationOffsetX = -viewerNavigationDirection * Math.min(visibleDistance, maxOffset)
-        logViewerGesture("drag progress deltaX=" + viewerGestureNumber(deltaX) +
-                         " visibleDistance=" + viewerGestureNumber(visibleDistance))
+        return standaloneNavigation.applyViewerNavigationDelta(deltaX)
     }
-
     function viewerNavigationFinishAnimationDuration(targetOffset, shouldCommit) {
-        if (!shouldCommit) {
-            return viewerMode.animationDuration
-        }
-
-        let fullDistance = viewerNavigationDirection < 0 ? viewerNavigationTargetTravelDistance : viewerMode.width
-        let remainingDistance = Math.abs(targetOffset - viewerNavigationOffsetX)
-        let remainingRatio = Math.min(1, remainingDistance / Math.max(1, fullDistance))
-        return viewerMode.animationDuration * (1 + remainingRatio)
+        return standaloneNavigation.viewerNavigationFinishAnimationDuration(targetOffset, shouldCommit)
     }
-
     function finishViewerNavigation() {
-        viewerNavigationFinishTimer.stop()
-        if (!viewerNavigationActive) {
-            logViewerGesture("finish without active navigation")
-            flickableArea.finishWheelPan()
-            return
-        }
-
-        let signedVelocity = -viewerNavigationDirection * viewerNavigationVelocityX
-        let signedOffset = -viewerNavigationDirection * viewerNavigationOffsetX
-        let gestureDistance = viewerNavigationOverdrag
-        let shouldCommit = viewerNavigationTargetIndex !== -1 && viewerNavigationRevealed &&
-                (gestureDistance >= viewerNavigationCommitThreshold || signedVelocity > 900)
-
-        if (shouldCommit) {
-            viewerNavigationGestureCommitted = true
-        }
-        let targetOffset = shouldCommit ?
-                (viewerNavigationDirection < 0 ? viewerNavigationTargetTravelDistance : -viewerNavigationDirection * viewerMode.width) : 0
-        let finishDuration = viewerNavigationFinishAnimationDuration(targetOffset, shouldCommit)
-        logViewerGesture("finish shouldCommit=" + shouldCommit +
-                         " signedOffset=" + viewerGestureNumber(signedOffset) +
-                         " gestureDistance=" + viewerGestureNumber(gestureDistance) +
-                         " signedVelocity=" + viewerGestureNumber(signedVelocity) +
-                         " threshold=" + viewerGestureNumber(viewerNavigationCommitThreshold) +
-                         " duration=" + viewerGestureNumber(finishDuration))
-        viewerNavigationCommitAfterAnimation = shouldCommit
-        viewerNavigationOffsetAnimation.to = targetOffset
-        viewerNavigationOffsetAnimation.duration = finishDuration
-        viewerNavigationOffsetAnimation.restart()
+        return standaloneNavigation.finishViewerNavigation()
     }
-
     function commitViewerNavigation() {
-        const targetIndex = viewerNavigationTargetIndex
-        const targetImageX = viewerNavigationTargetFinalImageX
-        const targetImageY = viewerNavigationTargetFinalImageY
-        const targetSource = viewerNavigationTargetSource
-        const targetSourceLevel = viewerNavigationTargetSourceLevel
-        // QML value types read from a bound property can continue to reference
-        // that property. resetViewerNavigation() changes its target index and
-        // therefore its size to 0x0, so make an explicit value copy first.
-        const targetOriginalSize = Qt.size(
-                    viewerNavigationTargetOriginalSize.width,
-                    viewerNavigationTargetOriginalSize.height)
-        const targetIsValid = targetIndex !== -1
-                && targetIndex !== sourceMasonry.view.currentIndex
-        const canAdoptFitTransition = targetIsValid
-                && flickableArea.zoomFitView
-                && !sphericViewerMode
-                && targetSourceLevel === 1
-                && targetSource !== ""
-                && targetOriginalSize.width > 1
-                && targetOriginalSize.height > 1
-                && viewerNavigationNeighborImage.source.toString()
-                   === targetSource
-                && viewerNavigationNeighborImage.status === Image.Ready
-        logViewerGesture("commit target=" + targetIndex)
-        viewerNavigationGestureCommitted = true
-        startViewerNavigationResidualSuppression("commit")
-        selectionHighlightAnimationSuppressed = true
-        resetViewerNavigation("commit")
-        if (!targetIsValid) {
-            Qt.callLater(() => selectionHighlightAnimationSuppressed = false)
-            return
-        }
-
-        // The swipe overlay is already showing a prepared Fit tier. Adopt it
-        // before changing the model row so the normal current-index handler
-        // cannot replace it with the masonry thumbnail during the handoff.
-        // Native/free-zoom navigation retains the original current-index flow.
-        if (canAdoptFitTransition) {
-            viewerNavigationLastAdoptedOriginalSize = Qt.size(
-                        targetOriginalSize.width, targetOriginalSize.height)
-            flickableArea.setImage(targetSource, targetOriginalSize,
-                                   targetIndex, targetSourceLevel)
-        }
-        if (!flickableArea.zoomFitView) {
-            flickableArea.image.x = targetImageX
-            flickableArea.image.y = targetImageY
-        }
-        sourceMasonry.setCurrentIndex(targetIndex)
-        Qt.callLater(() => selectionHighlightAnimationSuppressed = false)
+        return standaloneNavigation.commitViewerNavigation()
     }
-
     function finishViewerNavigationAnimationNow(reason) {
-        if (!viewerNavigationOffsetAnimation.running && !viewerNavigationCommitAfterAnimation) {
-            return
-        }
-
-        logViewerGesture("finish animation now reason=" + reason)
-        viewerNavigationOffsetAnimation.stop()
-        if (viewerNavigationCommitAfterAnimation) {
-            commitViewerNavigation()
-        }
-        else {
-            resetViewerNavigation("interrupted animation: " + reason)
-            flickableArea.settlePan()
-        }
+        return standaloneNavigation.finishViewerNavigationAnimationNow(reason)
     }
-
     function wheelDeltaPixels(pixelDelta, angleDelta) {
-        if (pixelDelta !== 0) {
-            return pixelDelta
-        }
-
-        return angleDelta / 120 * 80
+        return standaloneNavigation.wheelDeltaPixels(pixelDelta, angleDelta)
     }
-
     function switchImageForLegacyWheel(angleDeltaY) {
-        let nextIndex = -1
-        let currentIndex = sourceMasonry.view.currentIndex
-        if (angleDeltaY < 0) {
-            nextIndex = sourceMasonry.moveInImageList(true, false)
-        }
-        else if (angleDeltaY > 0) {
-            nextIndex = sourceMasonry.moveInImageList(false, false)
-        }
-
-        if (nextIndex !== -1 && nextIndex !== currentIndex) {
-            logViewerGesture("legacy wheel switch angleDeltaY=" + angleDeltaY + " target=" + nextIndex)
-        }
+        return standaloneNavigation.switchImageForLegacyWheel(angleDeltaY)
     }
-
-    function isLegacyWheelImageSwitch(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY,
-                                      phase, hasPixelDelta, nativeMomentum,
-                                      nativePhase, nativeMomentumPhase) {
-        if (angleDeltaY === 0 || angleDeltaX !== 0 || nativeMomentum) {
-            return false
-        }
-
-        if (!hasPixelDelta) {
-            return true
-        }
-
-        let phaseFree = phase === ViewerWheelArea.NoScrollPhase &&
-                nativePhase === 0 && nativeMomentumPhase === 0
-        if (!phaseFree) {
-            return false
-        }
-
-        return Math.abs(pixelDeltaY) > 0 && Math.abs(pixelDeltaX) < Math.abs(pixelDeltaY) * 0.2
+    function isLegacyWheelImageSwitch(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, hasPixelDelta, nativeMomentum, nativePhase, nativeMomentumPhase) {
+        return standaloneNavigation.isLegacyWheelImageSwitch(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, hasPixelDelta, nativeMomentum, nativePhase, nativeMomentumPhase)
     }
-
     function panZoomedImageFromWheel(deltaX, deltaY, recordVelocity) {
-        if (flickableArea.zoomFitView) {
-            return Qt.point(deltaX, deltaY)
-        }
-
-        viewerWheelPanFinishTimer.stop()
-        return flickableArea.panBy(deltaX, deltaY, recordVelocity)
+        return standaloneNavigation.panZoomedImageFromWheel(deltaX, deltaY, recordVelocity)
     }
-
     function scheduleWheelPanFallbackFinish() {
-        if (!flickableArea.zoomFitView) {
-            viewerWheelPanFinishTimer.restart()
-        }
+        return standaloneNavigation.scheduleWheelPanFallbackFinish()
+    }
+    function handleViewerWheel(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, modifiers, buttons, hasPixelDelta, inverted, source, deviceType, nativeMomentum, nativePhase, nativeMomentumPhase) {
+        return standaloneNavigation.handleViewerWheel(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, modifiers, buttons, hasPixelDelta, inverted, source, deviceType, nativeMomentum, nativePhase, nativeMomentumPhase)
     }
 
-    function handleViewerWheel(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, modifiers,
-                               buttons, hasPixelDelta, inverted, source, deviceType,
-                               nativeMomentum, nativePhase, nativeMomentumPhase) {
-        let phaseAware = phase !== ViewerWheelArea.NoScrollPhase
-        let effectivePhase = nativeMomentum && phase === ViewerWheelArea.ScrollBegin ?
-                ViewerWheelArea.ScrollMomentum : phase
-        logViewerGesture("wheel phase=" + viewerGesturePhaseName(phase) +
-                         " px=(" + viewerGestureNumber(pixelDeltaX) + "," + viewerGestureNumber(pixelDeltaY) + ")" +
-                         " angle=(" + viewerGestureNumber(angleDeltaX) + "," + viewerGestureNumber(angleDeltaY) + ")" +
-                         " hasPixel=" + hasPixelDelta +
-                         " inverted=" + inverted +
-                         " source=" + source +
-                         " device=" + deviceType +
-                         " nativeMomentum=" + nativeMomentum +
-                         " nativePhase=" + nativePhase +
-                         " nativeMomentumPhase=" + nativeMomentumPhase +
-                         " modifiers=" + modifiers +
-                         " buttons=" + buttons)
+    readonly property alias viewerNavigationTargetOriginalSize: standaloneNavigation.viewerNavigationTargetOriginalSize
+    readonly property alias viewerNavigationTargetHasSize: standaloneNavigation.viewerNavigationTargetHasSize
+    readonly property alias viewerNavigationTargetDisplayOriginalSize: standaloneNavigation.viewerNavigationTargetDisplayOriginalSize
+    readonly property alias viewerNavigationTargetEffectiveOriginalSize: standaloneNavigation.viewerNavigationTargetEffectiveOriginalSize
+    readonly property alias viewerNavigationTargetKeepsZoom: standaloneNavigation.viewerNavigationTargetKeepsZoom
+    readonly property alias viewerNavigationTargetAspect: standaloneNavigation.viewerNavigationTargetAspect
+    readonly property alias viewerNavigationTargetFitToHeight: standaloneNavigation.viewerNavigationTargetFitToHeight
+    readonly property alias viewerNavigationTargetScale: standaloneNavigation.viewerNavigationTargetScale
+    readonly property alias viewerNavigationTargetDisplayWidth: standaloneNavigation.viewerNavigationTargetDisplayWidth
+    readonly property alias viewerNavigationTargetDisplayHeight: standaloneNavigation.viewerNavigationTargetDisplayHeight
+    readonly property alias viewerNavigationTargetPreservedImageX: standaloneNavigation.viewerNavigationTargetPreservedImageX
+    readonly property alias viewerNavigationTargetLeftAlignedImageX: standaloneNavigation.viewerNavigationTargetLeftAlignedImageX
+    readonly property alias viewerNavigationTargetRightAlignedImageX: standaloneNavigation.viewerNavigationTargetRightAlignedImageX
+    readonly property alias viewerNavigationTargetFinalImageX: standaloneNavigation.viewerNavigationTargetFinalImageX
+    readonly property alias viewerNavigationTargetFinalImageY: standaloneNavigation.viewerNavigationTargetFinalImageY
+    readonly property alias viewerNavigationTargetTravelDistance: standaloneNavigation.viewerNavigationTargetTravelDistance
+    readonly property alias viewerNavigationProgress: standaloneNavigation.viewerNavigationProgress
+    readonly property alias viewerNavigationCoverProgress: standaloneNavigation.viewerNavigationCoverProgress
+    readonly property alias viewerNavigationTargetOpacity: standaloneNavigation.viewerNavigationTargetOpacity
+    readonly property alias viewerNavigationCurrentOpacity: standaloneNavigation.viewerNavigationCurrentOpacity
+    readonly property alias viewerNavigationCurrentOffsetX: standaloneNavigation.viewerNavigationCurrentOffsetX
+    readonly property alias viewerNavigationTargetImageX: standaloneNavigation.viewerNavigationTargetImageX
+    readonly property alias viewerNavigationTargetImageY: standaloneNavigation.viewerNavigationTargetImageY
+    readonly property alias viewerNavigationOverdragThreshold: standaloneNavigation.viewerNavigationOverdragThreshold
+    readonly property alias viewerNavigationCommitThreshold: standaloneNavigation.viewerNavigationCommitThreshold
 
-        let deltaX = wheelDeltaPixels(pixelDeltaX, angleDeltaX)
-        let deltaY = wheelDeltaPixels(pixelDeltaY, angleDeltaY)
-
-        if (nativeMomentum && !flickableArea.zoomFitView && !viewerNavigationActive &&
-                !viewerNavigationCommitAfterAnimation && !viewerNavigationGestureCommitted &&
-                !viewerNavigationSuppressMomentum) {
-            panZoomedImageFromWheel(deltaX, deltaY, false)
-            logViewerGesture("native momentum panned zoomed image deltaX=" + viewerGestureNumber(deltaX) +
-                             " deltaY=" + viewerGestureNumber(deltaY))
-            return
-        }
-
-        if (viewerNavigationSuppressMomentum && !viewerNavigationGestureActive) {
-            let physicalScrollRestart = !nativeMomentum &&
-                    effectivePhase !== ViewerWheelArea.ScrollMomentum &&
-                    effectivePhase !== ViewerWheelArea.ScrollEnd
-            if (physicalScrollRestart) {
-                clearViewerNavigationResidualSuppression("new physical scroll " +
-                                                         viewerGesturePhaseName(effectivePhase))
-            }
-            else {
-                viewerNavigationResidualQuietTimer.restart()
-                logViewerGesture("wheel suppressed as residual tail phase=" +
-                                 viewerGesturePhaseName(effectivePhase))
-                return
-            }
-        }
-
-        if (nativeMomentum && !viewerNavigationGestureActive) {
-            startViewerNavigationResidualSuppression("stray native momentum")
-            logViewerGesture("native momentum suppressed")
-            return
-        }
-
-        if (nativeMomentum && viewerNavigationGestureActive) {
-            if (viewerNavigationActive) {
-                logViewerGesture("native momentum begins; finishing active gesture")
-                finishViewerNavigation()
-                endViewerNavigationGesture(false)
-                startViewerNavigationResidualSuppression("native momentum")
-                logViewerGesture("native momentum tail suppressed after navigation finish")
-                return
-            }
-            if (!flickableArea.zoomFitView) {
-                endViewerNavigationGesture(true)
-                panZoomedImageFromWheel(deltaX, deltaY, false)
-                logViewerGesture("native momentum took over zoom pan deltaX=" + viewerGestureNumber(deltaX) +
-                                 " deltaY=" + viewerGestureNumber(deltaY))
-                return
-            }
-            endViewerNavigationGesture(false)
-            startViewerNavigationResidualSuppression("native momentum")
-            logViewerGesture("native momentum tail suppressed after fit-view gesture")
-            return
-        }
-
-        if (effectivePhase === ViewerWheelArea.ScrollBegin) {
-            if (viewerNavigationCommitAfterAnimation) {
-                finishViewerNavigationAnimationNow("new gesture begin")
-            }
-            else if (viewerNavigationOffsetAnimation.running) {
-                finishViewerNavigationAnimationNow("new gesture begin")
-            }
-            beginViewerNavigationGesture(true, true)
-            if (!flickableArea.zoomFitView) {
-                flickableArea.beginWheelPan()
-            }
-            viewerNavigationFinishTimer.stop()
-            viewerWheelPanFinishTimer.stop()
-            return
-        }
-
-        if (effectivePhase === ViewerWheelArea.ScrollEnd) {
-            if (!viewerNavigationGestureActive) {
-                logViewerGesture("duplicate end ignored")
-                return
-            }
-            let hadActiveNavigation = viewerNavigationActive
-            if (hadActiveNavigation) {
-                finishViewerNavigation()
-            }
-            else if (!flickableArea.zoomFitView) {
-                scheduleWheelPanFallbackFinish()
-            }
-            endViewerNavigationGesture(false)
-            if (hadActiveNavigation || flickableArea.zoomFitView) {
-                startViewerNavigationResidualSuppression("phase end")
-                logViewerGesture("phase end suppressing following momentum")
-            }
-            else {
-                logViewerGesture("phase end waiting briefly for zoom pan momentum")
-            }
-            return
-        }
-
-        if (effectivePhase === ViewerWheelArea.ScrollMomentum &&
-                (viewerNavigationSuppressMomentum || !viewerNavigationGestureActive)) {
-            startViewerNavigationResidualSuppression("stray momentum")
-            logViewerGesture("momentum suppressed")
-            return
-        }
-
-        if (viewerNavigationCommitAfterAnimation) {
-            logViewerGesture("wheel ignored while commit animation is running")
-            return
-        }
-
-        if (isLegacyWheelImageSwitch(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY,
-                                     phase, hasPixelDelta, nativeMomentum,
-                                     nativePhase, nativeMomentumPhase)) {
-            logViewerGesture("legacy vertical wheel path hasPixel=" + hasPixelDelta)
-            if (viewerNavigationOffsetAnimation.running) {
-                finishViewerNavigationAnimationNow("legacy wheel")
-            }
-            endViewerNavigationGesture(true)
-            flickableArea.cancelWheelPan()
-            switchImageForLegacyWheel(angleDeltaY)
-            return
-        }
-
-        continueViewerNavigationGesture(phaseAware)
-
-        if (viewerNavigationGestureCommitted) {
-            logViewerGesture("wheel ignored after commit")
-            return
-        }
-
-        let horizontalIntent = viewerNavigationActive || Math.abs(deltaX) >= Math.abs(deltaY) * 0.6
-
-        if (!horizontalIntent) {
-            logViewerGesture("vertical intent deltaX=" + viewerGestureNumber(deltaX) +
-                             " deltaY=" + viewerGestureNumber(deltaY))
-            if (!flickableArea.zoomFitView) {
-                panZoomedImageFromWheel(0, deltaY, true)
-                if (!phaseAware) {
-                    scheduleWheelPanFallbackFinish()
-                }
-            }
-            return
-        }
-
-        if (!viewerNavigationActive && !flickableArea.zoomFitView) {
-            let leftover = panZoomedImageFromWheel(deltaX, deltaY, true)
-            logViewerGesture("zoom pan first deltaX=" + viewerGestureNumber(deltaX) +
-                             " deltaY=" + viewerGestureNumber(deltaY) +
-                             " leftoverX=" + viewerGestureNumber(leftover.x) +
-                             " leftoverY=" + viewerGestureNumber(leftover.y))
-            deltaX = leftover.x
-        }
-
-        if (Math.abs(deltaX) < 0.1) {
-            logViewerGesture("horizontal delta consumed")
-            if (!phaseAware) {
-                scheduleWheelPanFallbackFinish()
-            }
-            return
-        }
-
-        let now = Date.now()
-        let dt = viewerNavigationLastTime ? Math.max(1, now - viewerNavigationLastTime) : 16
-        viewerNavigationVelocityX = deltaX / dt * 1000
-        viewerNavigationLastTime = now
-
-        applyViewerNavigationDelta(deltaX)
-        if (!phaseAware) {
-            viewerNavigationFinishTimer.restart()
-        }
+    StandaloneViewerNavigationController {
+        id: standaloneNavigation
+        viewer: viewerMode
+        imageViewport: flickableArea
+        neighborImage: viewerNavigationNeighborImage
+        navigationAnimation: viewerNavigationOffsetAnimation
+        navigationFinishTimer: viewerNavigationFinishTimer
+        wheelPanFinishTimer: viewerWheelPanFinishTimer
+        gestureEndTimer: viewerNavigationGestureEndTimer
+        residualQuietTimer: viewerNavigationResidualQuietTimer
     }
 
     function beginShiftSelection() {
-        if (shiftSelectionActive) {
-            return
-        }
-        shiftSelectionActive = true
-        shiftSelectionAnchorIndex = sourceMasonry.view.currentIndex
-        shiftSelectionAnchorPath = pathForIndex(shiftSelectionAnchorIndex)
-        shiftNavigationSelectionValue = !selectionModel.isIndexSelected(sourceIndexForViewIndex(shiftSelectionAnchorIndex))
-        selectionModel.beginSelectionPreview()
+        return selectionHistoryState.beginShiftSelection()
     }
-
     function updateShiftNavigationSelection(targetIndex) {
-        beginShiftSelection()
-        selectionModel.previewSelectionIndexes(
-                    sourceMapper.sourceRowsForViewRange(shiftSelectionAnchorIndex, targetIndex, false),
-                    shiftNavigationSelectionValue ? 0 : 1)
+        return selectionHistoryState.updateShiftNavigationSelection(targetIndex)
     }
-
     function finishShiftSelection() {
-        if (!shiftSelectionActive) {
-            return
-        }
-        selectionModel.commitSelectionPreview(shiftNavigationSelectionValue ? "Range selection" : "Range deselection")
-        shiftSelectionActive = false
-        shiftSelectionAnchorIndex = -1
-        shiftSelectionAnchorPath = ""
+        return selectionHistoryState.finishShiftSelection()
     }
-
     function cancelShiftSelection() {
-        if (!shiftSelectionActive) {
-            return
-        }
-        selectionModel.cancelSelectionPreview()
-        shiftSelectionActive = false
-        shiftSelectionAnchorIndex = -1
-        shiftSelectionAnchorPath = ""
+        return selectionHistoryState.cancelShiftSelection()
     }
-
     function clearPreviousImage() {
-        previousImageIndex = -1
-        previousImagePath = ""
-        previousImageLocked = false
-        lockedPreviousReturnIndex = -1
-        lockedPreviousImagePath = ""
-        lockedPreviousReturnPath = ""
+        return selectionHistoryState.clearPreviousImage()
     }
-
     function pathForIndex(index) {
-        return index !== -1 ? sourceMasonry.view.indexFullPath(index) : ""
+        return selectionHistoryState.pathForIndex(index)
     }
-
     function effectiveSizeFromOriginalSize(originalSize) {
-        if (originalSize.width <= 1 || originalSize.height <= 1) {
-            return Qt.size(0, 0)
-        }
-        let displaySize = Qt.size(originalSize.width / dpr, originalSize.height / dpr)
-        return flickableArea.rotationMode % 2 === 1 ? Qt.size(displaySize.height, displaySize.width) : displaySize
+        return selectionHistoryState.effectiveSizeFromOriginalSize(originalSize)
     }
-
     function fitScaleForEffectiveSize(size) {
-        if (size.width <= 1 || size.height <= 1 || viewerMode.width <= 1 || viewerMode.height <= 1) {
-            return 1
-        }
-        return size.width / size.height <= viewerMode.width / viewerMode.height ?
-                    viewerMode.height / size.height :
-                    viewerMode.width / size.width
+        return selectionHistoryState.fitScaleForEffectiveSize(size)
     }
-
     function indexForPath(path) {
-        if (path === "") {
-            return -1
-        }
-        for (let i = 0; i < sourceMasonry.view.count; i++) {
-            if (sourceMasonry.view.indexFullPath(i) === path) {
-                return i
-            }
-        }
-        return -1
+        return selectionHistoryState.indexForPath(path)
     }
-
     function restorePreviousImageLockIndexes() {
-        if (!previousImageLocked) {
-            return
-        }
-        if (lockedPreviousImagePath !== "") {
-            previousImageIndex = indexForPath(lockedPreviousImagePath)
-            previousImagePath = previousImageIndex !== -1 ?
-                        lockedPreviousImagePath : ""
-        }
-        if (lockedPreviousReturnPath !== "") {
-            lockedPreviousReturnIndex = indexForPath(lockedPreviousReturnPath)
-        }
+        return selectionHistoryState.restorePreviousImageLockIndexes()
     }
-
     function rememberViewportForPreviousImageSwitch(targetIndex) {
-        pendingPreviousImageViewport = null
-        if (targetIndex === -1 || flickableArea.zoomFitView ||
-                flickableArea.effectiveOriginalSize.width <= 1 ||
-                flickableArea.effectiveOriginalSize.height <= 1) {
-            return
-        }
-
-        let targetSize = effectiveSizeFromOriginalSize(sourceMasonry.view.indexOriginalSize(targetIndex))
-        if (targetSize.width <= 1 || targetSize.height <= 1) {
-            return
-        }
-
-        let sourceSize = flickableArea.effectiveOriginalSize
-        let sourceFitScale = fitScaleForEffectiveSize(sourceSize)
-        pendingPreviousImageViewport = {
-            targetPath: pathForIndex(targetIndex),
-            centerRatioX: ((viewerMode.width / 2 - flickableArea.image.x) / flickableArea.zoomScale) / sourceSize.width,
-            centerRatioY: ((viewerMode.height / 2 - flickableArea.image.y) / flickableArea.zoomScale) / sourceSize.height,
-            zoomToFitRatio: flickableArea.zoomScale / sourceFitScale
-        }
+        return selectionHistoryState.rememberViewportForPreviousImageSwitch(targetIndex)
     }
-
     function applyPendingPreviousImageViewport() {
-        if (!pendingPreviousImageViewport) {
-            return false
-        }
-        if (pendingPreviousImageViewport.targetPath !== "" &&
-                pendingPreviousImageViewport.targetPath !== pathForIndex(sourceMasonry.view.currentIndex)) {
-            pendingPreviousImageViewport = null
-            return false
-        }
-        if (flickableArea.effectiveOriginalSize.width <= 1 || flickableArea.effectiveOriginalSize.height <= 1) {
-            return false
-        }
-
-        let targetSize = flickableArea.effectiveOriginalSize
-        let targetZoom = flickableArea.clampZoomScale(
-                    fitScaleForEffectiveSize(targetSize) * pendingPreviousImageViewport.zoomToFitRatio)
-        let targetX = viewerMode.width / 2 -
-                targetSize.width * pendingPreviousImageViewport.centerRatioX * targetZoom
-        let targetY = viewerMode.height / 2 -
-                targetSize.height * pendingPreviousImageViewport.centerRatioY * targetZoom
-
-        flickableArea.setViewport(targetZoom, targetX, targetY)
-        pendingPreviousImageViewport = null
-        return true
+        return selectionHistoryState.applyPendingPreviousImageViewport()
     }
-
     function togglePreviousImageLock(index) {
-        restorePreviousImageLockIndexes()
-        if (previousImageLocked) {
-            if (previousImageIndex === index) {
-                previousImageLocked = false
-                previousImageIndex = lockedPreviousReturnIndex
-                previousImagePath = lockedPreviousReturnPath
-                lockedPreviousReturnIndex = -1
-                lockedPreviousImagePath = ""
-                lockedPreviousReturnPath = ""
-            } else {
-                lockedPreviousReturnIndex = previousImageIndex
-                lockedPreviousReturnPath = lockedPreviousImagePath
-                previousImageIndex = index
-                previousImagePath = pathForIndex(index)
-                lockedPreviousImagePath = pathForIndex(index)
-            }
-            return
-        }
-
-        lockedPreviousReturnIndex = previousImageIndex !== index ? previousImageIndex : -1
-        lockedPreviousReturnPath = pathForIndex(lockedPreviousReturnIndex)
-        previousImageIndex = index
-        previousImagePath = pathForIndex(index)
-        lockedPreviousImagePath = pathForIndex(index)
-        previousImageLocked = true
+        return selectionHistoryState.togglePreviousImageLock(index)
     }
-
     function switchToPreviousImage(currentIndex) {
-        if (previousImageLocked) {
-            restorePreviousImageLockIndexes()
-            if (previousImageIndex === -1) {
-                return -1
-            }
-            if (currentIndex === previousImageIndex) {
-                restorePreviousImageLockIndexes()
-                if (lockedPreviousReturnIndex !== -1) {
-                    rememberViewportForPreviousImageSwitch(lockedPreviousReturnIndex)
-                    sourceMasonry.setCurrentIndex(lockedPreviousReturnIndex)
-                    return lockedPreviousReturnIndex
-                }
-                return -1
-            }
-
-            lockedPreviousReturnIndex = currentIndex
-            lockedPreviousReturnPath = pathForIndex(currentIndex)
-        }
-        else if (previousImagePath !== "") {
-            previousImageIndex = indexForPath(previousImagePath)
-        }
-        if (previousImageIndex === -1) {
-            return -1
-        }
-
-        // Capture the target before setCurrentIndex(), since changing the index
-        // synchronously reassigns previousImageIndex via the view's onCurrentIndexChanged handler.
-        let targetIndex = previousImageIndex
-        rememberViewportForPreviousImageSwitch(targetIndex)
-        sourceMasonry.setCurrentIndex(targetIndex)
-        return targetIndex
+        return selectionHistoryState.switchToPreviousImage(currentIndex)
     }
 
-    Connections {
-        target: root
-        function onStateChanged() {
-            if (root.state === "thumbnails") {
-                if (!previousImageLocked) {
-                    previousImageIndex = -1
-                    previousImagePath = ""
-                }
-                resetViewerNavigation()
-                endViewerNavigationGesture()
-                flickableArea.rotationMode = 0
-            }
-        }
+    StandaloneViewerSelectionHistoryController {
+        id: selectionHistoryState
+        viewer: viewerMode
+        imageViewport: flickableArea
     }
 
-    Connections {
-        target: viewerController
-        function onCurrentPathChanged() {
-            clearPreviousImage()
-            resetViewerNavigation()
-            endViewerNavigationGesture()
-        }
+    StandaloneViewerReconciler {
+        viewer: viewerMode
+        imageViewport: flickableArea
     }
 
-    Keys.onPressed:
-        (event) => {
-            let nextIndex = -1
-            let currentIndex = sourceMasonry.view.currentIndex
-            if (event.key === Qt.Key_Shift && !event.isAutoRepeat) {
-                beginShiftSelection()
-                return
-            }
-            if (event.key === Qt.Key_Backslash) {
-                toggleCurrentSelection()
-            }
-            else if (event.key === Qt.Key_Insert) {
-                selectionModel.setSelection(sourceIndexForViewIndex(currentIndex), true)
-            }
-            else if (event.key === Qt.Key_Delete) {
-                selectionModel.setSelection(sourceIndexForViewIndex(currentIndex), false)
-            }
-            else if (!zoomFitView && (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Up ||
-                                 event.key === Qt.Key_Down) ||
-                                 event.key === Qt.Key_Plus || event.key === Qt.Key_Minus || event.key === Qt.Key_Equal ||
-                                 event.key === Qt.Key_Control) {
-                if (event.isAutoRepeat) {
-                    return
-                }
-                if (event.key === Qt.Key_Left) {
-                    leftPressed = true
-                }
-                else if (event.key === Qt.Key_Right) {
-                    rightPressed = true
-                }
-                else if (event.key === Qt.Key_Up) {
-                    upPressed = true
-                }
-                else if (event.key === Qt.Key_Down) {
-                    downPressed = true
-                }
-                else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
-                    zoomInPressed = true
-                }
-                else if (event.key === Qt.Key_Minus) {
-                    zoomOutPressed = true
-                }
-                else if (event.key === Qt.Key_Control) {
-                    controlPressed = true
-                }
-
-                let speed = controlPressed ? 0.06 : 1
-                flickableArea.startZoomScrollingAnimation(leftPressed ? speed : rightPressed ? -speed : 0,
-                                                          upPressed ? speed : downPressed ? -speed : 0,
-                                                          zoomInPressed ? speed : zoomOutPressed ? -speed : 0)
-            }
-            else if ((event.key === Qt.Key_Left || event.key === Qt.Key_PageUp || event.key === Qt.Key_Backspace ||
-                 event.key === Qt.Key_Up) && !(event.modifiers & Qt.AltModifier)) {
-                nextIndex = sourceMasonry.moveInImageList(false, false)
-            }
-            else if ((event.key === Qt.Key_Right || event.key === Qt.Key_PageDown || event.key === Qt.Key_Space ||
-                      event.key === Qt.Key_Down) && !(event.modifiers & Qt.AltModifier)) {
-                nextIndex = sourceMasonry.moveInImageList(true, false)
-            }
-            else if (event.key === Qt.Key_Home) {
-                nextIndex = sourceMasonry.moveInImageList(false, true)
-            }
-            else if (event.key === Qt.Key_End) {
-                nextIndex = sourceMasonry.moveInImageList(true, true)
-            }
-            else if (event.key === Qt.Key_F11 || event.key === Qt.Key_F || event.key === Qt.Key_Clear /*Num_5*/ ||
-                     (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && (event.modifiers & Qt.AltModifier)) {
-                topLevelWindow.toggleFullscreen()
-            }
-            else if (event.key === Qt.Key_Enter || event.key === Qt.Key_Return || event.key === Qt.Key_Escape ||
-                     event.key === Qt.Key_Up && (event.modifiers & Qt.AltModifier) ||
-                     event.key === Qt.Key_PageUp && (event.modifiers & Qt.ControlModifier)) {
-                root.toggleViewer()
-            }
-            else if (event.key === Qt.Key_Asterisk || event.key === Qt.Key_9) {
-                flickableArea.zoomTo100()
-            }
-            else if (event.key === Qt.Key_1 && (event.modifiers & Qt.ControlModifier)) {
-                flickableArea.zoomTo100()
-            }
-            else if (event.key === Qt.Key_2 && (event.modifiers & Qt.ControlModifier)) {
-                flickableArea.zoomToScale(0.5)
-            }
-            else if (event.key === Qt.Key_3 && (event.modifiers & Qt.ControlModifier)) {
-                flickableArea.zoomToScale(0.25)
-            }
-            else if (event.key === Qt.Key_0 && (event.modifiers & Qt.ControlModifier)) {
-                flickableArea.zoomToFit()
-            }
-            else if (event.key === Qt.Key_Z || event.key === Qt.Key_Slash || event.key === Qt.Key_0) {
-                flickableArea.toggleZoomToFit()
-            }
-            else if (event.key === Qt.Key_Tab) {
-                panelsVisible = !panelsVisible
-            }
-            else if (isTildeKey(event)) {
-                if (event.modifiers & Qt.ShiftModifier) {
-                    togglePreviousImageLock(currentIndex)
-                    return
-                }
-
-                if (previousImageIndex !== -1) {
-                    nextIndex = switchToPreviousImage(currentIndex)
-                } else {
-                    let potentialNext = sourceMasonry.view.nextImageIndex(true, false)
-                    if (potentialNext !== currentIndex) {
-                        nextIndex = sourceMasonry.moveInImageList(true, false)
-                    } else {
-                        nextIndex = sourceMasonry.moveInImageList(false, false)
-                    }
-                }
-            }
-            else if (event.key === Qt.Key_S || event.key === Qt.Key_P) {
-                console.log("ZZ SP")
-                sphericViewerMode = !sphericViewerMode
-            }
-            else if (event.key === Qt.Key_BracketRight) {
-                flickableArea.rotate(1)
-                updateTitle()
-            }
-            else if (event.key === Qt.Key_BracketLeft) {
-                flickableArea.rotate(3)
-                updateTitle()
-            }
-            else if (event.key === Qt.Key_C) {
-                console.log("ZZ F12")
-                if (decodeModel.dumpCurrentImage) {
-                    decodeModel.dumpCurrentImage()
-                }
-            }
-
-            if (nextIndex !== -1 && nextIndex !== currentIndex) {
-                if (event.modifiers & Qt.ShiftModifier) {
-                    updateShiftNavigationSelection(nextIndex)
-                }
-            }
+    StandaloneViewerInput {
+        id: inputState
+        viewer: viewerMode
+        imageViewport: flickableArea
     }
 
-    Keys.onReleased:
-        (event) => {
-            if (!event.isAutoRepeat) {
-                if (event.key === Qt.Key_Left) {
-                    leftPressed = false
-                }
-                else if (event.key === Qt.Key_Right) {
-                    rightPressed = false
-                }
-                else if (event.key === Qt.Key_Up) {
-                    upPressed = false
-                }
-                else if (event.key === Qt.Key_Down) {
-                    downPressed = false
-                }
-                else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
-                    zoomInPressed = false
-                }
-                else if (event.key === Qt.Key_Minus) {
-                    zoomOutPressed = false
-                }
-                else if (event.key === Qt.Key_Control) {
-                    controlPressed = false
-                }
-                else if (event.key === Qt.Key_Shift) {
-                    finishShiftSelection()
-                }
-            }
+    Keys.onPressed: event => inputState.handlePressed(event)
+    Keys.onReleased: event => inputState.handleReleased(event)
 
-            if (!zoomFitView && (event.key === Qt.Key_Left || event.key === Qt.Key_Right || event.key === Qt.Key_Up ||
-                                 event.key === Qt.Key_Down ||
-                                 event.key === Qt.Key_Plus || event.key === Qt.Key_Minus || event.key === Qt.Key_Equal ||
-                                 event.key === Qt.Key_Control)) {
-                if (event.isAutoRepeat) {
-                    return
-                }
-
-                let speed = controlPressed ? 0.06 : 1
-                flickableArea.startZoomScrollingAnimation(leftPressed ? speed : rightPressed ? -speed : 0,
-                                                      upPressed ? speed : downPressed ? -speed : 0,
-                                                      zoomInPressed ? speed : zoomOutPressed ? -speed : 0)
-                if (event.key === Qt.Key_Control) {
-                    if (!leftPressed && !rightPressed && !upPressed && !downPressed && !zoomInPressed && !zoomOutPressed) {
-                        flickableArea.onControlReleased()
-                    }
-                }
-            }
-        }
-
-    Connections {
-        target: sourceMasonry.view
-        function onCountChanged() {
-            if (root.state === "viewer" && sourceMasonry.view.count === 0) {
-                cancelShiftSelection()
-                root.closeViewer()
-                return
-            }
-            if (previousImageLocked) {
-                restorePreviousImageLockIndexes()
-            }
-            else if (previousImagePath !== "") {
-                previousImageIndex = indexForPath(previousImagePath)
-                if (previousImageIndex === -1) {
-                    previousImagePath = ""
-                }
-            }
-
-            if (shiftSelectionActive && shiftSelectionAnchorPath !== "") {
-                let remappedAnchor = indexForPath(shiftSelectionAnchorPath)
-                if (remappedAnchor === -1) {
-                    cancelShiftSelection()
-                }
-                else {
-                    shiftSelectionAnchorIndex = remappedAnchor
-                }
-            }
-
-            if (viewerNavigationTargetPath !== "") {
-                let remappedTarget = indexForPath(viewerNavigationTargetPath)
-                if (remappedTarget === -1) {
-                    resetViewerNavigation("target-removed-by-model-change")
-                }
-                else {
-                    viewerNavigationTargetIndex = remappedTarget
-                    updateViewerNavigationTargetSource()
-                }
-            }
-        }
-
-        function onImageCountChanged() {
-            if (root.state === "viewer") {
-                viewerMode.updateTitle()
-            }
-        }
-
-        function onCurrentImageIndexChanged() {
-            if (root.state === "viewer") {
-                viewerMode.updateTitle()
-            }
-        }
-
-        function onCurrentIndexChanged() {
-            if (root.state === "viewer") {
-                if (sourceMasonry.view.currentIndex < 0 ||
-                        sourceMasonry.view.count === 0) {
-                    return
-                }
-                const currentPath =
-                        pathForIndex(sourceMasonry.view.currentIndex)
-                const currentFileWasPreserved =
-                        currentPath !== "" && currentPath === lastKnownPath
-                if (currentFileWasPreserved) {
-                    flickableArea.remapImageIndex(
-                                lastKnownIndex,
-                                sourceMasonry.view.currentIndex)
-                    lastKnownIndex = sourceMasonry.view.currentIndex
-                    lastKnownPath = currentPath
-                    viewerMode.updateTitle()
-                    return
-                }
-                if (lastKnownPath !== "" && lastKnownPath !== currentPath) {
-                    if (previousImageLocked) {
-                        restorePreviousImageLockIndexes()
-                        if (sourceMasonry.view.currentIndex !== previousImageIndex) {
-                            lockedPreviousReturnIndex = sourceMasonry.view.currentIndex
-                            lockedPreviousReturnPath = pathForIndex(sourceMasonry.view.currentIndex)
-                        }
-                    } else {
-                        const remappedPreviousIndex =
-                                indexForPath(lastKnownPath)
-                        if (remappedPreviousIndex !== -1) {
-                            previousImageIndex = remappedPreviousIndex
-                            previousImagePath = lastKnownPath
-                        }
-                    }
-                }
-                lastKnownIndex = sourceMasonry.view.currentIndex
-                lastKnownPath = currentPath
-
-                let imageIdUrl = sourceMasonry.view.indexImageIdUrl(sourceMasonry.view.currentIndex)
-                // console.log("ZZ INDEX CHANGE 2", sourceMasonry.view.currentIndex, imageIdUrl)
-                if (imageIdUrl) {
-                    setImage(imageIdUrl, sourceMasonry.view.indexOriginalSize(sourceMasonry.view.currentIndex), sourceMasonry.view.currentIndex, 0)
-                    let viewportRestored = applyPendingPreviousImageViewport()
-                    if (!viewportRestored && zoomFitView) {
-                        flickableArea.zoomToFit(true)
-                        // console.log("ZZ FIT ON CHANGE")
-                    }
-                    else if (!viewportRestored && !zoomFitView) {
-                        flickableArea.fitViewerImageInViewportBounds()
-                        // console.log("ZZ ELSE")
-                    }
-                }
-                viewerMode.onCurrentIndexChanged()
-            }
-            else {
-                lastKnownIndex = sourceMasonry.view.currentIndex
-                lastKnownPath = lastKnownIndex >= 0
-                        ? pathForIndex(lastKnownIndex) : ""
-            }
-        }
-    }
-
-    Connections {
-        target: decodeModel
-        function onViewerImageIdUrlChanged(newImageIdUrl, level) {
-            viewerMode.setImage(newImageIdUrl, sourceMasonry.view.indexOriginalSize(sourceMasonry.view.currentIndex), sourceMasonry.view.currentIndex, level)
-            applyPendingPreviousImageViewport()
-        }
-
-        function onViewerImageCacheChanged(index) {
-            if (index === sourceIndexForViewIndex(viewerNavigationTargetIndex)) {
-                updateViewerNavigationTargetSource()
-            }
-        }
-
-        function onViewerReset() {
-            if (root.state !== "viewer") {
-                return
-            }
-            Qt.callLater(function() {
-                if (root.state !== "viewer" ||
-                        sourceMasonry.view.count === 0 ||
-                        sourceMasonry.view.currentIndex < 0) {
-                    return
-                }
-                const currentIndex = sourceMasonry.view.currentIndex
-                const imageIdUrl =
-                    sourceMasonry.view.indexImageIdUrl(currentIndex)
-                if (imageIdUrl) {
-                    viewerMode.setImage(
-                                imageIdUrl,
-                                sourceMasonry.view.indexOriginalSize(
-                                    currentIndex),
-                                currentIndex, 0)
-                }
-                viewerMode.onCurrentIndexChanged()
-            })
-        }
-    }
-
-    Rectangle {
+    StandaloneViewerSurface {
+        id: viewerSurface
         anchors.fill: parent
-        color: viewerMode.currentItemSelected
-               ? viewerMode.currentItemSelectionColor
-               : viewerMode.viewerNavigationTargetSelectionColor
-        opacity: 0.16 * viewerMode.viewerBackgroundOpacity * viewerMode.selectionHighlightNavigationOpacity
-        visible: opacity > 0
-        z: -2
-
-        Behavior on opacity {
-            enabled: !viewerMode.selectionHighlightAnimationSuppressed &&
-                     !viewerNavigationActive &&
-                     root.state === "viewer" &&
-                     viewerMode.viewerBackgroundOpacity >= 0.999
-            NumberAnimation {
-                duration: 150
-                easing.type: Easing.OutSine
-            }
-        }
+        viewer: viewerMode
+        shell: viewerMode.shell
+        hostWindow: viewerMode.hostWindow
+        titleBarItem: viewerMode.titleBarItem
+        topChrome: topPanel
+        rightChrome: rightPanel
+        devicePixelRatio: viewerMode.devicePixelRatio
     }
-
-    Item {
-        id: flickableAreaContainer
+    StandaloneViewerChrome {
+        id: viewerChrome
         anchors.fill: parent
-
-        FlickableZoomable {
-            id: flickableArea
-
-            viewerModel: viewerMode.decodeModel
-            sourceMasonry: viewerMode.sourceMasonry
-            active: root.state === "viewer"
-            devicePixelRatio: dpr
-            topInset: titleBar.viewerHeight
-            checkerboardEnabled: Boolean(sourceMasonry && sourceMasonry.view
-                                         && sourceMasonry.view.showTransparentGrid)
-            scrollBarTheme: ({
-                "scrollBarHandle": Style.scrollBarHandle,
-                "scrollBarHandleBackgroundHovered":
-                    Style.scrollBarHandleBackgroundHovered,
-                "scrollBarHandleHovered": Style.scrollBarHandleHovered,
-                "scrollBarHandlePressed": Style.scrollBarHandlePressed,
-                "scrollBarTrackHovered": Style.lighter
-            })
-            onCloseRequested: root.toggleViewer()
-            onMiddleClickRequested: topLevelWindow.toggleFullscreen()
-            // visible: !sphericViewerMode
-            width: parent.width
-            height: parent.height
-            animationDuration: viewerMode.animationDuration
-            scrollBarsRightMargin: panelsVisible ? rightPanel.width : 0
-            hideVerticalScrollBar: viewerNavigationActive || viewerNavigationOffsetAnimation.running ||
-                    viewerNavigationCommitAfterAnimation || Math.abs(viewerNavigationOffsetX) > 0.1
-            pinchZoomEnabled: !sphericViewerMode
-            opacity: viewerNavigationCurrentOpacity
-            transform: Translate { x: viewerNavigationCurrentOffsetX }
-            onPinchZoomOutToThumbnailsProgressed: (progress) =>
-                    viewerMode.pinchZoomOutToThumbnailsProgressed(progress)
-            onPinchZoomOutToThumbnailsFinished: (commit) =>
-                    viewerMode.pinchZoomOutToThumbnailsFinished(commit)
-
-            Rectangle {
-                id: delegateOutline
-                anchors {
-                    fill: flickableArea.image
-                    margins: -2 //selectionExtendsForImage
-                }
-                color: Style.brickImageSelected
-                radius: 4
-                z: -1
-            }
-
-            Item {
-                id: imageInfoPanel
-                anchors {
-                    left: flickableArea.image.left
-                    right: flickableArea.image.right
-                    bottom: flickableArea.image.bottom
-                }
-                height: imageText.height + 10
-                z: 1
-                clip: true
-
-                Rectangle {
-                    anchors.fill: parent
-                    anchors.topMargin: -radius
-                    radius: 4
-                    color: Style.brickInfoPanelSelected
-                }
-
-
-                Text {
-                    id: imageText
-                    anchors{
-                        left: parent.left
-                        right: parent.right
-                        bottom: parent.bottom
-                        margins: 5
-                    }
-
-                    text: sourceMasonry.view.indexText(sourceMasonry.view.currentIndex)
-                    textFormat: sourceMasonry.quickSearchMode ? Text.RichText : Text.PlainText
-
-                    horizontalAlignment: Text.AlignHCenter
-                    elide: Text.ElideMiddle
-                    color: Style.viewerMainText
-                    maximumLineCount: 4
-                    wrapMode: Text.Wrap
-                }
-            }
-
-            component RectangleShadow : Rectangle {
-                property var baseItem
-
-                x: baseItem.x
-                y: baseItem.y
-                width: baseItem.width
-                height: baseItem.height
-                z: -1
-
-                color: Style.viewerPanelBackground
-                opacity: baseItem.opacity
-            }
-        }
-
-        RectangleShadow {
-            baseItem: leftPanel
-            bottomRightRadius: 8
-            topRightRadius: 8 * (1 - topPanel.backgroundOpacity)
-        }
-
-        RectangleShadow {
-            baseItem: rightPanel
-            topLeftRadius: 8 * (1 - topPanel.backgroundOpacity)
-            bottomLeftRadius: rightPanel.listContentsFitScreen ? 8 : 0
-        }
-
-        RectangleShadow {
-            baseItem: topPanel
-            opacity: topPanel.backgroundOpacity
-        }
-    }
-
-    Loader {
-        id: sphericViewerLoader
-        x: flickableArea.x
-        y: flickableArea.y
-        width: flickableArea.width
-        height: flickableArea.height
-        opacity: viewerNavigationCurrentOpacity
-        transform: Translate { x: viewerNavigationCurrentOffsetX }
-    }
-
-    Component {
-        id: sphericViewerComponent
-
-        SphericViewer {
-            originalSize: flickableArea.originalSize
-            source: flickableArea.textureSource
-            opacity: sphericViewerOpacity
-            easingType: viewerMode.easingType
-            onCloseRequested: root.toggleViewer()
-            onSphereScrollingMouseCursorRequested:
-                (set, idle, rotation) =>
-                    topLevelWindow.setSphereScrollingMouseCursor(
-                        set, idle, rotation)
-        }
-    }
-
-    Item {
-        id: viewerNavigationNeighbor
-        x: 0
-        y: 0
-        width: viewerMode.width
-        height: viewerMode.height
-        z: viewerNavigationDirection < 0 ? 1 : -1
-        opacity: viewerNavigationTargetOpacity
-        visible: opacity > 0 &&
-                 viewerNavigationActive &&
-                 viewerNavigationTargetIndex !== -1 && viewerNavigationTargetSource !== ""
-
-        Item {
-            id: viewerNavigationNeighborEffectiveBounds
-            x: viewerNavigationTargetImageX
-            y: viewerNavigationTargetImageY
-            width: viewerNavigationTargetDisplayWidth
-            height: viewerNavigationTargetDisplayHeight
-
-            // Match FlickableZoomable's effective-bounds/unrotated-content
-            // structure. The shader samples the raw texture, so rotation must
-            // happen around a source-aspect item rather than by stretching the
-            // texture into the already-swapped effective bounds.
-            Item {
-                id: viewerNavigationNeighborUnrotatedContent
-                x: (parent.width - width) / 2
-                y: (parent.height - height) / 2
-                width: viewerNavigationTargetHasSize
-                       ? viewerNavigationTargetDisplayOriginalSize.width
-                         * viewerNavigationTargetScale : parent.width
-                height: viewerNavigationTargetHasSize
-                        ? viewerNavigationTargetDisplayOriginalSize.height
-                          * viewerNavigationTargetScale : parent.height
-                rotation: flickableArea.rotationMode * 90
-
-                Image {
-                    id: viewerNavigationNeighborImage
-                    objectName: "standaloneViewerNavigationNeighborImage"
-                    anchors.fill: parent
-                    source: viewerNavigationTargetSource
-                    fillMode: Image.PreserveAspectFit
-                    asynchronous: true
-                    cache: false
-                    visible: false
-                    // Level 1 already covers the requested physical Fit size.
-                    // Native level 2 can still need minification.
-                    mipmap: viewerMode.viewerNavigationTargetSourceLevel === 2
-                }
-
-                ShaderEffect {
-                    objectName: "standaloneViewerNavigationNeighborShader"
-                    anchors.fill: parent
-
-                    property var source: viewerNavigationNeighborImage
-                    property var viewportSize: Qt.size(width * dpr,
-                                                       height * dpr)
-                    property real sharpenAmount:
-                        viewerMode.viewerNavigationTargetScale < 1 ? 1.5 : 0
-                    property bool showCheckerboard:
-                        flickableArea.checkerboardEnabled
-                        && viewerNavigationNeighborImage.status === Image.Ready
-                    property int checkerboardSize: 4 * dpr
-                    property int borderRadius: 0
-
-                    fragmentShader: "qrc:/ZoinGallery/resources/shader.frag.qsb"
-                }
-            }
-        }
-    }
-
-    Timer {
-        id: viewerNavigationFinishTimer
-        interval: 140
-        onTriggered: finishViewerNavigation()
-    }
-
-    Timer {
-        id: viewerWheelPanFinishTimer
-        interval: 70
-        onTriggered: flickableArea.finishWheelPan()
-    }
-
-    Timer {
-        id: viewerNavigationGestureEndTimer
-        interval: 350
-        onTriggered: endViewerNavigationGesture()
-    }
-
-    Timer {
-        id: viewerNavigationResidualQuietTimer
-        interval: 180
-        onTriggered: clearViewerNavigationResidualSuppression("quiet")
-    }
-
-    NumberAnimation {
-        id: viewerNavigationOffsetAnimation
-        target: viewerMode
-        property: "viewerNavigationOffsetX"
-        easing.type: viewerMode.easingType
-
-        onFinished: {
-            if (viewerNavigationCommitAfterAnimation) {
-                commitViewerNavigation()
-            }
-            else {
-                resetViewerNavigation()
-                flickableArea.settlePan()
-            }
-        }
-    }
-
-    ViewerWheelArea {
-        id: viewerWheelArea
-        anchors.fill: parent
-        enabled: root.state === "viewer"
-        z: 2
-
-        onWheelReceived:
-            (pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, modifiers, buttons,
-             hasPixelDelta, inverted, source, deviceType, nativeMomentum, nativePhase, nativeMomentumPhase) => {
-                handleViewerWheel(pixelDeltaX, pixelDeltaY, angleDeltaX, angleDeltaY, phase, modifiers,
-                                  buttons, hasPixelDelta, inverted, source, deviceType,
-                                  nativeMomentum, nativePhase, nativeMomentumPhase)
-            }
-
-        onWheelForwarded: {
-            logViewerGesture("wheel forwarded to zoom/drag handler")
-            finishViewerNavigation()
-        }
-
-        onZoomWheelReceived:
-            (angleDeltaY, modifiers, buttons) => {
-                if (sphericViewerMode && sphericViewerLoader.item) {
-                    sphericViewerLoader.item.handleZoomWheel(
-                                angleDeltaY, modifiers, buttons)
-                }
-                else {
-                    flickableArea.handleZoomWheel(
-                                angleDeltaY, modifiers, buttons)
-                }
-            }
-    }
-
-    MouseArea {
-        id: viewerMouse
-        anchors.fill: parent
-        enabled: root.state === "viewer" // && zoomFitView
-
-        acceptedButtons: Qt.LeftButton
-
-        onPressed:
-            (mouse) => {
-                if (mouse.button === Qt.LeftButton) {
-                    mouse.accepted = false
-                }
-            }
-    }
-
-    /*NumberAnimation {
-        id: viewerAnimation
-
-        property real x
-        property real y
-        property real width
-        property real height
-
-        duration: 0
-
-        onFinished: {
-            if (root.state === "thumbnails") {
-                viewerMode.visible = false
-            }
-        }
-
-    }*/
-
-    ParallelAnimation {
-        id: viewerAnimation
-
-        property alias x: viewerMaximizeAnimationX.to
-        property alias y: viewerMaximizeAnimationY.to
-        property alias width: viewerMaximizeAnimationWidth.to
-        property alias height: viewerMaximizeAnimationHeight.to
-
-        NumberAnimation {
-            id: viewerMaximizeAnimationX
-            target: flickableArea
-            property: "x"
-            duration: viewerMode.animationDuration
-            easing.type: viewerMode.easingType
-        }
-
-        NumberAnimation {
-            id: viewerMaximizeAnimationY
-            target: flickableArea
-            property: "y"
-            duration: viewerMode.animationDuration
-            easing.type: viewerMode.easingType
-        }
-
-        NumberAnimation {
-            id: viewerMaximizeAnimationWidth
-            target: flickableArea
-            property: "width"
-            duration: viewerMode.animationDuration
-            easing.type: viewerMode.easingType
-        }
-
-        NumberAnimation {
-            id: viewerMaximizeAnimationHeight
-            target: flickableArea
-            property: "height"
-            duration: viewerMode.animationDuration
-            easing.type: viewerMode.easingType
-        }
-
-        NumberAnimation {
-            target: delegateOutline
-            property: "opacity"
-            duration: viewerMode.animationDuration
-            easing.type: viewerMode.easingType
-            to: root.state === "viewer" ? 0 : 1
-        }
-
-        NumberAnimation {
-            target: imageInfoPanel
-            property: "opacity"
-            duration: viewerMode.animationDuration
-            easing.type: viewerMode.easingType
-            to: root.state === "viewer" ? 0 : 1
-        }
-
-        NumberAnimation {
-            target: viewerMode
-            property: "sphericViewerOpacity"
-            duration: viewerMode.animationDuration
-            easing.type: viewerMode.easingType
-            to: root.state === "viewer" ? 1 : 0
-        }
-
-        onFinished: {
-            if (root.state === "thumbnails") {
-                viewerMode.visible = false
-            }
-            else {
-                // image.x = Qt.binding(function() {return zoomFitView ? 0 : zoomCenterOffsetX})
-                // image.y = Qt.binding(function() {return zoomFitView ? 0 : zoomCenterOffsetY})
-                flickableArea.width = Qt.binding(() => {return viewerMode.width})
-                flickableArea.height = Qt.binding(() => {return viewerMode.height})
-            }
-        }
-    }
-
-    // Flickable {
-    //     anchors.fill: parent
-    //     contentWidth: image.width
-    //     contentHeight: image.height
-
-    //     ScrollBar.horizontal: ScrollBar {}
-    //     ScrollBar.vertical: ScrollBar {}
-
-    //     Image {
-    //         source: image.source
-    //         width: image.width
-    //         height: image.height
-    //     }
-    // }
-
-    Item {
-        id: topPanel
-
-        anchors {
-            left: parent.left
-            right: parent.right
-            top: parent.top
-        }
-        height: titleBar.viewerHeight
-
-        opacity: viewerMode.viewerChromeOpacity
-        visible: opacity !== 0
-        Behavior on opacity {
-            NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
-        }
-        property bool hovered: false
-        property alias backgroundOpacity: topBarBackground.opacity
-
-        property string fileName: {
-            let rotationStr = ""
-            if (flickableArea.rotationMode === 1) rotationStr = " [90°]"
-            else if (flickableArea.rotationMode === 2) rotationStr = " [180°]"
-            else if (flickableArea.rotationMode === 3) rotationStr = " [270°]"
-            return sourceMasonry.view.indexText(sourceMasonry.view.currentIndex) + rotationStr
-        }
-
-        component TitleProxyButton : TitleButton {
-            property var proxyControl
-            property bool backgroundVisible: true
-            property bool contentVisible: true
-
-            source: contentVisible || proxyControl.hovered ? proxyControl.source : ""
-            icon.color: proxyControl.icon.color === Style.text ? Style.viewerMainText : proxyControl.icon.color
-            backgroundColor: backgroundVisible ? proxyControl.backgroundColor : "transparent"
-            hoveredOverride: proxyControl.hovered
-            pressedOverride: proxyControl.pressed
-        }
-
-
-        Rectangle {
-            id: topBarRect
-            width: topPanel.width
-            height: topPanel.height
-
-            layer.enabled: true
-            visible: false
-        }
-
-        BlurBackground {
-            id: topBarBackground
-            opacity: topPanel.hovered ? viewerMode.viewerChromeOpacity : 0
-            visible: opacity !== 0
-            Behavior on opacity {
-                NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
-            }
-            maskSource: topBarRect
-        }
-
-        Timer {
-            repeat: true
-            running: root.state === "viewer"
-            interval: 50
-            onTriggered: {
-                let pos = topLevelWindow.mousePos()
-                pos = titleBar.mapFromGlobal(pos.x, pos.y)
-                let containsPos = pos.x >= titleBar.x && pos.y >= titleBar.y && pos.x <= titleBar.x + titleBar.width && pos.y <= titleBar.y + titleBar.height
-                topPanel.hovered = topLevelWindow.isPressedOnTitleBar() && containsPos
-            }
-        }
-
-        Item {
-            id: topPanelRowContainer
-            anchors.fill: parent
-
-            RowLayout {
-                id: topPanelRow
-                anchors {
-                    left: parent.left
-                    leftMargin: topLevelWindow.macTitleBarLeftPadding
-                    top: parent.top
-                    right: parent.right
-                    rightMargin: topLevelWindow.useMacNativeTitleBar ? 0 : titleBarButtonsRow.width
-                    bottom: parent.bottom
-                }
-                spacing: 0
-                clip: true
-
-                CanvasText {
-                    id: canv1
-                    text: topPanel.fileName
-                    elide: true
-                    Layout.leftMargin: 12
-                    Layout.fillWidth: true
-                    Layout.bottomMargin: 1
-                }
-
-                IconLabel {
-                    Layout.leftMargin: 13
-                    icon.source: "qrc:/ZoinGallery/resources/Sphere.svg"
-                    icon.width: 16
-                    icon.height: 16
-                    icon.color: Style.viewerMainText
-
-                    visible: sphericViewerMode
-                }
-
-                Text {
-                    id: text2
-                    Layout.leftMargin: sphericViewerMode ? 5 : 13
-                    Layout.rightMargin: 5
-                    verticalAlignment: Text.AlignVCenter
-                    Layout.bottomMargin: 1
-                    Layout.minimumWidth: 0
-                    Layout.preferredWidth: implicitWidth
-                    Layout.maximumWidth: implicitWidth
-
-                    text: (sphericViewerMode ? (sphericViewerLoader.item ? (Math.round(sphericViewerLoader.item.fovVisual) + "°") : "") : ((zoomFitView ? "* " : "") + (Math.round(flickableArea.zoomScale * 100) + "%"))) +
-                          " " + selectionModel.selectedCount
-                    font.pixelSize: 14
-                    color: Style.viewerMainText
-                }
-
-                Item {
-                    id: previousLockIndicator
-
-                    Layout.leftMargin: 8
-                    Layout.preferredWidth: 28
-                    Layout.preferredHeight: titleBar.viewerHeight
-
-                    visible: previousImageLocked && previousImageIndex !== -1
-
-                    IconLabel {
-                        anchors.centerIn: parent
-
-                        icon.source: "qrc:/ZoinGallery/resources/TildeLock.svg"
-                        icon.width: 16
-                        icon.height: 16
-                        icon.color: Style.viewerMainText
-                    }
-
-                    MouseArea {
-                        id: previousLockMouse
-                        anchors.fill: parent
-                        hoverEnabled: true
-                    }
-
-                    ToolTip {
-                        visible: previousLockMouse.containsMouse
-                        delay: 500
-                        timeout: 5000
-
-                        contentItem: ColumnLayout {
-                            spacing: 8
-
-                            Image {
-                                Layout.alignment: Qt.AlignHCenter
-                                Layout.preferredWidth: 96
-                                Layout.preferredHeight: 96
-
-                                source: lockedPreviousImageIdUrl
-                                sourceSize.width: 96
-                                sourceSize.height: 96
-                                fillMode: Image.PreserveAspectFit
-                                asynchronous: true
-                                cache: false
-                            }
-
-                            Text {
-                                Layout.maximumWidth: 260
-
-                                text: lockedPreviousPath
-                                wrapMode: Text.WrapAnywhere
-                                font.pixelSize: 12
-                                color: Style.text
-                            }
-                        }
-
-                        background: Rectangle {
-                            color: Style.tooltipBackground
-                            border.color: Style.tooltipBorder
-                            radius: 5
-                        }
-                    }
-
-                    Component.onCompleted: {
-                        windowAgent.setHitTestVisible(previousLockIndicator)
-                    }
-                }
-
-                Button {
-                    id: settingsButton
-
-                    icon.width: 10
-                    icon.height: 10
-
-                    implicitWidth: 36
-                    implicitHeight: titleBar.viewerHeight
-
-                    icon.source: "qrc:/ZoinGallery/resources/Settings.svg"
-                    onClicked: panelsVisible = !panelsVisible
-                    Component.onCompleted: {
-                        windowAgent.setHitTestVisible(settingsButton)
-                    }
-                }
-
-                component Separator : Rectangle {
-                    Layout.leftMargin: 14
-                    Layout.rightMargin: 14
-                    implicitWidth: 1
-                    implicitHeight: 20
-                    color: "#505050"
-                }
-
-                Separator {
-                    visible: !topLevelWindow.useMacNativeTitleBar
-                }
-            }
-
-            Row {
-                id: titleBarButtonsRow
-                anchors {
-                    right: parent.right
-                    top: parent.top
-                }
-                visible: !topLevelWindow.useMacNativeTitleBar
-
-                TitleProxyButton {
-                    proxyControl: minButton
-                    backgroundVisible: false
-                }
-
-                TitleProxyButton {
-                    proxyControl: maxButton
-                    backgroundVisible: false
-                }
-
-                TitleProxyButton {
-                    proxyControl: closeButton
-                    backgroundVisible: false
-                }
-            }
-        }
-
-        OutlineAndShadowEffect {
-            width: topPanelRowContainer.width
-            height: topPanelRowContainer.height
-            source: ShaderEffectSource {
-                sourceItem: topPanelRowContainer
-                hideSource: true
-            }
-
-            outlineOpacity: 0.6 * (1 - topBarBackground.opacity)
-            blurOpacity: 0.7 * (1 - topBarBackground.opacity)
-        }
-
-        Row {
-            id: titleBarButtonsBackground
-            anchors {
-                top: parent.top
-                right: parent.right
-            }
-            spacing: 0
-            visible: !topLevelWindow.useMacNativeTitleBar
-
-            TitleProxyButton {
-                proxyControl: minButton
-                contentVisible: false
-            }
-
-            TitleProxyButton {
-                proxyControl: maxButton
-                contentVisible: false
-            }
-
-            TitleProxyButton {
-                proxyControl: closeButton
-                contentVisible: false
-            }
-        }
-    }
-
-
-    MouseArea {
-        id: rightPanel
-        anchors {
-            top: parent.top
-            topMargin: isQWK ? titleBar.viewerHeight : 0
-            right: parent.right
-        }
-        width: 120
-        property int fullContentHeight: filmstrip.count * (57 + filmstrip.spacing) + filmstrip.spacing
-        height: Math.min(fullContentHeight, parent.height - y)
-
-        property bool viewerOverlapsFilmstrip: x < flickableArea.image.x + flickableArea.image.width
-
-        property bool listContentsFitScreen: rightPanel.fullContentHeight < rightPanel.parent.height - rightPanel.y
-
-        opacity: (panelsVisible || rightPanel.containsMouse) ? viewerMode.viewerChromeOpacity : 0
-        visible: opacity !== 0
-        Behavior on opacity {
-            NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
-        }
-
-        hoverEnabled: true
-
-        Rectangle {
-            id: bgRect
-            width: rightPanel.width
-            height: rightPanel.height
-
-            layer.enabled: true
-            visible: false
-
-            topLeftRadius: 8 * (1 - topPanel.backgroundOpacity)
-            bottomLeftRadius: rightPanel.listContentsFitScreen ? 8 : 0
-        }
-
-        BlurBackground {
-            maskSource: bgRect
-            maskEnabled: true
-        }
-
-        ListView {
-            id: filmstrip
-
-            anchors {
-                top: parent.top
-                right: parent.right
-                rightMargin: 25
-                bottom: parent.bottom
-            }
-            width: 86
-            spacing: 13
-            topMargin: spacing
-            bottomMargin: spacing
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-
-            interactive: false
-
-            model: filmstripModel
-
-            Connections {
-                target: sourceMasonry.view
-
-                function onCurrentIndexChanged() {
-                    filmstrip.positionViewAtIndex(filmstripModel.mapFromSourceRow(sourceMasonry.view.currentIndex), ListView.Center)
-                }
-            }
-
-
-            delegate: Item {
-                width: 86
-                height: 57
-
-                property bool isCurrent: filmstripModel.mapFromSourceRow(sourceMasonry.view.currentIndex) === index
-
-                Image {
-                    id: filmstripImage
-
-                    width: parent.width
-                    height: parent.height
-                    source: model.imageIdUrlRole
-
-                    fillMode: Image.PreserveAspectFit
-                    cache: false
-                    // Async adds black blinking for folder views
-                    // asynchronous: true
-                    mipmap: true
-                    visible: false
-                }
-
-                ShaderEffect {
-                    id: imageShader
-                    property real aspect: filmstripImage.sourceSize.width / filmstripImage.sourceSize.height
-                    property bool useHeight: (filmstripImage.sourceSize.height * filmstripImage.width / filmstripImage.height) <= filmstripImage.sourceSize.width
-
-                    anchors.centerIn: parent
-                    width: useHeight ? filmstripImage.width : (filmstripImage.height * aspect)
-                    height: useHeight ? (filmstripImage.width / aspect) : filmstripImage.height
-
-                    property var source: filmstripImage
-                    property var viewportSize: Qt.size(width * dpr, height * dpr)
-                    property real sharpenAmount: 2
-                    property bool showCheckerboard: sourceMasonry.view.showTransparentGrid
-                    property int checkerboardSize: 4 * dpr
-                    property real borderRadius: 4.1 * dpr
-
-                    fragmentShader: "qrc:/ZoinGallery/resources/shader.frag.qsb"
-                    visible: filmstripImage.source != ""
-                }
-
-                /*Image {
-                    id: thumbnailImage
-                    source: model.imageIdUrlRole
-                    sourceSize.width: parent.width
-                    sourceSize.height: parent.height
-                    fillMode: Image.PreserveAspectFit
-                    width: parent.width
-                    height: parent.height
-                }
-
-                RoundCorners {
-                    anchors.fill: parent
-                    backgroundColor: Style.opaqueMasonryViewBackground
-                }*/
-
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: imageShader.width + 6
-                    height: imageShader.height + 6
-                    visible: isCurrent || thumbnailMouse.containsMouse
-
-                    color: "transparent"
-                    border.width: 2
-                    border.color: thumbnailMouse.pressed ? Style.brickImagePressed : (isCurrent ? Style.brickImageSelected : Style.brickImageHovered)
-                    radius: 6
-                    z: 2
-                }
-
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: imageShader.width
-                    height: imageShader.height
-                    visible: model.selectedRole
-
-                    color: "transparent"
-                    border.width: 3
-                    border.color: model.selectionGroupColorRole
-                    radius: 4
-                    z: 3
-                }
-
-                MouseArea {
-                    id: thumbnailMouse
-                    anchors.fill: parent
-
-                    hoverEnabled: true
-
-                    onClicked: {
-                        sourceMasonry.setCurrentIndex(filmstripModel.mapToSourceRow(index))
-                    }
-                }
-            }
-        }
-
-        Slider {
-            id: currentImageSlider
-            x: parent.width
-            y: 3
-            width: parent.height - 6
-            height: 16
-            leftPadding: 0
-            rightPadding: 0
-            topPadding: 0
-            bottomPadding: 0
-
-            handleVisible: false
-            visualHeight: 10
-
-            from: 0
-            to: sourceMasonry.view.imageCount - 1
-            value: sourceMasonry.view.currentImageIndex
-            stepSize: 1
-            snapMode: Slider.SnapAlways
-
-            rotation: 90
-            transformOrigin: Item.TopLeft
-
-            onValueChanged: {
-                if (pressed) {
-                    sourceMasonry.view.currentImageIndex = Math.round(value)
-                    sourceMasonry.setCurrentIndex(sourceMasonry.view.currentIndex)
-                }
-            }
-
-            Connections {
-                target: sourceMasonry.view
-                function onCurrentImageIndexChanged() {
-                    currentImageSlider.value = sourceMasonry.view.currentImageIndex
-                }
-            }
-        }
-    }
-
-    MouseArea {
-        id: leftPanel
-        anchors {
-            top: parent.top
-            topMargin: titleBar.viewerHeight
-            left: parent.left
-        }
-        width: 180
-        height: exifLayout.height > 0 ? (exifLayout.height + 10) : 0
-
-        opacity: (panelsVisible || leftPanel.containsMouse) ? viewerMode.viewerChromeOpacity : 0
-        visible: opacity !== 0
-        Behavior on opacity {
-            NumberAnimation { duration: viewerMode.animationDuration; easing.type: viewerMode.easingType }
-        }
-
-        hoverEnabled: true
-
-        Rectangle {
-            id: leftPanelBg
-
-            width: leftPanel.width
-            height: leftPanel.height
-
-            layer.enabled: true
-            visible: false
-
-            bottomRightRadius: 8
-            topRightRadius: 8 * (1 - topPanel.backgroundOpacity)
-        }
-
-        BlurBackground {
-            maskSource: leftPanelBg
-            maskEnabled: true
-        }
-        /*Rectangle {
-            anchors {
-                fill: parent
-            }
-            color: "transparent" // width < flickableArea.image.x || height < flickableArea.image.y ? Style.viewerPanel : Style.opaqueMasonryViewBackgroundWithOpacity
-            bottomRightRadius: 7
-        }*/
-
-        ColumnLayout {
-            id: exifLayout
-            anchors {
-                top: parent.top
-                left: parent.left
-                right: parent.right
-                leftMargin: 12
-                rightMargin: 6
-            }
-            spacing: 0
-
-            Repeater {
-                model: sourceMasonry.view.currentImageExif
-                delegate: RowLayout {
-                    property bool isTitle: modelData.title !== undefined
-
-                    Layout.topMargin: !index ? 10 : isTitle ? 15 : 0
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: exifText.height + 2
-
-                    spacing: 7
-
-                    IconLabel {
-                        visible: modelData.icon !== undefined
-                        icon.source: modelData.icon !== undefined ? modelData.icon : ""
-                        icon.width: 15
-                        icon.height: 15
-                        icon.color: Style.viewerSecondaryText
-                    }
-
-                    Text {
-                        id: exifText
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                        text: modelData.url !== undefined ? modelData.text.replace(" ", "\n") : modelData.text
-                        wrapMode: modelData.multiline !== undefined ? Text.Wrap : Text.NoWrap
-                        color: !isTitle ? Style.viewerMainText : Style.viewerSecondaryText
-                        font.pixelSize: 16
-                        font.underline: modelData.url !== undefined
-
-                        MouseArea {
-                            id: exifMouse
-                            anchors.fill: parent
-
-                            hoverEnabled: true
-                            cursorShape: modelData.url !== undefined ? Qt.PointingHandCursor : Qt.ArrowCursor
-
-                            onClicked: {
-                                if (modelData.url !== undefined) {
-                                    Qt.openUrlExternally(modelData.url)
-                                }
-                            }
-                        }
-
-                        ToolTip {
-                            id: tooltip
-
-                            visible: exifMouse.containsMouse && exifText.implicitWidth > exifText.width
-                            text: modelData.text
-                        }
-                    }
-                }
-            }
-        }
+        viewer: viewerMode
+        shell: viewerMode.shell
+        hostWindow: viewerMode.hostWindow
+        titleBarItem: viewerMode.titleBarItem
+        imageViewport: flickableArea
+        viewportContainer: flickableAreaContainer
+        sphereLoader: sphericViewerLoader
+        minimizeButton: viewerMode.minimizeButton
+        maximizeButton: viewerMode.maximizeButton
+        closeButton: viewerMode.closeButton
+        quickWindowKitEnabled: viewerMode.quickWindowKitEnabled
+        devicePixelRatio: viewerMode.devicePixelRatio
     }
 }

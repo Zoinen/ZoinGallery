@@ -55,6 +55,7 @@ public:
     int rowForEntryId(const QString &entryId) const;
 
     void toggleSelection(int viewIndex);
+    void setSelection(int viewIndex, bool selected);
     void ensurePreviews();
     void requestViewer(int viewIndex, const QSize &size);
     void requestViewerAt(int targetViewIndex, const QSize &size);

@@ -117,6 +117,15 @@ set(ZOIN_CORE_SOURCES
     NaturalSort.h
     FileListModel.h
     FileListModel.cpp
+    FileListModelSignals.cpp
+    FileListModelPrivate.h
+    FileListModelFolderSource.cpp
+    FileListModelFolderReconcile.cpp
+    FileListModelCatalog.cpp
+    FileListModelViewer.cpp
+    FileListModelSettings.cpp
+    FileListModelFileOperations.cpp
+    FileListModelSelection.cpp
     ImageFile.h
     ImageFile.cpp
     ProviderImageStore.h
@@ -127,8 +136,36 @@ set(ZOIN_CORE_SOURCES
     QmlImageProvider.cpp
     QmlAsyncImageProvider.h
     QmlAsyncImageProvider.cpp
+    GalleryPixelGrid.h
+    GalleryLayoutEngine.h
+    GalleryLayoutEngine.cpp
+    GalleryGeometryIndex.h
+    GalleryGeometryIndex.cpp
+    GalleryDelegatePool.h
+    GalleryDelegatePool.cpp
+    GalleryViewportMaterializer.h
+    GalleryViewportMaterializer.cpp
+    GalleryThumbnailPlanner.h
+    GalleryThumbnailPlanner.cpp
+    GalleryQuickSearchIndex.h
+    GalleryQuickSearchIndex.cpp
+    GalleryEntryVisual.h
+    GalleryEntryVisual.cpp
+    GalleryIconTextMeasurer.h
+    GalleryIconTextMeasurer.cpp
+    GalleryDelegateItem.h
+    GalleryDelegateItem.cpp
     MasonryLayout.h
     MasonryLayout.cpp
+    MasonryLayoutDelegateCommit.cpp
+    MasonryLayoutGeometry.cpp
+    MasonryLayoutModelDelta.cpp
+    MasonryLayoutModelReset.cpp
+    MasonryLayoutNavigation.cpp
+    MasonryLayoutNavigationPaging.cpp
+    MasonryLayoutProperties.cpp
+    MasonryLayoutRewrap.cpp
+    MasonryLayoutThumbnails.cpp
     MasonryLayoutQuickSearch.h
     MasonryLayoutQuickSearch.cpp
     ViewerWheelArea.h
@@ -141,6 +178,7 @@ set(ZOIN_CORE_SOURCES
     GalleryViewModel.cpp
     SelectedImagesModel.h
     SelectedImagesModel.cpp
+    SelectedImagesModelSelection.cpp
     SvgCursor.h
     SvgCursor.cpp
     PersistentImageCache.h
@@ -200,12 +238,33 @@ set(ZOIN_CORE_SOURCES
     Exiftool/LensDatabase.h
     include/ZoinGallery/GalleryRuntime.h
     include/ZoinGallery/GallerySession.h
+    include/ZoinGallery/GalleryCatalogSource.h
+    include/ZoinGallery/GalleryCatalogModel.h
+    include/ZoinGallery/GalleryPanelBackend.h
+    include/ZoinGallery/GalleryDragPreviewModel.h
+    include/ZoinGallery/GallerySessionPanelBackend.h
+    include/ZoinGallery/SelectedImagesPanelBackend.h
+    include/ZoinGallery/GalleryPanelController.h
+    include/ZoinGallery/GalleryIconResolver.h
     include/ZoinGallery/ImageSourceProvider.h
     src/embed/ImageSourceProvider.cpp
     src/embed/SharedImageSourceProvider.h
     src/embed/SharedImageSourceProvider.cpp
     src/embed/ExternalCatalogModel.h
     src/embed/ExternalCatalogModel.cpp
+    src/embed/ExternalCatalogModelPrivate.h
+    src/embed/ExternalCatalogApply.cpp
+    src/embed/ExternalCatalogSparseExtension.cpp
+    src/embed/ExternalCatalogSparseExtension.h
+    src/embed/ExternalCatalogRowsTransaction.cpp
+    src/embed/ExternalCatalogMetadata.cpp
+    src/embed/ExternalCatalogMetadataPlanner.cpp
+    src/embed/ExternalCatalogThumbnailPlanner.cpp
+    src/embed/ExternalCatalogResetTransaction.cpp
+    src/embed/ExternalCatalogResetTransaction.h
+    src/embed/ExternalCatalogViewer.cpp
+    src/embed/ExternalCatalogDecode.cpp
+    src/embed/ExternalCatalogPlanner.cpp
     src/embed/EmbeddedImageProbe.h
     src/embed/EmbeddedImageProbe.cpp
     src/embed/DecodeSizePolicy.h
@@ -216,6 +275,13 @@ set(ZOIN_CORE_SOURCES
     src/embed/LocalFilesystemSource.cpp
     src/embed/GalleryRuntime.cpp
     src/embed/GallerySession.cpp
+    src/panel/GalleryCatalogModel.cpp
+    src/panel/GalleryPanelBackend.cpp
+    src/panel/GalleryDragPreviewModel.cpp
+    src/panel/GallerySessionPanelBackend.cpp
+    src/panel/SelectedImagesPanelBackend.cpp
+    src/panel/GalleryPanelController.cpp
+    src/panel/GalleryIconResolver.cpp
 )
 
 set(ZOIN_STANDALONE_SOURCES
@@ -330,6 +396,18 @@ if(ZOIN_BUILD_STANDALONE)
 endif()
 
 if(BUILD_TESTING)
+    find_program(ZOIN_ARCHITECTURE_PYTHON NAMES python3 python)
+    if(ZOIN_ARCHITECTURE_PYTHON)
+        add_test(NAME ZoinGalleryArchitectureCheck
+            COMMAND ${ZOIN_ARCHITECTURE_PYTHON}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_architecture.py
+                --root ${CMAKE_CURRENT_SOURCE_DIR}
+                --qml-root qml
+                --cpp-root .
+                --require-bound-qml
+                --fail-on-file-limit)
+    endif()
+
     add_executable(ZoinGallerySelectionTests
         tests/PersistentSelectionCacheTest.cpp
     )
@@ -476,6 +554,73 @@ if(BUILD_TESTING)
     set_tests_properties(MasonryLayoutModesTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic")
 
+    foreach(_zoin_visual_dpr IN ITEMS 1.0 1.25 1.5 2.0)
+        string(REPLACE "." "" _zoin_visual_dpr_suffix
+            "${_zoin_visual_dpr}")
+        set(_zoin_visual_test
+            "MasonryVisualDpr${_zoin_visual_dpr_suffix}Test")
+        add_test(NAME ${_zoin_visual_test}
+            COMMAND ZoinGalleryMasonryLayoutModesTests
+                panelThemeColorsUpdateLiveAfterConstruction
+                presentationSwitchInstantlyRevealsStableCurrentItem
+                settledCursorUsesPhysicalPixelGridButAnimationsStaySmooth
+                settledDetailsCursorRendersSolidPhysicalBorderPixels
+                columnsAndDetailsUseIdenticalCompactLucideIcons
+                fractionalDetailsDensityPreservesRowPhaseAndContentExtent
+                verticalScrollBarDoesNotChangeViewportWidth)
+        set_tests_properties(${_zoin_visual_test} PROPERTIES
+            ENVIRONMENT
+                "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic;QT_SCALE_FACTOR=${_zoin_visual_dpr}"
+            LABELS "visual;dpr"
+            TIMEOUT 30)
+    endforeach()
+
+    add_executable(ZoinGalleryLayoutEngineTests
+        tests/GalleryLayoutEngineTest.cpp)
+    target_include_directories(ZoinGalleryLayoutEngineTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryLayoutEngineTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GalleryLayoutEngineTest
+        COMMAND ZoinGalleryLayoutEngineTests)
+
+    add_executable(ZoinGalleryPanelControllerTests
+        tests/GalleryPanelControllerTest.cpp)
+    target_link_libraries(ZoinGalleryPanelControllerTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GalleryPanelControllerTest
+        COMMAND ZoinGalleryPanelControllerTests)
+
+    add_executable(ZoinGalleryQuickSearchIndexTests
+        tests/GalleryQuickSearchIndexTest.cpp)
+    target_include_directories(ZoinGalleryQuickSearchIndexTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryQuickSearchIndexTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GalleryQuickSearchIndexTest
+        COMMAND ZoinGalleryQuickSearchIndexTests)
+
+    add_executable(ZoinGalleryThumbnailPlannerTests
+        tests/GalleryThumbnailPlannerTest.cpp)
+    target_include_directories(ZoinGalleryThumbnailPlannerTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryThumbnailPlannerTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GalleryThumbnailPlannerTest
+        COMMAND ZoinGalleryThumbnailPlannerTests)
+
+    add_executable(ZoinGalleryIconResolverTests
+        tests/GalleryIconResolverTest.cpp)
+    target_link_libraries(ZoinGalleryIconResolverTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GalleryIconResolverTest
+        COMMAND ZoinGalleryIconResolverTests)
+
     if(ZOIN_BUILD_STANDALONE)
         set(ZOIN_STANDALONE_SMOKE_SOURCES
             tests/StandaloneShellSmokeTest.cpp
@@ -551,10 +696,57 @@ endif()
 set(ZOIN_QML_FILES
     qml/AutoScrollController.qml
     qml/GalleryPanel.qml
-    qml/GalleryEntryDelegate.qml
-    qml/GalleryViewer.qml
-    qml/FlickableZoomable.qml
-    qml/GalleryScrollBar.qml
+    qml/GalleryViewport.qml
+    qml/GalleryPanelOverlays.qml
+    qml/GalleryPanelChrome.qml
+    qml/GalleryDetailsHeader.qml
+    qml/GalleryCursorChrome.qml
+    qml/GalleryPointerLayer.qml
+    qml/GalleryQuickSearchOverlay.qml
+    qml/GalleryQuickSearchFormatter.qml
+    qml/GallerySelectionController.qml
+    qml/GalleryViewportController.qml
+    qml/GalleryCursorController.qml
+    qml/GalleryNavigationController.qml
+    qml/GalleryPanelInput.qml
+    qml/GalleryPanelReconciler.qml
+    qml/GalleryPanelMotion.qml
+    qml/GalleryPanelDiagnostics.qml
+    qml/GalleryDetailsSchema.qml
+    qml/GalleryViewerTransitionSource.qml
+    qml/GalleryThemePalette.qml
+    qml/GalleryPresentationMetrics.qml
+    qml/StandaloneGalleryTheme.qml
+    qml/StandaloneGalleryPanel.qml
+    qml/GalleryEntryDelegateBase.qml
+    qml/GalleryInteractiveEntryDelegate.qml
+    qml/GalleryEntrySelectionSurface.qml
+    qml/GalleryEntryPreview.qml
+    qml/GalleryThumbnailShaderLayer.qml
+    qml/GalleryThumbnailCompactLayer.qml
+    qml/GalleryMasonryEntryDelegate.qml
+    qml/GalleryEntryActions.qml
+    qml/GalleryFolderPreview.qml
+    qml/MasonryEntryDelegate.qml
+    qml/ColumnsEntryDelegate.qml
+    qml/DetailsEntryDelegate.qml
+    qml/GridEntryDelegate.qml
+    qml/IconsEntryDelegate.qml
+      qml/GalleryViewer.qml
+      qml/GalleryViewerCatalogController.qml
+      qml/GalleryViewerInput.qml
+      qml/GalleryViewerMotion.qml
+      qml/GalleryViewerNavigation.qml
+      qml/GalleryViewerSessionReconciler.qml
+      qml/GalleryViewerSelectionController.qml
+      qml/GalleryViewerSurface.qml
+      qml/GalleryViewerTransitionController.qml
+      qml/FlickableZoomable.qml
+      qml/ViewerImageLayer.qml
+      qml/ViewerSourceController.qml
+      qml/ViewerViewportMotion.qml
+      qml/ViewerViewportPointerLayer.qml
+      qml/GalleryScrollBar.qml
     qml/SphericViewer.qml
     qml/PathControl.qml
     qml/TitleButton.qml
@@ -577,10 +769,20 @@ if(ZOIN_BUILD_STANDALONE)
         qml/main.qml
         qml/AppSettings.qml
         qml/SettingsDialog.qml
-        qml/MasonryMode.qml
         qml/SelectedImagesPanel.qml
-        qml/BrickDelegate.qml
-        qml/ViewerMode.qml
+    qml/ViewerMode.qml
+    qml/StandaloneViewerNavigationController.qml
+    qml/StandaloneViewerReconciler.qml
+    qml/StandaloneViewerInput.qml
+    qml/StandaloneViewerSelectionHistoryController.qml
+    qml/StandaloneViewerSurface.qml
+    qml/StandaloneViewerChrome.qml
+    qml/StandalonePanelsSurface.qml
+    qml/StandaloneToolbar.qml
+    qml/StandaloneShellController.qml
+    qml/StandaloneSelectionHistoryWindow.qml
+    qml/StandaloneTitleBar.qml
+    qml/StandaloneShellOverlays.qml
         qml/RoundCorners.qml
         qml/CacheViewer.qml
         ZGStyle/ScrollBar.qml
@@ -679,34 +881,38 @@ if(TARGET ZoinGalleryQmlplugin)
         ZoinGalleryQmlplugin)
 endif()
 
-if(ZOIN_BUILD_STANDALONE AND TARGET ZoinGalleryQmlplugin)
-    add_dependencies(ZoinGallery ZoinGalleryQmlplugin)
-endif()
-if(TARGET ZoinGallerySessionTests AND TARGET ZoinGalleryQmlplugin)
-    add_dependencies(ZoinGallerySessionTests ZoinGalleryQmlplugin)
-endif()
-if(TARGET ZoinGalleryPanelGestureTests AND TARGET ZoinGalleryQmlplugin)
-    add_dependencies(ZoinGalleryPanelGestureTests ZoinGalleryQmlplugin)
-endif()
-if(TARGET ZoinGalleryMasonryLayoutModesTests AND
-   TARGET ZoinGalleryQmlplugin)
-    add_dependencies(ZoinGalleryMasonryLayoutModesTests
-        ZoinGalleryQmlplugin)
-endif()
-if(TARGET ZoinGalleryReusableViewerPrimitivesTests AND
-   TARGET ZoinGalleryQmlplugin)
-    add_dependencies(ZoinGalleryReusableViewerPrimitivesTests
-        ZoinGalleryQmlplugin)
-endif()
-if(TARGET ZoinGalleryStandaloneShellSmokeTests AND TARGET ZoinGalleryQmlplugin)
-    add_dependencies(ZoinGalleryStandaloneShellSmokeTests
-        ZoinGalleryQmlplugin)
-endif()
-if(TARGET ZoinGalleryLayoutInteractionBenchmark AND
-   TARGET ZoinGalleryQmlplugin)
-    add_dependencies(ZoinGalleryLayoutInteractionBenchmark
-        ZoinGalleryQmlplugin)
-endif()
+function(zoin_attach_qml_plugin target)
+    if(NOT TARGET ${target} OR NOT TARGET ZoinGalleryQmlplugin)
+        return()
+    endif()
+
+    add_dependencies(${target} ZoinGalleryQmlplugin)
+
+    # A dynamic QML plugin is discovered through qmldir. A static plugin must
+    # instead be linked into every QML entry point together with Qt's generated
+    # import object; an order-only dependency leaves the module unavailable at
+    # runtime and can accidentally appear to work when a stale DLL is present.
+    get_target_property(_zoin_qml_plugin_type ZoinGalleryQmlplugin TYPE)
+    if(_zoin_qml_plugin_type STREQUAL "STATIC_LIBRARY")
+        target_link_libraries(${target} PRIVATE ZoinGalleryQmlplugin)
+        if(TARGET ZoinGalleryQmlplugin_init)
+            target_link_libraries(${target} PRIVATE
+                ZoinGalleryQmlplugin_init)
+        endif()
+    endif()
+endfunction()
+
+foreach(_zoin_qml_entry_point IN ITEMS
+    ZoinGallery
+    ZoinGallerySessionTests
+    ZoinGalleryQmlInteractionTests
+    ZoinGalleryReusableViewerPrimitivesTests
+    ZoinGalleryPanelGestureTests
+    ZoinGalleryMasonryLayoutModesTests
+    ZoinGalleryStandaloneShellSmokeTests
+    ZoinGalleryLayoutInteractionBenchmark)
+    zoin_attach_qml_plugin(${_zoin_qml_entry_point})
+endforeach()
 
 if (ZOIN_BUILD_STANDALONE AND USE_QWK)
     target_link_libraries(ZoinGallery PRIVATE QWindowKit::Quick)

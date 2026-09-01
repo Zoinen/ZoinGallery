@@ -1,6 +1,11 @@
 #include <ZoinGallery/GalleryRuntime.h>
 
 #include <ZoinGallery/GallerySession.h>
+#include <ZoinGallery/GalleryCatalogModel.h>
+#include <ZoinGallery/GalleryPanelBackend.h>
+#include <ZoinGallery/GalleryPanelController.h>
+#include <ZoinGallery/GalleryIconResolver.h>
+#include <ZoinGallery/SelectedImagesPanelBackend.h>
 
 #include "CacheViewer.h"
 #include "DecodeManager.h"
@@ -99,7 +104,7 @@ void GalleryRuntime::registerTypes() {
         // them before any GalleryPanel is loaded without racing (or mutating)
         // the plugin-owned namespace.
         qmlRegisterType<MasonryLayout>(NativeModuleUri, 1, 0,
-                                       "MasonryLayout");
+                                       "GalleryViewportItem");
         qmlRegisterType<BrickItem>(NativeModuleUri, 1, 0, "BrickItem");
         qmlRegisterType<ViewerWheelArea>(NativeModuleUri, 1, 0,
                                         "ViewerWheelArea");
@@ -110,6 +115,18 @@ void GalleryRuntime::registerTypes() {
         qmlRegisterUncreatableType<GallerySession>(
             NativeModuleUri, 1, 0, "GallerySession",
             QStringLiteral("GallerySession instances are created by GalleryRuntime"));
+        qmlRegisterType<GalleryPanelController>(
+            NativeModuleUri, 1, 0, "GalleryPanelController");
+        qmlRegisterType<GalleryIconResolver>(
+            NativeModuleUri, 1, 0, "GalleryIconResolver");
+        qmlRegisterUncreatableType<GalleryPanelBackend>(
+            NativeModuleUri, 1, 0, "GalleryPanelBackend",
+            QStringLiteral("GalleryPanelBackend instances are supplied by a catalog source"));
+        qmlRegisterType<SelectedImagesPanelBackend>(
+            NativeModuleUri, 1, 0, "SelectedImagesPanelBackend");
+        qmlRegisterUncreatableType<GalleryCatalogModel>(
+            NativeModuleUri, 1, 0, "GalleryCatalogModel",
+            QStringLiteral("GalleryCatalogModel instances are owned by a panel backend"));
         qmlRegisterType<ImageInfoModel>(NativeModuleUri, 1, 0,
                                         "ImageInfoModel");
     });

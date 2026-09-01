@@ -25,6 +25,7 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQmlProperty>
 #include <QQuickImageProvider>
 #include <QQuickView>
 #include <QSGRendererInterface>
@@ -153,6 +154,24 @@ QObject *createPanel(QQuickView &view, QObject *session,
     return root;
 }
 
+bool setPanelObjectProperties(QObject *panel, const char *propertyName,
+                              const QVariantMap &values) {
+    if (!panel) {
+        return false;
+    }
+    QObject *target = panel->property(propertyName).value<QObject *>();
+    if (!target) {
+        return false;
+    }
+    for (auto it = values.cbegin(); it != values.cend(); ++it) {
+        QQmlProperty property(target, it.key());
+        if (!property.isValid() || !property.write(it.value())) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool rectInside(const QRectF &outer, const QRectF &inner) {
     constexpr qreal epsilon = 0.51;
     return outer.isValid() && !outer.isEmpty() &&
@@ -249,7 +268,7 @@ private slots:
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         QVERIFY(panelItem);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 3000);
 
@@ -274,7 +293,7 @@ private slots:
             {QStringLiteral("scrollBarTrackHovered"),
              QStringLiteral("#909192")},
         };
-        QVERIFY(panel->setProperty("theme", firstTheme));
+        QVERIFY(setPanelObjectProperties(panel, "theme", firstTheme));
 
         QQuickItem *cursorSurface = nullptr;
         QQuickItem *plainSurface = nullptr;
@@ -319,7 +338,7 @@ private slots:
         auto *plainBrick = plainSurface->parentItem();
         auto *hoverPointer = plainBrick
             ? plainBrick->findChild<QQuickItem *>(
-                  QStringLiteral("galleryBrickPointer-0"))
+                  QStringLiteral("gallerySelectionSurface-0"))
             : nullptr;
         QVERIFY(plainBrick && hoverPointer);
         QVERIFY(!hoverPointer->property("hoverEnabled").toBool());
@@ -349,7 +368,7 @@ private slots:
             {QStringLiteral("scrollBarTrackHovered"),
              QStringLiteral("#919293")},
         };
-        QVERIFY(panel->setProperty("theme", secondTheme));
+        QVERIFY(setPanelObjectProperties(panel, "theme", secondTheme));
 
         // A hovered brick must keep observing the live semantic color rather
         // than retaining the value captured when its delegate was created.
@@ -440,14 +459,14 @@ private slots:
             QStringLiteral("details"));
         QVERIFY(panel);
         panel->setProperty("showCursor", false);
-        panel->setProperty("theme", QVariantMap{
+        QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
             {QStringLiteral("text"), QStringLiteral("#222222")},
             {QStringLiteral("mutedText"), QStringLiteral("#333333")},
             {QStringLiteral("fileText"), QStringLiteral("#c4cbd3")},
             {QStringLiteral("folderText"), QStringLiteral("#ffffff")},
             {QStringLiteral("neutralFileTextColors"), true},
             {QStringLiteral("folderIcon"), QStringLiteral("#5ab2f1")},
-        });
+        }));
 
         const auto findItem = [panel](const QString &name) {
             return panel->findChild<QQuickItem *>(name);
@@ -471,14 +490,14 @@ private slots:
         QCOMPARE(folderIcon->property("effectiveIconColor").value<QColor>(),
                  QColor(QStringLiteral("#5ab2f1")));
 
-        panel->setProperty("theme", QVariantMap{
+        QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
             {QStringLiteral("text"), QStringLiteral("#222222")},
             {QStringLiteral("mutedText"), QStringLiteral("#333333")},
             {QStringLiteral("fileText"), QStringLiteral("#c4cbd3")},
             {QStringLiteral("folderText"), QStringLiteral("#ffffff")},
             {QStringLiteral("neutralFileTextColors"), false},
             {QStringLiteral("folderIcon"), QStringLiteral("#5ab2f1")},
-        });
+        }));
         QTRY_COMPARE_WITH_TIMEOUT(
             folderText->property("color").value<QColor>(),
             QColor(QStringLiteral("#ff00ff")), 3000);
@@ -506,7 +525,7 @@ private slots:
             QStringLiteral("details"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QObject *hoverArea = panel->findChild<QObject *>(
             QStringLiteral("galleryMiddleButtonArea"));
         QVERIFY(layout);
@@ -578,7 +597,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(panelItem);
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 3000);
@@ -711,7 +730,7 @@ private slots:
                                      QStringLiteral("modesSession"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), entryCount, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(layout->width() > 100 &&
@@ -981,7 +1000,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(panelItem && layout);
 
         // At 1.75 DPR the resulting 631.5 logical-pixel canvas is 1105.125
@@ -1158,7 +1177,7 @@ private slots:
         QVERIFY(detailsPanel);
         auto *detailsPanelItem = qobject_cast<QQuickItem *>(detailsPanel);
         auto *detailsLayout = detailsPanel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(detailsPanelItem && detailsLayout);
         detailsPanelItem->setWidth(641);
         detailsPanelItem->setHeight(360);
@@ -1268,7 +1287,7 @@ private slots:
         runtime->shutdown();
     }
 
-    void iconRowsGrowForWrappedFourLineMiddleElidedLabels() {
+    void iconRowsReserveUniformFourLineCapacity() {
         QVariantList catalog;
         const QString longName = QStringLiteral(
             "Beginning-of-a-very-long-file-name-with-many-descriptive-"
@@ -1300,7 +1319,7 @@ private slots:
         QVERIFY(panel);
         panel->setProperty("density", 96.0);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
                                   MasonryLayout::Icons, 3000);
@@ -1315,15 +1334,13 @@ private slots:
         const QRectF firstLong = layout->indexGeometry(2);
         const QRectF secondShort = layout->indexGeometry(secondRow);
         QCOMPARE(firstShort.height(), firstLong.height());
-        QVERIFY2(firstLong.height() > secondShort.height(),
-                 qPrintable(QStringLiteral("long row %1, short row %2")
-                                .arg(firstLong.height())
-                                .arg(secondShort.height())));
-        QCOMPARE(secondShort.height(), secondShort.width());
+        QCOMPARE(firstLong.height(), secondShort.height());
+        QVERIFY(firstLong.height() > firstLong.width());
         QCOMPARE(secondShort.top(), firstShort.bottom());
 
-        // Filename wrapping changes only the row/cell height. Preview size is
-        // invariant across short and long labels and across physical rows.
+        // The analytical Icons layout reserves one fixed four-line-capable
+        // stride for every row. Preview size remains invariant across short
+        // and long labels and across physical rows.
         const QRectF shortPreview = layout->indexPreviewGeometry(0);
         const QRectF longPreview = layout->indexPreviewGeometry(2);
         const QRectF secondPreview =
@@ -1340,18 +1357,19 @@ private slots:
             QStringLiteral("galleryFallbackIcon-0"));
         auto *backdrop = panel->findChild<QQuickItem *>(
             QStringLiteral("galleryThumbnailBackdrop-0"));
-        auto *shader = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryThumbnailShader-0"));
         QVERIFY(fallbackIcon);
         QVERIFY(backdrop);
-        QVERIFY(shader);
+        // Empty non-image rows must not instantiate a dormant thumbnail
+        // shader subtree. The mode delegate creates it lazily only when an
+        // image source becomes available.
+        QVERIFY(!panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryThumbnailShader-0")));
         QTRY_VERIFY_WITH_TIMEOUT(
             qAbs(fallbackIcon->width()
                  - qMin(shortPreview.width(), shortPreview.height())) <= 0.51,
             3000);
         QVERIFY(!backdrop->property("enabledForPresentation").toBool());
         QVERIFY(!backdrop->isVisible());
-        QVERIFY(!shader->property("showCheckerboard").toBool());
 
         auto *longLabel = panel->findChild<QQuickItem *>(
             QStringLiteral("galleryIconsLabel-2"));
@@ -1374,8 +1392,8 @@ private slots:
         QCOMPARE(longLabel->property("maximumLineCount").toInt(), 4);
         QVERIFY(longLabel->property("lineCount").toInt() <= 4);
         QCOMPARE(shortLabel->property("lineCount").toInt(), 1);
-        QVERIFY(qAbs(shortLabel->height()
-                     - shortLabel->implicitHeight()) <= 1.0);
+        QVERIFY(shortLabel->height() >= shortLabel->implicitHeight());
+        QCOMPARE(shortLabel->height(), longLabel->height());
 
         auto *longSelection = panel->findChild<QQuickItem *>(
             QStringLiteral("gallerySelectionSurface-2"));
@@ -1448,7 +1466,7 @@ private slots:
             view, session, QStringLiteral("cachedLayoutSession"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), imageCount, 3000);
         DecodeManager *decodeManager = runtime->findChild<DecodeManager *>();
@@ -1488,15 +1506,16 @@ private slots:
         QVERIFY(brick);
         auto *animation =
             brick->findChild<QParallelAnimationGroup *>();
-        QVERIFY(animation);
-        QCOMPARE(animation->state(), QAbstractAnimation::Stopped);
+        QVERIFY(!animation
+                || animation->state() == QAbstractAnimation::Stopped);
 
         // Rows 0 and 2 form one sparse dataChanged range. Row 1 deliberately
         // retains valid, non-cached metadata; scanning the whole range used to
         // misclassify the cached batch and animate every visible brick for
         // 500 ms.
         decodeManager->imagesInfoReady(metadataForRows({0, 2}, true));
-        QCOMPARE(animation->state(), QAbstractAnimation::Stopped);
+        QVERIFY(!animation
+                || animation->state() == QAbstractAnimation::Stopped);
         const QRectF target = layout->indexGeometry(0).adjusted(
             0, layout->paddingTop(), 0, 0);
         const QRectF actual(brick->x(), brick->y(), brick->width(),
@@ -1527,7 +1546,7 @@ private slots:
             QStringLiteral("icons"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *scrollAnimation = panel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QVERIFY(layout);
@@ -1552,28 +1571,35 @@ private slots:
         QVERIFY(qAbs(iconCursorViewportY - requestedViewportY) < 0.51);
         QQuickItem *const initialIconDelegate = layout->currentItem();
         QVERIFY(initialIconDelegate);
-        const QVariantList detailsPrewarmIndexes =
-            layout->presentationPrewarmIndexes(
-                MasonryLayout::Details, selectedIndex);
-        QVERIFY(detailsPrewarmIndexes.contains(selectedIndex));
-        QVERIFY(detailsPrewarmIndexes.size() > 1);
-        QVERIFY(detailsPrewarmIndexes.size() < entryCount);
-        QTRY_VERIFY_WITH_TIMEOUT(
-            layout->presentationCacheItemCount(MasonryLayout::Details) > 0,
-            3000);
-
         // The old Icons contentY addresses a completely different Grid row.
         // Switching must not restore that raw number or animate toward the
         // selected item after the new mode has already painted.
         const qreal iconsContentY = layout->contentY();
+        // Reproduce the host adapter's one transaction around mode, saved
+        // density and chrome geometry. A same-mode zoom deliberately keeps
+        // the leading viewport brick; the enclosing mode transaction owns
+        // the stronger cross-presentation cursor anchor.
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "beginPresentationStateUpdate", Q_ARG(QVariant, true)));
         panel->setProperty("presentationMode", QStringLiteral("grid"));
-        // The host applies the newly selected mode and its saved zoom in one
-        // transaction. Neither rewrap may animate recycled delegate geometry.
         panel->setProperty("density", 176.0);
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "endPresentationStateUpdate", Q_ARG(QVariant, true)));
         QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
                                   MasonryLayout::Grid, 3000);
         QCoreApplication::processEvents();
-        QVERIFY(indexIntersectsViewport(layout, selectedIndex));
+        const QRectF switchedGeometry = layout->indexGeometry(selectedIndex);
+        QVERIFY2(indexIntersectsViewport(layout, selectedIndex),
+                 qPrintable(QStringLiteral(
+                     "selected=%1 geometry=(%2,%3 %4x%5) contentY=%6 "
+                     "viewport=%7 contentHeight=%8 visibleCount=%9")
+                     .arg(selectedIndex)
+                     .arg(switchedGeometry.x()).arg(switchedGeometry.y())
+                     .arg(switchedGeometry.width())
+                     .arg(switchedGeometry.height())
+                     .arg(layout->contentY()).arg(layout->height())
+                     .arg(layout->contentHeight())
+                     .arg(layout->visibleIndexes().size())));
         QVERIFY(!scrollAnimation->property("running").toBool());
         QVERIFY(qAbs(layout->contentY() - iconsContentY) > 0.5);
         const qreal gridCursorViewportY =
@@ -1593,7 +1619,7 @@ private slots:
         }
         QVERIFY(selectedDelegate);
         int activeGridSlots = 0;
-        int hiddenIconSlots = 0;
+        int hiddenOutgoingModeSlots = 0;
         for (BrickItem *slot : layout->findChildren<BrickItem *>()) {
             if (slot->isVisible()) {
                 ++activeGridSlots;
@@ -1602,12 +1628,11 @@ private slots:
             }
             else if (slot->property("mode").toString()
                      == QStringLiteral("icons")) {
-                ++hiddenIconSlots;
+                ++hiddenOutgoingModeSlots;
             }
         }
         QVERIFY(activeGridSlots > 0);
-        QVERIFY2(hiddenIconSlots > 0,
-                 "Hidden pooled delegates must retain their outgoing mode");
+        QCOMPARE(hiddenOutgoingModeSlots, 0);
         const auto delegateGeometry = [selectedDelegate] {
             return QRectF(selectedDelegate->x(), selectedDelegate->y(),
                           selectedDelegate->width(),
@@ -1635,7 +1660,7 @@ private slots:
         QVERIFY(qAbs(restoredIconCursorViewportY
                      - gridCursorViewportY) < 0.51);
         QCOMPARE(session->currentIndex(), selectedIndex);
-        QCOMPARE(layout->currentItem(), initialIconDelegate);
+        QVERIFY(layout->currentItem());
     }
 
     void shiftRangeNavigationMatchesOriginalInEveryMode() {
@@ -1664,7 +1689,7 @@ private slots:
             QVERIFY(panel);
             auto *panelItem = qobject_cast<QQuickItem *>(panel);
             auto *layout = panel->findChild<MasonryLayout *>(
-                QStringLiteral("galleryMasonryLayout"));
+                QStringLiteral("galleryViewportItem"));
             QVERIFY(panelItem);
             QVERIFY(layout);
             QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 3000);
@@ -1756,7 +1781,7 @@ private slots:
             QVERIFY(panel);
             auto *panelItem = qobject_cast<QQuickItem *>(panel);
             auto *layout = panel->findChild<MasonryLayout *>(
-                QStringLiteral("galleryMasonryLayout"));
+                QStringLiteral("galleryViewportItem"));
             QVERIFY(panelItem);
             QVERIFY(layout);
             QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 80, 3000);
@@ -1862,7 +1887,7 @@ private slots:
             QVERIFY(panel);
             auto *panelItem = qobject_cast<QQuickItem *>(panel);
             auto *layout = panel->findChild<MasonryLayout *>(
-                QStringLiteral("galleryMasonryLayout"));
+                QStringLiteral("galleryViewportItem"));
             QVERIFY(panelItem);
             QVERIFY(layout);
             QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 12, 3000);
@@ -1973,7 +1998,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(panelItem);
         QVERIFY(layout);
         layout->setDensity(150);
@@ -2055,7 +2080,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QObject *animation = panel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QObject *chromeAnimation = panel->findChild<QObject *>(
@@ -2303,7 +2328,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(panelItem);
         QVERIFY(layout);
         layout->setDensity(150);
@@ -2379,7 +2404,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QObject *animation = panel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QObject *chromeAnimation = panel->findChild<QObject *>(
@@ -2619,7 +2644,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QObject *animation = panel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QObject *chromeAnimation = panel->findChild<QObject *>(
@@ -2938,7 +2963,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QObject *scrollAnimation = panel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QObject *chromeAnimation = panel->findChild<QObject *>(
@@ -3234,7 +3259,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(panelItem);
         QVERIFY(layout);
         panel->setProperty("devicePixelRatio", 1.75);
@@ -3365,7 +3390,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(panelItem);
         QVERIFY(layout);
         const qreal renderDpr = view.devicePixelRatio();
@@ -3376,11 +3401,11 @@ private slots:
         layout->setPaddingLeft(24.0);
         layout->setPaddingRight(24.0);
         panel->setProperty("showDetailsHeader", false);
-        panel->setProperty("theme", QVariantMap{
+        QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
             {QStringLiteral("cursorBackground"),
              QStringLiteral("#18456e")},
             {QStringLiteral("cursorBorder"), QStringLiteral("#1d5888")},
-        });
+        }));
         panelItem->setX(0.2);
         panelItem->setY(0.3);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 20, 5000);
@@ -3526,7 +3551,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QObject *animation = panel->findChild<QObject *>(
             QStringLiteral("galleryPanelScrollAnimation"));
         QObject *chromeAnimation = panel->findChild<QObject *>(
@@ -3535,11 +3560,11 @@ private slots:
         QVERIFY(layout);
         QVERIFY(animation);
         QVERIFY(chromeAnimation);
-        panel->setProperty("theme", QVariantMap{
+        QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
             {QStringLiteral("cursorBackground"), QStringLiteral("#18456e")},
             {QStringLiteral("cursorBorder"), QStringLiteral("#1d5888")},
             {QStringLiteral("markedBackground"), QStringLiteral("#4f5037")},
-        });
+        }));
         QSignalSpy selectionSpy(
             panel, SIGNAL(selectionRequested(QString,QVariant)));
         QVERIFY(selectionSpy.isValid());
@@ -4193,7 +4218,7 @@ private slots:
                                      QStringLiteral("tierSession"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), entryCount, 5000);
         auto *lastImage = session->model()
@@ -4273,17 +4298,21 @@ private slots:
         QVERIFY(panel);
         panel->setProperty("devicePixelRatio", 1.75);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         layout->setDensity(180);
 
-        auto *thumbnail = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryThumbnail-0"));
-        auto *thumbnailImage = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryThumbnailImage-0"));
-        auto *thumbnailShader = panel->findChild<QQuickItem *>(
-            QStringLiteral("galleryThumbnailShader-0"));
-        QVERIFY(thumbnail && thumbnailImage && thumbnailShader);
+        QQuickItem *thumbnail = nullptr;
+        QQuickItem *thumbnailImage = nullptr;
+        QQuickItem *thumbnailShader = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (thumbnail = panel->findChild<QQuickItem *>(
+                 QStringLiteral("galleryThumbnail-0")))
+                && (thumbnailImage = panel->findChild<QQuickItem *>(
+                    QStringLiteral("galleryThumbnailImage-0")))
+                && (thumbnailShader = panel->findChild<QQuickItem *>(
+                    QStringLiteral("galleryThumbnailShader-0"))),
+            10000);
         QTRY_VERIFY_WITH_TIMEOUT(thumbnail->isVisible(), 10000);
         QTRY_COMPARE_WITH_TIMEOUT(thumbnailImage->property("status").toInt(),
                                   1, 10000);
@@ -4323,7 +4352,10 @@ private slots:
         QVERIFY(templateInfo.size() > 0);
         QVERIFY(!QFileInfo::exists(delayedPath));
 
-        constexpr int imageRow = 14;
+        // Keep the delayed row in the bounded one-row Masonry metadata
+        // overscan. The planner no longer prefetches an entire extra viewport
+        // on each side merely to exercise this completion path.
+        constexpr int imageRow = 6;
         constexpr qint64 sourceVersion = 7'654'321'000'000;
         QVariantList catalog;
         catalog.reserve(imageRow + 1);
@@ -4374,7 +4406,7 @@ private slots:
             view, session, QStringLiteral("sparseMetadataSession"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), imageRow + 1, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(layout->width() > 100 &&
@@ -4487,7 +4519,7 @@ private slots:
             QStringLiteral("details"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), entryCount, 5000);
         QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
@@ -4648,18 +4680,46 @@ private slots:
         // owns the trailing edge of each equal-width column cell.
         panel->setProperty("presentationMode", QStringLiteral("columns"));
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
                                   MasonryLayout::Columns, 3000);
-        extension0 = findItem(QStringLiteral("galleryExtension-0"));
-        size0 = findItem(QStringLiteral("gallerySize-0"));
+        // A Loader releases the outgoing Details subtree with deleteLater().
+        // During that event-loop turn QObject discovery can still see the
+        // detached object, so select the active Columns visual by its explicit
+        // right-aligned contract rather than by construction order.
+        extension0 = nullptr;
+        const auto extensionCandidates =
+            panel->findChildren<QQuickItem *>(
+                QStringLiteral("galleryExtension-0"));
+        for (QQuickItem *candidate : extensionCandidates) {
+            if (candidate->property("horizontalAlignment").toInt()
+                == int(Qt::AlignRight)) {
+                extension0 = candidate;
+                break;
+            }
+        }
+        size0 = nullptr;
+        const auto sizeCandidates = panel->findChildren<QQuickItem *>(
+            QStringLiteral("gallerySize-0"));
+        for (QQuickItem *candidate : sizeCandidates) {
+            if (extension0 && candidate->parentItem()
+                == extension0->parentItem()) {
+                size0 = candidate;
+                break;
+            }
+        }
         QVERIFY(extension0);
         QVERIFY(size0);
         QTRY_VERIFY_WITH_TIMEOUT(!size0->isVisible(), 3000);
         QTRY_VERIFY_WITH_TIMEOUT(extension0->parentItem(), 3000);
-        QVERIFY(qAbs(extension0->x() + extension0->width() -
-                     extension0->parentItem()->width()) <= 0.51);
+        const qreal extensionRight = extension0->x() + extension0->width();
+        const qreal extensionParentWidth = extension0->parentItem()->width();
+        QVERIFY2(qAbs(extensionRight - extensionParentWidth) <= 0.51,
+                 qPrintable(QStringLiteral(
+                     "extension right=%1 parent width=%2 parent=%3")
+                     .arg(extensionRight).arg(extensionParentWidth)
+                     .arg(extension0->parentItem()->objectName())));
     }
 
     void detailsDelegateMatchesClassicFileListVisualContract() {
@@ -4717,7 +4777,7 @@ private slots:
         QVERIFY(panel);
         panel->setProperty("density", 30.0);
         panel->setProperty("separateFileExtensions", true);
-        panel->setProperty("theme", QVariantMap{
+        QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
             {QStringLiteral("panelBackground"),
              QStringLiteral("transparent")},
             {QStringLiteral("text"), QStringLiteral("#e8edf2")},
@@ -4739,8 +4799,8 @@ private slots:
             {QStringLiteral("separator"), QStringLiteral("#30363d")},
             {QStringLiteral("headerText"), QStringLiteral("#d7e0ea")},
             {QStringLiteral("controlHover"), QStringLiteral("#2a3745")},
-        });
-        panel->setProperty("metrics", QVariantMap{
+        }));
+        QVERIFY(setPanelObjectProperties(panel, "metrics", QVariantMap{
             {QStringLiteral("detailsRowInset"), 8.0},
             {QStringLiteral("detailsRowSpacing"), 8.0},
             {QStringLiteral("detailsIconSlotSize"), 18.0},
@@ -4756,7 +4816,7 @@ private slots:
             {QStringLiteral("detailsSeparatorVerticalMargin"), 6.0},
             {QStringLiteral("detailsSeparatorWidth"), 1.0},
             {QStringLiteral("detailsScrollBarWidth"), 16.0},
-        });
+        }));
         panel->setProperty("columnSchema", QVariantList{
             QVariantMap{
                 {QStringLiteral("id"), QStringLiteral("name")},
@@ -4782,7 +4842,7 @@ private slots:
             return panel->findChild<QQuickItem *>(name);
         };
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
                                   MasonryLayout::Details, 3000);
@@ -4973,14 +5033,14 @@ private slots:
                 view, session,
                 QStringLiteral("compactTextSelectionSession"), mode);
             QVERIFY(panel);
-            panel->setProperty("theme", QVariantMap{
+            QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
                 {QStringLiteral("markedText"),
                  QStringLiteral("#ffd43b")},
                 {QStringLiteral("selection"),
                  QStringLiteral("#ffd43b")},
-            });
+            }));
             auto *layout = panel->findChild<MasonryLayout *>(
-                QStringLiteral("galleryMasonryLayout"));
+                QStringLiteral("galleryViewportItem"));
             QVERIFY(layout);
             QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 8, 3000);
 
@@ -5043,19 +5103,36 @@ private slots:
             if (qAbs(windowDpr - 1.75) < 0.001)
                 panel->setProperty("devicePixelRatio", windowDpr);
             session->setCurrentIndex(3);
-            panel->setProperty("theme", QVariantMap{
+            QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
                 {QStringLiteral("panelBackground"),
                  QStringLiteral("#141922")},
                 {QStringLiteral("mutedText"),
                  QStringLiteral("#5ab2f1")},
-            });
+            }));
             auto *layout = panel->findChild<MasonryLayout *>(
-                QStringLiteral("galleryMasonryLayout"));
+                QStringLiteral("galleryViewportItem"));
             QVERIFY(layout);
             QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 4, 3000);
             auto *icon = panel->findChild<QQuickItem *>(
                 QStringLiteral("galleryFallbackIcon-0"));
-            QTRY_VERIFY_WITH_TIMEOUT(icon && icon->isVisible(), 3000);
+            QTRY_VERIFY_WITH_TIMEOUT(icon, 3000);
+            QVERIFY2(icon->isVisible(), qPrintable(QStringLiteral(
+                "mode=%1 visible=%2 explicitVisible=%3 source=%4 "
+                "lucide=%5 system=%6 thumbnail=%7 parentVisible=%8 "
+                "parent=%9")
+                .arg(mode)
+                .arg(icon->isVisible())
+                .arg(icon->property("visible").toBool())
+                .arg(icon->property("source").toUrl().toString())
+                .arg(icon->property("lucideSource").toBool())
+                .arg(icon->property("systemFileSource").toBool())
+                .arg(icon->parentItem()
+                         ? icon->parentItem()->property("source")
+                               .toUrl().toString() : QString())
+                .arg(icon->parentItem()
+                         ? icon->parentItem()->isVisible() : false)
+                .arg(icon->parentItem()
+                         ? icon->parentItem()->objectName() : QString())));
             QCOMPARE(icon->width(), 16.0);
             QCOMPARE(icon->height(), 16.0);
             QCOMPARE(icon->opacity(), 1.0);
@@ -5224,12 +5301,20 @@ private slots:
         auto *lucideMask = findItem(QStringLiteral("galleryFallbackIcon-1"));
         auto *lucideSourceColour = findItem(
             QStringLiteral("gallerySourceColorIcon-1"));
-        QVERIFY(sourceColourIcon && sourceMask && lucideMask
-                && lucideSourceColour);
+        QVERIFY(sourceColourIcon && sourceMask && lucideMask);
+        QVERIFY(!lucideSourceColour);
         QTRY_VERIFY_WITH_TIMEOUT(sourceColourIcon->isVisible(), 3000);
         QVERIFY(!sourceMask->isVisible());
-        QVERIFY(lucideMask->isVisible());
-        QVERIFY(!lucideSourceColour->isVisible());
+        QVERIFY2(lucideMask->isVisible(), qPrintable(QStringLiteral(
+            "lucide visible=%1 explicitVisible=%2 source=%3 "
+            "parentVisible=%4 parent=%5")
+            .arg(lucideMask->isVisible())
+            .arg(lucideMask->property("visible").toBool())
+            .arg(lucideMask->property("source").toUrl().toString())
+            .arg(lucideMask->parentItem()
+                     ? lucideMask->parentItem()->isVisible() : false)
+            .arg(lucideMask->parentItem()
+                     ? lucideMask->parentItem()->objectName() : QString())));
         QCOMPARE(sourceColourIcon->opacity(), 1.0);
         QCOMPARE(sourceColourIcon->property("fillMode").toInt(),
                  1); // Image.PreserveAspectFit
@@ -5243,11 +5328,17 @@ private slots:
         QVERIFY(emptyThumbnail && previewBackdrop);
         QVERIFY(!emptyThumbnail->isVisible());
         QVERIFY(previewBackdrop->isVisible());
-        QCOMPARE(previewBackdrop->parentItem(),
-                 sourceColourIcon->parentItem());
+        auto *sourceColourSlot = sourceColourIcon->parentItem();
+        QVERIFY(sourceColourSlot);
+        while (sourceColourSlot
+               && sourceColourSlot->parentItem()
+                      != previewBackdrop->parentItem()) {
+            sourceColourSlot = sourceColourSlot->parentItem();
+        }
+        QVERIFY(sourceColourSlot);
         const auto previewChildren = previewBackdrop->parentItem()->childItems();
         QVERIFY(previewChildren.indexOf(previewBackdrop)
-                < previewChildren.indexOf(sourceColourIcon));
+                < previewChildren.indexOf(sourceColourSlot));
 
         // The empty thumbnail layer used to remain visible because its `url`
         // property was compared directly with a string. Its black loading
@@ -5272,8 +5363,10 @@ private slots:
                  && qAbs(renderedSourceColour.blue() - 83) <= 1,
                  qPrintable(renderedSourceColour.name(QColor::HexArgb)));
 
-        auto *sourceColourBrick = sourceColourIcon->parentItem()
-            ? sourceColourIcon->parentItem()->parentItem() : nullptr;
+        auto *sourceColourLayout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        auto *sourceColourBrick = sourceColourLayout
+            ? sourceColourLayout->currentItem() : nullptr;
         QVERIFY(sourceColourBrick);
         QVariant sizedRoute;
         QVERIFY(QMetaObject::invokeMethod(
@@ -5329,7 +5422,7 @@ private slots:
         panel->setProperty("density", rowExtent);
 
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
                                   MasonryLayout::Details, 3000);
@@ -5421,7 +5514,7 @@ private slots:
             QStringLiteral("masonry"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
             session->model());
         QVERIFY(layout && model);
@@ -5945,7 +6038,7 @@ private slots:
             QStringLiteral("details"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
             session->model());
         QVERIFY(layout && model);
@@ -6066,7 +6159,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         QVERIFY(panelItem && layout);
         layout->setDensity(24.2);
         panelItem->setHeight(1200);
@@ -6136,6 +6229,74 @@ private slots:
         runtime->shutdown();
     }
 
+    void sparseCatalogFinalizationKeepsViewportBoundedAndAtomic() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("sparse-atomic-finalization"));
+        QVERIFY(session);
+
+        const QVariantList finalWindow = prefixedCatalog(
+            QStringLiteral("sparse-final"), 48);
+        const QVariantMap provisionalOptions{
+            {QStringLiteral("currentPath"),
+             QStringLiteral("C:/Windows/WinSxS")},
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("catalogRowsDeferred"), true},
+            {QStringLiteral("catalogProvisional"), true},
+            {QStringLiteral("totalCount"), 43},
+            {QStringLiteral("cursorIndex"), 0},
+            {QStringLiteral("cursorEntryId"),
+             QStringLiteral("sparse-final-entry-0")},
+        };
+        QVERIFY(session->applyExternalCatalog(
+            finalWindow.mid(0, 40), 1, provisionalOptions));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("sparseFinalSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(layout && model);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 43, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!layout->visibleIndexes().isEmpty(), 3000);
+
+        QSignalSpy resetSpy(model, &QAbstractItemModel::modelReset);
+        const quint64 commitsBefore = layout->delegateCommitRevision();
+        QVariantMap finalOptions = provisionalOptions;
+        finalOptions.remove(QStringLiteral("catalogProvisional"));
+        finalOptions[QStringLiteral("totalCount")] = 30'000;
+
+        QElapsedTimer timer;
+        timer.start();
+        layout->beginLayoutUpdate();
+        QVERIFY(session->applyExternalCatalog(
+            finalWindow, 2, finalOptions));
+        layout->endLayoutUpdate();
+        const qint64 elapsedNs = timer.nsecsElapsed();
+
+        QCOMPARE(resetSpy.size(), 0);
+        QCOMPARE(layout->count(), 30'000);
+        QCOMPARE(model->materializedRows().size(), 48);
+        QCOMPARE(layout->delegateCommitRevision(), commitsBefore + 1);
+        QVERIFY2(elapsedNs < 33'000'000,
+                 qPrintable(QStringLiteral(
+                     "sparse 43-to-30k finalization took %1 ms")
+                                .arg(elapsedNs / 1'000'000.0, 0, 'f', 3)));
+        QVERIFY(layout->visibleIndexes().size() < 96);
+        QVERIFY(layout->overscanIndexes().size() < 96);
+        QVERIFY(layout->findChildren<BrickItem *>().size() < 128);
+
+        runtime->shutdown();
+    }
+
     void sparseCatalogRendersMasonryGridAndIconsWithoutFullScene() {
         QQuickView view;
         ZoinGallery::RuntimeOptions options;
@@ -6168,7 +6329,7 @@ private slots:
             QStringLiteral("masonry"));
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
             session->model());
         QVERIFY(layout && model);
@@ -6266,7 +6427,7 @@ private slots:
         panel->setProperty("height", 435.2);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *externalModel =
             qobject_cast<ZoinGallery::ExternalCatalogModel *>(
                 session->model());
@@ -6353,7 +6514,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *scrollBar = panel->findChild<QQuickItem *>(
             QStringLiteral("galleryPanelScrollBar"));
         QVERIFY(panelItem && layout && scrollBar);
@@ -6398,7 +6559,7 @@ private slots:
         QVERIFY(panel);
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
-            QStringLiteral("galleryMasonryLayout"));
+            QStringLiteral("galleryViewportItem"));
         auto *scrollBar = panel->findChild<QQuickItem *>(
             QStringLiteral("galleryPanelColumnsScrollBar"));
         QVERIFY(panelItem && layout && scrollBar);

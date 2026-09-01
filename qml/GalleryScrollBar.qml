@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic as T
 
@@ -7,22 +9,13 @@ import QtQuick.Controls.Basic as T
 T.ScrollBar {
     id: scroll
 
-    property var theme: ({})
-    readonly property color handleColor:
-        theme && theme.scrollBarHandle !== undefined
-        ? theme.scrollBarHandle : "#4a4a4a"
+    required property GalleryThemePalette theme
+    readonly property color handleColor: theme.scrollBarHandle
     readonly property color handleBackgroundHoveredColor:
-        theme && theme.scrollBarHandleBackgroundHovered !== undefined
-        ? theme.scrollBarHandleBackgroundHovered : "#676767"
-    readonly property color handleHoveredColor:
-        theme && theme.scrollBarHandleHovered !== undefined
-        ? theme.scrollBarHandleHovered : "#878787"
-    readonly property color handlePressedColor:
-        theme && theme.scrollBarHandlePressed !== undefined
-        ? theme.scrollBarHandlePressed : "#505050"
-    readonly property color trackHoveredColor:
-        theme && theme.scrollBarTrackHovered !== undefined
-        ? theme.scrollBarTrackHovered : Qt.rgba(1, 1, 1, 0.06)
+        theme.scrollBarHandleBackgroundHovered
+    readonly property color handleHoveredColor: theme.scrollBarHandleHovered
+    readonly property color handlePressedColor: theme.scrollBarHandlePressed
+    readonly property color trackHoveredColor: theme.scrollBarTrackHovered
 
     policy: T.ScrollBar.AlwaysOn
     implicitWidth: 15

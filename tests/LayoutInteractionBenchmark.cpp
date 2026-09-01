@@ -6,6 +6,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QEventLoop>
 #include <QGuiApplication>
 #include <QImage>
@@ -17,6 +18,7 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QRectF>
 #include <QSGRendererInterface>
 #include <QTextStream>
 #include <QThread>
@@ -148,10 +150,19 @@ QJsonObject benchmarkMode(QQuickItem *panel, QObject *layout,
     const qsizetype overscanCount =
         layout->property("overscanIndexes").toList().size();
     const int instantiated = instantiatedEntryCount(panel);
+    // A normal GUI event-loop turn reclaims the outgoing Loader item after
+    // the replacement frame is ready. Tight benchmark loops do not process
+    // DeferredDelete automatically, so drain it outside the measured switch
+    // before starting the next presentation.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 
     return {
         {QStringLiteral("mode"), mode},
         {QStringLiteral("switched"), switched},
+        {QStringLiteral("nativeMode"),
+         layout->property("presentationMode").toInt()},
+        {QStringLiteral("presentationSwitchPending"),
+         panel->property("presentationSwitchPending").toBool()},
         {QStringLiteral("switchMs"), switchMs},
         {QStringLiteral("contentHeight"), contentHeight},
         {QStringLiteral("visibleCount"), visibleCount},
@@ -167,6 +178,123 @@ QJsonObject benchmarkMode(QQuickItem *panel, QObject *layout,
              ? -1 : *std::max_element(scrollSamplesUs.cbegin(),
                                       scrollSamplesUs.cend())},
         {QStringLiteral("screenshotSaved"), screenshotSaved},
+    };
+}
+
+QRectF indexGeometry(QObject *layout, int index) {
+    QRectF geometry;
+    if (layout) {
+        QMetaObject::invokeMethod(
+            layout, "indexGeometry", Qt::DirectConnection,
+            Q_RETURN_ARG(QRectF, geometry), Q_ARG(int, index));
+    }
+    return geometry;
+}
+
+QJsonObject benchmarkVisibleModeSwitches(
+    QQuickItem *panel, QObject *layout,
+    ZoinGallery::GallerySession *session, QQuickWindow *window,
+    int anchorIndex, int cycles, int timeoutMs) {
+    if (!panel || !layout || !session || !window || anchorIndex < 0) {
+        return {{QStringLiteral("ready"), false}};
+    }
+
+    session->setCurrentIndex(anchorIndex);
+    panel->setProperty("presentationMode", QStringLiteral("details"));
+    const bool initialReady = waitFor([&] {
+        return layout->property("presentationMode").toInt() == 2
+            && !panel->property("presentationSwitchPending").toBool()
+            && indexGeometry(layout, anchorIndex).isValid();
+    }, timeoutMs);
+    if (!initialReady) {
+        return {{QStringLiteral("ready"), false}};
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+    const QRectF initialGeometry = indexGeometry(layout, anchorIndex);
+    layout->setProperty("contentY", qMax<qreal>(
+        0, initialGeometry.top()
+               - layout->property("height").toReal() * 0.35));
+    session->setPanelScrollOffset(
+        layout->property("contentY").toReal());
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+
+    QList<qint64> samplesUs;
+    samplesUs.reserve(cycles);
+    QJsonArray transitions;
+    bool allSwitched = true;
+    bool anchorAlwaysVisible = true;
+    int maximumInstantiated = 0;
+    QString from = QStringLiteral("details");
+    for (int cycle = 0; cycle < cycles; ++cycle) {
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        const QVariantList beforeVisible =
+            layout->property("visibleIndexes").toList();
+        const QString to = cycle % 2 == 0
+            ? QStringLiteral("grid") : QStringLiteral("details");
+        const int nativeMode = cycle % 2 == 0 ? 3 : 2;
+        QElapsedTimer timer;
+        timer.start();
+        panel->setProperty("presentationMode", to);
+        const bool switched = waitFor([&] {
+            return layout->property("presentationMode").toInt()
+                       == nativeMode
+                && !panel->property("presentationSwitchPending").toBool()
+                && !layout->property("visibleIndexes").toList().isEmpty();
+        }, timeoutMs);
+        window->update();
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        const qint64 durationUs = timer.nsecsElapsed() / 1000;
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        samplesUs.append(durationUs);
+
+        const QRectF geometry = indexGeometry(layout, anchorIndex);
+        const qreal contentY = layout->property("contentY").toReal();
+        const qreal viewportHeight = layout->property("height").toReal();
+        const bool anchorVisible = geometry.isValid()
+            && geometry.bottom() > contentY
+            && geometry.top() < contentY + viewportHeight;
+        const int instantiated = instantiatedEntryCount(panel);
+        const QVariantList afterVisible =
+            layout->property("visibleIndexes").toList();
+        maximumInstantiated = qMax(maximumInstantiated, instantiated);
+        allSwitched = allSwitched && switched;
+        anchorAlwaysVisible = anchorAlwaysVisible && anchorVisible;
+        transitions.append(QJsonObject{
+            {QStringLiteral("from"), from},
+            {QStringLiteral("to"), to},
+            {QStringLiteral("durationUs"), durationUs},
+            {QStringLiteral("switched"), switched},
+            {QStringLiteral("anchorVisible"), anchorVisible},
+            {QStringLiteral("instantiatedEntryCount"), instantiated},
+            {QStringLiteral("beforeVisibleFirst"),
+             beforeVisible.isEmpty() ? -1 : beforeVisible.constFirst().toInt()},
+            {QStringLiteral("beforeVisibleLast"),
+             beforeVisible.isEmpty() ? -1 : beforeVisible.constLast().toInt()},
+            {QStringLiteral("afterVisibleFirst"),
+             afterVisible.isEmpty() ? -1 : afterVisible.constFirst().toInt()},
+            {QStringLiteral("afterVisibleLast"),
+             afterVisible.isEmpty() ? -1 : afterVisible.constLast().toInt()},
+        });
+        from = to;
+    }
+
+    return {
+        {QStringLiteral("ready"), true},
+        {QStringLiteral("anchorIndex"), anchorIndex},
+        {QStringLiteral("cycles"), cycles},
+        {QStringLiteral("allSwitched"), allSwitched},
+        {QStringLiteral("anchorAlwaysVisible"), anchorAlwaysVisible},
+        {QStringLiteral("firstSwitchUs"),
+         samplesUs.isEmpty() ? -1 : samplesUs.constFirst()},
+        {QStringLiteral("switchP50Us"), percentile(samplesUs, 0.50)},
+        {QStringLiteral("switchP95Us"), percentile(samplesUs, 0.95)},
+        {QStringLiteral("switchMaxUs"),
+         samplesUs.isEmpty()
+             ? -1 : *std::max_element(samplesUs.cbegin(), samplesUs.cend())},
+        {QStringLiteral("maximumInstantiatedEntryCount"),
+         maximumInstantiated},
+        {QStringLiteral("transitions"), transitions},
     };
 }
 
@@ -201,13 +329,31 @@ int main(int argc, char **argv) {
     const QCommandLineOption strictOption(
         QStringList{QStringLiteral("strict")},
         QStringLiteral("Fail if virtualization or interaction guardrails are exceeded."));
+    const QCommandLineOption pagedOption(
+        QStringList{QStringLiteral("paged")},
+        QStringLiteral("Apply only a bounded initial catalog window while "
+                       "advertising the exact logical row count."));
+    const QCommandLineOption initialWindowOption(
+        QStringList{QStringLiteral("initial-window")},
+        QStringLiteral("Initial row payload used with --paged."),
+        QStringLiteral("rows"), QStringLiteral("64"));
+    const QCommandLineOption switchCyclesOption(
+        QStringList{QStringLiteral("switch-cycles")},
+        QStringLiteral("Visible Details/Grid mode-switch samples."),
+        QStringLiteral("cycles"), QStringLiteral("8"));
     parser.addOptions({countOption, cyclesOption, timeoutOption,
-                       screenshotOption, strictOption});
+                       screenshotOption, strictOption, pagedOption,
+                       initialWindowOption, switchCyclesOption});
     parser.process(application);
 
     const int count = qMax(1, parser.value(countOption).toInt());
     const int cycles = qMax(1, parser.value(cyclesOption).toInt());
     const int timeoutMs = qMax(100, parser.value(timeoutOption).toInt());
+    const bool paged = parser.isSet(pagedOption);
+    const int initialWindow = qBound(
+        1, parser.value(initialWindowOption).toInt(), count);
+    const int switchCycles = qMax(
+        1, parser.value(switchCyclesOption).toInt());
 
     QQmlEngine engine;
     engine.addImportPath(QStringLiteral(ZOIN_BENCH_QML_IMPORT_PATH));
@@ -228,10 +374,25 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    const QVariantList catalog = syntheticCatalog(count);
+    const int catalogPayloadCount = paged ? initialWindow : count;
+    const QVariantList catalog = syntheticCatalog(catalogPayloadCount);
+    QVariantMap catalogOptions;
+    if (paged) {
+        catalogOptions = {
+            {QStringLiteral("currentPath"),
+             QStringLiteral("/virtual/zoin-layout-benchmark")},
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("catalogRowsDeferred"), true},
+            {QStringLiteral("totalCount"), count},
+            {QStringLiteral("cursorIndex"), 0},
+            {QStringLiteral("cursorEntryId"),
+             QStringLiteral("synthetic:0")},
+        };
+    }
     QElapsedTimer catalogTimer;
     catalogTimer.start();
-    const bool catalogApplied = session->applyExternalCatalog(catalog, 1);
+    const bool catalogApplied = session->applyExternalCatalog(
+        catalog, 1, catalogOptions);
     const qint64 catalogApplyMs = catalogTimer.elapsed();
     session->setCurrentIndex(0);
 
@@ -247,13 +408,13 @@ int main(int argc, char **argv) {
             session: benchmarkSession
             autoFocus: false
             showCursor: true
-            theme: ({
-                panelBackground: "#121820",
-                text: "#e7edf5",
-                mutedText: "#8e9baa",
-                cursor: "#1587bf",
+            theme: GalleryThemePalette {
+                panelBackground: "#121820"
+                text: "#e7edf5"
+                mutedText: "#8e9baa"
+                cursor: "#1587bf"
                 selection: "#d3a335"
-            })
+            }
         }
     )QML", QUrl(QStringLiteral("benchmark:/GalleryPanel.qml")));
 
@@ -287,7 +448,7 @@ int main(int argc, char **argv) {
     window.show();
 
     QObject *layout = panel->findChild<QObject *>(
-        QStringLiteral("galleryMasonryLayout"));
+        QStringLiteral("galleryViewportItem"));
     QElapsedTimer firstLayoutWaitTimer;
     firstLayoutWaitTimer.start();
     const bool firstLayoutReady = layout && waitFor([&] {
@@ -301,6 +462,7 @@ int main(int argc, char **argv) {
         qmlCreateMs + firstLayoutWaitTimer.elapsed();
 
     QJsonArray modes;
+    QJsonObject visibleModeSwitches;
     if (layout) {
         const QList<QPair<QString, int>> modeValues{
             {QStringLiteral("masonry"), 0},
@@ -314,10 +476,17 @@ int main(int argc, char **argv) {
                 panel, layout, &window, mode, nativeMode, cycles,
                 timeoutMs, parser.value(screenshotOption)));
         }
+        const int anchorIndex = paged
+            ? qMin(catalogPayloadCount - 1, 32) : count / 2;
+        visibleModeSwitches = benchmarkVisibleModeSwitches(
+            panel, layout, session, &window, anchorIndex,
+            switchCycles, timeoutMs);
     }
 
     QJsonObject report{
         {QStringLiteral("catalogCount"), count},
+        {QStringLiteral("pagedCatalog"), paged},
+        {QStringLiteral("catalogPayloadCount"), catalogPayloadCount},
         {QStringLiteral("catalogApplied"), catalogApplied},
         {QStringLiteral("catalogApplyMs"), catalogApplyMs},
         {QStringLiteral("qmlCreateMs"), qmlCreateMs},
@@ -328,6 +497,7 @@ int main(int argc, char **argv) {
         {QStringLiteral("thumbnailCacheRetainedBytes"),
          runtime->thumbnailCacheRetainedBytes()},
         {QStringLiteral("modes"), modes},
+        {QStringLiteral("visibleModeSwitches"), visibleModeSwitches},
     };
     QTextStream(stdout) << QJsonDocument(report).toJson(
         QJsonDocument::Indented);
@@ -342,6 +512,16 @@ int main(int argc, char **argv) {
                 qMin(count, 1000) &&
             mode.value(QStringLiteral("scrollP95Us")).toInteger() < 50'000;
     }
+    guardrailsPassed = guardrailsPassed
+        && visibleModeSwitches.value(QStringLiteral("ready")).toBool()
+        && visibleModeSwitches.value(
+               QStringLiteral("allSwitched")).toBool()
+        && visibleModeSwitches.value(
+               QStringLiteral("anchorAlwaysVisible")).toBool()
+        && visibleModeSwitches.value(
+               QStringLiteral("firstSwitchUs")).toInteger() < 33'000
+        && visibleModeSwitches.value(
+               QStringLiteral("switchP95Us")).toInteger() < 33'000;
 
     window.hide();
     panel->setParentItem(nullptr);

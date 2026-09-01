@@ -225,26 +225,26 @@ ImageFile *GalleryViewModel::rootItem() const {
 }
 
 void GalleryViewModel::decodeImages(const QList<ImageDecodeRequest> &requests) {
-    if (ThumbnailsRequestInterface *requestModel = dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())) {
+    if (auto *requestModel = dynamic_cast<ZoinGallery::GalleryCatalogSource *>(sourceModel())) {
         requestModel->decodeImages(requests);
     }
 }
 
 void GalleryViewModel::cancelAllRunners() {
-    if (ThumbnailsRequestInterface *requestModel = dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())) {
+    if (auto *requestModel = dynamic_cast<ZoinGallery::GalleryCatalogSource *>(sourceModel())) {
         requestModel->cancelAllRunners();
     }
 }
 
 void GalleryViewModel::cancelAllDecodeRunners() {
-    if (ThumbnailsRequestInterface *requestModel = dynamic_cast<ThumbnailsRequestInterface *>(sourceModel())) {
+    if (auto *requestModel = dynamic_cast<ZoinGallery::GalleryCatalogSource *>(sourceModel())) {
         requestModel->cancelAllDecodeRunners();
     }
 }
 
 bool GalleryViewModel::preserveViewStateOnReset() const {
     const auto *requestModel =
-        dynamic_cast<const ThumbnailsRequestInterface *>(sourceModel());
+        dynamic_cast<const ZoinGallery::GalleryCatalogSource *>(sourceModel());
     return requestModel && requestModel->preserveViewStateOnReset();
 }
 

@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Window
 import QtQuick.Layouts
@@ -18,6 +20,7 @@ Window {
 
     property int currentPage: 0
     property bool positionedOnce: false
+    required property var galleryLayout
 
     property var thumbnailShortcuts: [
         { key: "Enter", desc: "Open image / folder" },
@@ -437,8 +440,8 @@ Window {
 
                     StyledCheckBox {
                         text: "Animate resizing items in layout"
-                        checked: masonryLayout.view.animateResizing
-                        onToggled: masonryLayout.view.animateResizing = checked
+                        checked: settingsDialog.galleryLayout.view.animateResizing
+                        onToggled: settingsDialog.galleryLayout.view.animateResizing = checked
                     }
 
                     StyledCheckBox {

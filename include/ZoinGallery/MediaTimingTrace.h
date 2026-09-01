@@ -119,6 +119,11 @@ inline void eventAt(const QString &name, qint64 monotonicNs,
             output->write("F4_NAV_BENCHMARK_TRACE ");
             output->write(json);
             output->write("\n");
+            // Benchmarks commonly return without entering QCoreApplication's
+            // main event loop, so aboutToQuit is not guaranteed to run. The
+            // output path is opt-in diagnostics; flush each complete JSONL
+            // record so the tail of short-lived runs is never lost.
+            output->flush();
         }
         else {
             qInfo().noquote() << "F4_MEDIA_TIMING_TRACE" << json;

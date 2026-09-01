@@ -1,4 +1,6 @@
 #include <ZoinGallery/GalleryRuntime.h>
+#include <ZoinGallery/GalleryCatalogModel.h>
+#include <ZoinGallery/GalleryPanelController.h>
 #include <ZoinGallery/GallerySession.h>
 
 #include "DummyQWK.h"
@@ -140,6 +142,10 @@ private slots:
             QDir(galleryPath).filePath(QStringLiteral("third.png"));
         const QString fourthImagePath =
             QDir(galleryPath).filePath(QStringLiteral("fourth.png"));
+        const QString albumPath =
+            QDir(galleryPath).filePath(QStringLiteral("album"));
+        const QString albumImagePath =
+            QDir(albumPath).filePath(QStringLiteral("nested.png"));
         // Keep one image larger than the deterministic test window in both
         // dimensions.  That makes all four held-arrow pan directions
         // observable at 100%, instead of merely checking internal flags.
@@ -216,7 +222,7 @@ private slots:
         auto *galleryPanel = window->findChild<QQuickItem *>(
             QStringLiteral("standaloneGalleryPanel"));
         auto *masonryMode = window->findChild<QQuickItem *>(
-            QStringLiteral("standaloneMasonryMode"));
+            QStringLiteral("standaloneGalleryFacade"));
         auto *galleryViewer = window->findChild<QQuickItem *>(
             QStringLiteral("standaloneGalleryViewer"));
         auto *viewerMode = window->findChild<QQuickItem *>(
@@ -227,10 +233,12 @@ private slots:
         QVERIFY(galleryViewer);
         QVERIFY(viewerMode);
 
-        // This is the contract that prevents the reusable wrappers from
-        // silently replacing standalone's mature interaction/state machines.
-        QCOMPARE(galleryPanel->property("customContent").value<QObject *>(),
-                 masonryMode);
+        // The standalone shell now uses the same typed panel facade as the
+        // embedded host.  Keep the viewer on its legacy path until the later
+        // viewer-pipeline milestone, but assert that thumbnails are no longer
+        // routed through a hidden standalone renderer.
+        QVERIFY(isDescendantOf(masonryMode, galleryPanel));
+        QVERIFY(masonryMode->property("controller").value<QObject *>());
         QCOMPARE(galleryViewer->property("customContent").value<QObject *>(),
                  viewerMode);
         QCOMPARE(shellContent->property("state").toString(),
@@ -244,14 +252,15 @@ private slots:
         QVERIFY(layout);
         QVERIFY(fileListModel);
         QVERIFY(galleryViewModel);
-        // The top-level standalone collection must remain a catalog view,
-        // not a nested folder-card RootProxyModel.  MasonryLayout uses a null
-        // rootItem() to enable its bounded desired-window rebase, so rapid
-        // fixed-mode scrolling cancels stale thumbnail work just like the
-        // external f4 catalog.  Nested folder previews deliberately retain a
-        // root item and keep their independent lifecycle.
-        QCOMPARE(layout->model(),
+        // The top-level standalone collection is adapted through the fixed
+        // role catalog contract, while retaining GalleryViewModel as the
+        // zero-copy source. It must not become a nested folder-card model.
+        auto *catalogModel =
+            qobject_cast<ZoinGallery::GalleryCatalogModel *>(layout->model());
+        QVERIFY(catalogModel);
+        QCOMPARE(catalogModel->sourceModel(),
                  static_cast<QAbstractItemModel *>(galleryViewModel));
+        QCOMPARE(catalogModel->rootItem(), nullptr);
         QCOMPARE(galleryViewModel->rootItem(), nullptr);
         QTRY_COMPARE_WITH_TIMEOUT(
             controller->property("currentPath").toString(), galleryPath,
@@ -275,6 +284,21 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(masonryMode, "focusView"));
         QTRY_COMPARE(layout->currentIndex(), imageIndex);
         QTRY_VERIFY_WITH_TIMEOUT(layout->currentItem(), 5000);
+        auto *panelController = qobject_cast<
+            ZoinGallery::GalleryPanelController *>(
+                masonryMode->property("controller").value<QObject *>());
+        QVERIFY(panelController);
+        QVERIFY(panelController->dragEnabled());
+        QQuickItem *entryActions = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (entryActions = masonryMode->findChild<QQuickItem *>(
+                 QStringLiteral("galleryEntryActions-%1").arg(imageIndex)))
+                != nullptr,
+            5000);
+        QVERIFY(panelController->prepareDrag(imageIndex, true, 5));
+        QCOMPARE(panelController->dragUrls().size(), 1);
+        QVERIFY(panelController->dragPreviewModel()->rowCount() <= 5);
+        panelController->finishExternalDrag(Qt::IgnoreAction);
         QTRY_VERIFY_WITH_TIMEOUT(
             layout->indexOriginalSize(imageIndex).width() > 1 &&
                 layout->indexOriginalSize(imageIndex).height() > 1,
@@ -293,7 +317,7 @@ private slots:
             viewerAnimation, SIGNAL(runningChanged(bool)));
         QVERIFY(viewerAnimationSpy.isValid());
 
-        // Enter is handled by the original MasonryMode and starts the original
+        // Enter is handled by the shared panel facade and starts the
         // thumbnail-to-viewer geometry animation.
         QTest::keyClick(window, Qt::Key_Return);
         QTRY_COMPARE_WITH_TIMEOUT(shellContent->property("state").toString(),
@@ -438,10 +462,20 @@ private slots:
                 == swipeTargetOriginalSize;
         }, 15000));
         QVERIFY(nativeUrl != preparedFitUrl);
-        QCOMPARE(fileListModel->preparedViewerImageUrlForIndex(
-                     swipeTargetSourceIndex, fitViewport.width(),
-                     fitViewport.height()),
-                 preparedFitUrl);
+        // An already queued, equal-or-larger Fit decode may complete while
+        // the native tier is prepared. Its provider URL is an implementation
+        // detail; what the transition contract requires is a current level-1
+        // frame covering this viewport alongside the native tier.
+        preparedFitUrl =
+            fileListModel->preparedViewerImageUrlForIndex(
+                swipeTargetSourceIndex, fitViewport.width(),
+                fitViewport.height());
+        QVERIFY(!preparedFitUrl.isEmpty());
+        const QSize currentPreparedFitFrameSize =
+            fileListModel->viewerForImageId(
+                preparedFitUrl.section(QLatin1Char('/'), -1)).size();
+        QVERIFY(currentPreparedFitFrameSize.width() >= expectedFitSize.width());
+        QVERIFY(currentPreparedFitFrameSize.height() >= expectedFitSize.height());
         QVERIFY(viewerMode->property("zoomFitView").toBool());
         QCOMPARE(layout->currentIndex(), swipeStartIndex);
 
@@ -561,9 +595,14 @@ private slots:
                 layout->nextImageIndex(alias.forward, false);
             QVERIFY2(expected != middleImageIndex, alias.name);
             QTest::keyClick(window, alias.key);
-            QVERIFY2(waitFor([&] {
+            const bool moved = waitFor([&] {
                 return layout->currentIndex() == expected;
-            }), alias.name);
+            });
+            const QByteArray navigationFailure =
+                QByteArray(alias.name) + " expected=" +
+                QByteArray::number(expected) + " actual=" +
+                QByteArray::number(layout->currentIndex());
+            QVERIFY2(moved, navigationFailure.constData());
             QVERIFY2(shellContent->property("state").toString() ==
                          QStringLiteral("viewer"),
                      alias.name);
@@ -948,6 +987,31 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(
             isDescendantOf(window->activeFocusItem(), masonryMode), 3000);
         QCOMPARE(layout->currentIndex(), finalIndex);
+
+        // Recursive folder cards use the same bounded delegate pipeline. The
+        // nested preview is loaded only for a visible folder whose asynchronous
+        // preview model has become available; no legacy renderer is retained.
+        QVERIFY(QDir().mkpath(albumPath));
+        QVERIFY(writeImage(albumImagePath, QSize(640, 480), Qt::blue));
+        fileListModel->enterRecursiveView();
+        QTRY_VERIFY_WITH_TIMEOUT(layout->count() >= 2, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(indexForPath(layout, albumPath) >= 0, 10000);
+        const int albumIndex = indexForPath(layout, albumPath);
+        QVERIFY(albumIndex >= 0);
+        QVERIFY(QMetaObject::invokeMethod(
+            masonryMode, "setCurrentIndex",
+            Q_ARG(QVariant, QVariant(albumIndex)),
+            Q_ARG(QVariant, QVariant(false)),
+            Q_ARG(QVariant, QVariant(false)),
+            Q_ARG(QVariant, QVariant(false)),
+            Q_ARG(QVariant, QVariant(false))));
+        QTRY_COMPARE(layout->currentIndex(), albumIndex);
+        QQuickItem *folderPreview = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (folderPreview = masonryMode->findChild<QQuickItem *>(
+                 QStringLiteral("galleryFolderPreview-%1")
+                     .arg(albumIndex))) != nullptr,
+            10000);
 
         window->hide();
         runtime->shutdown();

@@ -7,7 +7,8 @@
 
 #include "FileListModel.h"
 
-class GalleryViewModel : public QSortFilterProxyModel, public ThumbnailsRequestInterface {
+class GalleryViewModel : public QSortFilterProxyModel,
+                         public ZoinGallery::GalleryCatalogSource {
     Q_OBJECT
     Q_PROPERTY(bool selectedOnly READ selectedOnly WRITE setSelectedOnly NOTIFY selectedOnlyChanged)
     Q_PROPERTY(int sortMode READ sortMode WRITE setSortMode NOTIFY sortModeChanged)

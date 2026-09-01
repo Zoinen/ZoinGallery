@@ -422,6 +422,76 @@ class GallerySessionTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void duplicateSourceFansOutMetadataAndViewerTier() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(
+            QStringLiteral("shared-source.png"));
+        QImage source(320, 180, QImage::Format_RGBA8888);
+        source.fill(Qt::darkCyan);
+        QVERIFY(source.save(path, "PNG"));
+        const QFileInfo file(path);
+        const qint64 version =
+            file.lastModified().toMSecsSinceEpoch() * 1'000'000;
+
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.maxDecodeThreads = 2;
+        options.persistentCache = false;
+        ZoinGallery::GalleryRuntime *runtime =
+            ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        ZoinGallery::GallerySession *session =
+            runtime->createExternalSession(
+                QStringLiteral("duplicate-source-fanout"));
+        QVERIFY(session);
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(model);
+
+        QVariantList catalog;
+        for (int row = 0; row < 3; ++row) {
+            catalog.append(QVariantMap{
+                {QStringLiteral("entryId"),
+                 QStringLiteral("duplicate-%1").arg(row)},
+                {QStringLiteral("index"), row},
+                {QStringLiteral("name"),
+                 QStringLiteral("shared-source-%1.png").arg(row)},
+                {QStringLiteral("localPath"), path},
+                {QStringLiteral("isDir"), false},
+                {QStringLiteral("isImage"), true},
+                {QStringLiteral("mtimeNs"), version},
+                {QStringLiteral("size"), file.size()},
+            });
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+
+        model->requestImageMetadata({0, 1, 2}, true);
+        for (int row = 0; row < 3; ++row) {
+            QTRY_COMPARE_WITH_TIMEOUT(
+                session->imageOriginalSizeAt(row), source.size(), 5000);
+        }
+
+        QSignalSpy sourceChangedSpy(
+            session, &ZoinGallery::GallerySession::viewerSourceAtChanged);
+        session->activateIndex(0);
+        session->setViewerOpen(true);
+        session->requestViewer(640, 360);
+        for (int row = 0; row < 3; ++row) {
+            QTRY_VERIFY_WITH_TIMEOUT(
+                !session->viewerSourcesAt(row).isEmpty(), 5000);
+        }
+
+        QSet<int> notifiedRows;
+        for (const QList<QVariant> &arguments : sourceChangedSpy) {
+            notifiedRows.insert(arguments.constFirst().toInt());
+        }
+        QCOMPARE(notifiedRows, QSet<int>({0, 1, 2}));
+        QVERIFY(!session->viewerSource().isEmpty());
+
+        runtime->shutdown();
+    }
+
     void relayoutKeepsExpensiveThumbnailOwnerAdmission() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -1872,6 +1942,94 @@ private slots:
 
         runtime->shutdown();
         QVERIFY(survivor->shutdownComplete());
+    }
+
+    void finalizesSparseCatalogByExtendingLogicalTail() {
+        QQmlEngine engine;
+        ZoinGallery::GalleryRuntime *runtime =
+            ZoinGallery::GalleryRuntime::install(&engine);
+        QVERIFY(runtime);
+        ZoinGallery::GallerySession *session =
+            runtime->createExternalSession(
+                QStringLiteral("sparse-tail-finalization"));
+        QVERIFY(session);
+
+        QVariantList finalWindow;
+        finalWindow.reserve(48);
+        for (int row = 0; row < 48; ++row) {
+            finalWindow.append(entry(
+                QStringLiteral("winsxs-%1").arg(row), row,
+                QStringLiteral("winsxs-%1.txt").arg(row)));
+        }
+        const QVariantList provisional = finalWindow.mid(0, 40);
+        const QVariantMap provisionalOptions{
+            {QStringLiteral("currentPath"),
+             QStringLiteral("C:/Windows/WinSxS")},
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("catalogRowsDeferred"), true},
+            {QStringLiteral("catalogProvisional"), true},
+            {QStringLiteral("totalCount"), 43},
+            {QStringLiteral("cursorIndex"), 0},
+            {QStringLiteral("cursorEntryId"),
+             QStringLiteral("winsxs-0")},
+        };
+        QVERIFY(session->applyExternalCatalog(
+            provisional, 1, provisionalOptions));
+        QCOMPARE(session->model()->rowCount(), 43);
+
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(model);
+        QCOMPARE(model->materializedRows().size(), 40);
+        const int itemRole = model->roleNames().key(
+            QByteArrayLiteral("imageFileRole"), -1);
+        const int sizeRole = model->roleNames().key(
+            QByteArrayLiteral("fileSizeRole"), -1);
+        QVERIFY(itemRole >= 0);
+        QVERIFY(sizeRole >= 0);
+        ImageFile *retainedItem = model->data(
+            model->index(0, 0), itemRole).value<ImageFile *>();
+        QVERIFY(retainedItem);
+
+        const QVariantMap metadata{
+            {QStringLiteral("entryId"), QStringLiteral("winsxs-0")},
+            {QStringLiteral("index"), 0},
+            {QStringLiteral("size"), qint64(8192)},
+            {QStringLiteral("mtimeNanos"),
+             qint64(1'700'000'000'000'000'000LL)},
+            {QStringLiteral("sizeText"), QStringLiteral("8 KB")},
+        };
+        QVERIFY(model->applyMetadata({metadata}));
+
+        QSignalSpy resetSpy(model, &QAbstractItemModel::modelReset);
+        QSignalSpy insertedSpy(model, &QAbstractItemModel::rowsInserted);
+        QSignalSpy changedSpy(model, &QAbstractItemModel::dataChanged);
+        QVariantMap finalOptions = provisionalOptions;
+        finalOptions.remove(QStringLiteral("catalogProvisional"));
+        finalOptions[QStringLiteral("totalCount")] = 30'000;
+        QVERIFY(session->applyExternalCatalog(
+            finalWindow, 2, finalOptions));
+
+        QCOMPARE(resetSpy.size(), 0);
+        QCOMPARE(insertedSpy.size(), 1);
+        QCOMPARE(insertedSpy.constFirst().at(1).toInt(), 43);
+        QCOMPARE(insertedSpy.constFirst().at(2).toInt(), 29'999);
+        QCOMPARE(changedSpy.size(), 1);
+        QCOMPARE(changedSpy.constFirst().at(0).value<QModelIndex>().row(),
+                 40);
+        QCOMPARE(changedSpy.constFirst().at(1).value<QModelIndex>().row(),
+                 42);
+        QCOMPARE(model->rowCount(), 30'000);
+        QCOMPARE(model->materializedRows().size(), 48);
+        QCOMPARE(model->entryIdAt(47), QStringLiteral("winsxs-47"));
+        QVERIFY(model->entryIdAt(100).isEmpty());
+        QCOMPARE(model->data(model->index(0, 0), itemRole)
+                     .value<ImageFile *>(),
+                 retainedItem);
+        QCOMPARE(model->data(model->index(0, 0), sizeRole).toLongLong(),
+                 qint64(8192));
+
+        runtime->shutdown();
     }
 
     void preservesExternalOrderAndStableState() {

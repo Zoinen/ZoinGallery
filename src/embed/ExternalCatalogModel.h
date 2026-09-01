@@ -19,9 +19,16 @@ class ProviderImageStore;
 namespace ZoinGallery {
 
 class ThumbnailMemoryCache;
+class ExternalCatalogResetTransaction;
+class ExternalCatalogSparseExtension;
+class ExternalCatalogMetadataTransaction;
+class ExternalCatalogRowsTransaction;
+class ExternalCatalogAppendTransaction;
+class ExternalCatalogMetadataPlanner;
+class ExternalCatalogThumbnailPlanner;
 
 class ExternalCatalogModel final : public QAbstractListModel,
-                                   public ThumbnailsRequestInterface {
+                                   public GalleryCatalogSource {
     Q_OBJECT
     Q_PROPERTY(bool sparseCatalog READ sparseCatalog)
     Q_PROPERTY(QVariantList materializedRows READ materializedRows)
@@ -127,6 +134,14 @@ signals:
     void viewerSourceAtChanged(int row);
 
 private:
+    friend class ExternalCatalogResetTransaction;
+    friend class ExternalCatalogSparseExtension;
+    friend class ExternalCatalogMetadataTransaction;
+    friend class ExternalCatalogRowsTransaction;
+    friend class ExternalCatalogAppendTransaction;
+    friend class ExternalCatalogMetadataPlanner;
+    friend class ExternalCatalogThumbnailPlanner;
+
     struct Entry {
         QString id;
         int sourceIndex = -1;
@@ -144,6 +159,7 @@ private:
         QVariantMap displayFields;
         QVariantMap highlightStyle;
         QString iconPath;
+        QString iconKey;
         bool metadataDeferred = false;
         ImageInfo imageInfo;
         QSize originalSize;
@@ -152,6 +168,9 @@ private:
         QString thumbnailTransformKey;
         ImageFile *item = nullptr;
     };
+
+    bool setEntryHighlightStyle(Entry &entry,
+                                const QVariantMap &highlightStyle) const;
 
     struct ViewerPlan {
         QSize viewportSize;
@@ -176,12 +195,65 @@ private:
         qint64 notBeforeMs = 0;
     };
 
+    struct ImageInfoBatchState {
+        int firstChangedRow = -1;
+        int lastChangedRow = -1;
+        bool flushRequested = false;
+        bool catalogFitChanged = false;
+        bool viewerMetadataChanged = false;
+        bool acceptedNamespace = false;
+        bool allChangedMetadataCached = true;
+    };
+
+    struct ProbeBatch {
+        qsizetype available = 0;
+        QList<ImageProbeRequest> highRequests;
+        QList<ImageProbeRequest> backgroundRequests;
+    };
+
     void handleImageInfo(const ImageInfo &info);
     void handleImageInfos(const QList<ImageInfo> &infos);
+    void applyImageInfoResult(const ImageInfo &info,
+                              ImageInfoBatchState &state);
+    bool applyImageInfoToRow(int row, const ImageInfo &info,
+                             ImageInfoBatchState &state);
+    void publishImageInfoBatch(const ImageInfoBatchState &state);
     void handleImageProbe(const ImageProbeResult &result);
+    bool acceptImageProbe(const ImageProbeResult &result,
+                          QString &sourceIdentity, QString &version);
+    void recordProbeStatus(const ImageProbeResult &result,
+                           const QString &sourceIdentity,
+                           const QString &version);
+    QString storeProbePreview(const ImageProbeResult &result,
+                              const QString &sourceIdentity,
+                              const QString &version);
+    void publishProbeRows(const ImageProbeResult &result,
+                          const QString &sourceIdentity,
+                          const QString &version,
+                          const QString &providerId);
+    bool finishCatalogProbePass();
+    void replanAfterImageProbe(bool completedCatalogProbePass);
     void handleImageReady(const ImageDecodeRequest &request,
                           const QImage &image,
                           const DecodedImageInfo &decodedInfo);
+    QList<int> sourceRows(const QString &sourceIdentity) const;
+    QList<int> decodeAuthorityRows(
+        const ImageDecodeRequest &request) const;
+    void clearCompletedDecodeRequest(const ImageDecodeRequest &request);
+    Entry *validatedDecodedEntry(int row,
+                                 const ImageDecodeRequest &request);
+    QList<int> validatedDecodedRows(
+        const QList<int> &rows,
+        const ImageDecodeRequest &request);
+    void deriveCatalogThumbnail(const ImageDecodeRequest &request,
+                                const QImage &image, Entry &entry);
+    void publishViewerImage(const QList<int> &rows,
+                            const ImageDecodeRequest &request,
+                            const QImage &image,
+                            const DecodedImageInfo &decodedInfo);
+    void publishThumbnailImage(Entry &entry,
+                               const ImageDecodeRequest &request,
+                               const QImage &image);
     void handleImageReadFailed(const ImageDecodeRequest &request);
     void handleThumbnailFrameAvailable(const QString &sourceIdentity,
                                        const QString &versionToken,
@@ -205,6 +277,8 @@ private:
     bool catalogMatches(const QVariantList &values,
                         bool *carriesAppearance,
                         bool metadataDeferred) const;
+    bool tryExtendSparseCatalog(const QVariantList &entries,
+                                bool metadataDeferred, int totalCount);
     bool applySparseCatalog(const QVariantList &entries,
                             bool metadataDeferred, int totalCount);
     bool parseCatalogEntry(const QVariantMap &value, int row,
@@ -218,6 +292,12 @@ private:
     void enqueueProbeRows(const QList<int> &rows, bool highPriority);
     void scheduleProbePump();
     void pumpProbeRequests();
+    void appendProbeRow(ProbeBatch &batch, int row, bool highPriority);
+    void drainProbeRows(ProbeBatch &batch, QList<int> &rows,
+                        bool highPriority);
+    void collectCatalogProbeRows(ProbeBatch &batch);
+    void submitProbeBatch(const QList<ImageProbeRequest> &requests,
+                          bool highPriority);
     void resetProgressivePipeline();
     bool probeResolvedFor(const Entry &entry) const;
     bool probeBarrierReached() const;

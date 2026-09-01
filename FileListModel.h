@@ -12,32 +12,14 @@
 #include "ImageFile.h"
 #include "PersistentSelectionCache.h"
 #include "ViewerImageCache.h"
+#include <ZoinGallery/GalleryCatalogSource.h>
 
 class DecodeManager;
 class FileListModel;
 class QSocketNotifier;
 
-class ThumbnailsRequestInterface {
-public:
-    virtual void decodeImages(const QList<ImageDecodeRequest> &requests) = 0;
-    // Viewport-driven external sources may defer metadata until a renderer
-    // needs it. Standalone/scanning models keep their existing lifecycle via
-    // this no-op default.
-    virtual void requestImageMetadata(const QList<int> &rows,
-                                      bool highPriority,
-                                      bool catalogWide = false) {
-        Q_UNUSED(rows)
-        Q_UNUSED(highPriority)
-        Q_UNUSED(catalogWide)
-    }
-    virtual void cancelAllRunners() = 0;
-    virtual void cancelAllDecodeRunners() = 0;
-    virtual bool preserveViewStateOnReset() const { return false; }
-
-    virtual ImageFile *rootItem() const { return nullptr; }
-};
-
-class RootProxyModel : public QAbstractProxyModel, public ThumbnailsRequestInterface {
+class RootProxyModel : public QAbstractProxyModel,
+                       public ZoinGallery::GalleryCatalogSource {
     Q_OBJECT
 
 public:
@@ -56,7 +38,7 @@ public:
 
     FileListModel *sourceModel() const;
 
-    // ThumbnailsRequestInterface interface
+    // GalleryCatalogSource interface
     ImageFile *rootItem() const override;
     void decodeImages(const QList<ImageDecodeRequest> &requests) override;
 
@@ -73,7 +55,8 @@ private:
 };
 
 
-class FileListModel : public QAbstractItemModel, public ThumbnailsRequestInterface {
+class FileListModel : public QAbstractItemModel,
+                      public ZoinGallery::GalleryCatalogSource {
     Q_OBJECT
     Q_PROPERTY(bool runningTasksDebug READ runningTasksDebug WRITE setRunningTasksDebug NOTIFY runningTasksDebugChanged)
     Q_PROPERTY(int selectedCount READ selectedCount NOTIFY selectionChanged)
@@ -157,7 +140,7 @@ public:
 
     const ImageFile *itemForImageId(const QString &imageId);
 
-    // ThumbnailsRequestInterface
+    // GalleryCatalogSource
     void decodeImages(const QList<ImageDecodeRequest> &requests) override;
 
     Q_INVOKABLE void cancelAllRunners() override;
@@ -299,6 +282,10 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    struct ImageInfoBatchUpdate;
+    struct FolderPreviewUpdate;
+    struct FolderReconcileTransaction;
+
     enum SelectionPreviewMode {
         SelectionPreviewSelect = 0,
         SelectionPreviewDeselect = 1,
@@ -350,6 +337,44 @@ private:
     };
 
     QString generateNewId();
+    void initializeRuntimeSettings();
+    void connectRuntimeStatusSignals();
+    void connectImageInfoSignal();
+    void connectImageInfosSignal();
+    void connectImageReadySignal();
+    void connectFolderListReadySignal();
+    void connectImageReadFailedSignal();
+    void connectFolderListFailedSignal();
+    void configureMaintenanceTimers();
+    void handleImageInfosReady(const QList<ImageInfo> &results);
+    QList<ImageInfo> acceptedImageInfos(
+        const QList<ImageInfo> &results) const;
+    void applyImageInfoBatchResult(ImageInfoBatchUpdate *update,
+                                   const ImageInfo &result);
+    void emitImageInfoBatchRowChanges(
+        const ImageInfoBatchUpdate &update);
+    void finishImageInfoBatch(ImageInfoBatchUpdate *update);
+    void handleFolderListReady(const QString &path,
+                               const QList<FileInfo> &subfiles,
+                               bool isFromCache,
+                               quint64 requestGeneration);
+    bool beginFolderPreviewUpdate(const QString &path,
+                                  const QList<FileInfo> &subfiles,
+                                  bool isFromCache,
+                                  quint64 requestGeneration,
+                                  FolderPreviewUpdate *update);
+    void buildFolderPreviewRows(FolderPreviewUpdate *update);
+    void applyFolderPreviewMetadata(FolderPreviewUpdate *update);
+    void reconcileFolderPreviewRows(FolderPreviewUpdate *update);
+    void removeMissingFolderPreviewRows(FolderPreviewUpdate *update,
+                                        QList<ImageFile *> *workingRows);
+    void placeFolderPreviewRows(FolderPreviewUpdate *update,
+                                QList<ImageFile *> *workingRows);
+    void bindFolderPreviewRows(FolderPreviewUpdate *update);
+    void retireFolderPreviewRows(FolderPreviewUpdate *update);
+    void emitFolderPreviewMetadataChanges(
+        const FolderPreviewUpdate &update);
+    void finishFolderPreviewUpdate(FolderPreviewUpdate *update);
     void readImagesInfo(const QList<QString> &paths,
                         bool isFromEmbeddedView,
                         int directOpenGeneration = 0,
@@ -377,6 +402,35 @@ private:
     void scheduleFolderWatchRetry();
     void refreshWatchedFolder();
     void reconcileFolderEntries(const QList<FileInfo> &entries);
+    QList<FileInfo> sortedFolderEntries(
+        const QList<FileInfo> &entries) const;
+    void buildFolderReconcileRows(FolderReconcileTransaction *transaction,
+                                  const QList<FileInfo> &entries);
+    ImageFile *createReconciledFolderItem(const FileInfo &entry);
+    void captureFolderReconcileState(
+        FolderReconcileTransaction *transaction);
+    void seedFolderReconcileSelection(
+        const FolderReconcileTransaction &transaction);
+    void applyFolderReconcileStructure(
+        FolderReconcileTransaction *transaction);
+    void removeMissingFolderRows(FolderReconcileTransaction *transaction);
+    void placeFolderRows(FolderReconcileTransaction *transaction);
+    void remapFolderTrackedIndexes(
+        const FolderReconcileTransaction &transaction);
+    int folderIndexForPath(const QString &path) const;
+    void reindexFolderItemsFrom(int first);
+    void rebuildFolderCatalogIndexes(
+        const FolderReconcileTransaction &transaction);
+    void detachRemovedFolderModels(
+        const FolderReconcileTransaction &transaction);
+    void applyFolderReconcileMetadata(
+        const FolderReconcileTransaction &transaction);
+    void emitFolderReconcileMetadataChanges(
+        const FolderReconcileTransaction &transaction);
+    void removeFolderItemDecodedState(ImageFile *item);
+    void cleanupRemovedFolderItems(
+        const FolderReconcileTransaction &transaction);
+    void finishFolderReconcile(FolderReconcileTransaction *transaction);
     bool isCurrentFileVersion(const ImageFile *item,
                               const ImageInfo &info) const;
     void emitThumbnailInfoFlush();

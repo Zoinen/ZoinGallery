@@ -50,6 +50,8 @@ private slots:
         QVERIFY(resolver.isMonochrome({}, source));
         QCOMPARE(resolver.resolve({}, source, false, false, false, false),
                  source);
+        QCOMPARE(resolver.resolve({}, source, true, false, false, false),
+                 source);
     }
 
     void retargetsOnlySupportedImageProviders() {

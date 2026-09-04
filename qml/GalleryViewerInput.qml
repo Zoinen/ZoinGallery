@@ -85,9 +85,13 @@ QtObject {
                    || ((event.key === Qt.Key_Return
                         || event.key === Qt.Key_Enter) && altPressed)) {
             viewer.fullscreenToggleRequested()
+        } else if (event.key === Qt.Key_Escape) {
+            // Esc is a modal escape hatch in f4. Do not make the user wait
+            // for the thumbnail return animation before the host can restore
+            // the panel surface.
+            viewer.requestImmediateClose()
         } else if (event.key === Qt.Key_Enter
                    || event.key === Qt.Key_Return
-                   || event.key === Qt.Key_Escape
                    || (event.key === Qt.Key_Up && altPressed)
                    || (event.key === Qt.Key_PageUp && controlModifier)) {
             viewer.requestClose()

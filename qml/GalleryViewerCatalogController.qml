@@ -273,6 +273,7 @@ QtObject {
             return
         if (imageViewport.zoomFitView && !viewer.sphericViewerMode) {
             requestIndex(viewer.presentedIndex, 1)
+            viewer.refreshCurrentSource()
             return
         }
         // The original viewer uses a zero target as its native/full-size
@@ -283,6 +284,7 @@ QtObject {
             viewer.session.requestViewer(0, 0)
         else
             viewer.session.requestViewerAt(viewer.presentedIndex, 0, 0)
+        viewer.refreshCurrentSource()
     }
 
     function setPresentedIndex(index, awaitAuthority) {

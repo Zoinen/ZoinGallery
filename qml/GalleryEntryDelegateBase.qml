@@ -79,19 +79,6 @@ BrickItem {
             return visualModel.selectedForeground
         return visualModel.normalForeground
     }
-    readonly property string highlightBackgroundValue: {
-        const cursor = current && panelRoot.showCursor
-        if (cursor && selected)
-            return visualModel.selectedCursorBackground
-        if (cursor)
-            return visualModel.cursorBackground
-        if (selected)
-            return visualModel.selectedBackground
-        return visualModel.normalBackground
-    }
-    readonly property string nonCursorHighlightBackgroundValue:
-        selected ? visualModel.selectedBackground
-                 : visualModel.normalBackground
     readonly property color highlightForeground:
         selected
         ? panelRoot.markedTextColor
@@ -123,7 +110,9 @@ BrickItem {
            : (highlightForegroundValue !== ""
               ? highlightForeground : panelRoot.mutedColor))
     readonly property color highlightLabelBackground:
-        highlightBackgroundValue || panelRoot.labelBackgroundColor
+        (current && panelRoot.showCursor
+         ? visualModel.cursorBackground : visualModel.normalBackground)
+        || panelRoot.labelBackgroundColor
     readonly property rect effectivePreviewRect: {
         if (detailsMode) {
             return Qt.rect(panelRoot.detailsRowInset,

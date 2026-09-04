@@ -10,6 +10,11 @@ Item {
     required property bool shaderThumbnail
     required property bool activePresentation
     readonly property alias thumbnailItem: thumbnail
+    readonly property bool thumbnailHasSource:
+        thumbnail.source.toString() !== ""
+    readonly property bool thumbnailReady:
+        thumbnailHasSource && previewContent.item
+        && previewContent.item.sourceStatus === Image.Ready
 
     visible: activePresentation && !entry.folderPreviewActive
     opacity: entry.hiddenEntry && !entry.detailsMode ? 0.5 : 1
@@ -30,9 +35,7 @@ Item {
         radius: 4
         color: preview.entry.panelRoot.previewBackdropColor
         visible: enabledForPresentation
-                 && (thumbnail.source.toString() === ""
-                     || !previewContent.item
-                     || previewContent.item.sourceStatus !== Image.Ready)
+                 && !preview.thumbnailReady
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId
                          === preview.entry.entryId)
@@ -85,10 +88,8 @@ Item {
                  ? 1 : 0.78
         visible: (lucideSource
                   || (systemFileSource
-                      && (!previewContent.item
-                          || previewContent.item.sourceStatus
-                             !== Image.Ready)))
-                 && thumbnail.source.toString() === ""
+                      && !preview.thumbnailReady))
+                 && !preview.thumbnailReady
                  && fallbackIcon.modelIconSource.toString() !== ""
                  && (!preview.entry.highlightMarker || lucideSource)
                  && !(preview.entry.panelRoot.viewerTransitionActive

@@ -194,10 +194,9 @@ QtObject {
     function endPointerDrag() {
         const commitCursor = dragCursorActive && panel.cursorCommitPending
         dragCursorActive = false
-        let selectionCommitted = false
         if (keyboardShiftSelectionActive)
-            selectionCommitted = finishKeyboardShiftSelection()
-        if (commitCursor && !selectionCommitted)
+            finishKeyboardShiftSelection()
+        if (commitCursor)
             panel.commitPendingCursor()
         refreshHoveredIndex()
     }

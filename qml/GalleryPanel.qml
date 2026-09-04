@@ -353,6 +353,7 @@ FocusScope {
     readonly property color mutedColor: theme.mutedText
     readonly property color cursorColor: theme.cursor
     readonly property color selectionColor: theme.selection
+    readonly property bool showSelectionBorders: theme.showSelectionBorders
     readonly property color cursorBackgroundColor: theme.cursorBackground
     readonly property color cursorBorderColor: theme.cursorBorder
     readonly property color cardCursorBorderColor: theme.cardCursorBorder

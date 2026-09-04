@@ -4981,7 +4981,9 @@ private slots:
                  QColor(QStringLiteral("#ffffff")));
         QCOMPARE(markedSurface->property("color").value<QColor>(),
                  QColor(Qt::transparent));
-        QCOMPARE(markedSurface->property("visualBorderWidth").toReal(), 0.0);
+        QCOMPARE(markedSurface->property("visualBorderWidth").toReal(), 1.0);
+        QCOMPARE(markedSurface->property("visualBorderColor").value<QColor>(),
+                 panel->property("selectionColor").value<QColor>());
 
         // Persistent selection outranks the transient cursor. Moving the
         // cursor onto an already-selected folder must keep both its name and
@@ -5012,7 +5014,7 @@ private slots:
         QCOMPARE(layout->width(), panelItem->width());
     }
 
-    void compactModesUseMarkedTextWithoutSelectionBorder() {
+    void compactModesCanUseMarkedTextWithoutSelectionBorder() {
         for (const QString &mode : {QStringLiteral("columns"),
                                     QStringLiteral("details")}) {
             QQuickView view;
@@ -5034,6 +5036,7 @@ private slots:
                 QStringLiteral("compactTextSelectionSession"), mode);
             QVERIFY(panel);
             QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
+                {QStringLiteral("showSelectionBorders"), false},
                 {QStringLiteral("markedText"),
                  QStringLiteral("#ffd43b")},
                 {QStringLiteral("selection"),

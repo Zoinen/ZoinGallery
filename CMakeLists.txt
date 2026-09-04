@@ -526,6 +526,19 @@ if(BUILD_TESTING)
     set_tests_properties(ReusableViewerPrimitivesTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic")
 
+    add_executable(ZoinGalleryEntryHoverTests
+        tests/GalleryEntryHoverTest.cpp)
+    target_compile_definitions(ZoinGalleryEntryHoverTests PRIVATE
+        ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(ZoinGalleryEntryHoverTests PRIVATE
+        ZoinGallery::Core
+        ZoinGallery::Qml
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GalleryEntryHoverTest COMMAND ZoinGalleryEntryHoverTests)
+    set_tests_properties(GalleryEntryHoverTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic;QT_SCALE_FACTOR=1.75"
+        TIMEOUT 60)
+
     add_executable(ZoinGalleryPanelGestureTests
         tests/GalleryPanelGestureTest.cpp)
     target_compile_definitions(ZoinGalleryPanelGestureTests PRIVATE
@@ -907,6 +920,7 @@ foreach(_zoin_qml_entry_point IN ITEMS
     ZoinGallerySessionTests
     ZoinGalleryQmlInteractionTests
     ZoinGalleryReusableViewerPrimitivesTests
+    ZoinGalleryEntryHoverTests
     ZoinGalleryPanelGestureTests
     ZoinGalleryMasonryLayoutModesTests
     ZoinGalleryStandaloneShellSmokeTests

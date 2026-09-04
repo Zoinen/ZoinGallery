@@ -23,20 +23,22 @@ Rectangle {
         entry.current && entry.panelRoot.showCursor
         && !entry.panelRoot.cursorPixelAlignmentSuspended
         && !entry.geometryAnimationRunning
+    readonly property bool selectionBorderVisible:
+        entry.selected && entry.panelRoot.showSelectionBorders
+    readonly property bool pixelAlignedSelectionGeometry:
+        selectionBorderVisible
+        && !entry.panelRoot.cursorPixelAlignmentSuspended
+        && !entry.geometryAnimationRunning
     readonly property rect visualSurfaceRect:
-        pixelAlignedCursorGeometry
+        pixelAlignedCursorGeometry || pixelAlignedSelectionGeometry
         ? entry.panelRoot.alignViewportItemRectToDevicePixels(
               entry, nominalSurfaceRect)
         : nominalSurfaceRect
     readonly property real nominalBorderWidth: {
         if (entry.cursorChromeExposesUnderlay)
             return 0
-        if (entry.detailsMode || entry.columnsMode) {
-            return entry.current && entry.panelRoot.showCursor
-                    && !entry.cursorChromeSuppressed ? 1 : 0
-        }
-        if (entry.selected)
-            return 3
+        if (selectionBorderVisible)
+            return 1
         return entry.current && entry.panelRoot.showCursor
                 && !entry.cursorChromeSuppressed ? 1 : 0
     }
@@ -47,33 +49,19 @@ Rectangle {
     height: visualSurfaceRect.height
     radius: entry.columnsMode || entry.detailsMode ? 4 : 6
     antialiasing: true
-    color: {
+    readonly property color baseColor: {
         if (entry.cursorChromeExposesUnderlay)
             return "transparent"
         if (entry.detailsMode) {
-            if (entry.cursorChromeSuppressed) {
-                if (!entry.selected
-                        && entry.nonCursorHighlightBackgroundValue !== "")
-                    return entry.nonCursorHighlightBackgroundValue
-            } else {
-                if ((!entry.selected || (entry.current
-                                          && entry.panelRoot.showCursor))
-                        && entry.highlightBackgroundValue !== "")
-                    return entry.highlightBackgroundValue
-                if (entry.current && entry.panelRoot.showCursor)
-                    return entry.panelRoot.cursorBackgroundColor
-            }
-            if (!entry.selected && entry.pointerHovered)
-                return entry.panelRoot.itemHoverColor
-            return "transparent"
+            if (entry.current && entry.panelRoot.showCursor
+                    && !entry.cursorChromeSuppressed)
+                return entry.visualModel.cursorBackground
+                        || entry.panelRoot.cursorBackgroundColor
+            return entry.visualModel.normalBackground || "transparent"
         }
         if (entry.current && entry.panelRoot.showCursor
                 && !entry.cursorChromeSuppressed)
             return entry.panelRoot.cursorColor
-        if (entry.selected)
-            return "transparent"
-        if (entry.pointerHovered)
-            return entry.panelRoot.itemHoverColor
         if (entry.masonryMode || entry.gridMode) {
             return entry.isFolder
                     ? entry.panelRoot.directoryBackgroundColor
@@ -81,15 +69,25 @@ Rectangle {
         }
         return "transparent"
     }
+    // Hover is a visual overlay, not an alternative to cursor/selection state.
+    // Compose the live palette tint with the resolved background so marked
+    // rows and the current row respond too, without losing their text/border.
+    color: {
+        if (!entry.pointerHovered || entry.cursorChromeExposesUnderlay)
+            return baseColor
+        const hover = entry.panelRoot.itemHoverColor
+        const alpha = hover.a + baseColor.a * (1 - hover.a)
+        if (alpha <= 0)
+            return baseColor
+        // Qt.tint interpolates RGB as if the base were opaque. Normalize the
+        // weight for transparent rows and translucent theme backgrounds.
+        const mixed = Qt.tint(baseColor, Qt.rgba(
+                                  hover.r, hover.g, hover.b, hover.a / alpha))
+        return Qt.rgba(mixed.r, mixed.g, mixed.b, alpha)
+    }
     border.width: nominalBorderWidth
     border.pixelAligned: true
-    border.color: entry.detailsMode
-        ? entry.panelRoot.cursorBorderColor
-        : (entry.columnsMode
-           ? entry.panelRoot.cardCursorBorderColor
-           : (entry.selected
-              ? entry.panelRoot.selectionColor
-              : (entry.current && entry.panelRoot.showCursor
-                 ? entry.panelRoot.cardCursorBorderColor
-                 : entry.panelRoot.selectionColor)))
+    border.color: selectionBorderVisible ? entry.panelRoot.selectionColor
+                  : entry.detailsMode ? entry.panelRoot.cursorBorderColor
+                  : entry.panelRoot.cardCursorBorderColor
 }

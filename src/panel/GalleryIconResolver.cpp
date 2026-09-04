@@ -79,7 +79,13 @@ QString GalleryIconResolver::resolve(
     if (!key.isEmpty() && !prefix.isEmpty()) {
         return prefix + key + QStringLiteral(".svg");
     }
-    if (largePresentation && source.contains(QStringLiteral("/lucide/"))) {
+    // image:// URLs are rendered by a registered provider.  The provider has
+    // one logical lucide route whose size/DPR query is part of the request;
+    // rewriting it to the static "lucide-gallery" route makes the provider
+    // return no image in large presentations (Grid, Icons and Masonry).
+    if (largePresentation
+        && QUrl(source).scheme() != QStringLiteral("image")
+        && source.contains(QStringLiteral("/lucide/"))) {
         QString largeSource = source;
         largeSource.replace(QStringLiteral("/lucide/"),
                             QStringLiteral("/lucide-gallery/"));

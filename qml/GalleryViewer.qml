@@ -467,6 +467,9 @@ FocusScope {
     function requestClose() {
         transitionState.requestClose()
     }
+    function requestImmediateClose() {
+        transitionState.requestImmediateClose()
+    }
     function closeViewer() {
         transitionState.requestClose()
     }

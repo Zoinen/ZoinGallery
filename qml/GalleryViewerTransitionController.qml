@@ -121,6 +121,24 @@ QtObject {
         motion.transitionAnimation.restart()
     }
 
+    function requestImmediateClose() {
+        if (viewer.customContent || viewer.completingClose)
+            return
+        motion.transitionAnimation.stop()
+        motion.transitionFinalizeTimer.stop()
+        motion.pinchCloseProgressAnimation.stop()
+        motion.pinchCloseFinalizeTimer.stop()
+        viewer.finishViewerNavigationAnimationNow()
+        viewer.completingClose = true
+        viewer.returningFromPinch = false
+        viewer.pinchCloseActive = false
+        viewer.pinchCloseFinishingCommit = false
+        viewer.pinchCloseProgress = 0
+        viewer.clearHeldKeys()
+        viewer.transitionProgress = 0
+        finishClose()
+    }
+
     function closeViewer() { requestClose() }
 
     function currentViewerImageGeometry() {

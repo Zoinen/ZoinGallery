@@ -91,6 +91,7 @@ Item {
         id: middleButtonArea
         objectName: "galleryMiddleButtonArea"
         anchors.fill: parent
+        z: 1
         acceptedButtons: Qt.MiddleButton
         hoverEnabled: true
 

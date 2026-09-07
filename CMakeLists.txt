@@ -569,7 +569,7 @@ if(BUILD_TESTING)
     set_tests_properties(MasonryLayoutModesTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic")
 
-    foreach(_zoin_visual_dpr IN ITEMS 1.0 1.25 1.5 2.0)
+    foreach(_zoin_visual_dpr IN ITEMS 1.0 1.25 1.5 1.75 2.0)
         string(REPLACE "." "" _zoin_visual_dpr_suffix
             "${_zoin_visual_dpr}")
         set(_zoin_visual_test
@@ -581,6 +581,7 @@ if(BUILD_TESTING)
                 settledCursorUsesPhysicalPixelGridButAnimationsStaySmooth
                 settledDetailsCursorRendersSolidPhysicalBorderPixels
                 columnsAndDetailsUseIdenticalCompactLucideIcons
+                masonryFirstRowLucideProviderUsesPhysicalRasterAndGrid
                 fractionalDetailsDensityPreservesRowPhaseAndContentExtent
                 verticalScrollBarDoesNotChangeViewportWidth)
         set_tests_properties(${_zoin_visual_test} PROPERTIES

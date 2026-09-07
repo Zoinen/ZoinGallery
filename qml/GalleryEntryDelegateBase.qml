@@ -31,6 +31,19 @@ BrickItem {
         && Boolean(model && model.folderView)
     readonly property real renderDpr:
         Math.max(0.01, Number(panelRoot.devicePixelRatio) || 1)
+    readonly property point iconSceneOrigin: {
+        // mapToItem() does not register dependencies on ancestor geometry.
+        // Track geometry through the complete chain so host
+        // panel placement invalidates the correction without any scrolling.
+        let dependency = 0
+        let ancestor = entry
+        while (ancestor) {
+            dependency += ancestor.x + ancestor.y + ancestor.width
+                    + ancestor.height + ancestor.scale + ancestor.rotation
+            ancestor = ancestor.parent
+        }
+        return entry.mapToItem(null, dependency * 0, dependency * 0)
+    }
     readonly property real iconPixelAlignmentRevision: {
         if (!visible)
             return 0
@@ -44,7 +57,10 @@ BrickItem {
     }
 
     function snapIconExtent(value) {
-        return Math.max(0, Math.round(Number(value || 0) * renderDpr)
+        // sourceSize is an integer logical QSize. Derive the displayed
+        // physical extent from that same integer so the provider's raster
+        // and the rendered quad agree even at fractional DPR.
+        return Math.max(0, Math.round(Math.round(Number(value || 0)) * renderDpr)
                            / renderDpr)
     }
 
@@ -52,12 +68,13 @@ BrickItem {
         if (!visible || !item || !item.parent || !item.visible)
             return Qt.point(0, 0)
         const revision = iconPixelAlignmentRevision
+        const origin = iconSceneOrigin
         const scenePoint = item.parent.mapToItem(null, item.x, item.y)
         return Qt.point(
             Math.round(scenePoint.x * renderDpr) / renderDpr
-                - scenePoint.x + revision * 0,
+                - scenePoint.x + revision * 0 + origin.x * 0,
             Math.round(scenePoint.y * renderDpr) / renderDpr
-                - scenePoint.y)
+                - scenePoint.y + origin.y * 0)
     }
 
     readonly property bool current:

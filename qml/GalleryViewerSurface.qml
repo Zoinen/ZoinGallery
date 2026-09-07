@@ -81,6 +81,8 @@ Item {
                 hideVerticalScrollBar:
                     root.viewer.viewerNavigationActive
                     || root.viewer.viewerNavigationAnimationRunning
+                    || root.viewer.viewerNavigationCommitAfterAnimation
+                    || Math.abs(root.viewer.viewerNavigationOffsetX) > 0.1
 
                 onZoomScaleChanged: root.viewer.scheduleDecodeRequest()
                 onCloseRequested: root.viewer.requestClose()

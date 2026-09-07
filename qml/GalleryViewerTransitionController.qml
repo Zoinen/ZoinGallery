@@ -29,7 +29,7 @@ QtObject {
                 || typeof viewer.sourcePanel.currentItemImageGeometry !== "function"
                 || typeof viewer.sourcePanel.currentItemImageSource !== "function")
             return false
-        const geometry = viewer.sourcePanel.currentItemImageGeometry(root)
+        const geometry = viewer.sourcePanel.currentItemImageGeometry(viewer)
         const source = viewer.sourcePanel.currentItemImageSource()
         if (!viewer.validGeometry(geometry) || source.toString() === "")
             return false
@@ -42,7 +42,6 @@ QtObject {
     function beginOpen() {
         if (viewer.customContent)
             return
-        viewer.immediateCloseRequested = false
         if (viewer.session && viewer.presentedIndex < 0)
             viewer.presentedIndex = viewer.session.currentIndex
         viewer.refreshCurrentSource()
@@ -104,7 +103,6 @@ QtObject {
     function requestClose() {
         if (viewer.customContent || viewer.completingClose)
             return
-        viewer.immediateCloseRequested = false
         viewer.finishViewerNavigationAnimationNow()
         viewer.completingClose = true
         viewer.returningFromPinch = false
@@ -126,7 +124,6 @@ QtObject {
     function requestImmediateClose() {
         if (viewer.customContent || viewer.completingClose)
             return
-        viewer.immediateCloseRequested = true
         motion.transitionAnimation.stop()
         motion.transitionFinalizeTimer.stop()
         motion.pinchCloseProgressAnimation.stop()

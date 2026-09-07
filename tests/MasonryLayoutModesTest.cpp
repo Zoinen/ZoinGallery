@@ -97,8 +97,9 @@ QVariantList prefixedCatalog(const QString &prefix, int count) {
 
 class CompactIconProvider final : public QQuickImageProvider {
 public:
-    CompactIconProvider()
-        : QQuickImageProvider(QQuickImageProvider::Image) {}
+    explicit CompactIconProvider(bool checker = false)
+        : QQuickImageProvider(QQuickImageProvider::Image), m_checker(checker) {}
+    QSize lastRequestedSize;
 
     QImage requestImage(const QString &,
                         QSize *size,
@@ -110,8 +111,17 @@ public:
         }
         QImage image(imageSize, QImage::Format_ARGB32_Premultiplied);
         image.fill(Qt::white);
+        if (m_checker) {
+            lastRequestedSize = requestedSize;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    if ((x + y) % 2)
+                        image.setPixel(x, y, 0);
+        }
         return image;
     }
+private:
+    bool m_checker;
 };
 
 QObject *createPanel(QQuickView &view, QObject *session,
@@ -5252,6 +5262,121 @@ private slots:
                          QStringLiteral("color"))),
                      icon->property("effectiveIconColor").value<QColor>());
         }
+    }
+
+    void masonryFirstRowLucideProviderUsesPhysicalRasterAndGrid() {
+        QQuickView view;
+        auto *checkerProvider = new CompactIconProvider(true);
+        view.engine()->addImageProvider(
+            QStringLiteral("masonry-icons"), checkerProvider);
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("masonry-first-row-pixel-grid"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(4), 1));
+        QVERIFY(session->applyExternalAppearance({QVariantMap{
+            {QStringLiteral("entryId"), QStringLiteral("layout-entry-0")},
+            {QStringLiteral("highlightStyle"), QVariantMap{
+                 {QStringLiteral("icon"), QStringLiteral(
+                      "image://masonry-icons/lucide/ZmlsZQ"
+                      "?size=128&dpr=2&revision=1")},
+             }},
+        }}, 1));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("masonryFirstRowSession"),
+            QStringLiteral("masonry"));
+        QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        QVERIFY(panelItem && layout);
+        panelItem->setX(0.25);
+        panelItem->setY(0.25);
+        const qreal dpr = view.devicePixelRatio();
+        panel->setProperty("devicePixelRatio", dpr);
+
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 4, 3000);
+        auto *icon = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryFallbackIcon-0"));
+        QVERIFY(icon);
+        QTRY_VERIFY_WITH_TIMEOUT(icon->isVisible(), 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(icon->property("status").toInt(), 1,
+                                  3000);
+
+        const QSize expectedPhysicalSize(
+            qRound(icon->width() * dpr), qRound(icon->height() * dpr));
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QTRY_COMPARE(checkerProvider->lastRequestedSize, expectedPhysicalSize);
+        const QPointF origin = icon->mapToScene(QPointF{});
+        qInfo().nospace() << "masonry icon geometry=" << icon->x() << ','
+                          << icon->y() << ' ' << icon->width() << 'x'
+                          << icon->height() << " scene=" << origin
+                          << " sourceSize="
+                          << icon->property("sourceSize").toSize()
+                          << " offset="
+                          << icon->property("pixelGridOffset").toPointF();
+        const auto onPhysicalGrid = [dpr](qreal value) {
+            return qAbs(value * dpr - qRound(value * dpr)) < 0.001;
+        };
+        QVERIFY(onPhysicalGrid(origin.x()));
+        QVERIFY(onPhysicalGrid(origin.y()));
+        QVERIFY(onPhysicalGrid(origin.x() + icon->width()));
+        QVERIFY(onPhysicalGrid(origin.y() + icon->height()));
+        const QPointF unitX = icon->mapToScene(QPointF(1, 0)) - origin;
+        const QPointF unitY = icon->mapToScene(QPointF(0, 1)) - origin;
+        QCOMPARE(unitX, QPointF(1, 0));
+        QCOMPARE(unitY, QPointF(0, 1));
+
+        // Moving an ancestor after layout must invalidate the leaf's
+        // scene-space correction even though the panel itself has not moved.
+        auto *ancestor = new QQuickItem(view.contentItem());
+        ancestor->setSize(QSizeF(view.width(), view.height()));
+        panelItem->setParentItem(ancestor);
+        ancestor->setX(0.25);
+        ancestor->setY(0.25);
+        QTest::qWait(100);
+        const QPointF moved = icon->mapToScene(QPointF{});
+        qInfo() << "first-row physical origin after ancestor movement" << moved * dpr;
+        QVERIFY(onPhysicalGrid(moved.x()));
+        QVERIFY(onPhysicalGrid(moved.y()));
+        for (int index = 0; index < 4; ++index) {
+            auto *leaf = panel->findChild<QQuickItem *>(
+                QStringLiteral("galleryFallbackIcon-%1").arg(index));
+            QVERIFY(leaf && leaf->isVisible());
+            const QPointF position = leaf->mapToScene(QPointF{});
+            QVERIFY2(onPhysicalGrid(position.x()) && onPhysicalGrid(position.y()),
+                     qPrintable(QStringLiteral("%1 physical origin %2,%3")
+                         .arg(leaf->objectName()).arg(position.x() * dpr)
+                         .arg(position.y() * dpr)));
+            QVERIFY(onPhysicalGrid(position.x() + leaf->width()));
+            QVERIFY(onPhysicalGrid(position.y() + leaf->height()));
+            QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - position, QPointF(1, 0));
+            QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - position, QPointF(0, 1));
+        }
+
+        const QImage raster = view.grabWindow();
+        QVERIFY(!raster.isNull());
+        const QRect region(QPoint(qRound(moved.x() * dpr), qRound(moved.y() * dpr)),
+                           expectedPhysicalSize);
+        QVERIFY(raster.rect().contains(region));
+        const QImage crop = raster.copy(region);
+        const QString captureDirectory = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+        if (!captureDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(captureDirectory));
+            QVERIFY(raster.save(captureDirectory + QStringLiteral("/masonry-window.png")));
+            QVERIFY(crop.save(captureDirectory + QStringLiteral("/masonry-icon.png")));
+        }
+        const QColor ink = crop.pixelColor(0, 0);
+        const QColor background = crop.pixelColor(1, 0);
+        QVERIFY(ink != background);
+        for (int y = 0; y < crop.height(); ++y)
+            for (int x = 0; x < crop.width(); ++x)
+                QCOMPARE(crop.pixelColor(x, y), (x + y) % 2 ? background : ink);
     }
 
     void nonLucideIconsPreserveTheirSourceColors() {

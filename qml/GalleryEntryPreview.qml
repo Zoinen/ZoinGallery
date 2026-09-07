@@ -73,6 +73,8 @@ Item {
             : Math.max(0, Math.min(parent.width, parent.height) * 0.55)
         width: preview.entry.snapIconExtent(nominalIconSize)
         height: width
+        // Qt applies the window DPR to sourceSize before requesting provider
+        // pixels. Supplying physical dimensions here applies DPR twice.
         sourceSize: Qt.size(width, height)
         color: effectiveIconColor
         fillMode: Image.PreserveAspectFit

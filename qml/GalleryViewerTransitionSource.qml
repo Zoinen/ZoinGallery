@@ -8,7 +8,9 @@ QtObject {
     function currentItem() {
         if (!panel.controller || panel.controller.currentIndex < 0)
             return null
-        const item = panel.galleryLayout.currentItem
+        // The session owns the cursor. A native model reset may reset the
+        // layout's convenience cursor without changing the session cursor.
+        const item = panel.galleryLayout.itemForIndex(panel.controller.currentIndex)
         if (!item || item.viewIndex !== panel.controller.currentIndex)
             return null
         return item

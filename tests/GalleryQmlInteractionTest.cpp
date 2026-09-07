@@ -794,6 +794,54 @@ private slots:
                      - viewport->width()
                            / viewerImage->property("width").toReal()) < 0.01);
 
+        // The original bars were siblings above the image and its pointer
+        // area. A z value on a bar cannot escape an extracted parent layer.
+        const qreal thumbPosition = verticalScrollBar->property("position").toReal();
+        const QPoint thumbPoint = verticalScrollBar->mapToScene(QPointF(
+            verticalScrollBar->width() / 2,
+            verticalScrollBar->height() * (thumbPosition + verticalSize / 2))).toPoint();
+        QTest::mouseMove(&view, thumbPoint);
+        QTRY_VERIFY(verticalScrollBar->property("hovered").toBool());
+        QTRY_COMPARE(verticalScrollBar->opacity(), 1.0);
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, thumbPoint);
+        const bool scrollbarReceivedPress = verticalScrollBar->property("pressed").toBool();
+        const qreal beforeThumbDrag = viewerImage->property("y").toReal();
+        const QPoint thumbDragPoint = thumbPoint + QPoint(0, thumbPosition < 0.1 ? 20 : -20);
+        QTest::mouseMove(&view, thumbDragPoint, 30);
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, thumbDragPoint);
+        QVERIFY2(scrollbarReceivedPress, "Image pointer layer intercepted the scrollbar thumb");
+        QVERIFY(qAbs(viewerImage->property("y").toReal() - beforeThumbDrag) > 1);
+        if (!qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR").isEmpty()) {
+            const QImage frame = view.grabWindow();
+            QVERIFY(!frame.isNull());
+            QVERIFY(frame.save(QDir(qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR"))
+                                   .filePath(QStringLiteral("viewer-scrollbars.png"))));
+        }
+        QTest::mouseMove(&view, QPoint(320, 200));
+        QTest::qWait(250);
+        QCOMPARE(verticalScrollBar->opacity(), 1.0);
+        QTRY_VERIFY_WITH_TIMEOUT(verticalScrollBar->opacity() < 1.0, 750);
+        QTRY_COMPARE_WITH_TIMEOUT(verticalScrollBar->opacity(), 0.0, 1000);
+        const QPoint horizontalThumbPoint = horizontalScrollBar->mapToScene(QPointF(
+            horizontalScrollBar->width()
+                * (horizontalScrollBar->property("position").toReal() + horizontalSize / 2),
+            horizontalScrollBar->height() / 2)).toPoint();
+        QTest::mouseMove(&view, horizontalThumbPoint);
+        QTRY_COMPARE(horizontalScrollBar->opacity(), 1.0);
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, horizontalThumbPoint);
+        const bool horizontalReceivedPress = horizontalScrollBar->property("pressed").toBool();
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, horizontalThumbPoint);
+        QVERIFY(horizontalReceivedPress);
+        QTest::mouseMove(&view, QPoint(320, 200));
+
+        viewer->setProperty("viewerNavigationCommitAfterAnimation", true);
+        QVERIFY(!verticalScrollBar->isVisible());
+        viewer->setProperty("viewerNavigationCommitAfterAnimation", false);
+        viewer->setProperty("viewerNavigationOffsetX", 0.2);
+        QVERIFY(!verticalScrollBar->isVisible());
+        viewer->setProperty("viewerNavigationOffsetX", 0.0);
+        QTRY_VERIFY(verticalScrollBar->isVisible());
+
         const qreal beforeX = viewerImage->property("x").toReal();
         const qreal minimumX = viewport->width()
                                - viewerImage->property("width").toReal();
@@ -1811,6 +1859,92 @@ private slots:
         QTest::qWait(100);
         QCOMPARE(navigationSpy.size(), 6);
 
+        runtime->shutdown();
+    }
+
+    void panelRestoresNonzeroTransitionTargetAfterCatalogReset() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath = directory.filePath(QStringLiteral("tile.png"));
+        QVERIFY(writeImage(imagePath, QSize(320, 120), Qt::green));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        auto *session = runtime->createExternalSession(QStringLiteral("transition-reset"));
+        const QVariantList entries{
+            imageEntry(QStringLiteral("first"), 0, imagePath),
+            imageEntry(QStringLiteral("tile"), 1, imagePath)};
+        QVERIFY(session->applyExternalCatalog(entries, 1));
+        QVERIFY(session->applyExternalState(QStringLiteral("tile"), 1, {}, 1));
+        view.engine()->rootContext()->setContextProperty(QStringLiteral("testSession"), session);
+        QObject *rootObject = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryPanel {
+                id: panel
+                width: 480; height: 360
+                session: null
+                devicePixelRatio: 1.75
+                property int transitionCursor: -1
+                property rect capturedGeometry
+                property string capturedSource
+                property bool openViewer: false
+                function captureTarget() {
+                    const item = currentTransitionItem()
+                    transitionCursor = item ? item.viewIndex : -1
+                    capturedGeometry = currentItemImageGeometry(panel)
+                    capturedSource = currentItemImageSource()
+                }
+                function resetLayoutCursor() { galleryLayout.currentIndex = 0 }
+                Loader {
+                    anchors.fill: parent
+                    active: panel.openViewer
+                    sourceComponent: GalleryViewer {
+                        objectName: "resetViewer"
+                        session: testSession
+                        sourcePanel: panel
+                        animationDuration: 300
+                    }
+                }
+            }
+        )QML", QStringLiteral("GalleryTransitionReset.qml"));
+        QVERIFY(rootObject);
+        view.show();
+        rootObject->setProperty("session", QVariant::fromValue(session));
+        QTest::qWait(200);
+        QMetaObject::invokeMethod(rootObject, "captureTarget");
+        QCOMPARE(rootObject->property("transitionCursor").toInt(), 1);
+        QVERIFY(session->applyExternalCatalog(entries, 2, {{QStringLiteral("sourceIdentityChanged"), true}}));
+        QVERIFY(session->applyExternalState(QStringLiteral("tile"), 1, {}, 2));
+        QTest::qWait(200);
+        // A native layout reset can retain row zero while the authoritative
+        // session cursor is unchanged (observed in f4: layout 0, session 75).
+        QMetaObject::invokeMethod(rootObject, "resetLayoutCursor");
+        QMetaObject::invokeMethod(rootObject, "captureTarget");
+        QCOMPARE(rootObject->property("transitionCursor").toInt(), 1);
+        const QRectF thumbnailGeometry = rootObject->property("capturedGeometry").toRectF();
+        QVERIFY(thumbnailGeometry.width() > 1);
+        QVERIFY(thumbnailGeometry.height() > 1);
+        QVERIFY(!rootObject->property("capturedSource").toString().isEmpty());
+        session->setViewerOpen(true);
+        rootObject->setProperty("openViewer", true);
+        auto *viewer = rootObject->findChild<QQuickItem *>(QStringLiteral("resetViewer"));
+        QVERIFY(viewer);
+        QTRY_VERIFY(viewer->property("transitionHasGeometry").toBool());
+        QCOMPARE(viewer->property("transitionSourceGeometry").toRectF(), thumbnailGeometry);
+        QTRY_VERIFY(viewer->property("transitionProgress").toReal() > 0);
+        QVERIFY(viewer->property("transitionProgress").toReal() < 1);
+        const QImage transitionFrame = view.grabWindow();
+        QVERIFY(!transitionFrame.isNull());
+        QTRY_COMPARE(viewer->property("transitionProgress").toReal(), 1.0);
+        const QImage settledFrame = view.grabWindow();
+        QVERIFY(!settledFrame.isNull());
+        QVERIFY(transitionFrame != settledFrame);
+        if (!qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR").isEmpty()) {
+            const QDir captureDir(qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR"));
+            QVERIFY(transitionFrame.save(captureDir.filePath(QStringLiteral("viewer-opening.png"))));
+            QVERIFY(settledFrame.save(captureDir.filePath(QStringLiteral("viewer-open.png"))));
+        }
         runtime->shutdown();
     }
 

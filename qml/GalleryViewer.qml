@@ -91,10 +91,6 @@ FocusScope {
     property url transitionThumbnailSource: ""
     property bool transitionHasGeometry: false
     property bool completingClose: false
-    // Escape uses an immediate close so the host can restore its panel before
-    // the thumbnail return animation. The embedding host uses this bit to
-    // fence the matching native key release after the Loader is torn down.
-    property bool immediateCloseRequested: false
     property bool viewerContentVisible: true
     property bool returningFromPinch: false
     property bool pinchCloseActive: false

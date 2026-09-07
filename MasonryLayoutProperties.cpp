@@ -856,7 +856,11 @@ void MasonryLayout::setSpacing(int newSpacing) {
 }
 
 QQuickItem *MasonryLayout::currentItem() const {
-    const MasonryBrick *brick = brickAt(_currentIndex);
+    return itemForIndex(_currentIndex);
+}
+
+QQuickItem *MasonryLayout::itemForIndex(int index) const {
+    const MasonryBrick *brick = brickAt(index);
     return brick ? brick->item : nullptr;
 }
 

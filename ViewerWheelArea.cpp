@@ -12,7 +12,8 @@ ViewerWheelArea::ViewerWheelArea(QQuickItem *parent)
     : QQuickItem(parent)
 {
     setAcceptedMouseButtons(Qt::AllButtons);
-    setAcceptHoverEvents(true);
+    // This overlay handles wheels only. Accepting hover would hide the
+    // underlying scrollbar hover targets and prevent their reveal behavior.
 }
 
 void ViewerWheelArea::mousePressEvent(QMouseEvent *event)

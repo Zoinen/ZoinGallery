@@ -795,6 +795,9 @@ Item {
     ViewerViewportMotion {
         id: viewportMotion
         anchors.fill: parent
+        // Preserve the original scrollbar stacking above both the image and
+        // its gesture area after extracting them into separate parent items.
+        z: 1
         viewport: flickableArea
         imageItem: viewerImage
     }

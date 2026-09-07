@@ -115,6 +115,7 @@ void FileListModel::connectImageInfoSignal() {
             }
             _failedImageInfoRequests.remove(infoRetryKey(result));
             _failedImageInfoRetryAttempts.remove(infoRetryKey(result));
+            _terminalImageInfoFailureRevisions.remove(result.path);
             _failedImageWorkRetryDelayMs = FailedImageWorkRetryInitialMs;
             ImageInfo itemInfo = result;
             if (itemInfo.fileSize < 0) {
@@ -233,6 +234,7 @@ void FileListModel::applyImageInfoBatchResult(
 
     _failedImageInfoRequests.remove(infoRetryKey(result));
     _failedImageInfoRetryAttempts.remove(infoRetryKey(result));
+    _terminalImageInfoFailureRevisions.remove(result.path);
     _failedImageWorkRetryDelayMs = FailedImageWorkRetryInitialMs;
     update->foundCurrentItem = true;
     ImageInfo itemInfo = result;
@@ -326,7 +328,19 @@ void FileListModel::connectImageReadySignal() {
             return;
         }
         if (image.isNull()) {
-            rememberFailedDecodeRequest(request);
+            ImageDecodeRequest sourceRequest = request;
+            sourceRequest.checkCache = false;
+            const QString retryKey = decodeRetryKey(sourceRequest);
+            _failedImageDecodeRequests.remove(retryKey);
+            _failedImageDecodeRetryAttempts.remove(retryKey);
+            if (request.viewerRequest) {
+                // The compressed bytes were read successfully but none of
+                // the decoders accepted them. Retrying the same immutable
+                // bytes cannot make progress and used to leave both the
+                // retry timer and the QML spinner alive indefinitely.
+                setViewerRequestState(request.info.sourceIdentity(),
+                                      QStringLiteral("failed"));
+            }
             handleDirectOpenImageReady(request, image, decodedInfo);
             return;
         }
@@ -370,6 +384,10 @@ void FileListModel::connectImageReadySignal() {
                         emit viewerImageIdUrlChanged(storedImage.url,
                                                      storedImage.level);
                     }
+                }
+                if (storedImage.presentable) {
+                    setViewerRequestState(request.info.sourceIdentity(),
+                                          QStringLiteral("ready"));
                 }
             }
             else {
@@ -686,7 +704,11 @@ void FileListModel::connectImageReadFailedSignal() {
             request.info.directOpenGeneration != _directOpen.generation) {
             return;
         }
-        rememberFailedDecodeRequest(request);
+        const bool retryScheduled = rememberFailedDecodeRequest(request);
+        if (request.viewerRequest && !retryScheduled) {
+            setViewerRequestState(request.info.sourceIdentity(),
+                                  QStringLiteral("failed"));
+        }
         handleDirectOpenImageReady(request, QImage(), DecodedImageInfo());
     });
 }

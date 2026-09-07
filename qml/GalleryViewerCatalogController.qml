@@ -161,8 +161,11 @@ QtObject {
             viewer.currentOriginalSizeValue = Qt.size(0, 0)
             viewer.appliedPresentedIndex = -1
             viewer.appliedTierSignature = ""
+            viewer.refreshViewerRequestState()
             return
         }
+
+        viewer.refreshViewerRequestState()
 
         const sources = sourceTiersAt(viewer.presentedIndex)
         viewer.currentSourcesValue = sources

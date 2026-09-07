@@ -707,6 +707,15 @@ private slots:
             }
         }
 
+        for (const int direction : {-1, 0, 1}) {
+            SvgCursor::setScrollingModeCursor(true, direction, 2.0);
+            const QCursor *cursor = QGuiApplication::overrideCursor();
+            QVERIFY(cursor);
+            QCOMPARE(cursor->shape(), Qt::BitmapCursor);
+        }
+        SvgCursor::setScrollingModeCursor(false, 0, 2.0);
+        QVERIFY(QGuiApplication::overrideCursor() == nullptr);
+
         SvgCursor::setOverrideCursor();
         QVERIFY(QGuiApplication::overrideCursor() == nullptr);
     }

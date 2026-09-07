@@ -25,6 +25,7 @@ Item {
         sourceContext ? sourceContext.selectionModel : null
     readonly property var filmstripModel:
         sourceContext ? sourceContext.filmstripModel : null
+    property string currentViewerRequestState: "idle"
 
     // sourceContext is a short-lived wrapper recreated whenever the viewer is
     // opened. The masonry instance identifies the actual persistent source.
@@ -135,6 +136,15 @@ Item {
             decodeModel.requestViewer(
                         sourceIndex, requestedWidth, requestedHeight)
         }
+        refreshViewerRequestState()
+    }
+
+    function refreshViewerRequestState() {
+        currentViewerRequestState = decodeModel && sourceMasonry
+                && sourceMasonry.view
+                && typeof decodeModel.viewerRequestStateForIndex === "function"
+                ? decodeModel.viewerRequestStateForIndex(currentSourceIndex())
+                : "idle"
     }
 
     readonly property bool currentItemSelected: selectionModel.selectedCount >= 0 &&
@@ -167,51 +177,18 @@ Item {
 
     function fitCurrentImageWhenReady() {
         if (!zoomFitView || sphericViewerMode) {
-            delayedFitTimer.stop()
             return
         }
 
         if (flickableArea.originalSize.width > 1 && flickableArea.originalSize.height > 1) {
-            delayedFitTimer.stop()
             if (!flickableArea.viewportAnimationRunning) {
                 flickableArea.zoomToFit(true)
             }
-        }
-        else {
-            delayedFitTimer.restartWait()
         }
     }
 
     function setImage(imageIdUrl, originalSize, fromIndex, level) {
         flickableArea.setImage(imageIdUrl, originalSize, fromIndex, level)
-    }
-
-    Timer {
-        id: delayedFitTimer
-        interval: 50
-        repeat: true
-        property int attempts: 0
-
-        function restartWait() {
-            attempts = 0
-            restart()
-        }
-
-        onTriggered: {
-            let size = sourceMasonry.view.indexOriginalSize(sourceMasonry.view.currentIndex)
-            if (size.width > 1 && size.height > 1) {
-                stop()
-                let level = flickableArea.image.fromLevel >= 0 ? flickableArea.image.fromLevel : 0
-                viewerMode.setImage(flickableArea.image.source, size, sourceMasonry.view.currentIndex, level)
-                fitCurrentImageWhenReady()
-                decodeModel.cancelAllDecodeViewerRunners()
-                requestCurrentViewer(viewerMode.width * dpr,
-                                     viewerMode.height * dpr)
-            }
-            else if (++attempts >= 600) {
-                stop()
-            }
-        }
     }
 
     function show(sphericViewer) {
@@ -271,6 +248,32 @@ Item {
     property int shiftSelectionAnchorIndex: -1
     property string shiftSelectionAnchorPath: ""
     property bool shiftNavigationSelectionValue: true
+
+    function clearHeldKeys() {
+        leftPressed = false
+        rightPressed = false
+        upPressed = false
+        downPressed = false
+        zoomInPressed = false
+        zoomOutPressed = false
+        controlPressed = false
+        cancelShiftSelection()
+        flickableArea.stopZoomScrollingAnimation()
+    }
+
+    onActiveFocusChanged: {
+        if (!activeFocus)
+            clearHeldKeys()
+    }
+    onVisibleChanged: {
+        if (!visible) {
+            currentViewerRequestState = "idle"
+            clearHeldKeys()
+        }
+    }
+    Component.onDestruction: {
+        clearHeldKeys()
+    }
 
     property int previousImageIndex: -1
     // Indexes are only a projection of the current model order. Keep the

@@ -64,6 +64,7 @@ public:
     int viewerSourceLevel() const;
     QUrl viewerSourceAt(int viewIndex) const;
     QList<QPair<QString, int>> viewerImageSourcesAt(int viewIndex) const;
+    QString viewerRequestStateAt(int viewIndex) const;
     void shutdown();
 
 signals:
@@ -72,6 +73,7 @@ signals:
     void selectionChanged();
     void viewerSourceChanged();
     void viewerSourceAtChanged(int viewIndex);
+    void viewerRequestStateAtChanged(int viewIndex);
 
 private:
     ImageFile *itemAt(int viewIndex) const;

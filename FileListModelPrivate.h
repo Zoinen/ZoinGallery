@@ -114,6 +114,13 @@ QString infoRetryKey(const ImageInfo &info) {
         .arg(info.fileSize);
 }
 
+QString imageInfoRevisionToken(const ImageInfo &info) {
+    return QStringLiteral("%1\x1f%2")
+        .arg(info.lastModified.isValid()
+                 ? info.lastModified.toMSecsSinceEpoch() : -1)
+        .arg(info.fileSize);
+}
+
 QVariantMap fileOperationResult(bool success, const QString &title,
                                 const QString &message, int action = Qt::IgnoreAction,
                                 int count = 0, const QString &destination = {}) {

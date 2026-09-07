@@ -505,6 +505,8 @@ if(BUILD_TESTING)
         tests/GalleryQmlInteractionTest.cpp)
     target_compile_definitions(ZoinGalleryQmlInteractionTests PRIVATE
         ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(ZoinGalleryQmlInteractionTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(ZoinGalleryQmlInteractionTests PRIVATE
         ZoinGallery::Core
         ZoinGallery::Qml

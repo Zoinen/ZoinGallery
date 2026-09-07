@@ -734,6 +734,24 @@ void FileListModel::rememberFailedImageInfo(const ImageInfo &info) {
     ImageInfo sourceRetry = info;
     sourceRetry.lastModified = itemIt.value()->lastModified();
     sourceRetry.fileSize = itemIt.value()->fileSize();
+    if (!info.sourceAccessFailed) {
+        // The source was opened and every metadata decoder rejected the
+        // bytes. This is an authoritative corrupt/unsupported result for this
+        // exact local revision, not transport work which can make progress by
+        // waking the application again.
+        if (!isCurrentFileVersion(itemIt.value(), info) &&
+            !isActiveDirectOpenInfo(info)) {
+            return;
+        }
+        _terminalImageInfoFailureRevisions.insert(
+            info.path, imageInfoRevisionToken(sourceRetry));
+        if (_hasCurrentViewerRequest && _currentViewIndex >= 0 &&
+            _currentViewIndex < _items.size() &&
+            _items.at(_currentViewIndex) == itemIt.value()) {
+            setViewerRequestState(info.path, QStringLiteral("failed"));
+        }
+        return;
+    }
     const QString retryKey = infoRetryKey(sourceRetry);
     const auto existingRetry = _failedImageInfoRequests.constFind(retryKey);
     if (existingRetry != _failedImageInfoRequests.constEnd()) {
@@ -744,19 +762,25 @@ void FileListModel::rememberFailedImageInfo(const ImageInfo &info) {
     scheduleFailedImageWorkRetry();
 }
 
-void FileListModel::rememberFailedDecodeRequest(
+bool FileListModel::rememberFailedDecodeRequest(
     const ImageDecodeRequest &request) {
     if (!sourceReadsEnabled(_imageCacheMode)) {
-        return;
+        return false;
     }
     const auto itemIt = _fileToItem.constFind(request.info.path);
     if (itemIt == _fileToItem.constEnd() || !itemIt.value()->isImage() ||
         !isCurrentFileVersion(itemIt.value(), request.info)) {
-        return;
+        return false;
     }
     ImageDecodeRequest sourceRetry = request;
     sourceRetry.checkCache = false;
     const QString retryKey = decodeRetryKey(sourceRetry);
+    if (_failedImageDecodeRetryAttempts.value(retryKey, 0) >=
+        FailedImageWorkMaxAttempts) {
+        _failedImageDecodeRetryAttempts.remove(retryKey);
+        _failedImageDecodeRequests.remove(retryKey);
+        return false;
+    }
     const auto existingRetry = _failedImageDecodeRequests.constFind(retryKey);
     if (existingRetry != _failedImageDecodeRequests.constEnd()) {
         sourceRetry.highPriority =
@@ -779,6 +803,7 @@ void FileListModel::rememberFailedDecodeRequest(
     }
     _failedImageDecodeRequests.insert(retryKey, sourceRetry);
     scheduleFailedImageWorkRetry();
+    return true;
 }
 
 void FileListModel::scheduleFailedImageWorkRetry() {
@@ -838,13 +863,18 @@ void FileListModel::retryFailedImageWork() {
             _failedImageInfoRetryAttempts.remove(attemptKey);
             attemptKey = effectiveAttemptKey;
         }
-        if (activeDirectRetry &&
-            attempts >= FailedImageWorkMaxAttempts) {
-            abandonDirectPriority = true;
+        if (attempts >= FailedImageWorkMaxAttempts) {
+            if (_hasCurrentViewerRequest && _currentViewIndex >= 0 &&
+                _currentViewIndex < _items.size() &&
+                _items.at(_currentViewIndex) == itemIt.value()) {
+                setViewerRequestState(info.path,
+                                      QStringLiteral("failed"));
+            }
+            if (activeDirectRetry) {
+                abandonDirectPriority = true;
+            }
             _failedImageInfoRetryAttempts.remove(attemptKey);
-            info.directOpenGeneration = 0;
-            attemptKey = infoRetryKey(info);
-            attempts = _failedImageInfoRetryAttempts.value(attemptKey, 0);
+            continue;
         }
         _failedImageInfoRetryAttempts.insert(
             attemptKey,
@@ -953,6 +983,14 @@ void FileListModel::retryFailedImageWork() {
             request.info.directOpenGeneration = 0;
             attemptKey = decodeRetryKey(request);
             attempts = _failedImageDecodeRetryAttempts.value(attemptKey, 0);
+        }
+        if (attempts >= FailedImageWorkMaxAttempts) {
+            _failedImageDecodeRetryAttempts.remove(attemptKey);
+            if (request.viewerRequest) {
+                setViewerRequestState(request.info.sourceIdentity(),
+                                      QStringLiteral("failed"));
+            }
+            continue;
         }
         if (request.viewerRequest) {
             if (!_viewerImageCache.needsDecode(request)) {

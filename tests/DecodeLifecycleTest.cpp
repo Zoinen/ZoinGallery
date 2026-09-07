@@ -123,6 +123,189 @@ private slots:
         }
     }
 
+    void idleManagerDoesNotPollRunningTaskStatus() {
+        DecodeManager manager(nullptr, 3);
+        QSignalSpy statusSpy(&manager, &DecodeManager::runningTasksChanged);
+
+        // A freshly installed embedded runtime has no work. It must leave the
+        // event dispatcher asleep instead of publishing the same 0/0 status
+        // ten times per second.
+        QTest::qWait(350);
+        QCOMPARE(statusSpy.size(), 0);
+    }
+
+    void runningTaskStatusTimerStopsAtTrueQuiescence() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath =
+            directory.filePath(QStringLiteral("status-lifecycle.bmp"));
+        QImage source(48, 32, QImage::Format_RGB32);
+        source.fill(QColor(50, 110, 190));
+        QVERIFY(source.save(imagePath, "BMP"));
+
+        DecodeManager manager(nullptr, 3);
+        manager.setImageCacheMode(CacheUsageMode::Off);
+        QSignalSpy statusSpy(&manager, &DecodeManager::runningTasksChanged);
+        bool completed = false;
+        connect(&manager, &DecodeManager::imageReady, &manager,
+                [&completed](const ImageDecodeRequest &, const QImage &image,
+                             const DecodedImageInfo &) {
+                    QVERIFY(!image.isNull());
+                    completed = true;
+                });
+
+        manager.decodeImages({decodeRequest(
+            imagePath, QStringLiteral("status-lifecycle"), true)});
+        QTRY_VERIFY_WITH_TIMEOUT(completed, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!statusSpy.isEmpty()
+                && statusSpy.constLast().at(0).toString()
+                    == QStringLiteral("0/0"), 5000);
+
+        const qsizetype settledSignalCount = statusSpy.size();
+        QTest::qWait(350);
+        QCOMPARE(statusSpy.size(), settledSignalCount);
+    }
+
+    void standaloneViewerDecodeFailureBecomesTerminalWithoutRetryWork() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath =
+            directory.filePath(QStringLiteral("unsupported.png"));
+        QFile file(imagePath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("not an image"), qint64(12));
+        file.close();
+
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        DecodeManager manager(nullptr, 3);
+        manager.setImageCacheMode(CacheUsageMode::Off);
+        FileListModel model(
+            store, &manager, QStringLiteral("terminal-viewer"),
+            QStringLiteral("terminal-viewer-"),
+            QStringLiteral("zoingallery-thumbnails"),
+            QStringLiteral("zoingallery-async"));
+        const int row = model.cd(directory.path(),
+                                 QStringLiteral("unsupported.png"));
+        QVERIFY(row >= 0);
+        QSignalSpy stateSpy(&model,
+                            &FileListModel::viewerRequestStateChanged);
+        model.requestViewer(row, 320, 240);
+        QTRY_COMPARE_WITH_TIMEOUT(model.viewerRequestStateForIndex(row),
+                                  QStringLiteral("failed"), 5000);
+
+        model.cancelAllDecodeViewerRunnersForViewerClose();
+        QCOMPARE(model.viewerRequestStateForIndex(row),
+                 QStringLiteral("idle"));
+        model.requestViewer(row, 320, 240);
+        QCOMPARE(model.viewerRequestStateForIndex(row),
+                 QStringLiteral("failed"));
+        const qsizetype settledStateSignals = stateSpy.size();
+        QTest::qWait(350);
+        QCOMPARE(stateSpy.size(), settledStateSignals);
+
+        model.shutdown();
+    }
+
+    void failedThumbnailAndSelectedImageWorkStopsAtRetryLimit() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath =
+            directory.filePath(QStringLiteral("retry-cap.bmp"));
+        QImage image(48, 32, QImage::Format_RGB32);
+        image.fill(QColor(70, 130, 200));
+        QVERIFY(image.save(imagePath, "BMP"));
+
+        DecodeManager manager(nullptr, 3);
+        manager.setImageCacheMode(CacheUsageMode::Off);
+        manager.setFileListCacheMode(CacheUsageMode::Off);
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        FileListModel sourceModel(
+            store, &manager, QStringLiteral("retry-cap-source"),
+            QStringLiteral("retry-cap-source-"),
+            QStringLiteral("retry-cap-thumbnails"),
+            QStringLiteral("retry-cap-async"));
+        sourceModel.cd(directory.path());
+        QTRY_VERIFY_WITH_TIMEOUT(sourceModel._fileToItem.contains(imagePath),
+                                 2000);
+
+        ImageDecodeRequest thumbnail = decodeRequest(
+            imagePath, QStringLiteral("retry-cap-source"), false);
+        thumbnail.sourceAccessFailed = true;
+        QVERIFY(sourceModel.rememberFailedDecodeRequest(thumbnail));
+        QCOMPARE(sourceModel._failedImageDecodeRequests.size(), 1);
+        const QString sourceRetryKey =
+            sourceModel._failedImageDecodeRequests.constBegin().key();
+        sourceModel._failedImageWorkRetryTimer.stop();
+        sourceModel._failedImageDecodeRequests.clear();
+        sourceModel._failedImageDecodeRetryAttempts.insert(sourceRetryKey, 8);
+        QVERIFY(!sourceModel.rememberFailedDecodeRequest(thumbnail));
+        QVERIFY(!sourceModel._failedImageWorkRetryTimer.isActive());
+        QVERIFY(sourceModel._failedImageDecodeRequests.isEmpty());
+
+        SelectedImagesModel selectedModel(
+            &sourceModel, store, &manager,
+            QStringLiteral("retry-cap-selected"),
+            QStringLiteral("retry-cap-selected-"),
+            QStringLiteral("retry-cap-thumbnails"),
+            QStringLiteral("retry-cap-async"));
+        auto *selectedItem = new ImageFile(&selectedModel);
+        selectedItem->setFolderPath(directory.path());
+        selectedItem->setFileName(QFileInfo(imagePath).fileName());
+        selectedItem->setIsImage(true);
+        selectedItem->setIsFolder(false);
+        selectedItem->setIndex(selectedModel._items.size());
+        selectedItem->setInfo(thumbnail.info);
+        selectedModel._pathToItem.insert(imagePath, selectedItem);
+        selectedModel._items.append(selectedItem);
+        selectedModel._imageInfoRequestTimer.stop();
+        selectedModel._failedImageWorkRetryTimer.stop();
+        selectedModel._failedImageInfoRequests.clear();
+        selectedModel._failedImageDecodeRequests.clear();
+
+        ImageInfo metadata = thumbnail.info;
+        metadata.sourceAccessFailed = false;
+        selectedModel.rememberFailedImageInfo(metadata);
+        QVERIFY(!selectedModel._failedImageWorkRetryTimer.isActive());
+        QVERIFY(selectedModel._failedImageInfoRequests.isEmpty());
+
+        metadata.sourceAccessFailed = true;
+        selectedModel.rememberFailedImageInfo(metadata);
+        QCOMPARE(selectedModel._failedImageInfoRequests.size(), 1);
+        const QString selectedInfoRetryKey =
+            selectedModel._failedImageInfoRequests.constBegin().key();
+        selectedModel._failedImageWorkRetryTimer.stop();
+        selectedModel._failedImageInfoRequests.clear();
+        selectedModel._failedImageInfoRetryAttempts.insert(
+            selectedInfoRetryKey, 8);
+        selectedModel.rememberFailedImageInfo(metadata);
+        QVERIFY(!selectedModel._failedImageWorkRetryTimer.isActive());
+        QVERIFY(selectedModel._failedImageInfoRequests.isEmpty());
+
+        thumbnail.requestNamespace = QStringLiteral("retry-cap-selected");
+        selectedModel.rememberFailedDecodeRequest(thumbnail);
+        QCOMPARE(selectedModel._failedImageDecodeRequests.size(), 1);
+        const QString selectedDecodeRetryKey =
+            selectedModel._failedImageDecodeRequests.constBegin().key();
+        selectedModel._failedImageWorkRetryTimer.stop();
+        selectedModel._failedImageDecodeRequests.clear();
+        selectedModel._failedImageDecodeRetryAttempts.insert(
+            selectedDecodeRetryKey, 8);
+        selectedModel.rememberFailedDecodeRequest(thumbnail);
+        QVERIFY(!selectedModel._failedImageWorkRetryTimer.isActive());
+        QVERIFY(selectedModel._failedImageDecodeRequests.isEmpty());
+
+        // A null image after a successful read is an authoritative decoder
+        // rejection. It must not arm even the first transport retry.
+        selectedModel._failedImageDecodeRetryAttempts.clear();
+        thumbnail.sourceAccessFailed = false;
+        selectedModel.onImageAvailable(thumbnail, QImage(), {});
+        QVERIFY(!selectedModel._failedImageWorkRetryTimer.isActive());
+        QVERIFY(selectedModel._failedImageDecodeRequests.isEmpty());
+
+        selectedModel.prepareToClose();
+        sourceModel.shutdown();
+    }
+
     void decoderFactoryReturnsScopedOwnership() {
         static_assert(std::is_same_v<
                       decltype(ImageDecoderFactory::createDecoder(0)),

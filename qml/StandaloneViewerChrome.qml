@@ -196,16 +196,22 @@ Item {
             maskSource: topBarRect
         }
 
-        Timer {
-            repeat: true
-            running: chrome.shell.state === "viewer"
-            interval: 50
-            onTriggered: {
-                let pos = chrome.hostWindow.mousePos()
-                pos = chrome.titleBarItem.mapFromGlobal(pos.x, pos.y)
-                let containsPos = pos.x >= chrome.titleBarItem.x && pos.y >= chrome.titleBarItem.y && pos.x <= chrome.titleBarItem.x + chrome.titleBarItem.width && pos.y <= chrome.titleBarItem.y + chrome.titleBarItem.height
-                topPanel.hovered = chrome.hostWindow.isPressedOnTitleBar() && containsPos
+        HoverHandler {
+            id: titleBarHoverHandler
+            objectName: "standaloneViewerTitleBarHoverHandler"
+            enabled: chrome.shell.state === "viewer"
+
+            function refresh() {
+                topPanel.hovered = enabled && hovered
+                        && chrome.hostWindow.isPressedOnTitleBar()
             }
+
+            onEnabledChanged: refresh()
+            onHoveredChanged: refresh()
+            // A passive hover grab continues to see press/release and drag
+            // updates. Re-evaluate the native title-bar grab predicate on
+            // those events without polling the global cursor position.
+            onPointChanged: refresh()
         }
 
         Item {

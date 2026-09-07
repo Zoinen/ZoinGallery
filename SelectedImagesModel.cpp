@@ -880,8 +880,15 @@ void SelectedImagesModel::rememberFailedImageInfo(const ImageInfo &info) {
     ImageInfo sourceRetry = info;
     sourceRetry.lastModified = item->lastModified();
     sourceRetry.fileSize = item->fileSize();
-    _failedImageInfoRequests.insert(selectedInfoRetryKey(sourceRetry),
-                                    sourceRetry);
+    const QString retryKey = selectedInfoRetryKey(sourceRetry);
+    if (!info.sourceAccessFailed ||
+        _failedImageInfoRetryAttempts.value(retryKey, 0) >=
+            FailedImageWorkMaxAttempts) {
+        _failedImageInfoRequests.remove(retryKey);
+        _failedImageInfoRetryAttempts.remove(retryKey);
+        return;
+    }
+    _failedImageInfoRequests.insert(retryKey, sourceRetry);
     scheduleFailedImageWorkRetry();
 }
 
@@ -896,6 +903,12 @@ void SelectedImagesModel::rememberFailedDecodeRequest(
     ImageDecodeRequest sourceRetry = request;
     sourceRetry.checkCache = false;
     const QString retryKey = selectedDecodeRetryKey(sourceRetry);
+    if (_failedImageDecodeRetryAttempts.value(retryKey, 0) >=
+        FailedImageWorkMaxAttempts) {
+        _failedImageDecodeRequests.remove(retryKey);
+        _failedImageDecodeRetryAttempts.remove(retryKey);
+        return;
+    }
     const auto existingRetry = _failedImageDecodeRequests.constFind(retryKey);
     if (existingRetry != _failedImageDecodeRequests.constEnd()) {
         sourceRetry.highPriority =
@@ -954,6 +967,10 @@ void SelectedImagesModel::retryFailedImageWork() {
         }
         const int attempts =
             _failedImageInfoRetryAttempts.value(attemptKey, 0);
+        if (attempts >= FailedImageWorkMaxAttempts) {
+            _failedImageInfoRetryAttempts.remove(attemptKey);
+            continue;
+        }
         _failedImageInfoRetryAttempts.insert(
             attemptKey,
             qMin(attempts + 1, FailedImageWorkMaxAttempts));
@@ -1008,6 +1025,10 @@ void SelectedImagesModel::retryFailedImageWork() {
         }
         const int attempts =
             _failedImageDecodeRetryAttempts.value(attemptKey, 0);
+        if (attempts >= FailedImageWorkMaxAttempts) {
+            _failedImageDecodeRetryAttempts.remove(attemptKey);
+            continue;
+        }
         if (request.viewerRequest &&
             !_viewerImageCache.needsDecode(request)) {
             _failedImageDecodeRetryAttempts.remove(attemptKey);
@@ -1107,7 +1128,11 @@ void SelectedImagesModel::onImageAvailable(const ImageDecodeRequest &request, co
         return;
     }
     if (image.isNull()) {
-        rememberFailedDecodeRequest(request);
+        ImageDecodeRequest sourceRetry = request;
+        sourceRetry.checkCache = false;
+        const QString retryKey = selectedDecodeRetryKey(sourceRetry);
+        _failedImageDecodeRequests.remove(retryKey);
+        _failedImageDecodeRetryAttempts.remove(retryKey);
         return;
     }
     if (!decodedInfo.isFromCache) {

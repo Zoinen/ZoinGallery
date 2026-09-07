@@ -186,16 +186,26 @@ Item {
     }
 
     BusyIndicator {
+        objectName: "galleryViewerBusyIndicator"
         anchors.centerIn: parent
         running: !root.viewer.customContent
+                 && root.viewer.visible
+                 && root.viewer.viewerContentVisible
+                 && root.viewer.transitionProgress > 0.5
+                 && root.viewer.session
+                 && root.viewer.presentedIndex >= 0
+                 && root.viewer.currentViewerRequestState === "pending"
                  && root.viewer.currentSourceValue.toString() === ""
-        visible: running && root.viewer.transitionProgress > 0.5
+        visible: running
     }
 
     Label {
+        objectName: "galleryViewerLoadFailure"
         anchors.centerIn: parent
         visible: !root.viewer.customContent && root.viewer.session
-                 && root.viewer.presentedIndex < 0
+                 && (root.viewer.presentedIndex < 0
+                     || (root.viewer.currentViewerRequestState === "failed"
+                         && root.viewer.currentSourceValue.toString() === ""))
         text: qsTr("Unable to load image")
         color: root.viewer.foregroundColor
     }

@@ -69,3 +69,23 @@ void SvgCursor::setOverrideCursor(const QString &path, qreal dp, qreal rotation)
         qApp->restoreOverrideCursor();
     }
 }
+
+void SvgCursor::setScrollingModeCursor(bool scrollingMode, int direction,
+                                        qreal dp) {
+    if (!scrollingMode) {
+        setOverrideCursor();
+        return;
+    }
+
+    QString path;
+    if (direction < 0) {
+        path = QStringLiteral(":/ZoinGallery/resources/ScrollModeUp.svg");
+    }
+    else if (direction > 0) {
+        path = QStringLiteral(":/ZoinGallery/resources/ScrollModeDown.svg");
+    }
+    else {
+        path = QStringLiteral(":/ZoinGallery/resources/ScrollMode.svg");
+    }
+    setOverrideCursor(path, dp > 0 ? dp : 1);
+}

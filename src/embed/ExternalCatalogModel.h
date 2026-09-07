@@ -92,6 +92,7 @@ public:
     QString viewerImageUrlAt(int row) const;
     QString bestViewerImageUrlAt(int row) const;
     QList<QPair<QString, int>> viewerImageSourcesAt(int row) const;
+    QString viewerRequestStateAt(int row) const;
     void requestViewer(int row, const QSize &viewportSize);
     void requestViewerAt(int row, const QSize &viewportSize);
     void setViewerIndex(int row);
@@ -132,6 +133,7 @@ public:
 signals:
     void viewerImageUrlChanged();
     void viewerSourceAtChanged(int row);
+    void viewerRequestStateAtChanged(int row);
 
 private:
     friend class ExternalCatalogResetTransaction;
@@ -239,7 +241,8 @@ private:
     QList<int> sourceRows(const QString &sourceIdentity) const;
     QList<int> decodeAuthorityRows(
         const ImageDecodeRequest &request) const;
-    void clearCompletedDecodeRequest(const ImageDecodeRequest &request);
+    void clearCompletedDecodeRequest(const ImageDecodeRequest &request,
+                                     bool clearRetryState = true);
     Entry *validatedDecodedEntry(int row,
                                  const ImageDecodeRequest &request);
     QList<int> validatedDecodedRows(
@@ -270,7 +273,10 @@ private:
                                         bool retryWaiters);
     void releaseFailedThumbnailRequest(
         const ImageDecodeRequest &request, bool retryWaiters = false);
-    void scheduleSourceDecodeRetry(const ImageDecodeRequest &request);
+    bool scheduleSourceDecodeRetry(const ImageDecodeRequest &request);
+    void setViewerRequestState(const QList<int> &rows,
+                               const QString &state);
+    void clearViewerRequestStates();
     bool adoptCachedThumbnail(int row);
     void attachThumbnail(int row, const QString &providerId);
     void detachThumbnail(Entry &entry);
@@ -314,7 +320,7 @@ private:
     void invalidateNativeDwell();
     void scheduleMetadataPump();
     void pumpMetadataRequests();
-    void scheduleMetadataRetry(const QString &sourceIdentity,
+    bool scheduleMetadataRetry(const QString &sourceIdentity,
                                const QString &contentVersion,
                                const QString &resourceId,
                                bool background);
@@ -407,6 +413,7 @@ private:
     QString _lastViewerImageUrl;
     QHash<QString, ViewerPlan> _viewerPlans;
     QSet<QString> _pendingViewerRequests;
+    QHash<QString, QString> _viewerRequestStates;
     QHash<QString, PendingThumbnailRequest> _pendingThumbnailRequests;
     QHash<QString, int> _sourceDecodeRetryAttempts;
     QSet<QString> _sourceDecodeRetryScheduled;

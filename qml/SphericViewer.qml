@@ -23,6 +23,20 @@ Item {
     signal sphereScrollingMouseCursorRequested(bool set, bool idle,
                                                real rotation)
 
+    function stopScrolling() {
+        panoramaMouseArea.scrollSpeedX = 0
+        panoramaMouseArea.scrollSpeedY = 0
+        scrollAnimation.inertiaMode = false
+        scrollAnimation.stop()
+        sphereScrollingMouseCursorRequested(false, false, 0)
+    }
+
+    onVisibleChanged: {
+        if (!visible)
+            stopScrolling()
+    }
+    Component.onDestruction: stopScrolling()
+
     // ViewerWheelArea sits above the reusable viewer so it can preserve the
     // original horizontal image-navigation gestures.  Keep the panorama's
     // legacy FOV calculation callable from that input layer as well as from
@@ -98,7 +112,6 @@ Item {
             baseY = mouseY;
             scrollSpeedX = 0;
             scrollSpeedY = 0;
-            scrollAnimation.start();
 
             flickableArea.sphereScrollingMouseCursorRequested(true, true, 0)
         }
@@ -128,11 +141,14 @@ Item {
                 if (!distance) {
                     scrollSpeedX = 0
                     scrollSpeedY = 0
+                    scrollAnimation.stop()
                 }
                 else {
                     let decel = Math.pow(fov / 90.0, 0.5)
                     scrollSpeedX = deltaX / distance * speed * decel;
                     scrollSpeedY = deltaY / distance * speed * decel;
+                    if (!scrollAnimation.running)
+                        scrollAnimation.start()
                 }
                 flickableArea.sphereScrollingMouseCursorRequested(
                             true, false,
@@ -142,10 +158,19 @@ Item {
 
         onReleased: {
             // Smoothly transition to inertia using the current scroll speed
+            if (Math.abs(scrollSpeedX) < 0.01
+                    && Math.abs(scrollSpeedY) < 0.01) {
+                flickableArea.stopScrolling()
+                return
+            }
             scrollAnimation.inertiaMode = true;
+            if (!scrollAnimation.running)
+                scrollAnimation.start()
             flickableArea.sphereScrollingMouseCursorRequested(
                         false, false, 0)
         }
+
+        onCanceled: flickableArea.stopScrolling()
 
         onEntered: {
             // Hide the cursor when the mouse enters the area
@@ -167,6 +192,7 @@ Item {
 
         FrameAnimation {
             id: scrollAnimation
+            running: false
             property bool inertiaMode: false
 
             onTriggered: {

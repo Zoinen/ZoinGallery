@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <QImageReader>
 #include <QDate>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QStandardPaths>
@@ -38,6 +39,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <mutex>
 
 #if defined(Q_OS_WIN)
@@ -239,16 +241,33 @@ void updateDailyLogFile()
     }
 }
 
+void scheduleNextDailyLogRollover(QTimer *timer)
+{
+    const QDateTime now = QDateTime::currentDateTime();
+    const QDateTime nextMidnight = now.date().addDays(1).startOfDay(now.timeZone());
+    // A precise timer is not permitted to fire early. The small guard keeps a
+    // timeout delivered on a clock boundary on the new local date, after
+    // which the single-shot timer is scheduled again for the following day.
+    const qint64 interval = qMax<qint64>(
+        1000, now.msecsTo(nextMidnight) + 1000);
+    timer->start(static_cast<int>(qMin<qint64>(
+        interval, (std::numeric_limits<int>::max)())));
+}
+
 void installDailyLogRedirection(QObject *parent)
 {
     qInstallMessageHandler(logMessageHandler);
     updateDailyLogFile();
 
     auto *logRolloverTimer = new QTimer(parent);
-    QObject::connect(logRolloverTimer, &QTimer::timeout, []() {
+    logRolloverTimer->setSingleShot(true);
+    logRolloverTimer->setTimerType(Qt::PreciseTimer);
+    QObject::connect(logRolloverTimer, &QTimer::timeout,
+                     [logRolloverTimer]() {
         updateDailyLogFile();
+        scheduleNextDailyLogRollover(logRolloverTimer);
     });
-    logRolloverTimer->start(60 * 1000);
+    scheduleNextDailyLogRollover(logRolloverTimer);
 }
 
 class ZoinApplication : public QApplication {

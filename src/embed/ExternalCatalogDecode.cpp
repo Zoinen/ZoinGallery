@@ -84,9 +84,19 @@ void ExternalCatalogModel::applyImageInfoResult(
     }
     if (info.sourceAccessFailed) {
         const Entry &entry = loadedEntry(authorityRows.constFirst());
-        scheduleMetadataRetry(sourceIdentity, entry.contentVersion,
-                              entry.source.resourceId,
-                              !info.highPriority);
+        if (!scheduleMetadataRetry(sourceIdentity, entry.contentVersion,
+                                   entry.source.resourceId,
+                                   !info.highPriority)) {
+            QList<int> pendingRows;
+            for (const int row : std::as_const(authorityRows)) {
+                if (viewerRequestStateAt(row) ==
+                    QStringLiteral("pending")) {
+                    pendingRows.append(row);
+                }
+            }
+            setViewerRequestState(pendingRows,
+                                  QStringLiteral("failed"));
+        }
         return;
     }
 
@@ -104,9 +114,24 @@ void ExternalCatalogModel::applyImageInfoResult(
     _metadataRetryAttempts.remove(retryKey);
     _metadataRetryScheduled.remove(retryKey);
     _backgroundMetadataRetries.remove(retryKey);
+    const bool unusableMetadata = !info.imageSize.isValid();
+    if (unusableMetadata) {
+        QList<int> pendingRows;
+        for (const int row : std::as_const(authorityRows)) {
+            if (viewerRequestStateAt(row) ==
+                QStringLiteral("pending")) {
+                pendingRows.append(row);
+            }
+        }
+        setViewerRequestState(pendingRows, QStringLiteral("failed"));
+    }
     if (_catalogFitWaitingMetadata.remove(sourceIdentity)
         && !_catalogFitResolvedSources.contains(sourceIdentity)) {
-        _catalogFitRows.prepend(authorityRows.constFirst());
+        if (unusableMetadata) {
+            _catalogFitResolvedSources.insert(sourceIdentity);
+        } else {
+            _catalogFitRows.prepend(authorityRows.constFirst());
+        }
         state.catalogFitChanged = true;
     }
 }
@@ -224,7 +249,7 @@ void ExternalCatalogModel::handleImageReady(
     if (authorityRows.isEmpty()) {
         return;
     }
-    clearCompletedDecodeRequest(request);
+    clearCompletedDecodeRequest(request, !image.isNull());
     if (_shutdown) {
         return;
     }
@@ -232,12 +257,20 @@ void ExternalCatalogModel::handleImageReady(
         if (!request.viewerRequest) {
             releaseFailedThumbnailRequest(request);
         }
-        // A null decode from a VFS-backed source is commonly caused by a
-        // transiently invalid materialized lease during transport recovery.
-        // Keep the bounded retry path for it as well; local corrupt/unsupported
-        // files retain their terminal behavior.
-        if (request.info.source.isValid()) {
-            scheduleSourceDecodeRetry(request);
+        // A null decode after a successful direct-local read is authoritative:
+        // the bytes are corrupt or unsupported, so repeating it only burns
+        // CPU and keeps the loading animation alive. Expensive/materialized
+        // sources retain their bounded transport-recovery retries.
+        if (request.info.source.isValid()
+            && expensiveSource(request.info.source)
+            && scheduleSourceDecodeRetry(request)) {
+            if (request.viewerRequest) {
+                setViewerRequestState(authorityRows,
+                                      QStringLiteral("pending"));
+            }
+        } else if (request.viewerRequest) {
+            setViewerRequestState(authorityRows,
+                                  QStringLiteral("failed"));
         }
         return;
     }
@@ -296,14 +329,16 @@ QList<int> ExternalCatalogModel::decodeAuthorityRows(
 }
 
 void ExternalCatalogModel::clearCompletedDecodeRequest(
-    const ImageDecodeRequest &request) {
+    const ImageDecodeRequest &request, bool clearRetryState) {
     const QString requestKey = request.viewerRequest
         ? viewerRequestKey(request) : thumbnailRequestKey(request);
     const QString retryKey = (request.viewerRequest
         ? QStringLiteral("viewer:") : QStringLiteral("thumbnail:"))
         + requestKey;
-    _sourceDecodeRetryAttempts.remove(retryKey);
-    _sourceDecodeRetryScheduled.remove(retryKey);
+    if (clearRetryState) {
+        _sourceDecodeRetryAttempts.remove(retryKey);
+        _sourceDecodeRetryScheduled.remove(retryKey);
+    }
     if (request.viewerRequest) {
         _backgroundDecodeRetries.remove(retryKey);
         _pendingViewerRequests.remove(requestKey);
@@ -393,6 +428,9 @@ void ExternalCatalogModel::publishViewerImage(
     Entry &representative = loadedEntry(rows.constFirst());
     const ViewerImageCache::StoredImage stored =
         _viewerImageCache.storeDecodedImage(request, image, decodedInfo);
+    if (stored.presentable) {
+        setViewerRequestState(rows, QStringLiteral("ready"));
+    }
     MediaTimingTrace::event(
         QStringLiteral("qt.gallery.viewer_image.stored"), {
             {QStringLiteral("sessionId"), _sessionId},
@@ -448,6 +486,7 @@ void ExternalCatalogModel::handleImageReadFailed(
         return;
     }
     if (request.viewerRequest) {
+        const QList<int> authorityRows = decodeAuthorityRows(request);
         const QString key = viewerRequestKey(request);
         _pendingViewerRequests.remove(key);
         if (request.sourceAccessFailed) {
@@ -455,10 +494,18 @@ void ExternalCatalogModel::handleImageReadFailed(
             // complete: a transport timeout says nothing about its pixels.
             _catalogFitPendingKeys.remove(key);
             scheduleCatalogFitPump();
-            scheduleSourceDecodeRetry(request);
+            if (scheduleSourceDecodeRetry(request)) {
+                setViewerRequestState(authorityRows,
+                                      QStringLiteral("pending"));
+            } else {
+                setViewerRequestState(authorityRows,
+                                      QStringLiteral("failed"));
+            }
         }
         else {
             completeCatalogFitRequest(request);
+            setViewerRequestState(authorityRows,
+                                  QStringLiteral("failed"));
         }
         return;
     }
@@ -498,7 +545,7 @@ void ExternalCatalogModel::releaseFailedThumbnailRequest(
         request.targetSize, thumbnailTransformKey(request), retryWaiters);
 }
 
-void ExternalCatalogModel::scheduleSourceDecodeRetry(
+bool ExternalCatalogModel::scheduleSourceDecodeRetry(
     const ImageDecodeRequest &request) {
     const QString retryKey =
         (request.viewerRequest ? QStringLiteral("viewer:")
@@ -506,14 +553,14 @@ void ExternalCatalogModel::scheduleSourceDecodeRetry(
         (request.viewerRequest ? viewerRequestKey(request)
                                : thumbnailRequestKey(request));
     if (_sourceDecodeRetryScheduled.contains(retryKey)) {
-        return;
+        return true;
     }
     const int MaxAutomaticAttempts =
         request.backgroundViewerRequest ? 1 :
         (request.info.source.isValid() ? 8 : 3);
     const int attempt = _sourceDecodeRetryAttempts.value(retryKey) + 1;
     if (attempt > MaxAutomaticAttempts) {
-        return;
+        return false;
     }
     _sourceDecodeRetryAttempts.insert(retryKey, attempt);
     _sourceDecodeRetryScheduled.insert(retryKey);
@@ -525,7 +572,7 @@ void ExternalCatalogModel::scheduleSourceDecodeRetry(
             .notBeforeMs = QDateTime::currentMSecsSinceEpoch() + delayMs,
         });
         scheduleBackgroundRetryWake();
-        return;
+        return true;
     }
     const QString sourceIdentity = request.info.sourceIdentity();
     const QString contentVersion = request.info.sourceVersionToken;
@@ -567,6 +614,7 @@ void ExternalCatalogModel::scheduleSourceDecodeRetry(
             }
         }
     });
+    return true;
 }
 
 void ExternalCatalogModel::clearPublishedImage(Entry &entry) {

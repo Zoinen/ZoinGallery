@@ -40,6 +40,49 @@ QList<QPair<QString, int>> ExternalCatalogModel::viewerImageSourcesAt(
         });
 }
 
+QString ExternalCatalogModel::viewerRequestStateAt(int row) const {
+    if (!validRow(row) || !loadedEntry(row).image) {
+        return QStringLiteral("idle");
+    }
+    return _viewerRequestStates.value(loadedEntry(row).id,
+                                      QStringLiteral("idle"));
+}
+
+void ExternalCatalogModel::setViewerRequestState(
+    const QList<int> &rows, const QString &state) {
+    for (const int row : rows) {
+        if (!validRow(row)) {
+            continue;
+        }
+        const QString entryId = loadedEntry(row).id;
+        const QString previous = _viewerRequestStates.value(
+            entryId, QStringLiteral("idle"));
+        if (previous == state) {
+            continue;
+        }
+        if (state == QStringLiteral("idle")) {
+            _viewerRequestStates.remove(entryId);
+        } else {
+            _viewerRequestStates.insert(entryId, state);
+        }
+        emit viewerRequestStateAtChanged(row);
+    }
+}
+
+void ExternalCatalogModel::clearViewerRequestStates() {
+    if (_viewerRequestStates.isEmpty()) {
+        return;
+    }
+    const QStringList entryIds = _viewerRequestStates.keys();
+    _viewerRequestStates.clear();
+    for (const QString &entryId : entryIds) {
+        const int row = rowForEntryId(entryId);
+        if (validRow(row)) {
+            emit viewerRequestStateAtChanged(row);
+        }
+    }
+}
+
 void ExternalCatalogModel::requestViewer(
     int row, const QSize &viewportSize) {
     if (_shutdown || !validRow(row) || !loadedEntry(row).image ||
@@ -73,6 +116,16 @@ void ExternalCatalogModel::requestViewer(
     }
     const int prefetchCount = nativeRequest ? 5 : 16;
     _viewerPlans.insert(entryId, {viewportSize, prefetchCount});
+    const int requiredLevel = nativeRequest ? 2 : 1;
+    const auto currentSources = viewerImageSourcesAt(row);
+    const bool requestedTierReady = std::any_of(
+        currentSources.cbegin(), currentSources.cend(),
+        [requiredLevel](const auto &source) {
+            return source.second == requiredLevel;
+        });
+    setViewerRequestState(
+        {row}, requestedTierReady ? QStringLiteral("ready")
+                                  : QStringLiteral("pending"));
     if (nativeRequest) {
         // First guarantee a usable Fit base for current +/-2. Native pixels
         // are admitted only after a separate dwell below, so a quick swipe or
@@ -107,6 +160,16 @@ void ExternalCatalogModel::requestViewerAt(
         }
     }
     _viewerPlans.insert(entryId, {viewportSize, prefetchCount});
+    const int requiredLevel = nativeRequest ? 2 : 1;
+    const auto currentSources = viewerImageSourcesAt(row);
+    const bool requestedTierReady = std::any_of(
+        currentSources.cbegin(), currentSources.cend(),
+        [requiredLevel](const auto &source) {
+            return source.second == requiredLevel;
+        });
+    setViewerRequestState(
+        {row}, requestedTierReady ? QStringLiteral("ready")
+                                  : QStringLiteral("pending"));
     if (nativeRequest && entryId == _viewerEntryId) {
         if (_deferredNativeEntryId != entryId) {
             invalidateNativeDwell();
@@ -154,6 +217,7 @@ void ExternalCatalogModel::clearViewer() {
     _viewerEntryId.clear();
     _viewerViewportSize = {};
     _viewerPlans.clear();
+    clearViewerRequestStates();
     if (hadViewer) {
         notifyViewerImageUrlChanged();
     }

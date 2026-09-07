@@ -20,6 +20,7 @@
 #include <QDebug>
 #include <QThread>
 
+#include <algorithm>
 #include <chrono>
 #include <limits>
 #include <utility>
@@ -215,7 +216,7 @@ DecodeManager::DecodeManager(
             QSharedPointer<ZoinGallery::LocalImageSourceProvider>::create();
     }
 
-    _runningTasksUpdateTimer.start(100);
+    _runningTasksUpdateTimer.setInterval(100);
     connect(&_runningTasksUpdateTimer, &QTimer::timeout,
             this, &DecodeManager::updateRunningTasksCount);
 
@@ -1034,6 +1035,20 @@ void DecodeManager::processQueue() {
     if (_isClosing) {
         return;
     }
+    const auto hasRunningTask = [this]() {
+        return std::any_of(
+            _workers.cbegin(), _workers.cend(),
+            [](const WorkerInfo &worker) { return worker.runner != nullptr; });
+    };
+    if (_taskQueue.isEmpty() && !hasRunningTask()) {
+        updateRunningTasksCount();
+        _runningTasksUpdateTimer.stop();
+        return;
+    }
+    if (!_runningTasksUpdateTimer.isActive()) {
+        updateRunningTasksCount();
+        _runningTasksUpdateTimer.start();
+    }
     if (!_timer.isValid()) {
         _timer.start();
         // qDebug() << "ZZ TIMER START";
@@ -1050,14 +1065,7 @@ void DecodeManager::processQueue() {
         if (!_workers[workerIndex].runner) {
             if (_taskQueue.isEmpty()) {
                 updateRunningTasksCount();
-                _runningTasksUpdateTimer.stop();
                 return;
-            }
-            else {
-                if (!_runningTasksUpdateTimer.isActive()) {
-                    updateRunningTasksCount();
-                    _runningTasksUpdateTimer.start();
-                }
             }
             Runner *runner = nullptr;
             bool blockedEarlierImageRead = false;

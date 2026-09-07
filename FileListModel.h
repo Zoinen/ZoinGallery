@@ -15,6 +15,7 @@
 #include <ZoinGallery/GalleryCatalogSource.h>
 
 class DecodeManager;
+class DecodeLifecycleTest;
 class FileListModel;
 class QSocketNotifier;
 
@@ -162,6 +163,10 @@ public:
     Q_INVOKABLE QString preparedViewerImageUrlForIndex(
         int index, int width = -1, int height = -1) const;
     Q_INVOKABLE QSize viewerImageOriginalSizeForIndex(int index) const;
+    // "idle", "pending", "ready", or "failed".  This is the
+    // authoritative lifecycle of the viewer request, rather than an
+    // inference from whether a provider URL happens to be present yet.
+    Q_INVOKABLE QString viewerRequestStateForIndex(int index) const;
     QList<QPair<QString, int>> viewerImageSourcesForIndex(
         int index, const QSize &viewerSize = QSize()) const;
     QImage viewerForImageId(const QString &imageId);
@@ -258,6 +263,7 @@ public:
 signals:
     void viewerImageIdUrlChanged(const QString &imageId, int level); // 0 is thumbnail, 1 is viewer, 2 is full resolution
     void viewerImageCacheChanged(int index);
+    void viewerRequestStateChanged(int index);
     void viewerReset();
     void directOpenReady(int index);
     void directOpenFailed(const QString &path);
@@ -282,6 +288,8 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    friend class DecodeLifecycleTest;
+
     struct ImageInfoBatchUpdate;
     struct FolderPreviewUpdate;
     struct FolderReconcileTransaction;
@@ -436,7 +444,10 @@ private:
     void emitThumbnailInfoFlush();
     void refreshCurrentViewerAfterMetadata(ImageFile *item);
     void rememberFailedImageInfo(const ImageInfo &info);
-    void rememberFailedDecodeRequest(const ImageDecodeRequest &request);
+    bool rememberFailedDecodeRequest(const ImageDecodeRequest &request);
+    void setViewerRequestState(const QString &path,
+                               const QString &state);
+    void clearViewerRequestStates();
     void scheduleFailedImageWorkRetry();
     void retryFailedImageWork();
     void requestFolderPreviews(const QStringList &paths);
@@ -512,6 +523,7 @@ private:
     int _currentViewIndex;
     QSize _currentViewerRequestSize;
     bool _hasCurrentViewerRequest = false;
+    QHash<QString, QString> _viewerRequestStates;
 
     // Folder models must follow the folder identity, not its mutable row.
     // Watcher reconciliation can insert/remove rows before a visible folder;
@@ -528,6 +540,11 @@ private:
     QHash<QString, ImageDecodeRequest> _failedImageDecodeRequests;
     QHash<QString, int> _failedImageInfoRetryAttempts;
     QHash<QString, int> _failedImageDecodeRetryAttempts;
+    // Records an authoritative metadata failure for one exact local file
+    // revision. A repeated viewer request can then fail synchronously after
+    // its per-request state was cleared, instead of remaining pending when no
+    // decode target can be constructed.
+    QHash<QString, QString> _terminalImageInfoFailureRevisions;
 
     DirectOpenState _directOpen;
     SelectionGroupMoveAction _lastSelectionGroupMove;

@@ -149,6 +149,10 @@ public:
     Q_INVOKABLE int adjacentImageIndex(int fromIndex, int direction) const;
     Q_INVOKABLE QUrl viewerSourceAt(int index) const;
     Q_INVOKABLE QVariantList viewerSourcesAt(int index) const;
+    // Returns "idle", "pending", "ready", or "failed" for the requested
+    // row.  Consumers must use this instead of treating an empty URL as
+    // proof that work is still running.
+    Q_INVOKABLE QString viewerRequestStateAt(int index) const;
     Q_INVOKABLE void activateIndex(int index);
     Q_INVOKABLE void ensurePreviews();
     Q_INVOKABLE void requestViewer(int width, int height);
@@ -181,6 +185,7 @@ signals:
     void viewerOpenChanged();
     void viewerSourceChanged();
     void viewerSourceAtChanged(int index);
+    void viewerRequestStateAtChanged(int index);
     void viewerPreviousStateChanged();
     void shutdownCompleteChanged();
     void actionRequested(const QString &action, const QVariantMap &payload);

@@ -94,8 +94,10 @@ Item {
         acceptedButtons: Qt.MiddleButton
         hoverEnabled: true
 
-        onPositionChanged: mouse =>
+        onPositionChanged: mouse => {
+            autoScroll.updatePointerMotion()
             pointerLayer.hoverMoved(mouse.x, mouse.y)
+        }
         onContainsMouseChanged: {
             if (containsMouse)
                 pointerLayer.hoverMoved(mouseX, mouseY)
@@ -113,7 +115,7 @@ Item {
         onCanceled: {
             if (pointerLayer.wheelMode === "console") {
                 pointerLayer.consoleMiddleCanceled(mouseX, mouseY)
-            } else if (pointerLayer.scrollingStarted) {
+            } else if (pointerLayer.scrollingMode) {
                 autoScroll.end()
             }
         }
@@ -127,6 +129,16 @@ Item {
         horizontal: pointerLayer.presentationMode === "columns"
         scrollExtent: pointerLayer.autoScrollExtent
     }
+
+    onVisibleChanged: {
+        if (!visible && scrollingMode)
+            autoScroll.end()
+    }
+    onEnabledChanged: {
+        if (!enabled && scrollingMode)
+            autoScroll.end()
+    }
+    Component.onDestruction: autoScroll.end()
 
     PinchArea {
         objectName: "galleryPinchArea"

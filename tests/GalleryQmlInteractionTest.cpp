@@ -1,6 +1,10 @@
 #include <ZoinGallery/GalleryRuntime.h>
 #include <ZoinGallery/GallerySession.h>
 
+#include "DecodeManager.h"
+#include "FileListModel.h"
+#include "ImageFile.h"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QImage>
@@ -65,6 +69,389 @@ class GalleryQmlInteractionTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void terminalViewerFailureStopsBusyIndicatorAndFrames() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path =
+            directory.filePath(QStringLiteral("unsupported.png"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("not an image"), qint64(12));
+        file.close();
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("qml-terminal-viewer-failure"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(
+            {imageEntry(QStringLiteral("unsupported"), 0, path)}, 1));
+        QVERIFY(session->applyExternalState(
+            QStringLiteral("unsupported"), 0, {}, 1));
+        session->setViewerOpen(true);
+
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("terminalFailureSession"), session);
+#ifndef Q_MOC_RUN
+        QObject *rootObject = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryViewer {
+                objectName: "terminalFailureViewer"
+                width: 640
+                height: 420
+                session: terminalFailureSession
+                animationDuration: 1
+            }
+        )QML", QStringLiteral("GalleryTerminalViewerFailure.qml"));
+#else
+        QObject *rootObject = nullptr;
+#endif
+        QVERIFY(rootObject);
+        view.show();
+
+        auto *viewer = rootObject;
+        auto *busy = rootObject->findChild<QObject *>(
+            QStringLiteral("galleryViewerBusyIndicator"));
+        auto *failure = rootObject->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerLoadFailure"));
+        QVERIFY(viewer);
+        QVERIFY(busy);
+        QVERIFY(failure);
+
+        QSignalSpy requestStateSpy(
+            session, &ZoinGallery::GallerySession::viewerRequestStateAtChanged);
+        QTRY_COMPARE_WITH_TIMEOUT(session->viewerRequestStateAt(0),
+                                  QStringLiteral("failed"), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            viewer->property("currentViewerRequestState").toString(),
+            QStringLiteral("failed"), 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(!busy->property("running").toBool(), 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(failure->isVisible(), 1000);
+        QVERIFY(!requestStateSpy.isEmpty());
+
+        // A repeated request for the same immutable failed revision must not
+        // fall back to a pending state just because there is still no decode
+        // target. The resolved metadata outcome is authoritative.
+        session->requestViewer(640, 420);
+        QCOMPARE(session->viewerRequestStateAt(0),
+                 QStringLiteral("failed"));
+
+        // The Basic style fades a stopped BusyIndicator out for 250 ms.
+        // Measure after that bounded presentation transition has settled.
+        QTest::qWait(350);
+        QSignalSpy settledFrames(&view, &QQuickWindow::frameSwapped);
+        QVERIFY(settledFrames.isValid());
+        QTest::qWait(160);
+        QCOMPARE(settledFrames.size(), 0);
+
+        runtime->shutdown();
+    }
+
+    void quickSearchCursorBlinkSettlesAndHiddenPanelStopsIt() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("qml-bounded-quick-search-cursor"));
+        QVERIFY(session);
+        const QVariantMap folderEntry{
+            {QStringLiteral("entryId"), QStringLiteral("folder")},
+            {QStringLiteral("index"), 0},
+            {QStringLiteral("name"), QStringLiteral("alpha-folder")},
+            {QStringLiteral("localPath"), QDir::tempPath()},
+            {QStringLiteral("isDir"), true},
+            {QStringLiteral("isImage"), false},
+            {QStringLiteral("selected"), false},
+            {QStringLiteral("mtimeNs"), qint64(0)},
+            {QStringLiteral("size"), qint64(0)},
+        };
+        QVERIFY(session->applyExternalCatalog({folderEntry}, 1));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("quickSearchSession"), session);
+
+#ifndef Q_MOC_RUN
+        QObject *rootObject = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryPanel {
+                objectName: "quickSearchPanel"
+                width: 500
+                height: 320
+                session: quickSearchSession
+                localQuickSearchEnabled: true
+                animateLayoutChanges: false
+                function setSearch(value) {
+                    return controller.setQuickSearchQuery(value)
+                }
+            }
+        )QML", QStringLiteral("GalleryBoundedQuickSearchCursor.qml"));
+#else
+        QObject *rootObject = nullptr;
+#endif
+        QVERIFY(rootObject);
+        view.show();
+        view.requestActivate();
+        QTRY_VERIFY_WITH_TIMEOUT(view.isActive(), 3000);
+        QVERIFY(QMetaObject::invokeMethod(
+            rootObject, "setSearch", Q_ARG(QVariant, QStringLiteral("alpha"))));
+
+        auto *overlay = rootObject->findChild<QQuickItem *>(
+            QStringLiteral("galleryQuickSearchOverlay"));
+        auto *cursor = rootObject->findChild<QQuickItem *>(
+            QStringLiteral("galleryQuickSearchCursor"));
+        QVERIFY(overlay);
+        QVERIFY(cursor);
+        QTRY_VERIFY_WITH_TIMEOUT(overlay->isVisible(), 3000);
+        QVERIFY(overlay->setProperty("blinkInterval", 20));
+        QVERIFY(QMetaObject::invokeMethod(overlay, "restartBlink"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            overlay->property("blinkTimerRunning").toBool(), 500);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !overlay->property("blinkTimerRunning").toBool(), 500);
+        QVERIFY(cursor->property("blinkOn").toBool());
+
+        QTest::qWait(50);
+        QSignalSpy settledFrames(&view, &QQuickWindow::frameSwapped);
+        QVERIFY(settledFrames.isValid());
+        QTest::qWait(120);
+        QCOMPARE(settledFrames.size(), 0);
+
+        QVERIFY(QMetaObject::invokeMethod(
+            rootObject, "setSearch", Q_ARG(QVariant, QStringLiteral("folder"))));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            overlay->property("blinkTimerRunning").toBool(), 500);
+        rootObject->setProperty("visible", false);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !overlay->property("blinkTimerRunning").toBool(), 500);
+        QVERIFY(cursor->property("blinkOn").toBool());
+
+        runtime->shutdown();
+    }
+
+    void autoScrollArmsWithoutAnimatingAndTracksTheDeadZone() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QVERIFY(ZoinGallery::GalleryRuntime::install(view.engine()));
+
+#ifndef Q_MOC_RUN
+        QObject *rootObject = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 480
+                height: 320
+                readonly property var controller: controllerLoader.item
+
+                QtObject {
+                    id: fakePointer
+                    objectName: "autoScrollFakePointer"
+                    property real mouseX: 0
+                    property real mouseY: 100
+                }
+                QtObject {
+                    id: fakeLayout
+                    objectName: "autoScrollFakeLayout"
+                    property real contentY: 100
+                    property bool scrollingMode: false
+                    property int scrollingDirection: 99
+                    property int clearCount: 0
+                    function setScrollingMode(active, direction) {
+                        scrollingMode = active
+                        scrollingDirection = direction === undefined ? 0 : direction
+                        if (!active)
+                            clearCount++
+                    }
+                }
+                Loader {
+                    id: controllerLoader
+                    active: true
+                    sourceComponent: Component {
+                        AutoScrollController {
+                            objectName: "testedAutoScrollController"
+                        }
+                    }
+                    onLoaded: {
+                        item.layout = fakeLayout
+                        item.pointerSource = fakePointer
+                        item.scrollExtent = 320
+                    }
+                }
+                function unloadController() { controllerLoader.active = false }
+            }
+        )QML", QStringLiteral("AutoScrollIdleLifecycle.qml"));
+#else
+        QObject *rootObject = nullptr;
+#endif
+        QVERIFY(rootObject);
+        view.show();
+
+        QObject *controller = rootObject->findChild<QObject *>(
+            QStringLiteral("testedAutoScrollController"));
+        QObject *pointer = rootObject->findChild<QObject *>(
+            QStringLiteral("autoScrollFakePointer"));
+        QObject *layout = rootObject->findChild<QObject *>(
+            QStringLiteral("autoScrollFakeLayout"));
+        QVERIFY(controller);
+        QVERIFY(pointer);
+        QVERIFY(layout);
+
+        QVERIFY(QMetaObject::invokeMethod(controller, "start"));
+        QVERIFY(controller->property("scrollingMode").toBool());
+        QVERIFY(!controller->property("animationRunning").toBool());
+        QVERIFY(layout->property("scrollingMode").toBool());
+        QCOMPARE(layout->property("scrollingDirection").toInt(), 0);
+        QTest::qWait(50);
+        QSignalSpy stationaryFrames(&view, &QQuickWindow::frameSwapped);
+        QVERIFY(stationaryFrames.isValid());
+        QTest::qWait(120);
+        QCOMPARE(stationaryFrames.size(), 0);
+
+        pointer->setProperty("mouseY", 180);
+        QVERIFY(QMetaObject::invokeMethod(controller, "updatePointerMotion"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            controller->property("animationRunning").toBool(), 1000);
+        QCOMPARE(layout->property("scrollingDirection").toInt(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(layout->property("contentY").toReal() > 100,
+                                 1000);
+
+        pointer->setProperty("mouseY", 110);
+        QVERIFY(QMetaObject::invokeMethod(controller, "updatePointerMotion"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !controller->property("animationRunning").toBool(), 1000);
+        QVERIFY(controller->property("scrollingMode").toBool());
+        QCOMPARE(layout->property("scrollingDirection").toInt(), 0);
+
+        const int clearCount = layout->property("clearCount").toInt();
+        QVERIFY(QMetaObject::invokeMethod(rootObject, "unloadController"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            rootObject->property("controller").value<QObject *>() == nullptr,
+            1000);
+        QVERIFY(layout->property("clearCount").toInt() > clearCount);
+        QVERIFY(!layout->property("scrollingMode").toBool());
+    }
+
+    void panelLifecycleAlwaysClearsArmedAutoScroll() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("auto-scroll-panel-lifecycle"));
+        QVERIFY(session);
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("autoScrollSession"), session);
+
+#ifndef Q_MOC_RUN
+        QObject *rootObject = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 640
+                height: 420
+                GalleryPanel {
+                    id: panel
+                    objectName: "autoScrollLifecyclePanel"
+                    anchors.fill: parent
+                    session: autoScrollSession
+                    showCursor: true
+                    focus: true
+                }
+                FocusScope {
+                    id: alternateFocus
+                    objectName: "autoScrollAlternateFocus"
+                }
+                function clearPanelSession() { panel.session = null }
+            }
+        )QML", QStringLiteral("AutoScrollPanelLifecycle.qml"));
+#else
+        QObject *rootObject = nullptr;
+#endif
+        QVERIFY(rootObject);
+        view.show();
+        view.requestActivate();
+
+        auto *panel = rootObject->findChild<QQuickItem *>(
+            QStringLiteral("autoScrollLifecyclePanel"));
+        auto *alternateFocus = rootObject->findChild<QQuickItem *>(
+            QStringLiteral("autoScrollAlternateFocus"));
+        QObject *controller = rootObject->findChild<QObject *>(
+            QStringLiteral("galleryMouseAutoScrollController"));
+        QObject *middleButtonArea = rootObject->findChild<QObject *>(
+            QStringLiteral("galleryMiddleButtonArea"));
+        QVERIFY(panel);
+        QVERIFY(alternateFocus);
+        QVERIFY(controller);
+        QVERIFY(middleButtonArea);
+
+        const auto armMoving = [&]() {
+            panel->forceActiveFocus();
+            QTRY_VERIFY_WITH_TIMEOUT(panel->hasActiveFocus(), 1000);
+            QVERIFY(QMetaObject::invokeMethod(controller, "start"));
+            controller->setProperty("startCoordinate", -1000);
+            QVERIFY(QMetaObject::invokeMethod(controller,
+                                              "updatePointerMotion"));
+            QTRY_VERIFY_WITH_TIMEOUT(
+                controller->property("animationRunning").toBool(), 1000);
+        };
+        const auto verifyStopped = [&](const char *context) {
+            QTRY_VERIFY2_WITH_TIMEOUT(
+                !controller->property("scrollingMode").toBool(), context, 1000);
+            QVERIFY(!controller->property("animationRunning").toBool());
+        };
+
+        // All panel presentations share this controller. Verify each one
+        // can retain the armed neutral cursor without retaining a frame-loop.
+        const QStringList modes{
+            QStringLiteral("masonry"), QStringLiteral("grid"),
+            QStringLiteral("icons"), QStringLiteral("details"),
+            QStringLiteral("columns")};
+        for (const QString &mode : modes) {
+            panel->setProperty("presentationMode", mode);
+            QVERIFY(QMetaObject::invokeMethod(controller, "start"));
+            QVERIFY(controller->property("scrollingMode").toBool());
+            QVERIFY(!controller->property("animationRunning").toBool());
+            QVERIFY(QMetaObject::invokeMethod(controller, "end"));
+            verifyStopped("explicit end did not clear auto-scroll");
+
+            // Let bounded mode-change layout and scrollbar transitions finish,
+            // then require a genuinely sleeping Qt Quick scene.
+            QTest::qWait(250);
+            QSignalSpy settledFrames(&view, &QQuickWindow::frameSwapped);
+            QVERIFY(settledFrames.isValid());
+            QTest::qWait(120);
+            QCOMPARE(settledFrames.size(), 0);
+        }
+
+        armMoving();
+        QVERIFY(QMetaObject::invokeMethod(middleButtonArea, "canceled"));
+        verifyStopped("pointer cancel did not clear auto-scroll");
+
+        // F4 retains this panel below documents, dialogs, and the image
+        // viewer. showCursor=false is the host's explicit inactive/covered
+        // lifecycle edge and must stop hidden frame work immediately.
+        armMoving();
+        panel->setProperty("showCursor", false);
+        verifyStopped("inactive retained panel did not clear auto-scroll");
+
+        panel->setProperty("showCursor", true);
+        armMoving();
+        alternateFocus->forceActiveFocus();
+        verifyStopped("focus loss did not clear auto-scroll");
+
+        armMoving();
+        panel->setVisible(false);
+        verifyStopped("visibility loss did not clear auto-scroll");
+
+        panel->setVisible(true);
+        armMoving();
+        QVERIFY(QMetaObject::invokeMethod(rootObject, "clearPanelSession"));
+        verifyStopped("session removal did not clear auto-scroll");
+    }
+
     void interruptedViewerTransitionFinalizesExactlyOnce() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -307,6 +694,16 @@ private slots:
             viewport->property("imageTextureReady").toBool(),
             qPrintable(textureDiagnostic()), 5000);
         viewer->forceActiveFocus();
+
+        // A successfully decoded, fitted image is a steady presentation.
+        // Decode completion and the opening transition may request bounded
+        // frames, but the visible viewer must not retain an animation loop
+        // once those operations settle.
+        QTest::qWait(350);
+        QSignalSpy idleViewerFrames(&view, &QQuickWindow::frameSwapped);
+        QVERIFY(idleViewerFrames.isValid());
+        QTest::qWait(160);
+        QCOMPARE(idleViewerFrames.size(), 0);
 
         // The original continuous-motion branch does not consume arrow auto
         // repeats while Fit is active: each repeat moves another image.
@@ -939,6 +1336,25 @@ private slots:
                           Qt::ControlModifier);
         QTRY_VERIFY(sphericViewer->property("fov").toReal() < initialFov);
 
+        auto *sphericPointerArea = sphericViewer->findChild<QQuickItem *>(
+            QStringLiteral("sphericViewerPointerArea"));
+        QVERIFY(sphericPointerArea);
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(260, 180));
+        QVERIFY(!sphericViewer->property("inertiaRunning").toBool());
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                            QPoint(260, 180));
+        QVERIFY(!sphericViewer->property("inertiaRunning").toBool());
+
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(260, 180));
+        QTest::mouseMove(&view, QPoint(350, 235), 20);
+        QTRY_VERIFY(sphericViewer->property("inertiaRunning").toBool());
+        QVERIFY(QMetaObject::invokeMethod(sphericPointerArea, "canceled"));
+        QTRY_VERIFY(!sphericViewer->property("inertiaRunning").toBool());
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                            QPoint(350, 235));
+
         const qreal initialPan = sphericViewer->property("pan").toReal();
         QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier,
                           QPoint(260, 180));
@@ -947,6 +1363,10 @@ private slots:
                             QPoint(350, 235));
         QTRY_VERIFY(qAbs(sphericViewer->property("pan").toReal()
                          - initialPan) > 0.001);
+        QTRY_VERIFY(sphericViewer->property("inertiaRunning").toBool());
+        sphericViewer->setProperty("visible", false);
+        QTRY_VERIFY(!sphericViewer->property("inertiaRunning").toBool());
+        sphericViewer->setProperty("visible", true);
         QCOMPARE(navigationSpy.size(), navigationBeforeSphere);
 
         // Middle click retains the old fullscreen command even while the

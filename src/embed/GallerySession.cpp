@@ -91,6 +91,9 @@ GallerySession::GallerySession(
         connect(d->external,
                 &ExternalCatalogModel::viewerSourceAtChanged,
                 this, &GallerySession::viewerSourceAtChanged);
+        connect(d->external,
+                &ExternalCatalogModel::viewerRequestStateAtChanged,
+                this, &GallerySession::viewerRequestStateAtChanged);
         return;
     }
 
@@ -137,6 +140,9 @@ GallerySession::GallerySession(
     connect(d->local,
             &::ZoinGallery::LocalFilesystemSource::viewerSourceAtChanged,
             this, &GallerySession::viewerSourceAtChanged);
+    connect(d->local,
+            &::ZoinGallery::LocalFilesystemSource::viewerRequestStateAtChanged,
+            this, &GallerySession::viewerRequestStateAtChanged);
 }
 
 GallerySession::~GallerySession() {
@@ -930,6 +936,15 @@ void GallerySession::requestToggleSelection(int index) {
     }
     emit actionRequested(QStringLiteral("panel.toggleSelection"),
                          actionPayload(this, d->currentIndex));
+}
+
+QString GallerySession::viewerRequestStateAt(int index) const {
+    if (d->shutdown) {
+        return QStringLiteral("idle");
+    }
+    return d->external ? d->external->viewerRequestStateAt(index)
+                       : d->local ? d->local->viewerRequestStateAt(index)
+                                  : QStringLiteral("idle");
 }
 
 void GallerySession::applySelectionIntent(

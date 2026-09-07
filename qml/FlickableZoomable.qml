@@ -167,6 +167,7 @@ Item {
 
     FrameAnimation {
         id: frameAnimation
+        running: false
 
         property real x: 0
         property real y: 0
@@ -205,6 +206,23 @@ Item {
         frameAnimation.scale = scale
         frameAnimation.running = x || y || scale
     }
+
+    function stopZoomScrollingAnimation() {
+        frameAnimation.x = 0
+        frameAnimation.y = 0
+        frameAnimation.scale = 0
+        frameAnimation.stop()
+    }
+
+    onActiveChanged: {
+        if (!active)
+            stopZoomScrollingAnimation()
+    }
+    onVisibleChanged: {
+        if (!visible)
+            stopZoomScrollingAnimation()
+    }
+    Component.onDestruction: stopZoomScrollingAnimation()
 
     // ViewerWheelArea sits above this item so it can normalize trackpad
     // navigation. An ignored wheel event is not guaranteed to continue to a

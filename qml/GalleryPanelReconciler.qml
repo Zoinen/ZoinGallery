@@ -191,12 +191,17 @@ QtObject {
         }
 
         function onSessionChanged() {
+            if (reconciler.panel.scrollingMode)
+                reconciler.panel.pointerLayer.endAutoScroll()
             reconciler.resetControllerState()
         }
 
         function onShowCursorChanged() {
-            if (!reconciler.panel.showCursor)
+            if (!reconciler.panel.showCursor) {
+                if (reconciler.panel.scrollingMode)
+                    reconciler.panel.pointerLayer.endAutoScroll()
                 reconciler.panel.cancelCursorChromeTransition()
+            }
         }
 
         function onViewerTransitionActiveChanged() {
@@ -208,6 +213,8 @@ QtObject {
             const panel = reconciler.panel
             if (panel.activeFocus)
                 return
+            if (panel.scrollingMode)
+                panel.pointerLayer.endAutoScroll()
             panel.navigationKeyHeld = false
             panel.cancelCursorChromeTransition()
             const selectionCommitted = panel.finishKeyboardSelectionGesture()

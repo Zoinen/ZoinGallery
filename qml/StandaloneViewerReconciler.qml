@@ -11,6 +11,7 @@ Item {
         target: viewer.shell
         function onStateChanged() {
             if (viewer.shell.state === "thumbnails") {
+                viewer.clearHeldKeys()
                 if (!viewer.previousImageLocked) {
                     viewer.previousImageIndex = -1
                     viewer.previousImagePath = ""
@@ -155,6 +156,23 @@ Item {
         function onViewerImageCacheChanged(index) {
             if (index === viewer.sourceIndexForViewIndex(viewer.viewerNavigationTargetIndex)) {
                 viewer.updateViewerNavigationTargetSource()
+            }
+        }
+
+        function onViewerRequestStateChanged(index) {
+            if (index !== viewer.currentSourceIndex())
+                return
+            viewer.refreshViewerRequestState()
+            if (viewer.currentViewerRequestState !== "ready")
+                return
+            const size = viewer.sourceMasonry.view.indexOriginalSize(
+                        viewer.sourceMasonry.view.currentIndex)
+            if (size.width > 1 && size.height > 1) {
+                const level = imageViewport.image.fromLevel >= 0
+                        ? imageViewport.image.fromLevel : 0
+                viewer.setImage(imageViewport.image.source, size,
+                                viewer.sourceMasonry.view.currentIndex, level)
+                viewer.fitCurrentImageWhenReady()
             }
         }
 

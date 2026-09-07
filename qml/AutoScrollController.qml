@@ -32,6 +32,33 @@ Item {
                 : Number(root.pointerSource.mouseY || 0)
     }
 
+    function effectiveDistance() {
+        const distance = root.pointerCoordinate() - root.startCoordinate
+        return Math.min(Math.max(0, distance - 25), distance + 25)
+    }
+
+    // Keep the middle-click gesture armed (and therefore keep its neutral
+    // cursor) without driving Qt Quick's animation loop while the pointer is
+    // stationary in the dead zone. Pointer motion is the event which starts
+    // or suspends frame work; once outside the dead zone the animation keeps
+    // running so auto-scroll continues with a stationary pointer.
+    function updatePointerMotion() {
+        if (!root.scrollingMode) {
+            autoScrollAnimation.stop()
+            return
+        }
+
+        const distance = root.effectiveDistance()
+        if (root.layout)
+            root.layout.setScrollingMode(true,
+                                         distance < 0 ? -1
+                                                      : distance > 0 ? 1 : 0)
+        if (distance === 0)
+            autoScrollAnimation.stop()
+        else if (!autoScrollAnimation.running)
+            autoScrollAnimation.start()
+    }
+
     function start() {
         if (root.scrollingMode) {
             root.end()
@@ -40,9 +67,9 @@ Item {
         root.scrollingStarted = false
         root.scrollingMode = true
         root.startCoordinate = root.pointerCoordinate()
-        autoScrollAnimation.start()
         if (root.layout)
             root.layout.setScrollingMode(true)
+        root.updatePointerMotion()
     }
 
     function end() {
@@ -56,13 +83,19 @@ Item {
     FrameAnimation {
         id: autoScrollAnimation
         objectName: "autoScrollFrameAnimation"
+        running: false
 
         onTriggered: {
-            if (!root.layout)
+            if (!root.layout) {
+                root.end()
                 return
+            }
 
-            let distance = root.pointerCoordinate() - root.startCoordinate
-            distance = Math.min(Math.max(0, distance - 25), distance + 25)
+            const distance = root.effectiveDistance()
+            if (distance === 0) {
+                root.updatePointerMotion()
+                return
+            }
             const totalExtent = Math.max(
                         25, Number(root.scrollExtent || 0))
             let fraction = Math.abs(distance) / Math.max(1, totalExtent - 25)
@@ -86,4 +119,6 @@ Item {
                 root.layout.setScrollingMode(true)
         }
     }
+
+    Component.onDestruction: root.end()
 }

@@ -110,6 +110,9 @@ void FileListModel::handleDirectOpenImageInfo(const ImageInfo &result) {
     if (_directOpen.stage == DirectOpenStage::WaitingInfo && result.path == _directOpen.path) {
         if (!result.imageSize.isValid()) {
             qWarning() << "Direct open metadata is invalid" << result.path << result.imageSize;
+            if (!result.sourceAccessFailed) {
+                finishDirectOpenPriorityWork();
+            }
             return;
         }
 
@@ -498,6 +501,23 @@ void FileListModel::requestViewerInOrder(
     _currentViewIndex = index;
     _currentViewerRequestSize = QSize(width, height);
     _hasCurrentViewerRequest = true;
+    const int requiredLevel = width > 0 && height > 0 ? 1 : 2;
+    const auto currentSources = viewerImageSourcesForIndex(
+        index, QSize(width, height));
+    const bool requestedTierReady = std::any_of(
+        currentSources.cbegin(), currentSources.cend(),
+        [requiredLevel](const auto &source) {
+            return source.second == requiredLevel;
+        });
+    const ImageInfo currentInfo = _items.at(index)->info();
+    const bool metadataTerminal =
+        _terminalImageInfoFailureRevisions.value(currentInfo.path) ==
+        imageInfoRevisionToken(currentInfo);
+    setViewerRequestState(
+        _items.at(index)->fullPath(),
+        requestedTierReady ? QStringLiteral("ready")
+        : metadataTerminal ? QStringLiteral("failed")
+                           : QStringLiteral("pending"));
     if (!_items[index]->imageIdUrl().isEmpty()) {
         emit viewerImageIdUrlChanged(_items[index]->imageIdUrl(), 0);
     }
@@ -535,6 +555,10 @@ void FileListModel::requestViewerInOrder(
     for (const auto &[url, level] : requestPlan.cachedImages) {
         emit viewerImageIdUrlChanged(url, level);
     }
+    for (const ImageDecodeRequest &request : requestPlan.decodeRequests) {
+        setViewerRequestState(request.info.sourceIdentity(),
+                              QStringLiteral("pending"));
+    }
     decodeImages(requestPlan.decodeRequests);
 }
 
@@ -552,6 +576,23 @@ void FileListModel::requestViewerAt(
     const ViewerImageCache::RequestPlan requestPlan =
         _viewerImageCache.planRequest(
             targetItems, 0, QSize(width, height), 1);
+    const int requiredLevel = width > 0 && height > 0 ? 1 : 2;
+    const auto currentSources = viewerImageSourcesForIndex(
+        index, QSize(width, height));
+    const bool requestedTierReady = std::any_of(
+        currentSources.cbegin(), currentSources.cend(),
+        [requiredLevel](const auto &source) {
+            return source.second == requiredLevel;
+        });
+    const ImageInfo currentInfo = _items.at(index)->info();
+    const bool metadataTerminal =
+        _terminalImageInfoFailureRevisions.value(currentInfo.path) ==
+        imageInfoRevisionToken(currentInfo);
+    setViewerRequestState(
+        _items.at(index)->fullPath(),
+        requestedTierReady ? QStringLiteral("ready")
+        : metadataTerminal ? QStringLiteral("failed")
+                           : QStringLiteral("pending"));
     decodeImages(requestPlan.decodeRequests);
 }
 
@@ -581,6 +622,52 @@ QString FileListModel::preparedViewerImageUrlForIndex(
 QSize FileListModel::viewerImageOriginalSizeForIndex(int index) const {
     return index >= 0 && index < _items.size() && _items.at(index)
         ? _items.at(index)->fullSize() : QSize();
+}
+
+QString FileListModel::viewerRequestStateForIndex(int index) const {
+    if (index < 0 || index >= _items.size() || !_items.at(index)
+        || !_items.at(index)->isImage()) {
+        return QStringLiteral("idle");
+    }
+    return _viewerRequestStates.value(_items.at(index)->fullPath(),
+                                      QStringLiteral("idle"));
+}
+
+void FileListModel::setViewerRequestState(const QString &path,
+                                          const QString &state) {
+    if (path.isEmpty()) {
+        return;
+    }
+    const QString previous = _viewerRequestStates.value(
+        path, QStringLiteral("idle"));
+    if (previous == state) {
+        return;
+    }
+    if (state == QStringLiteral("idle")) {
+        _viewerRequestStates.remove(path);
+    } else {
+        _viewerRequestStates.insert(path, state);
+    }
+    const auto item = _fileToItem.constFind(path);
+    if (item != _fileToItem.constEnd() && item.value()
+        && !item.value()->imageFileParent()) {
+        emit viewerRequestStateChanged(item.value()->index());
+    }
+}
+
+void FileListModel::clearViewerRequestStates() {
+    if (_viewerRequestStates.isEmpty()) {
+        return;
+    }
+    const QStringList paths = _viewerRequestStates.keys();
+    _viewerRequestStates.clear();
+    for (const QString &path : paths) {
+        const auto item = _fileToItem.constFind(path);
+        if (item != _fileToItem.constEnd() && item.value()
+            && !item.value()->imageFileParent()) {
+            emit viewerRequestStateChanged(item.value()->index());
+        }
+    }
 }
 
 QList<QPair<QString, int>> FileListModel::viewerImageSourcesForIndex(
@@ -645,6 +732,7 @@ void FileListModel::cancelAllDecodeRunners() {
     }
     _failedImageDecodeRequests.clear();
     _failedImageDecodeRetryAttempts.clear();
+    clearViewerRequestStates();
     finishDirectOpenAfterDecodeCancellation(directOpenGeneration, true);
 }
 
@@ -665,6 +753,7 @@ void FileListModel::cancelAllDecodeViewerRunners() {
             ++it;
         }
     }
+    clearViewerRequestStates();
     finishDirectOpenAfterDecodeCancellation(directOpenGeneration, true);
 }
 
@@ -688,6 +777,7 @@ void FileListModel::cancelAllDecodeViewerRunnersForViewerClose() {
             ++it;
         }
     }
+    clearViewerRequestStates();
     finishDirectOpenAfterDecodeCancellation(directOpenGeneration, false);
 }
 

@@ -275,22 +275,7 @@ void MasonryLayout::setScrollingMode(bool scrollingMode, int direction) {
         return;
     }
 
-    if (scrollingMode) {
-        QString path;
-        if (direction == -1) {
-            path = ":/ZoinGallery/resources/ScrollModeUp.svg";
-        }
-        else if (direction == 1) {
-            path = ":/ZoinGallery/resources/ScrollModeDown.svg";
-        }
-        else {
-            path = ":/ZoinGallery/resources/ScrollMode.svg";
-        }
-        SvgCursor::setOverrideCursor(path, dpValue());
-    }
-    else {
-        SvgCursor::setOverrideCursor();
-    }
+    SvgCursor::setScrollingModeCursor(scrollingMode, direction, dpValue());
     _currentScrollingMode = scrollingMode;
     _currentScrollingDirection = direction;
 }

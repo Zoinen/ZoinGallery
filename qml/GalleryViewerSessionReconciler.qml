@@ -48,6 +48,11 @@ Item {
                 root.viewer.refreshNeighborSource()
         }
 
+        function onViewerRequestStateAtChanged(index) {
+            if (index === root.viewer.presentedIndex)
+                root.viewer.refreshViewerRequestState()
+        }
+
         function onCatalogRevisionChanged() {
             if (root.viewer.session.currentIndex < 0) {
                 root.viewer.presentedIndex = -1

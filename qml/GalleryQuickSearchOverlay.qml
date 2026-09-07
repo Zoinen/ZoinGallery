@@ -6,6 +6,7 @@ import ZoinGallery.Native 1.0
 
 Rectangle {
     id: root
+    objectName: "galleryQuickSearchOverlay"
 
     required property GalleryPanelController controller
     required property color backgroundColor
@@ -16,6 +17,35 @@ Rectangle {
 
     readonly property real pixel: 1 / Math.max(1, devicePixelRatio)
     readonly property string query: controller.quickSearchQuery
+    property int blinkInterval: 520
+    property int blinkTransitionsRemaining: 0
+    readonly property bool blinkTimerRunning: blinkTimer.running
+    readonly property bool blinkEligible:
+        visible && (!Window.window || Window.window.active)
+
+    function settleBlink() {
+        blinkTimer.stop()
+        blinkTransitionsRemaining = 0
+        pseudoCursor.blinkOn = true
+    }
+
+    function restartBlink() {
+        blinkTimer.stop()
+        pseudoCursor.blinkOn = true
+        if (!blinkEligible) {
+            blinkTransitionsRemaining = 0
+            return
+        }
+        blinkTransitionsRemaining = 2
+        blinkTimer.start()
+    }
+
+    onBlinkEligibleChanged: {
+        if (blinkEligible)
+            restartBlink()
+        else
+            settleBlink()
+    }
 
     implicitWidth: Math.max(220, queryText.implicitWidth
                             + matchText.implicitWidth + 56)
@@ -51,6 +81,7 @@ Rectangle {
 
     Rectangle {
         id: pseudoCursor
+        objectName: "galleryQuickSearchCursor"
         readonly property real textAdvance:
             queryMetrics.advanceWidth(queryText.text)
         x: Math.min(queryText.x + queryText.width,
@@ -65,8 +96,7 @@ Rectangle {
         Connections {
             target: root.controller
             function onQuickSearchChanged() {
-                pseudoCursor.blinkOn = true
-                blinkTimer.restart()
+                root.restartBlink()
             }
         }
     }
@@ -88,10 +118,21 @@ Rectangle {
 
     Timer {
         id: blinkTimer
-        interval: 520
-        repeat: true
-        running: root.visible
-        onTriggered: pseudoCursor.blinkOn = !pseudoCursor.blinkOn
+        interval: root.blinkInterval
+        repeat: false
+        onTriggered: {
+            if (!root.blinkEligible
+                    || root.blinkTransitionsRemaining <= 0) {
+                root.settleBlink()
+                return
+            }
+            pseudoCursor.blinkOn = !pseudoCursor.blinkOn
+            --root.blinkTransitionsRemaining
+            if (root.blinkTransitionsRemaining > 0)
+                blinkTimer.start()
+            else
+                pseudoCursor.blinkOn = true
+        }
     }
 
     MouseArea {

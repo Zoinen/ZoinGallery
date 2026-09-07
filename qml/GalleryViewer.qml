@@ -78,6 +78,7 @@ FocusScope {
     property url currentSourceValue: ""
     property int currentSourceLevelValue: -1
     property var currentSourcesValue: []
+    property string currentViewerRequestState: "idle"
     property size currentOriginalSizeValue: Qt.size(0, 0)
     property int appliedPresentedIndex: -1
     property string appliedTierSignature: ""
@@ -90,6 +91,10 @@ FocusScope {
     property url transitionThumbnailSource: ""
     property bool transitionHasGeometry: false
     property bool completingClose: false
+    // Escape uses an immediate close so the host can restore its panel before
+    // the thumbnail return animation. The embedding host uses this bit to
+    // fence the matching native key release after the Loader is torn down.
+    property bool immediateCloseRequested: false
     property bool viewerContentVisible: true
     property bool returningFromPinch: false
     property bool pinchCloseActive: false
@@ -320,6 +325,11 @@ FocusScope {
     function refreshCurrentSource(forceIndexChange, previousFitMode) {
         catalogState.refreshCurrentSource(forceIndexChange, previousFitMode)
     }
+    function refreshViewerRequestState() {
+        currentViewerRequestState = session && presentedIndex >= 0
+                && typeof session.viewerRequestStateAt === "function"
+                ? session.viewerRequestStateAt(presentedIndex) : "idle"
+    }
     function refreshNeighborSource() {
         catalogState.refreshNeighborSource()
     }
@@ -430,7 +440,16 @@ FocusScope {
         zoomOutPressed = false
         controlPressed = false
         cancelShiftSelection()
-        flickableArea.startZoomScrollingAnimation(0, 0, 0)
+        flickableArea.stopZoomScrollingAnimation()
+    }
+
+    onActiveFocusChanged: {
+        if (!activeFocus)
+            clearHeldKeys()
+    }
+    onVisibleChanged: {
+        if (!visible)
+            clearHeldKeys()
     }
 
     function ownsZoomKey(event) {
@@ -636,5 +655,8 @@ FocusScope {
             Qt.callLater(beginOpen)
         }
     }
-    Component.onDestruction: setPanelTransition(false)
+    Component.onDestruction: {
+        clearHeldKeys()
+        setPanelTransition(false)
+    }
 }

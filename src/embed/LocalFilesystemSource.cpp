@@ -88,6 +88,14 @@ LocalFilesystemSource::LocalFilesystemSource(
                     emit viewerSourceAtChanged(viewIndex);
                 }
             });
+    connect(_fileListModel, &FileListModel::viewerRequestStateChanged,
+            this, [this](int sourceIndex) {
+                const int viewIndex = _galleryViewModel
+                    ? _galleryViewModel->mapFromSourceRow(sourceIndex) : -1;
+                if (viewIndex >= 0) {
+                    emit viewerRequestStateAtChanged(viewIndex);
+                }
+            });
     connect(_fileListModel, &FileListModel::viewerReset,
             this, &LocalFilesystemSource::clearViewer);
 }
@@ -282,6 +290,13 @@ QList<QPair<QString, int>> LocalFilesystemSource::viewerImageSourcesAt(
         ? QList<QPair<QString, int>>()
         : _fileListModel->viewerImageSourcesForIndex(
               sourceIndex, _viewerViewportSize);
+}
+
+QString LocalFilesystemSource::viewerRequestStateAt(int viewIndex) const {
+    const int sourceIndex = sourceIndexAt(viewIndex);
+    return !_fileListModel || sourceIndex < 0
+        ? QStringLiteral("idle")
+        : _fileListModel->viewerRequestStateForIndex(sourceIndex);
 }
 
 void LocalFilesystemSource::shutdown() {

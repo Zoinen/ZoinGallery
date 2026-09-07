@@ -193,6 +193,7 @@ void FileListModel::clearModelData(bool clearViewerData,
     if (clearViewerData) {
         // Viewer
         _viewerImageCache.clear();
+        clearViewerRequestStates();
         emit viewerReset();
     }
     _currentViewIndex = -1;
@@ -215,6 +216,7 @@ void FileListModel::clearModelData(bool clearViewerData,
         _failedImageDecodeRequests.clear();
         _failedImageInfoRetryAttempts.clear();
         _failedImageDecodeRetryAttempts.clear();
+        _terminalImageInfoFailureRevisions.clear();
         _failedImageWorkRetryTimer.stop();
         _failedImageWorkRetryDelayMs = FailedImageWorkRetryInitialMs;
     }

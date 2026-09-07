@@ -355,18 +355,18 @@ void ExternalCatalogModel::pumpMetadataRequests() {
     planner.run();
 }
 
-void ExternalCatalogModel::scheduleMetadataRetry(
+bool ExternalCatalogModel::scheduleMetadataRetry(
     const QString &sourceIdentity, const QString &contentVersion,
     const QString &resourceId, bool background) {
     const QString retryKey = sourceIdentity + QChar(0x1f) +
         contentVersion;
     if (_metadataRetryScheduled.contains(retryKey)) {
-        return;
+        return true;
     }
     const int MaxAutomaticAttempts = background ? 1 : 3;
     const int attempt = _metadataRetryAttempts.value(retryKey) + 1;
     if (attempt > MaxAutomaticAttempts) {
-        return;
+        return false;
     }
     _metadataRetryAttempts.insert(retryKey, attempt);
     _metadataRetryScheduled.insert(retryKey);
@@ -381,7 +381,7 @@ void ExternalCatalogModel::scheduleMetadataRetry(
             .notBeforeMs = QDateTime::currentMSecsSinceEpoch() + delayMs,
         });
         scheduleBackgroundRetryWake();
-        return;
+        return true;
     }
     QTimer::singleShot(delayMs, this,
                        [this, sourceIdentity, contentVersion, resourceId,
@@ -407,6 +407,7 @@ void ExternalCatalogModel::scheduleMetadataRetry(
         }
         scheduleMetadataPump();
     });
+    return true;
 }
 
 void ExternalCatalogModel::scheduleBackgroundRetryWake() {
@@ -554,6 +555,16 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
     if (_shutdown || !validRow(row) || !loadedEntry(row).image ||
         !viewportSize.isValid() || prefetchCount <= 0) {
         return;
+    }
+
+    const Entry &requestedEntry = loadedEntry(row);
+    const QSize requestedOriginalSize = requestedEntry.originalSize.isValid()
+        ? requestedEntry.originalSize
+        : requestedEntry.item ? requestedEntry.item->fullSize() : QSize();
+    if (!requestedOriginalSize.isValid() &&
+        _metadataResolvedPaths.contains(requestedEntry.sourceIdentity) &&
+        viewerRequestStateAt(row) == QStringLiteral("pending")) {
+        setViewerRequestState({row}, QStringLiteral("failed"));
     }
 
     const bool probeBarrierActive =

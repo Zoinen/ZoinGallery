@@ -11,6 +11,7 @@
 #include "ViewerImageCache.h"
 
 class DecodeManager;
+class DecodeLifecycleTest;
 
 class SelectedImagesModel : public QAbstractListModel,
                             public ZoinGallery::GalleryCatalogSource {
@@ -116,6 +117,8 @@ signals:
     void thumbnailReloadRequested();
 
 private:
+    friend class DecodeLifecycleTest;
+
     void syncFromPersistentSelection(bool preserveTransientState = false);
     void syncPathsFromPersistentSelection(const QStringList &paths);
     void refreshWatchedImageMetadata(const QStringList &paths);

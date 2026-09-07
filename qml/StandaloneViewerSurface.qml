@@ -192,6 +192,27 @@ Item {
         transform: Translate { x: surface.viewer.viewerNavigationCurrentOffsetX }
     }
 
+    BusyIndicator {
+        objectName: "standaloneViewerBusyIndicator"
+        anchors.centerIn: parent
+        running: surface.shell.state === "viewer"
+                 && surface.viewer.visible
+                 && surface.viewer.currentViewerRequestState === "pending"
+                 && flickableArea.image.source.toString() === ""
+        visible: running
+    }
+
+    Label {
+        objectName: "standaloneViewerLoadFailure"
+        anchors.centerIn: parent
+        visible: surface.shell.state === "viewer"
+                 && surface.viewer.visible
+                 && surface.viewer.currentViewerRequestState === "failed"
+                 && flickableArea.image.source.toString() === ""
+        text: qsTr("Unable to load image")
+        color: Style.viewerMainText
+    }
+
     Component {
         id: sphericViewerComponent
 

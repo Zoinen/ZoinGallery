@@ -76,11 +76,15 @@ Window {
         return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB"
     }
 
-    Timer {
-        interval: 2000
-        repeat: true
-        running: settingsDialog.visible
-        onTriggered: fileListModel.refreshCacheInfo()
+    Connections {
+        target: fileListModel
+        // Cache writes are decode work. Refresh the informational snapshot
+        // once that work reaches quiescence instead of polling the filesystem
+        // for the entire lifetime of an open settings window.
+        function onRunningTasksChanged(tasks, tasksInfo) {
+            if (settingsDialog.visible && tasks === "0/0")
+                fileListModel.refreshCacheInfo()
+        }
     }
 
     Settings {

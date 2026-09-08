@@ -6,9 +6,9 @@ namespace ZoinGallery {
 
 ExternalCatalogResetTransaction::ExternalCatalogResetTransaction(
     ExternalCatalogModel &model, const QVariantList &values,
-    bool metadataDeferred)
+    bool metadataDeferred, bool incremental)
     : m_model(model), m_values(values),
-      m_metadataDeferred(metadataDeferred) {
+      m_metadataDeferred(metadataDeferred), m_incremental(incremental) {
     m_result.traceEnabled = qEnvironmentVariableIsSet(
         "F4_NAV_BENCHMARK_TRACE");
 }
@@ -21,7 +21,8 @@ ExternalCatalogResetTransaction::run() {
     captureStableState();
     prepareNextCatalog();
 
-    m_model.beginResetModel();
+    if (!m_incremental)
+        m_model.beginResetModel();
     capturePreviousCatalog();
     rebuildRows();
     if (m_result.traceEnabled) {
@@ -34,6 +35,8 @@ ExternalCatalogResetTransaction::run() {
         m_result.leftoversCompletedNs = m_timer.nsecsElapsed();
     }
 
+    if (m_incremental)
+        reconcileRows();
     commitCatalogAndIndexes();
     pruneVersionedPipelineState();
     buildRetentionKeys();
@@ -84,8 +87,9 @@ void ExternalCatalogResetTransaction::prepareNextCatalog() {
 }
 
 void ExternalCatalogResetTransaction::capturePreviousCatalog() {
-    QList<Entry> oldEntries = std::move(m_model._entries);
-    m_model._entries.clear();
+    QList<Entry> oldEntries = m_incremental ? m_model._entries : std::move(m_model._entries);
+    if (!m_incremental)
+        m_model._entries.clear();
     m_previous.reserve(oldEntries.size());
     for (Entry &entry : oldEntries) {
         m_previous.insert(entry.id, std::move(entry));
@@ -100,6 +104,23 @@ void ExternalCatalogResetTransaction::rebuildRows() {
 
         Entry old = m_previous.take(entry.id);
         const bool sourceChanged = adoptPreviousState(entry, old);
+        QList<int> roles;
+        if (sourceChanged) {
+            roles = {FileListModel::ImageIdUrlRole, FileListModel::ImageFullSizeRole,
+                     FileListModel::IsImageRole, ExternalCatalogModel::KnownImageSizeRole,
+                     ExternalCatalogModel::VersionTokenRole, ExternalCatalogModel::LocalPathRole};
+        }
+        if (old.name != entry.name) roles.append(ExternalCatalogModel::EntryNameRole);
+        if (old.sourceIndex != entry.sourceIndex) roles.append(ExternalCatalogModel::SourceIndexRole);
+        if (old.directory != entry.directory) roles.append(FileListModel::FolderRole);
+        if (old.selected != entry.selected) roles.append(FileListModel::SelectedRole);
+        if (old.size != entry.size) roles.append(FileListModel::FileSizeRole);
+        if (old.mtimeNs != entry.mtimeNs) roles.append(FileListModel::LastModifiedRole);
+        if (!roles.isEmpty() || old.displayFields != entry.displayFields
+            || old.highlightStyle != map.value(QStringLiteral("highlightStyle"), old.highlightStyle).toMap()) {
+            roles.append(ExternalCatalogModel::VisualSnapshotRole);
+            m_changedRoles.insert(entry.id, roles);
+        }
         updateMaterializedItem(entry, map, row, sourceChanged);
         indexRow(entry, row);
     }
@@ -176,6 +197,16 @@ bool ExternalCatalogResetTransaction::adoptPreviousState(
     }
     entry.item = old.item;
     entry.highlightStyle = old.highlightStyle;
+    if (m_incremental && m_metadataDeferred && hadOldEntry
+        && old.source.resourceId == entry.source.resourceId
+        && old.source.sourceKey == entry.source.sourceKey
+        && old.contentVersion == entry.contentVersion
+        && old.image == entry.image && old.directory == entry.directory) {
+        entry.size = old.size;
+        entry.mtimeNs = old.mtimeNs;
+        entry.localPath = old.localPath;
+        entry.displayFields = old.displayFields;
+    }
 
     const bool sourceChanged = hadOldEntry &&
         (old.source.resourceId != entry.source.resourceId
@@ -190,6 +221,7 @@ bool ExternalCatalogResetTransaction::adoptPreviousState(
     if (hadOldEntry && !sourceChanged) {
         entry.imageInfo = old.imageInfo;
         entry.originalSize = old.originalSize;
+        entry.iconPath = old.iconPath;
     }
     if (sourceChanged) {
         m_model._viewerImageCache.remove(old.sourceIdentity);
@@ -302,6 +334,58 @@ void ExternalCatalogResetTransaction::retireRemovedEntries() {
             m_retiredAfterReset.append(entry.item);
             entry.item = nullptr;
         }
+    }
+}
+
+// Qt observers must see valid row/identity indexes at every end*Rows signal.
+void ExternalCatalogResetTransaction::reindexCurrentRows() {
+    m_model._idToRow.clear();
+    m_model._pathToRow.clear();
+    m_model._sourceToRow.clear();
+    for (int row = 0; row < m_model._entries.size(); ++row) {
+        Entry &entry = m_model._entries[row];
+        entry.sourceIndex = row;
+        m_model._idToRow.insert(entry.id, row);
+        if (!entry.localPath.isEmpty())
+            m_model._pathToRow.insert(QDir::cleanPath(entry.localPath), row);
+        if (!entry.sourceIdentity.isEmpty())
+            m_model._sourceToRow.insert(entry.sourceIdentity, row);
+        if (entry.item)
+            entry.item->setIndex(row);
+    }
+}
+
+void ExternalCatalogResetTransaction::reconcileRows() {
+    for (int last = m_model._entries.size() - 1; last >= 0;) {
+        if (m_nextIdToRow.contains(m_model._entries[last].id)) { --last; continue; }
+        int first = last;
+        while (first > 0 && !m_nextIdToRow.contains(m_model._entries[first-1].id)) --first;
+        m_model.beginRemoveRows({}, first, last);
+        m_model._entries.remove(first, last-first+1);
+        reindexCurrentRows();
+        m_model.endRemoveRows();
+        last = first-1;
+    }
+    for (int row = 0; row < m_next.size(); ++row) {
+        const Entry &next = m_next[row];
+        int current = m_model._idToRow.value(next.id, -1);
+        if (current < 0) {
+            m_model.beginInsertRows({}, row, row);
+            m_model._entries.insert(row, next);
+            reindexCurrentRows();
+            m_model.endInsertRows();
+        } else if (current != row) {
+            const bool moved = m_model.beginMoveRows({}, current, current, {}, current < row ? row+1 : row);
+            Q_ASSERT(moved);
+            m_model._entries.move(current, row);
+            reindexCurrentRows();
+            m_model.endMoveRows();
+        }
+        Entry replacement = next;
+        if (!replacement.item)
+            replacement.item = m_model._entries[row].item;
+        m_model._entries[row] = replacement;
+        m_next[row] = replacement;
     }
 }
 
@@ -501,7 +585,15 @@ void ExternalCatalogResetTransaction::finishModelReset() {
     if (m_result.traceEnabled) {
         m_result.resetStartedNs = m_timer.nsecsElapsed();
     }
-    m_model.endResetModel();
+    if (!m_incremental) {
+        m_model.endResetModel();
+    } else {
+        for (auto it = m_changedRoles.cbegin(); it != m_changedRoles.cend(); ++it) {
+            const int row = m_model.rowForEntryId(it.key());
+            if (row >= 0)
+                emit m_model.dataChanged(m_model.index(row, 0), m_model.index(row, 0), it.value());
+        }
+    }
     for (ImageFile *item : std::as_const(m_retiredAfterReset)) {
         m_model.retireItemAfterReset(item);
     }

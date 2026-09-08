@@ -11,6 +11,7 @@
 #include "tests/HeicTestFixture.h"
 
 #include <QAbstractItemModel>
+#include <QAbstractItemModelTester>
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QDir>
@@ -422,6 +423,70 @@ class GallerySessionTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void sparseRefreshRetainsMaterializedRowsAndRejectsInvalidRanges() {
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession(QStringLiteral("sparse-refresh"));
+        QVariantMap options{{"catalogRowsDeferred", true}, {"totalCount", 100000}, {"currentPath", "/same"}};
+        QVERIFY(session->applyExternalCatalog({entry("a", 40, "a.txt"), entry("b", 41, "b.txt")}, 1, options));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        const int role = model->roleNames().key("imageFileRole", -1);
+        QAbstractItemModelTester tester(model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        const QVariant before = model->data(model->index(40, 0), role);
+        QPersistentModelIndex persistent(model->index(40,0));
+        QSignalSpy reset(model, &QAbstractItemModel::modelReset);
+        const QVariantMap delta{{"baseCatalogRevision", 1}, {"oldTotalCount", 100000},
+            {"ranges", QVariantList{QVariantMap{{"oldIndex",0},{"index",1},{"count",100000}}}}};
+        options["totalCount"] = 100001;
+        options["catalogDelta"] = delta;
+        QVERIFY(session->applyExternalCatalog({entry("new", 0, "new.txt")}, 2, options));
+        QCOMPARE(reset.size(), 0);
+        QCOMPARE(model->rowCount(), 100001);
+        QCOMPARE(model->materializedRows().size(), 3);
+        QCOMPARE(persistent.row(), 41);
+        QCOMPARE(model->data(model->index(41,0), role), before);
+        QCOMPARE(model->entryIdAt(42), QStringLiteral("b"));
+        QVariantMap bad{{"oldTotalCount",100001},{"ranges",QVariantList{
+            QVariantMap{{"oldIndex",0},{"index",0},{"count",100002}}}}};
+        QVERIFY(!model->reconcileSparseCatalog({}, false, 100001, bad));
+        QCOMPARE(reset.size(), 0);
+        QCOMPARE(model->data(model->index(41,0), role), before);
+        QVariantMap remove{{"baseCatalogRevision",2},{"oldTotalCount",100001},{"ranges",QVariantList{
+            QVariantMap{{"oldIndex",1},{"index",0},{"count",100000}}}}};
+        options["totalCount"] = 100000; options["catalogDelta"] = remove;
+        QVERIFY(session->applyExternalCatalog({entry("a",40,"a.txt")},3,options));
+        QCOMPARE(reset.size(),0);
+        QCOMPARE(persistent.row(),40);
+        QCOMPARE(model->materializedRows().size(),2);
+        QCOMPARE(model->data(model->index(40,0),role),before);
+    }
+
+    void sameFolderCatalogReconcilesRowsWithoutReset() {
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession(QStringLiteral("refresh-delta"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog({entry("a", 0, "a.txt"), entry("b", 1, "b.txt")}, 1));
+        auto *model = session->model();
+        const int itemRole = model->roleNames().key("imageFileRole", -1);
+        QAbstractItemModelTester tester(model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        QVERIFY(itemRole >= 0);
+        const QVariant oldItem = model->data(model->index(1, 0), itemRole);
+        QSignalSpy reset(model, &QAbstractItemModel::modelReset);
+        QSignalSpy added(model, &QAbstractItemModel::rowsInserted);
+        QSignalSpy removed(model, &QAbstractItemModel::rowsRemoved);
+        QSignalSpy moved(model, &QAbstractItemModel::rowsMoved);
+        QVERIFY(session->applyExternalCatalog({entry("b", 0, "b.txt"), entry("c", 1, "c.txt"), entry("a", 2, "a.txt")}, 2));
+        QCOMPARE(reset.size(), 0);
+        QCOMPARE(added.size(), 1);
+        QVERIFY(moved.size() > 0);
+        QCOMPARE(model->data(model->index(0, 0), itemRole), oldItem);
+        QVERIFY(session->applyExternalCatalog({entry("b", 0, "b.txt"), entry("a", 1, "a.txt")}, 3));
+        QCOMPARE(removed.size(), 1);
+        QCOMPARE(reset.size(), 0);
+    }
+
     void duplicateSourceFansOutMetadataAndViewerTier() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

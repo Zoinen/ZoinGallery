@@ -377,9 +377,15 @@ bool GallerySession::applyExternalCatalog(
     if (applySameExternalCatalogRevision(context, revision)) {
         return true;
     }
-    if (!d->external->applyCatalog(
-            entries, context.metadataDeferred,
-            !context.pathChanged, context.totalCount)) {
+    const QVariantMap delta = options.value(QStringLiteral("catalogDelta")).toMap();
+    const bool canReconcile = !context.pathChanged
+        && (context.catalogRowsDeferred || d->external->sparseCatalog()) && !delta.isEmpty()
+        && delta.value(QStringLiteral("baseCatalogRevision")).toULongLong() == d->catalogRevision;
+    const bool applied = canReconcile
+        ? d->external->reconcileSparseCatalog(entries, context.metadataDeferred,
+              context.catalogRowsDeferred ? context.totalCount : entries.size(), delta)
+        : d->external->applyCatalog(entries, context.metadataDeferred, !context.pathChanged && d->catalogRevision > 0, context.totalCount);
+    if (!applied) {
         return false;
     }
     commitExternalCatalogState(context, revision, options);

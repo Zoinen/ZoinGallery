@@ -6,7 +6,7 @@
 
 namespace ZoinGallery {
 
-// Performs a full catalog replacement as one model-reset transaction.  The
+// Reconciles a catalog with row signals, or resets it on navigation. The
 // individual stages deliberately keep row construction, source retention,
 // request pruning, planner reset, and viewer restoration independent.
 class ExternalCatalogResetTransaction final {
@@ -24,7 +24,7 @@ public:
 
     ExternalCatalogResetTransaction(ExternalCatalogModel &model,
                                     const QVariantList &values,
-                                    bool metadataDeferred);
+                                    bool metadataDeferred, bool incremental = false);
 
     Result run();
 
@@ -44,6 +44,8 @@ private:
     void resolveSourceRetention();
     void retireRemovedEntries();
     void commitCatalogAndIndexes();
+    void reconcileRows();
+    void reindexCurrentRows();
     bool retainedVersion(const QString &sourceIdentity,
                          const QString &version) const;
     void pruneVersionedPipelineState();
@@ -62,6 +64,8 @@ private:
     ExternalCatalogModel &m_model;
     const QVariantList &m_values;
     bool m_metadataDeferred = false;
+    bool m_incremental = false;
+    QHash<QString, QList<int>> m_changedRoles;
     Result m_result;
     QElapsedTimer m_timer;
 

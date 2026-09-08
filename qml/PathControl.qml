@@ -61,7 +61,20 @@ Item {
     property bool isNetworkDrive: normalizedText.startsWith("//")
     property string textNetworkFixed:
         isNetworkDrive ? normalizedText.slice(2) : normalizedText
-    property var breadcrumbs: (textNetworkFixed.endsWith("/") ? textNetworkFixed.slice(0, -1) : textNetworkFixed).split("/")
+    // Keep URI schemes as one root button: splitting :// creates an empty
+    // breadcrumb and loses the root's navigation address.
+    function uriPrefix(path) {
+        const match = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.exec(path)
+        return match ? match[0] : ""
+    }
+    property var breadcrumbs: {
+        const prefix = uriPrefix(normalizedText)
+        if (prefix !== "") {
+            const body = normalizedText.slice(prefix.length).replace(/\/+$/g, "")
+            return [prefix].concat(body === "" ? [] : body.split("/").filter(part => part !== ""))
+        }
+        return (textNetworkFixed.endsWith("/") ? textNetworkFixed.slice(0, -1) : textNetworkFixed).split("/")
+    }
 
     function updatePathField() {
         const editablePath = navigationPath !== "" ? navigationPath : pathRoot.text
@@ -116,12 +129,17 @@ Item {
     }
 
     function canonicalFolderPath(index, fallbackPath) {
+        const source = navigationPath !== "" ? navigationPath : text
+        const canonical = windowsPathSeparators
+                ? source.replace(/\\/g, "/") : source
+        const prefix = uriPrefix(canonical)
+        if (prefix !== "") {
+            const parts = canonical.slice(prefix.length).split("/").filter(part => part !== "")
+            return prefix + parts.slice(0, Math.max(0, index + 1)).join("/")
+        }
         if (navigationPath === "")
             return fallbackPath
 
-        const canonical = windowsPathSeparators
-                ? navigationPath.replace(/\\/g, "/")
-                : navigationPath
         const networkPrefix = canonical.startsWith("//") ? "//" : ""
         const rootPrefix = networkPrefix !== ""
                 ? networkPrefix

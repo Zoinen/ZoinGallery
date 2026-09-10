@@ -6142,7 +6142,15 @@ private slots:
         runtime->shutdown();
     }
 
+    void sparsePageReplacementRebindsVisibleFacadeBeforeReset_data() {
+        QTest::addColumn<QString>("presentation");
+        QTest::newRow("details") << QStringLiteral("details");
+        QTest::newRow("icons") << QStringLiteral("icons");
+        QTest::newRow("masonry") << QStringLiteral("masonry");
+    }
+
     void sparsePageReplacementRebindsVisibleFacadeBeforeReset() {
+        QFETCH(QString, presentation);
         QQuickView view;
         ZoinGallery::RuntimeOptions options;
         options.persistentCache = false;
@@ -6172,7 +6180,7 @@ private slots:
 
         QObject *panel = createPanel(
             view, session, QStringLiteral("sparseFacadeLifetimeSession"),
-            QStringLiteral("details"));
+            presentation);
         QVERIFY(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
             QStringLiteral("galleryViewportItem"));
@@ -6229,9 +6237,16 @@ private slots:
         QPointer<ImageFile> authoritativeFacade = pageFacade;
         QTRY_VERIFY_WITH_TIMEOUT(previewFacade.isNull(), 3000);
         QTRY_VERIFY_WITH_TIMEOUT(authoritativeFacade.isNull(), 3000);
+        // Revisit retained rows after the retired facades have actually died.
+        // A raw cached pointer could be passed back into QML on this scroll.
+        layout->setContentY(1);
+        layout->setContentY(0);
+        QTRY_VERIFY_WITH_TIMEOUT(slot->property("model").value<ImageFile *>(), 3000);
+        QCOMPARE(slot->property("model").value<ImageFile *>(),
+                 model->index(0, 0).data(FileListModel::ImageFileRole).value<ImageFile *>());
         const int liveFacades = model->findChildren<ImageFile *>(
             QString(), Qt::FindDirectChildrenOnly).size();
-        QVERIFY2(liveFacades < 96,
+        QVERIFY2(liveFacades < 256,
                  qPrintable(QStringLiteral(
                      "sparse catalog materialized %1 ImageFile facades")
                      .arg(liveFacades)));

@@ -131,7 +131,7 @@ bool MasonryLayout::prepareDelegateRow(
     row->deferMissingFacade = _visualSnapshotRole >= 0
         && _delegateMaterializationPending && !brick.image;
     row->image = (_visualSnapshotRefresh || row->deferMissingFacade)
-        ? brick.image : materializeImageForIndex(index);
+        ? brick.image.data() : materializeImageForIndex(index);
 
     if (!brick.item) {
         const int initialSourceIndex = row->image

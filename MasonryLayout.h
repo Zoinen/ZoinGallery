@@ -301,7 +301,8 @@ private:
         int row = 0;
         int column = 0;
         BrickItem *item = nullptr;
-        ImageFile *image = nullptr;
+        // Catalog resets can retire a facade before the next viewport commit.
+        QPointer<ImageFile> image;
         int globalIndex = -1;
         QRectF previewGeometry;
         QString iconLabelText;

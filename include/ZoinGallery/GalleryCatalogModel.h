@@ -45,6 +45,7 @@ public:
         VersionTokenRole,
         NameRole,
         VisualSnapshotRole = Qt::UserRole + 119,
+        MetadataSettledRole,
         CachedMetadataBatchRole = Qt::UserRole + 200,
     };
     Q_ENUM(Role)

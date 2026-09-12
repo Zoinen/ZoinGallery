@@ -28,6 +28,7 @@
 #include <QQmlProperty>
 #include <QQuickImageProvider>
 #include <QQuickView>
+#include <QScopeGuard>
 #include <QSGRendererInterface>
 #include <QTemporaryDir>
 #include <QUrlQuery>
@@ -6671,6 +6672,325 @@ private slots:
         QVERIFY(layout->overscanIndexes().size() < 96);
         QVERIFY(layout->findChildren<BrickItem *>().size() < 128);
 
+        runtime->shutdown();
+    }
+
+    void thumbnailPublicationWaitsForMasonryGeometry_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<QByteArray>("delay");
+        QTest::addColumn<QSize>("imageSize");
+        for (const auto &mode : {"masonry", "grid", "icons", "details", "columns"}) {
+            for (const auto &delay : {QByteArray("0"), QByteArray("1000")}) {
+                QTest::newRow(qPrintable(QString::fromLatin1(mode) + '-' + delay))
+                    << QString::fromLatin1(mode) << delay << QSize(1170, 2532);
+            }
+        }
+        QTest::newRow("masonry-placeholder-size")
+            << QStringLiteral("masonry") << QByteArray("0") << QSize(1, 1);
+        QTest::newRow("masonry-terminal-metadata-error")
+            << QStringLiteral("masonry") << QByteArray("0") << QSize();
+    }
+
+    void thumbnailPublicationWaitsForMasonryGeometry() {
+        QFETCH(QString, mode);
+        QFETCH(QByteArray, delay);
+        QFETCH(QSize, imageSize);
+        const QByteArray previous = qgetenv("F4_GALLERY_ROW_DELAY_MS");
+        const auto restore = qScopeGuard([previous] {
+            if (previous.isNull()) qunsetenv("F4_GALLERY_ROW_DELAY_MS");
+            else qputenv("F4_GALLERY_ROW_DELAY_MS", previous);
+        });
+        qputenv("F4_GALLERY_ROW_DELAY_MS", delay);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession(QStringLiteral("publication"));
+        QVariantList catalog = prefixedCatalog(QStringLiteral("publication"), 24);
+        for (auto &value : catalog) {
+            auto entry = value.toMap();
+            entry[QStringLiteral("isImage")] = true;
+            value = entry;
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1, {
+            {QStringLiteral("metadataDeferred"), true}}));
+        auto *panel = createPanel(view, session, QStringLiteral("publicationSession"), mode);
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        QTRY_VERIFY(!layout->visibleIndexes().isEmpty());
+        auto *file = session->model()->index(0, 0)
+            .data(FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(file);
+        // Simulate a retained/cached thumbnail arriving independently of metadata.
+        file->setImageId(QStringLiteral("publication-fixture"));
+        session->model()->dataChanged(session->model()->index(0, 0),
+            session->model()->index(0, 0), {});
+        auto thumbnail = [panel]() {
+            return panel->findChild<QQuickItem *>(QStringLiteral("galleryThumbnail-0"));
+        };
+        QTRY_VERIFY(thumbnail());
+        QTest::qWait(50);
+        const QRectF before = layout->indexGeometry(0);
+        if (mode == QStringLiteral("masonry"))
+            QVERIFY2(thumbnail()->property("source").toUrl().isEmpty(),
+                     "Thumbnail leaked before its masonry row geometry was committed");
+        else
+            QCOMPARE(thumbnail()->property("source").toUrl().toString(), file->imageIdUrl());
+
+        if (mode == QStringLiteral("masonry")) {
+            // The same cached URL must open immediately in fixed modes and
+            // close again on return to a still-unresolved masonry row.
+            for (const auto &fixed : {"grid", "icons", "details", "columns"}) {
+                panel->setProperty("presentationMode", QString::fromLatin1(fixed));
+                QTRY_VERIFY(thumbnail());
+                QTRY_COMPARE(thumbnail()->property("source").toUrl().toString(), file->imageIdUrl());
+            }
+            panel->setProperty("presentationMode", mode);
+            QTRY_VERIFY(thumbnail());
+            QVERIFY(thumbnail()->property("source").toUrl().isEmpty());
+        }
+
+        QList<ImageInfo> infos;
+        for (const auto &value : catalog) {
+            ImageInfo info;
+            info.path = QFileInfo(value.toMap().value(QStringLiteral("localPath")).toString()).absoluteFilePath();
+            info.requestNamespace = session->sessionId();
+            info.imageSize = imageSize;
+            info.isCached = delay != "0";
+            infos.append(info);
+        }
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        decoder->imagesInfoReady(infos);
+        if (mode == QStringLiteral("masonry")) {
+            if (delay != "0") {
+                QTest::qWait(200);
+                QCOMPARE(layout->indexGeometry(0), before);
+                QVERIFY(thumbnail()->property("source").toUrl().isEmpty());
+            }
+            if (imageSize.isValid() && imageSize.width() != imageSize.height())
+                QTRY_VERIFY_WITH_TIMEOUT(layout->indexGeometry(0) != before, 2500);
+        }
+        QTRY_COMPARE(thumbnail()->property("source").toUrl().toString(), file->imageIdUrl());
+        if (mode == QStringLiteral("masonry") && delay != "0") {
+            QVERIFY(session->applyExternalCatalog(catalog, 2, {
+                {QStringLiteral("metadataDeferred"), true},
+                {QStringLiteral("currentPath"), QStringLiteral("/reentry")}}));
+            QTRY_VERIFY(thumbnail());
+            QVERIFY(thumbnail()->property("source").toUrl().isEmpty());
+            QTRY_VERIFY_WITH_TIMEOUT(!thumbnail()->property("source").toUrl().isEmpty(), 2500);
+        }
+        runtime->shutdown();
+    }
+
+    void diagnosticMasonryPacesRowsAndReentry() {
+        const QByteArray previous = qgetenv("F4_GALLERY_ROW_DELAY_MS");
+        const auto restore = qScopeGuard([previous] {
+            if (previous.isNull()) qunsetenv("F4_GALLERY_ROW_DELAY_MS");
+            else qputenv("F4_GALLERY_ROW_DELAY_MS", previous);
+        });
+        qputenv("F4_GALLERY_ROW_DELAY_MS", "1000");
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession(QStringLiteral("slow-rows"));
+        QVariantList catalog = prefixedCatalog(QStringLiteral("slow-rows"), 24);
+        for (int row = 0; row < catalog.size(); ++row) {
+            auto entry = catalog[row].toMap();
+            entry[QStringLiteral("isImage")] = true;
+            catalog[row] = entry;
+        }
+        const QVariantMap state{{QStringLiteral("metadataDeferred"), true}};
+        QVERIFY(session->applyExternalCatalog(catalog, 1, state));
+        auto *panel = createPanel(view, session, QStringLiteral("slowRowsSession"),
+                                  QStringLiteral("masonry"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(layout && decoder);
+        QTRY_VERIFY(!layout->visibleIndexes().isEmpty());
+        const QRectF before = layout->indexGeometry(0);
+        QList<ImageInfo> infos;
+        for (int row = 0; row < catalog.size(); ++row) {
+            ImageInfo info;
+            info.path = QFileInfo(catalog[row].toMap().value(QStringLiteral("localPath")).toString()).absoluteFilePath();
+            info.requestNamespace = session->sessionId();
+            info.imageSize = QSize(1170, 2532);
+            info.isCached = true;
+            infos.append(info);
+        }
+        decoder->imagesInfoReady(infos);
+        QTest::qWait(300);
+        QCOMPARE(layout->indexGeometry(0), before);
+        QTRY_VERIFY_WITH_TIMEOUT(layout->indexGeometry(0) != before, 2000);
+        const auto isPortrait = [layout](int row) {
+            const auto rect = layout->indexGeometry(row);
+            return rect.height() > 1.5 * rect.width();
+        };
+        QVERIFY(!isPortrait(23));
+        QTest::qWait(300);
+        QVERIFY(!isPortrait(23));
+        QTRY_VERIFY_WITH_TIMEOUT(isPortrait(23), 6000);
+        // Retained metadata must be replayable without clearing a user's cache.
+        QVERIFY(session->applyExternalCatalog(catalog, 2, {
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("currentPath"), QStringLiteral("/reentry")},
+        }));
+        QVERIFY(!isPortrait(23));
+        QTRY_VERIFY_WITH_TIMEOUT(isPortrait(23), 6000);
+        runtime->shutdown();
+    }
+
+    void masonryMetadataCommitsCompleteRows() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(QStringLiteral("row-metadata"));
+        QVariantList catalog = prefixedCatalog(QStringLiteral("row-metadata"), 13);
+        for (int row = 0; row < catalog.size(); ++row) {
+            QVariantMap entry = catalog[row].toMap();
+            entry[QStringLiteral("isImage")] = true;
+            catalog[row] = entry;
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1, {
+            {QStringLiteral("currentPath"), QStringLiteral("/DCIM/100APPLE")},
+            {QStringLiteral("metadataDeferred"), true},
+        }));
+        QObject *panel = createPanel(view, session, QStringLiteral("rowMetadataSession"),
+                                     QStringLiteral("masonry"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(layout && decoder);
+        QTRY_VERIFY(!layout->visibleIndexes().isEmpty());
+        QTest::qWait(50);
+        QList<QRectF> before;
+        for (int row = 0; row < catalog.size(); ++row)
+            before.append(layout->indexGeometry(row));
+        int firstRowEnd = 1;
+        while (firstRowEnd < before.size()
+               && qAbs(before[firstRowEnd].bottom() - before[0].bottom()) < 1)
+            ++firstRowEnd;
+        QVERIFY(firstRowEnd > 1 && firstRowEnd < catalog.size());
+        const auto deliver = [&](int row, bool failed = false, bool cached = false) {
+            ImageInfo info;
+            info.path = QFileInfo(catalog[row].toMap().value(QStringLiteral("localPath")).toString()).absoluteFilePath();
+            info.sourceVersionToken = 0;
+            info.fileSize = -1;
+            info.requestNamespace = session->sessionId();
+            info.imageSize = failed ? QSize() : QSize(1170, 2532);
+            info.orientation = ExifOrientation::Horizontal;
+            info.isCached = cached;
+            info.isLast = true; // Submission order is not a completion barrier.
+            decoder->imageInfoReady(info);
+        };
+        deliver(0);
+        QTest::qWait(50);
+        for (int row = 0; row < catalog.size(); ++row)
+            QCOMPARE(layout->indexGeometry(row), before[row]);
+        for (int row = firstRowEnd - 1; row > 0; --row)
+            deliver(row);
+        QTest::qWait(50);
+        // A row of square placeholders is NOT a complete portrait row:
+        // narrower real images will pull more entries into the same row.
+        QCOMPARE(layout->indexGeometry(0), before[0]);
+        const int finalRowStart = firstRowEnd + 1;
+        for (int row = catalog.size() - 1; row >= finalRowStart; --row)
+            deliver(row);
+        QTRY_VERIFY(layout->indexGeometry(catalog.size() - 1).height()
+                    > layout->indexGeometry(catalog.size() - 1).width());
+        QCOMPARE(layout->indexGeometry(0), before[0]);
+        // Resolve all remaining rows in reverse order, including an unreadable
+        // image and the incomplete final visual row. Neither may block forever.
+        for (int row = finalRowStart - 1; row >= firstRowEnd; --row)
+            deliver(row, row == firstRowEnd);
+        QTRY_VERIFY(layout->indexGeometry(0) != before[0]);
+        QTRY_VERIFY(layout->indexGeometry(catalog.size() - 1).height()
+                    > layout->indexGeometry(catalog.size() - 1).width());
+        QTest::qWait(50);
+        const qreal dpr = view.devicePixelRatio();
+        int checkedLeaves = 0;
+        for (const QVariant &value : layout->visibleIndexes()) {
+            for (const QString &prefix : {QStringLiteral("galleryMasonryLabel-"),
+                                          QStringLiteral("galleryFallbackIcon-")}) {
+                auto *leaf = panel->findChild<QQuickItem *>(prefix + value.toString());
+                if (!leaf || !leaf->isVisible())
+                    continue;
+                ++checkedLeaves;
+                const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+                QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.001,
+                         qPrintable(leaf->objectName()));
+                QVERIFY2(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.001,
+                         qPrintable(QStringLiteral("%1 physical y=%2")
+                             .arg(leaf->objectName()).arg(origin.y() * dpr, 0, 'f', 6)));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - origin,
+                         QPointF(1, 0));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - origin,
+                         QPointF(0, 1));
+            }
+        }
+        QVERIFY(checkedLeaves > 0);
+        const QString capture = qEnvironmentVariable("F4_ROW_METADATA_CAPTURE");
+        if (!capture.isEmpty())
+            QVERIFY(view.grabWindow().save(capture));
+        runtime->shutdown();
+    }
+
+    void densePromotionWithDeltaRestoresNaturalMasonrySizes() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(QStringLiteral("dense-promotion"));
+        const QVariantList catalog = prefixedCatalog(QStringLiteral("promotion"), 136);
+        QVariantMap state{
+            {QStringLiteral("currentPath"), QStringLiteral("/DCIM/100APPLE")},
+            {QStringLiteral("metadataDeferred"), true},
+            {QStringLiteral("catalogRowsDeferred"), true},
+            {QStringLiteral("totalCount"), catalog.size()},
+        };
+        QVERIFY(session->applyExternalCatalog(catalog.mid(0, 48), 1, state));
+        QObject *panel = createPanel(view, session, QStringLiteral("promotionSession"),
+                                     QStringLiteral("masonry"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(layout && model);
+        QVERIFY(model->sparseCatalog());
+        state[QStringLiteral("catalogRowsDeferred")] = false;
+        state[QStringLiteral("catalogDelta")] = QVariantMap{
+            {QStringLiteral("baseCatalogRevision"), 1},
+            {QStringLiteral("oldTotalCount"), catalog.size()},
+            {QStringLiteral("ranges"), QVariantList{QVariantMap{
+                {QStringLiteral("oldIndex"), 0}, {QStringLiteral("index"), 0},
+                {QStringLiteral("count"), catalog.size()},
+            }}},
+        };
+        QVERIFY(session->applyExternalCatalog(catalog, 2, state));
+        QVERIFY2(!model->sparseCatalog(), "completed catalog must stop using uniform sparse geometry");
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        QList<ImageInfo> metadata;
+        for (int row : {0, 4}) {
+            ImageInfo info;
+            info.path = QFileInfo(catalog[row].toMap().value(QStringLiteral("localPath")).toString()).absoluteFilePath();
+            info.sourceVersionToken = 0;
+            info.fileSize = -1;
+            info.requestNamespace = session->sessionId();
+            info.imageSize = row == 0 ? QSize(1170, 2532) : QSize(2532, 1170);
+            info.orientation = ExifOrientation::Horizontal;
+            info.isCached = true;
+            metadata.append(info);
+        }
+        decoder->imagesInfoReady(metadata);
+        QTRY_VERIFY(layout->indexGeometry(0).height() > layout->indexGeometry(0).width());
+        QTRY_VERIFY(layout->indexGeometry(4).width() > layout->indexGeometry(4).height());
         runtime->shutdown();
     }
 

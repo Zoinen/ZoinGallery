@@ -172,9 +172,26 @@ void MasonryLayout::updateMaterializedBrickState(const ModelDelta &delta)
         if (delta.sizeRoleChanged) {
             brick.modelKnownSize = modelIndex.data(
                 FileListModel::ImageFullSizeRole).toSize();
+            brick.modelMetadataSettled = _metadataSettledRole >= 0
+                && modelIndex.data(_metadataSettledRole).toBool();
         }
         if (!canUseLightweightRows()
             || (!delta.semanticRolesChanged && !delta.sizeRoleChanged)) {
+            continue;
+        }
+        if (_metadataSettledRole >= 0 && brick.modelIsImage
+            && (brick.modelKnownSize.isEmpty()
+                || QSizeF(brick.modelKnownSize) != brick.originalSize)) {
+            brick.masonryGeometryReady = false;
+            if (brick.item)
+                brick.item->setProperty("masonryGeometryReady", false);
+        }
+        // Keep the last committed geometry until this visual row is ready.
+        // Cached batches and structural changes remain atomic fast paths.
+        if (_presentationMode == Masonry && _metadataSettledRole >= 0
+            && (diagnosticMasonryDelayMs() > 0
+                || (!delta.semanticRolesChanged
+                    && !delta.roles.contains(FileListModel::CachedMetadataBatchRole)))) {
             continue;
         }
         QSize layoutSize = brick.modelKnownSize;
@@ -189,6 +206,9 @@ void MasonryLayout::updateMaterializedBrickState(const ModelDelta &delta)
         }
         brick.originalSize = layoutSize;
         brick.lineBreakAfter = lineBreakAfter;
+        if (_presentationMode != Masonry)
+            brick.masonryGeometryReady = !brick.modelIsImage
+                || !brick.modelKnownSize.isEmpty() || brick.modelMetadataSettled;
     }
     if (delta.semanticRolesChanged) {
         refreshImageCountFromCatalog();
@@ -257,7 +277,7 @@ bool MasonryLayout::handleLightweightMasonryDelta(const ModelDelta &delta)
         return false;
     }
     if (delta.semanticRolesChanged || delta.sizeRoleChanged) {
-        if (delta.roles.isEmpty()
+        if (delta.semanticRolesChanged
             || delta.roles.contains(FileListModel::CachedMetadataBatchRole)) {
             flushLightweightRewrap();
         } else {

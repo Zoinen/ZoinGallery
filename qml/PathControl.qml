@@ -20,6 +20,9 @@ Item {
     // path. When set, this property supplies that canonical path without
     // changing the breadcrumb text shown to the user.
     property string navigationPath: ""
+    // A host may name the root without changing its canonical address or
+    // the segment indices used by child breadcrumb navigation.
+    property string rootBreadcrumbLabel: ""
     // Keep the standalone control's original appearance by default while
     // allowing embedded hosts to share their own chrome and content grid.
     property bool backgroundOnHoverOnly: false
@@ -160,7 +163,7 @@ Item {
     }
 
     function folderClicked(path) {
-        const basePath = (isNetworkDrive ? "//" : "") + rootFolder.text
+        const basePath = (isNetworkDrive ? "//" : "") + breadcrumbs[0]
         navigateTo(canonicalFolderPath(-1, basePath + "/" + path))
     }
 
@@ -346,7 +349,7 @@ Item {
             id: rootFolder
             objectName: "pathBreadcrumbRoot"
             visible: !editMode
-            text: breadcrumbs[0]
+            text: pathRoot.rootBreadcrumbLabel || breadcrumbs[0]
             onClicked: (index) => pathRoot.folderClicked("")
         }
     }
@@ -453,6 +456,10 @@ Item {
         }
         visible: editMode
         font: pathRoot.breadcrumbFont
+        transform: Translate {
+            x: pathRoot.visualPixelOffsetX(pathField, pathRoot.breadcrumbGeometryRevision)
+            y: pathRoot.visualPixelOffsetY(pathField, pathRoot.breadcrumbGeometryRevision)
+        }
 
         leftPadding: 7
         rightPadding: 10

@@ -203,6 +203,7 @@ void ExternalCatalogMetadataTransaction::invalidateChangedSource(
     _model._viewerImageCache.remove(previous.sourceIdentity);
     _model.clearPublishedImage(entry);
     entry.originalSize = {};
+    entry.metadataSettled = false;
     if (entry.item) {
         entry.item->setFullSize({});
     }

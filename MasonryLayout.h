@@ -319,6 +319,9 @@ private:
         QString modelPath;
         QString modelText;
         QSize modelKnownSize;
+        bool modelMetadataSettled = false;
+        // Publication state, not metadata availability: opened by a row commit.
+        bool masonryGeometryReady = true;
         int modelSourceIndex = -1;
         bool modelIsImage = false;
         bool modelIsFolder = false;
@@ -524,6 +527,8 @@ private:
     QVariantMap visualSnapshotForIndex(int index) const;
     void updateVisualSnapshotForIndex(int index);
     void scheduleLightweightRewrap();
+    bool commitReadyMasonryRows();
+    static int diagnosticMasonryDelayMs();
     void flushLightweightRewrap();
     void zoom(bool in);
     void updateNeedScroll();
@@ -576,6 +581,7 @@ private:
     int _localPathRole = -1;
     int _entryNameRole = -1;
     int _knownImageSizeRole = -1;
+    int _metadataSettledRole = -1;
     int _visualSnapshotRole = -1;
     bool _lightweightRewrapPending = false;
     quint64 _lightweightRewrapGeneration = 0;

@@ -42,6 +42,7 @@ public:
         EntryNameRole,
         KnownImageSizeRole,
         VisualSnapshotRole,
+        MetadataSettledRole,
     };
 
     explicit ExternalCatalogModel(
@@ -167,6 +168,7 @@ private:
         bool metadataDeferred = false;
         ImageInfo imageInfo;
         QSize originalSize;
+        bool metadataSettled = false;
         QString thumbnailProviderId;
         QSize thumbnailRequestedSize;
         QString thumbnailTransformKey;

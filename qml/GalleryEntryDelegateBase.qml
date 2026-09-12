@@ -9,6 +9,8 @@ BrickItem {
 
     required property Item panelRoot
     property var model
+    // Installed by the layout after committing the whole metadata-ready row.
+    property bool masonryGeometryReady: false
     readonly property Item thumbnailItem: sharedPreview.thumbnailItem
     readonly property Item previewContainerItem: sharedPreview
     readonly property real paintedContentHeight:

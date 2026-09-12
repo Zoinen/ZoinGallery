@@ -353,6 +353,8 @@ QVariant ExternalCatalogModel::data(const QModelIndex &index, int role) const {
         return entry->name;
     case KnownImageSizeRole:
         return entry->originalSize;
+    case MetadataSettledRole:
+        return entry->metadataSettled;
     case VisualSnapshotRole:
         // This POD-only role is the first-frame facade for embedded views.
         // It never constructs an ImageFile and contains only the current
@@ -382,6 +384,7 @@ QHash<int, QByteArray> ExternalCatalogModel::roleNames() const {
     names[VersionTokenRole] = "versionToken";
     names[EntryNameRole] = "entryName";
     names[KnownImageSizeRole] = "knownImageSize";
+    names[MetadataSettledRole] = "metadataSettled";
     names[VisualSnapshotRole] = "visualSnapshot";
     return names;
 }

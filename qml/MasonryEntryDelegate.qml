@@ -10,11 +10,19 @@ Item {
 
     Item {
         id: labelSurface
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        anchors.margins: 4
-        height: masonryLabel.implicitHeight + 12
+        readonly property real dpr: content.entry.renderDpr
+        readonly property real margin: Math.round(4 * dpr) / dpr
+        readonly property real padding: Math.round(6 * dpr) / dpr
+        x: margin
+        y: Math.round((parent.height - margin - height) * dpr) / dpr
+        width: Math.max(0, Math.round((parent.width - 2 * margin) * dpr) / dpr)
+        height: Math.ceil(masonryLabel.implicitHeight * dpr) / dpr + 2 * padding
+        readonly property point pixelGridOffset:
+            content.entry.iconPixelOffset(labelSurface)
+        transform: Translate {
+            x: labelSurface.pixelGridOffset.x
+            y: labelSurface.pixelGridOffset.y
+        }
 
         Rectangle {
             anchors.fill: parent
@@ -26,7 +34,7 @@ Item {
             id: masonryLabel
             objectName: "galleryMasonryLabel-" + content.entry.viewIndex
             anchors.fill: parent
-            anchors.margins: 6
+            anchors.margins: labelSurface.padding
             text: content.entry.panelRoot.quickSearchFormatter.styledText(
                       content.entry.effectiveDisplayName,
                       content.entry.entryId, 0)

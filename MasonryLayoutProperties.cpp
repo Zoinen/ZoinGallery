@@ -454,6 +454,17 @@ void MasonryLayout::setPresentationMode(PresentationMode mode) {
             &previousCurrentViewportY, &previousCurrentWasVisible);
     }
     _presentationMode = mode;
+    if (mode == Masonry && _metadataSettledRole >= 0 && canUseLightweightRows()
+        && !_sparseCatalogRows) {
+        for (auto &brick : _bricks) {
+            if (brick.modelIsImage) {
+                brick.masonryGeometryReady = false;
+                if (brick.item)
+                    brick.item->setProperty("masonryGeometryReady", false);
+            }
+        }
+        scheduleLightweightRewrap();
+    }
     _density = _modeDensities[normalizedValue];
     _targetHeight = qRound(_density);
     _currentLoadingRow.clear();

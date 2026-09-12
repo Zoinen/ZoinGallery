@@ -9,6 +9,18 @@ Item {
     readonly property real paintedHeight: height
     opacity: content.entry.hiddenEntry ? 0.5 : 1
 
+    function pixelOffset(item) {
+        // Include every ancestor: horizontal paging and host placement can
+        // change the scene origin without changing the leaf's local geometry.
+        let revision = 0
+        for (let parent = item.parent; parent; parent = parent.parent)
+            revision += parent.x + parent.y + parent.width + parent.height
+        const point = item.parent.mapToItem(null, item.x, item.y)
+        const dpr = content.entry.renderDpr
+        return Qt.point(Math.round(point.x * dpr) / dpr - point.x + revision * 0,
+                        Math.round(point.y * dpr) / dpr - point.y)
+    }
+
     Item {
         id: textRow
         x: content.entry.effectivePreviewRect.x
@@ -41,8 +53,8 @@ Item {
                                ? extensionLabel.x : parent.width)
                               - x - (extensionLabel.visible
                                      ? textRow.gap : 0))
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
+            height: implicitHeight
+            y: (parent.height - height) / 2
             text: content.entry.panelRoot.quickSearchFormatter.styledText(
                       content.entry.panelRoot.separateFileExtensions
                           ? content.entry.displayBaseName
@@ -58,6 +70,10 @@ Item {
             elide: Text.ElideMiddle
             verticalAlignment: Text.AlignVCenter
             font.pixelSize: -1
+            transform: Translate {
+                x: content.pixelOffset(baseNameLabel).x
+                y: content.pixelOffset(baseNameLabel).y
+            }
         }
 
         Text {
@@ -66,9 +82,9 @@ Item {
             visible: content.entry.panelRoot.separateFileExtensions
                      && content.entry.displayExtension !== ""
             anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            width: textRow.extensionColumnWidth
+            height: implicitHeight
+            y: (parent.height - height) / 2
+            width: Math.floor(textRow.extensionColumnWidth * content.entry.renderDpr) / content.entry.renderDpr
             text: content.entry.panelRoot.quickSearchFormatter.styledSuffix(
                       content.entry.displayExtension !== ""
                           ? "." + content.entry.displayExtension : "",
@@ -83,6 +99,10 @@ Item {
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideLeft
             font.pixelSize: -1
+            transform: Translate {
+                x: content.pixelOffset(extensionLabel).x
+                y: content.pixelOffset(extensionLabel).y
+            }
         }
 
         Text {

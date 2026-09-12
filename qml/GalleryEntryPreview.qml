@@ -58,7 +58,11 @@ Item {
             preview.entry.isLucideIconSource(modelIconSource)
         readonly property bool systemFileSource:
             preview.entry.isSystemFileIconSource(modelIconSource)
-        source: lucideSource
+        // A delegate can complete before MasonryLayout attaches it to its
+        // window. At that point Qt uses the maximum screen DPR (for example
+        // 2 instead of this panel's 1.75) and keeps the oversized raster after
+        // attachment. Start the image request only with the owning window.
+        source: !Window.window ? "" : lucideSource
                 ? preview.entry.sourceColorIconAtSize(
                       modelIconSource, width, effectiveIconColor)
                 : (systemFileSource

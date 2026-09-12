@@ -580,6 +580,7 @@ if(BUILD_TESTING)
                 presentationSwitchInstantlyRevealsStableCurrentItem
                 settledCursorUsesPhysicalPixelGridButAnimationsStaySmooth
                 settledDetailsCursorRendersSolidPhysicalBorderPixels
+                columnsTextUsesPhysicalPixelGrid
                 columnsAndDetailsUseIdenticalCompactLucideIcons
                 masonryFirstRowLucideProviderUsesPhysicalRasterAndGrid
                 fractionalDetailsDensityPreservesRowPhaseAndContentExtent

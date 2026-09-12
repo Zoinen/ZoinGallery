@@ -5375,6 +5375,52 @@ private slots:
         }
     }
 
+    void columnsTextUsesPhysicalPixelGrid() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession(QStringLiteral("columns-pixel-grid"));
+        QVERIFY(session->applyExternalCatalog(plainCatalog(80), 1));
+        auto *panel = createPanel(view, session, QStringLiteral("columnsPixelSession"), QStringLiteral("columns"));
+        QVERIFY(panel);
+        auto *item = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        QVERIFY(item && layout);
+        const qreal dpr = view.devicePixelRatio();
+        panel->setProperty("devicePixelRatio", dpr);
+        item->setX(.25);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        for (int columns : {2, 3}) {
+            layout->setColumnCount(columns);
+            panel->setProperty("separateFileExtensions", columns == 3);
+            item->setX(columns == 3 ? .375 : .25);
+            item->setWidth(columns == 3 ? 631.5 : 640);
+            QTest::qWait(100);
+            int checked = 0;
+            const auto visit = [&](auto &&self, QQuickItem *leaf) -> void {
+                if (leaf->isVisible() && (leaf->objectName().startsWith("galleryBaseName-")
+                    || leaf->objectName().startsWith("galleryExtension-")
+                    || leaf->objectName().startsWith("galleryFallbackIcon-"))) {
+                    const auto origin = leaf->mapToScene(QPointF());
+                    const auto physical = origin * dpr;
+                    QVERIFY2(qAbs(physical.x()-qRound64(physical.x())) < .001
+                        && qAbs(physical.y()-qRound64(physical.y())) < .001,
+                        qPrintable(QString("%1 columns=%2 physical=%3,%4")
+                            .arg(leaf->objectName()).arg(columns).arg(physical.x()).arg(physical.y())));
+                    QCOMPARE(leaf->mapToScene(QPointF(1,0))-origin, QPointF(1,0));
+                    QCOMPARE(leaf->mapToScene(QPointF(0,1))-origin, QPointF(0,1));
+                    ++checked;
+                }
+                for (auto *child : leaf->childItems()) self(self,child);
+            };
+            visit(visit,item);
+            QVERIFY(checked > columns);
+            if (qEnvironmentVariableIsSet("F4_COLUMNS_CAPTURE"))
+                QVERIFY(view.grabWindow().save(qEnvironmentVariable("F4_COLUMNS_CAPTURE")+QString::number(columns)+".png"));
+        }
+    }
+
     void masonryFirstRowLucideProviderUsesPhysicalRasterAndGrid() {
         QQuickView view;
         auto *checkerProvider = new CompactIconProvider(true);

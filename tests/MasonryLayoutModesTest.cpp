@@ -4481,6 +4481,117 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!image->imageIdUrl().isEmpty(), 10000);
     }
 
+    void masonryThumbnailsConvergeAfterCatalogReorder() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString sourceDirectory = qEnvironmentVariable("ZOIN_THUMBNAIL_REGRESSION_DIR");
+        if (sourceDirectory.isEmpty()) {
+            sourceDirectory = directory.path();
+            for (int i = 0; i < 80; ++i) {
+                QImage image(i % 4 == 1 ? QSize(384, 512) : QSize(512, 384),
+                             QImage::Format_RGB32);
+                image.fill(QColor::fromHsv(i * 13 % 360, 160, 200));
+                QVERIFY(image.save(directory.filePath(QStringLiteral("image-%1.png")
+                                                     .arg(i, 3, 10, QLatin1Char('0')))));
+            }
+        }
+        const QFileInfoList files = QDir(sourceDirectory).entryInfoList(
+            {QStringLiteral("*.jpg"), QStringLiteral("*.png")}, QDir::Files, QDir::Name);
+        QVERIFY(files.size() >= 20);
+        QVariantList catalog;
+        for (int row = 0; row < files.size(); ++row) {
+            catalog.append(catalogEntry(row, files.at(row).absoluteFilePath()));
+        }
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 4;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *left = runtime->createExternalSession(QStringLiteral("convergence-left"));
+        auto *right = runtime->createExternalSession(QStringLiteral("convergence-right"));
+        QVariantList provisionalCatalog;
+        for (int row = 0; row < catalog.size(); row += 3) {
+            auto entry = catalog.at(row).toMap();
+            entry.insert(QStringLiteral("index"), provisionalCatalog.size());
+            provisionalCatalog.append(entry);
+        }
+        QVERIFY(left->applyExternalCatalog(provisionalCatalog, 1));
+        QVERIFY(right->applyExternalCatalog(catalog, 1));
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        view.engine()->rootContext()->setContextProperty(QStringLiteral("leftSession"), left);
+        view.engine()->rootContext()->setContextProperty(QStringLiteral("rightSession"), right);
+        auto *component = new QQmlComponent(view.engine(), &view);
+        const QUrl url(QStringLiteral("inline:ThumbnailConvergence.qml"));
+        component->setData(R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 1280; height: 720
+                GalleryPanel {
+                    objectName: "leftPanel"
+                    width: 640; height: 720
+                    session: leftSession
+                    presentationMode: "masonry"
+                    autoFocus: false
+                }
+                GalleryPanel {
+                    objectName: "rightPanel"
+                    x: 640; width: 640; height: 720
+                    session: rightSession
+                    presentationMode: "masonry"
+                    autoFocus: false
+                }
+            }
+        )QML", url);
+        QTRY_VERIFY_WITH_TIMEOUT(component->isReady(), 5000);
+        QObject *root = component->create();
+        QVERIFY(root);
+        view.setContent(url, component, root);
+        view.show();
+        auto *panel = root->findChild<QQuickItem *>(QStringLiteral("leftPanel"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        QTRY_VERIFY_WITH_TIMEOUT(!layout->visibleIndexes().isEmpty(), 5000);
+        const auto missingThumbnails = [&]() {
+            QStringList missing;
+            for (const QVariant &value : layout->visibleIndexes()) {
+                const int row = value.toInt();
+                const QModelIndex index = left->model()->index(row, 0);
+                auto *thumbnail = panel->findChild<QQuickItem *>(
+                    QStringLiteral("galleryThumbnail-%1").arg(row));
+                const QString modelUrl = index.data(FileListModel::ImageIdUrlRole).toString();
+                const QString visualUrl = thumbnail ? thumbnail->property("source").toUrl().toString() : QString();
+                if (modelUrl.isEmpty() || visualUrl != modelUrl) {
+                    missing.append(QStringLiteral("row=%1 model=%2 visual=%3 size=%4x%5")
+                        .arg(row).arg(modelUrl, visualUrl)
+                        .arg(index.data(FileListModel::ImageFullSizeRole).toSize().width())
+                        .arg(index.data(FileListModel::ImageFullSizeRole).toSize().height()));
+                }
+            }
+            return missing.join(QLatin1Char('\n'));
+        };
+        QTRY_VERIFY2_WITH_TIMEOUT(missingThumbnails().isEmpty(), qPrintable(missingThumbnails()), 15000);
+        // Directory enumeration adds rows between already visible entries.
+        // Rewraps during these insertions must keep the same image facades.
+        QVERIFY(left->applyExternalCatalog(catalog, 2));
+        QTRY_VERIFY2_WITH_TIMEOUT(missingThumbnails().isEmpty(), qPrintable(missingThumbnails()), 15000);
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            std::reverse(catalog.begin(), catalog.end());
+            for (int row = 0; row < catalog.size(); ++row) {
+                auto entry = catalog.at(row).toMap();
+                entry.insert(QStringLiteral("index"), row);
+                catalog[row] = entry;
+            }
+            QVERIFY(left->applyExternalCatalog(catalog, cycle + 3));
+            for (qreal fraction : {0.1, 0.3, 0.1, 0.0}) {
+                layout->setContentY(qMax<qreal>(0, layout->contentHeight() - layout->height()) * fraction);
+                QTRY_VERIFY2_WITH_TIMEOUT(missingThumbnails().isEmpty(), qPrintable(missingThumbnails()), 15000);
+            }
+        }
+    }
+
     void metadataPlanningIsViewportScopedAndBounded() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -5614,6 +5725,74 @@ private slots:
                     "row %1 delegate height=%2 expected=%3")
                     .arg(index).arg(brick->height()).arg(rowExtent)),
                 3000);
+        }
+    }
+
+    void masonryParentReentryKeepsRequestedCursor() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 2;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("parent-reentry"));
+        QVERIFY(session);
+        const auto child = prefixedCatalog(QStringLiteral("child"), 100);
+        const auto parent = prefixedCatalog(QStringLiteral("parent"), 80);
+        QVariantList preview;
+        for (int row = 0; row < child.size(); row += 3) {
+            preview.append(child.at(row));
+        }
+        qulonglong revision = 0;
+        const auto apply = [&](const QVariantList &rows,
+                               const QString &path, int cursor) {
+            return session->applyExternalCatalog(rows, ++revision, {
+                {QStringLiteral("currentPath"), path},
+                {QStringLiteral("cursorIndex"), cursor},
+                {QStringLiteral("cursorEntryId"), rows.at(cursor).toMap()
+                     .value(QStringLiteral("entryId"))},
+            });
+        };
+        QVERIFY(apply(child, QStringLiteral("/child"), 0));
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("reentrySession"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            QTRY_COMPARE(session->currentIndex(), 0);
+            QTRY_COMPARE(layout->contentY(), qreal(0));
+            QVERIFY(apply(parent, QStringLiteral("/"), 50));
+            QTest::qWait(250);
+            QCOMPARE(session->currentIndex(), 50);
+            QVERIFY(layout->contentY() > 0);
+            QVERIFY(apply(preview, QStringLiteral("/child"), 0));
+            QTest::qWait(50);
+            // f4 brackets the short-to-full catalog handoff in a renderer
+            // transaction. Without it, the viewport timer can conceal the
+            // accumulating padding error by restoring the old offset later.
+            QVERIFY(QMetaObject::invokeMethod(
+                panel, "beginPresentationStateUpdate", Q_ARG(QVariant, false)));
+            QVERIFY(apply(child, QStringLiteral("/child"), 0));
+            QVERIFY(QMetaObject::invokeMethod(
+                panel, "endPresentationStateUpdate", Q_ARG(QVariant, false)));
+            QTest::qWait(250);
+            QCOMPARE(session->currentIndex(), 0);
+            QCOMPARE(layout->currentIndex(), 0);
+            QCOMPARE(panel->property("visualCursorIndex").toInt(), 0);
+            QCOMPARE(layout->contentY(), qreal(0));
+            // Once delegates are visible, metadata/geometry refreshes use
+            // the cursor anchor rather than the leading-row anchor.
+            QVERIFY(QMetaObject::invokeMethod(
+                panel, "beginPresentationStateUpdate", Q_ARG(QVariant, false)));
+            layout->setSpacing(layout->spacing() + 1);
+            QVERIFY(QMetaObject::invokeMethod(
+                panel, "endPresentationStateUpdate", Q_ARG(QVariant, false)));
+            QCOMPARE(layout->contentY(), qreal(0));
         }
     }
 

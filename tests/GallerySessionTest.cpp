@@ -487,6 +487,60 @@ private slots:
         QCOMPARE(reset.size(), 0);
     }
 
+    void incrementalCatalogRetainsFacadesCreatedByLaterRowObservers() {
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("incremental-facade-retention"));
+        QVERIFY(session);
+        QVariantList catalog;
+        for (int row = 0; row < 8; ++row) {
+            catalog.append(entry(QString::number(row), row,
+                                 QStringLiteral("image-%1.png").arg(row), true));
+        }
+        QVERIFY(session->applyExternalCatalog({catalog.first()}, 1));
+        auto *model = session->model();
+        QList<ImageFile *> observedFacades;
+        const auto connection = connect(
+            model, &QAbstractItemModel::rowsInserted, this,
+            [&](const QModelIndex &, int first, int) {
+                if (first != 4) {
+                    return;
+                }
+                // A rewrap can bring previously reconciled rows into view
+                // while a later row is being inserted. Their facades are
+                // created in the live model, after the staged row was copied.
+                for (int row = 0; row < 4; ++row) {
+                    observedFacades.append(model->index(row, 0)
+                        .data(FileListModel::ImageFileRole).value<ImageFile *>());
+                }
+            });
+        QVERIFY(session->applyExternalCatalog(catalog, 2));
+        disconnect(connection);
+        QCOMPARE(observedFacades.size(), 4);
+        QList<ImageInfo> infos;
+        for (int row = 0; row < observedFacades.size(); ++row) {
+            QVERIFY(observedFacades.at(row));
+            QCOMPARE(model->index(row, 0).data(FileListModel::ImageFileRole)
+                         .value<ImageFile *>(), observedFacades.at(row));
+            ImageInfo info = observedFacades.at(row)->info();
+            info.imageSize = QSize(800 + row, 600);
+            info.isCached = true;
+            infos.append(info);
+        }
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        decoder->imagesInfoReady(infos);
+        for (int row = 0; row < observedFacades.size(); ++row) {
+            QCOMPARE(observedFacades.at(row)->fullSize(), QSize(800 + row, 600));
+        }
+        // No orphan ImageFiles remain owned by the model after reconciliation.
+        QCOMPARE(model->findChildren<ImageFile *>(
+                     QString(), Qt::FindDirectChildrenOnly).size(), 4);
+    }
+
     void duplicateSourceFansOutMetadataAndViewerTier() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

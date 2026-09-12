@@ -83,7 +83,6 @@ void ExternalCatalogResetTransaction::prepareNextCatalog() {
     m_nextIdToRow.reserve(m_values.size());
     m_nextPathToRow.reserve(m_values.size());
     m_nextSourceEntryIds.reserve(m_values.size());
-    m_nextProviderEntryIds.reserve(m_values.size());
 }
 
 void ExternalCatalogResetTransaction::capturePreviousCatalog() {
@@ -297,9 +296,6 @@ void ExternalCatalogResetTransaction::indexRow(
     if (!entry.sourceIdentity.isEmpty()) {
         m_nextSourceEntryIds.insert(entry.sourceIdentity, entry.id);
     }
-    if (!entry.thumbnailProviderId.isEmpty()) {
-        m_nextProviderEntryIds.insert(entry.thumbnailProviderId, entry.id);
-    }
 }
 
 void ExternalCatalogResetTransaction::resolveSourceRetention() {
@@ -385,24 +381,45 @@ void ExternalCatalogResetTransaction::reconcileRows() {
         if (!replacement.item)
             replacement.item = m_model._entries[row].item;
         m_model._entries[row] = replacement;
-        m_next[row] = replacement;
     }
 }
 
 void ExternalCatalogResetTransaction::commitCatalogAndIndexes() {
-    m_model._entries = std::move(m_next);
+    // Row observers can materialize earlier entries while a later insert or
+    // move is emitted. In incremental mode the live rows are authoritative:
+    // replacing them with the pre-signal snapshot orphans those ImageFiles,
+    // so their delegates never receive metadata or thumbnail completions.
+    if (!m_incremental) {
+        m_model._entries = std::move(m_next);
+    }
     m_model._virtualRowCount = -1;
     m_model._sparseRowToOffset.clear();
     m_model._idToRow = std::move(m_nextIdToRow);
     m_model._pathToRow = std::move(m_nextPathToRow);
     m_model._sourceEntryIds = std::move(m_nextSourceEntryIds);
-    m_model._providerEntryIds = std::move(m_nextProviderEntryIds);
+    m_model._providerEntryIds.clear();
     m_model._sourceToRow.clear();
+    const bool traceReconcile = m_incremental && MediaTimingTrace::enabled();
+    int observerFacades = 0;
     for (int row = 0; row < m_model._entries.size(); ++row) {
         const Entry &entry = m_model.loadedEntry(row);
         if (!entry.sourceIdentity.isEmpty()) {
             m_model._sourceToRow.insert(entry.sourceIdentity, row);
         }
+        if (!entry.thumbnailProviderId.isEmpty()) {
+            m_model._providerEntryIds.insert(entry.thumbnailProviderId, entry.id);
+        }
+        if (traceReconcile && entry.item && entry.item != m_next.at(row).item) {
+            ++observerFacades;
+        }
+    }
+    if (traceReconcile) {
+        MediaTimingTrace::event(QStringLiteral("qt.gallery.catalog.reconcile.commit"), {
+            {QStringLiteral("fix"), QStringLiteral("[FIX:incremental-facade-retention]")},
+            {QStringLiteral("sessionId"), m_model._sessionId},
+            {QStringLiteral("rows"), m_model._entries.size()},
+            {QStringLiteral("retainedObserverFacades"), observerFacades},
+        });
     }
 }
 

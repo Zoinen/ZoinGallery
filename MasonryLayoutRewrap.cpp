@@ -275,14 +275,30 @@ void MasonryLayout::rewrapMasonry(bool animate, qreal currentIndexOffset)
         0, contentHeight() - height());
     if (currentIndexOffset != -1) {
         nextContentY = qBound<qreal>(
-            0, _bricks[_currentIndex].y + currentIndexOffset,
+            0, indexGeometry(_currentIndex).y() + currentIndexOffset,
             maximumOffset);
     } else if (_topItem < _bricks.size()) {
+        // The saved anchor uses indexGeometry(), whose first row includes
+        // the top padding. Restoring from the raw brick Y adds that padding
+        // once per inserted row and walks a stationary viewport downward.
         nextContentY = qBound<qreal>(
-            0, _bricks[_topItem].y - _topItemOffset,
+            0, indexGeometry(_topItem).y() - _topItemOffset,
             maximumOffset);
     }
     if (nextContentY != _contentY) {
+        if (ZoinGallery::MediaTimingTrace::enabled()) {
+            ZoinGallery::MediaTimingTrace::event(QStringLiteral("qt.gallery.viewport.rewrap"), {
+                {QStringLiteral("fix"), QStringLiteral("[FIX:parent-reentry]")},
+                {QStringLiteral("currentIndex"), _currentIndex},
+                {QStringLiteral("currentIndexOffset"), currentIndexOffset},
+                {QStringLiteral("topItem"), _topItem},
+                {QStringLiteral("topItemOffset"), _topItemOffset},
+                {QStringLiteral("previous"), _contentY},
+                {QStringLiteral("next"), nextContentY},
+                {QStringLiteral("count"), _bricks.size()},
+                {QStringLiteral("firstPath"), brickPath(0)},
+            });
+        }
         setContentYInternal(nextContentY);
     } else if (!_deferDelegateWindowCommit) {
         updateProperties(animate);

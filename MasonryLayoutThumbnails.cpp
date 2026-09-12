@@ -1,6 +1,7 @@
 #include "MasonryLayout.h"
 
 #include <ZoinGallery/GalleryCatalogSource.h>
+#include <ZoinGallery/MediaTimingTrace.h>
 
 #include <QFileInfo>
 
@@ -99,6 +100,27 @@ void MasonryLayout::planThumbnailForIndex(
     }
     MasonryBrick &brick = ensureBrickAt(index);
     ImageFile *image = brick.image;
+    const auto traceSkipped = [&](const QString &reason) {
+        if (!ZoinGallery::MediaTimingTrace::enabled()) {
+            return;
+        }
+        ZoinGallery::MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.thumbnail.plan_skipped"), {
+                {QStringLiteral("fix"), QStringLiteral("[FIX:incremental-facade-retention]")},
+                {QStringLiteral("reason"), reason},
+                {QStringLiteral("row"), index},
+                {QStringLiteral("entryId"), brick.modelIdentity},
+                {QStringLiteral("displayName"), brick.modelText},
+                {QStringLiteral("modelIsImage"), brick.modelIsImage},
+                {QStringLiteral("knownWidth"), brick.modelKnownSize.width()},
+                {QStringLiteral("hasFacade"), image != nullptr},
+                {QStringLiteral("facadeIsImage"), image && image->isImage()},
+                {QStringLiteral("facadeWidth"), image ? image->fullSize().width() : -1},
+                {QStringLiteral("refreshPending"), _delegateRefreshPending},
+                {QStringLiteral("snapshotRefresh"), _visualSnapshotRefresh},
+                {QStringLiteral("materializationPending"), _delegateMaterializationPending},
+            });
+    };
     if (!image && canUseLightweightRows()) {
         // The layout intentionally keeps non-delegate rows as POD-only
         // bricks. Once metadata makes an overscan image decodable, create its
@@ -108,11 +130,13 @@ void MasonryLayout::planThumbnailForIndex(
             || _delegateMaterializationPending
             || !brick.modelIsImage || !brick.modelKnownSize.isValid()
             || brick.modelKnownSize.isEmpty()) {
+            traceSkipped(QStringLiteral("facade-deferred"));
             return;
         }
         image = materializeImageForIndex(index);
     }
     if (!image || !image->isImage() || !image->fullSize().isValid()) {
+        traceSkipped(QStringLiteral("facade-not-decodable"));
         return;
     }
     QSizeF previewSize = brick.previewGeometry.size();

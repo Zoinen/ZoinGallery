@@ -86,7 +86,6 @@ private:
     QHash<QString, int> m_nextIdToRow;
     QHash<QString, int> m_nextPathToRow;
     QMultiHash<QString, QString> m_nextSourceEntryIds;
-    QMultiHash<QString, QString> m_nextProviderEntryIds;
 
     QSet<QString> m_retainedSourceIdentities;
     QSet<QString> m_invalidatedSourceIdentities;

@@ -210,7 +210,10 @@ QtObject {
             if (indexChanged) {
                 if (viewer.pendingCommittedViewport
                         && viewer.pendingCommittedViewport.index === viewer.presentedIndex) {
-                    motion.committedViewportTimer.restart()
+                    // The neighbor already ended at this viewport. Apply it
+                    // with the source handoff, before another frame can render
+                    // the new image at the previous image's offset.
+                    viewer.applyPendingCommittedViewport()
                 } else if (applyPendingPreviousImageViewport()) {
                     // Previous-image switching restores the same normalized
                     // center and zoom-to-fit ratio as ViewerMode.

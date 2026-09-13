@@ -1250,8 +1250,11 @@ private slots:
                                                                   modifiers: Qt.AltModifier })
                 Keys.onPressed: event => { bubbledKeyCount++ }
                 function zoomForSwipe() { viewer.setZoom(2) }
+                property point committedPosition
                 function commitNextSwipe() {
                     viewer.beginViewerNavigation(1)
+                    committedPosition = Qt.point(viewer.viewerNavigationTargetFinalImageX,
+                                                 viewer.viewerNavigationTargetFinalImageY)
                     viewer.commitViewerNavigation()
                 }
                 function closeNow() { viewer.requestClose() }
@@ -1476,8 +1479,8 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(
             viewport, "setViewport",
             Q_ARG(QVariant, QVariant(targetScale)),
-            Q_ARG(QVariant, QVariant(0.0)),
-            Q_ARG(QVariant, QVariant(0.0))));
+            Q_ARG(QVariant, QVariant(-123.0)),
+            Q_ARG(QVariant, QVariant(-85.0))));
         QTRY_VERIFY(viewer->property("zoomFactor").toReal() > 1.5);
         const qreal preservedScale = viewport->property("zoomScale").toReal();
         QTRY_COMPARE_WITH_TIMEOUT(
@@ -1495,6 +1498,11 @@ private slots:
                                    SIGNAL(imageTextureReadyChanged()));
         QVERIFY(textureReadySpy.isValid());
         QVERIFY(QMetaObject::invokeMethod(rootObject, "commitNextSwipe"));
+        const auto committedPosition = rootObject->property("committedPosition").toPointF();
+        qInfo() << "[FIX:swipe-commit] expected" << committedPosition
+                << "actual" << viewerImage->property("x") << viewerImage->property("y");
+        QCOMPARE(QPointF(viewerImage->property("x").toReal(),
+                         viewerImage->property("y").toReal()), committedPosition);
         QTRY_COMPARE(navigationSpy.size(), 1);
         QCOMPARE(navigationSpy.at(0).at(0).toString(), QStringLiteral("second"));
         QCOMPARE(navigationSpy.at(0).at(1).toInt(), 22);

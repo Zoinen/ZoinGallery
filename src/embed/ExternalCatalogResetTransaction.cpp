@@ -354,6 +354,34 @@ void ExternalCatalogResetTransaction::reindexCurrentRows() {
 }
 
 void ExternalCatalogResetTransaction::reconcileRows() {
+    const bool sameIdentities = m_next.size() == m_model._entries.size()
+        && std::all_of(m_model._entries.cbegin(), m_model._entries.cend(),
+                       [this](const Entry &entry) { return m_nextIdToRow.contains(entry.id); });
+    bool reordered = false;
+    if (sameIdentities) {
+        for (int row = 0; row < m_next.size(); ++row)
+            reordered |= m_next[row].id != m_model._entries[row].id;
+    }
+    if (reordered) {
+        // Sorting is one permutation, not a sequence of visible moves. An
+        // intermediate move can push the cursor to an edge and clamp away its
+        // viewport offset even though the final position is well inside bounds.
+        emit m_model.layoutAboutToBeChanged();
+        const QModelIndexList oldPersistent = m_model.persistentIndexList();
+        QModelIndexList newPersistent;
+        for (const QModelIndex &index : oldPersistent)
+            newPersistent.append(m_model.index(m_nextIdToRow.value(
+                m_model._entries[index.row()].id), index.column()));
+        for (Entry &entry : m_next) {
+            if (!entry.item)
+                entry.item = m_model._entries[m_model._idToRow.value(entry.id)].item;
+        }
+        m_model._entries = m_next;
+        reindexCurrentRows();
+        m_model.changePersistentIndexList(oldPersistent, newPersistent);
+        emit m_model.layoutChanged();
+        return;
+    }
     for (int last = m_model._entries.size() - 1; last >= 0;) {
         if (m_nextIdToRow.contains(m_model._entries[last].id)) { --last; continue; }
         int first = last;

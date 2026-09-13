@@ -162,8 +162,22 @@ Item {
     signal pinchZoomOutToThumbnailsProgressed(real progress)
     signal pinchZoomOutToThumbnailsFinished(bool commit)
 
-    onWidthChanged: if (zoomFitView) { zoomToFit(true) }
-    onHeightChanged: if (zoomFitView) { zoomToFit(true) }
+    property size previousViewportSize: Qt.size(0, 0)
+    function resizeViewport() {
+        const oldWidth = previousViewportSize.width
+        const oldHeight = previousViewportSize.height
+        previousViewportSize = Qt.size(width, height)
+        if (zoomFitView) {
+            zoomToFit(true)
+        } else if (oldWidth > 0 && oldHeight > 0 && width > 0 && height > 0) {
+            // Preserve the image point underneath the viewport center. Bounds
+            // still win when a larger window exposes an entire image axis.
+            setViewport(zoomScale, viewerImage.x + (width - oldWidth) / 2,
+                        viewerImage.y + (height - oldHeight) / 2)
+        }
+    }
+    onWidthChanged: resizeViewport()
+    onHeightChanged: resizeViewport()
 
     FrameAnimation {
         id: frameAnimation

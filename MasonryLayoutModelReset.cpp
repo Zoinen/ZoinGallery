@@ -1244,6 +1244,9 @@ void MasonryLayout::restorePreservedCurrentItemPosition() {
             _topItem = row;
             _topItemOffset = _preservedViewportAnchorOffset;
             restoredViewportAnchor = true;
+            _preserveViewportAnchorForNextRewrap = true;
+            if (_topItem == _currentIndex)
+                _currentIndexOffsetOverride = -_topItemOffset;
         }
     }
     if (!restoredViewportAnchor && rowCount > 0 &&

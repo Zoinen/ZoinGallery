@@ -6316,10 +6316,11 @@ private slots:
                      QStringLiteral("sizeText")).toString(),
                  snapshotSize);
 
-        // Reordering known, unequal aspect ratios reuses the painted row slot.
+        // Reordering known, unequal aspect ratios retains the painted item.
         // Its geometry must equal the new hit-test geometry immediately; a
         // model reset is not a 500 ms cross-catalog layout animation.
         const QRectF geometryBeforeReorder = firstSlot->geometry();
+        const QVariant identityBeforeReorder = firstSlot->visualRow().value("entryId");
         QVariantList reorderedCatalog = renamedLargeCatalog;
         reorderedCatalog.swapItemsAt(0, 4);
         timer.restart();
@@ -6331,9 +6332,8 @@ private slots:
                  qPrintable(QStringLiteral(
                      "known-size reordered reset took %1 ms")
                      .arg(reorderedResetNs / 1'000'000.0, 0, 'f', 3)));
-        const QRectF expectedResetGeometry(
-            layout->indexGeometry(0).adjusted(
-                0, layout->paddingTop(), 0, 0).toRect());
+        const QRectF expectedResetGeometry(layout->indexGeometry(4).toRect());
+        QCOMPARE(firstSlot->visualRow().value("entryId"), identityBeforeReorder);
         QVERIFY(geometryBeforeReorder != expectedResetGeometry);
         QCOMPARE(firstSlot->geometry(), expectedResetGeometry);
 
@@ -6365,6 +6365,78 @@ private slots:
         QVERIFY(shutdownOrphan);
         model->shutdown();
         QVERIFY(shutdownOrphan.isNull());
+        runtime->shutdown();
+    }
+
+    void reorderKeepsCursorViewportOffset_data() {
+        QTest::addColumn<QString>("presentation");
+        QTest::addColumn<bool>("delta");
+        for (const char *mode : {"details", "icons", "grid", "masonry", "columns"}) {
+            QTest::newRow(mode) << QString::fromLatin1(mode) << false;
+            QTest::newRow(qPrintable(QString::fromLatin1(mode)+"-delta")) << QString::fromLatin1(mode) << true;
+        }
+    }
+
+    void reorderKeepsCursorViewportOffset() {
+        QFETCH(QString, presentation);
+        QFETCH(bool, delta);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession(QStringLiteral("reorder-anchor"));
+        auto catalog = prefixedCatalog(QStringLiteral("anchor"), 200);
+        QVariantMap catalogOptions{{"currentPath", "D:/synthetic/anchor"},
+                                   {"catalogRowsDeferred", delta}, {"totalCount", 200}};
+        QVERIFY(session->applyExternalCatalog(catalog, 1, catalogOptions));
+        QVERIFY(session->applyExternalState(QStringLiteral("anchor-entry-80"), 80, {}, 1));
+        auto *panel = createPanel(view, session, QStringLiteral("anchorSession"), presentation);
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", 1.75);
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        QTRY_COMPARE(layout->count(), 200);
+        QTRY_COMPARE(layout->currentIndex(), 80);
+        QTest::qWait(150);
+        const bool horizontal = presentation == QStringLiteral("columns");
+        const auto position = [layout, horizontal](int index) {
+            const auto rect = layout->indexGeometry(index);
+            return (horizontal ? rect.x() : rect.y()) - layout->contentY();
+        };
+        const auto rect = layout->indexGeometry(80);
+        layout->setContentY((horizontal ? rect.x() : rect.y()) - 80);
+        QTest::qWait(100);
+        const qreal offset = position(80);
+        QPersistentModelIndex persistent(session->model()->index(80, 0));
+        QSignalSpy layoutChanges(session->model(), &QAbstractItemModel::layoutChanged);
+        QSignalSpy rowMoves(session->model(), &QAbstractItemModel::rowsMoved);
+        std::reverse(catalog.begin(), catalog.end());
+        if (delta) {
+            QVariantList ranges;
+            for (int index=0; index<200; ++index) {
+                auto entry = catalog[index].toMap();
+                entry["index"] = index;
+                catalog[index] = entry;
+                ranges.append(QVariantMap{{"oldIndex", 199-index}, {"index", index}, {"count", 1}});
+            }
+            catalogOptions["catalogDelta"] = QVariantMap{{"baseCatalogRevision", 1},
+                {"oldTotalCount", 200}, {"ranges", ranges}};
+        }
+        QVERIFY(QMetaObject::invokeMethod(panel, "beginPresentationStateUpdate",
+                                          Q_ARG(QVariant, false)));
+        QVERIFY(session->applyExternalCatalog(catalog, 2, catalogOptions));
+        QVERIFY(session->applyExternalState(QStringLiteral("anchor-entry-80"), 119, {}, 2));
+        QVERIFY(QMetaObject::invokeMethod(panel, "endPresentationStateUpdate",
+                                          Q_ARG(QVariant, false)));
+        qInfo() << "[FIX:sort-anchor] immediate" << layout->currentIndex() << position(119);
+        QVERIFY(qAbs(position(119)-offset) < 0.6);
+        QCOMPARE(persistent.row(), 119);
+        QCOMPARE(layoutChanges.count(), 1);
+        QCOMPARE(rowMoves.count(), 0);
+        QTRY_COMPARE(layout->currentIndex(), 119);
+        QTest::qWait(200);
+        qInfo() << "[FIX:sort-anchor]" << presentation << offset << position(119);
+        QVERIFY(qAbs(position(119)-offset) < 0.6);
         runtime->shutdown();
     }
 

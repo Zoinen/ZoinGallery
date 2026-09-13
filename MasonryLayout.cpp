@@ -183,17 +183,33 @@ void MasonryLayout::preserveCurrentItemPositionForNextModelReset() {
         _preservedCurrentFallbackIndex = _currentIndex;
     }
 
-    const int anchorIndex = _topItem;
+    int anchorIndex = _topItem;
+    if (_currentIndex >= 0 && _currentIndex < count) {
+        const QRectF currentGeometry = indexGeometry(_currentIndex);
+        const qreal start = _presentationMode == Columns
+            ? currentGeometry.left() : currentGeometry.top();
+        const qreal end = _presentationMode == Columns
+            ? currentGeometry.right() : currentGeometry.bottom();
+        const qreal viewportExtent = _presentationMode == Columns ? width() : height();
+        // Reordering should not move the visible cursor to follow whichever
+        // unrelated item happened to intersect the old viewport's leading edge.
+        if (end > _contentY && start < _contentY + viewportExtent)
+            anchorIndex = _currentIndex;
+    }
     if (anchorIndex >= 0 && anchorIndex < count) {
         _preservedViewportAnchorFullPath = brickPath(anchorIndex);
         _preservedViewportAnchorFallbackIndex = anchorIndex;
-        _preservedViewportAnchorOffset =
-            indexGeometry(anchorIndex).y() - _contentY;
+        const QRectF geometry = indexGeometry(anchorIndex);
+        _preservedViewportAnchorOffset = (_presentationMode == Columns
+            ? geometry.x() : geometry.y()) - _contentY;
     }
 
     _preserveCurrentItemPositionOnNextModelReset =
         !_preservedCurrentItemFullPath.isEmpty() ||
         !_preservedViewportAnchorFullPath.isEmpty();
+    if (qEnvironmentVariableIsSet("F4_NAV_BENCHMARK_TRACE"))
+        qInfo() << "[FIX:sort-anchor] capture" << _currentIndex << anchorIndex
+                << _contentY << _preservedViewportAnchorOffset;
 }
 
 void MasonryLayout::preservePendingThumbnailRequestsForModelReset() {

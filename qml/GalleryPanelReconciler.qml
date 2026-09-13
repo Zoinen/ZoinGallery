@@ -112,6 +112,12 @@ QtObject {
             panel.selectionAnchorIndex = panel.controller.currentIndex
             panel.coordinateVisualCursor(panel.controller.currentIndex,
                                          panel.visualCursorIndex)
+            // A same-directory catalog replacement has already restored the
+            // native stable-item anchor. Publish that offset before a queued
+            // restore can overwrite it with the pre-sort scroll position.
+            if (!panel.pathViewportPlacementPending
+                    && panel.controller.panelViewportStateAvailable)
+                panel.viewportController.persistCommittedViewport()
             panel.schedulePathViewportPlacement("catalog-revision-changed")
         }
 

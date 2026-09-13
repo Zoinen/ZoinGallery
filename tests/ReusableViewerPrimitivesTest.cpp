@@ -505,6 +505,78 @@ private slots:
         QVERIFY(!view.grabWindow().isNull());
     }
 
+    void resizePreservesZoomedCenterAndFit() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("resize-grid.png"));
+        QImage grid(2800, 2100, QImage::Format_RGB32);
+        grid.fill(Qt::white);
+        for (int y = 0; y < grid.height(); ++y)
+            for (int x = 0; x < grid.width(); ++x)
+                if (x % 100 == 0 || y % 100 == 0)
+                    grid.setPixelColor(x, y, Qt::black);
+        QVERIFY(grid.save(path));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            FlickableZoomable {
+                width: 640; height: 420
+                devicePixelRatio: 1.75
+                animationDuration: 0
+                property url testSource
+                function prepare() {
+                    setImage(testSource, Qt.size(2800, 2100), 0, 0)
+                    setViewport(1, -400, -300)
+                }
+            }
+        )QML", QStringLiteral("ResizeViewport.qml"));
+        auto *viewport = qobject_cast<QQuickItem *>(root);
+        QVERIFY(viewport);
+        view.show();
+        QTRY_VERIFY(view.isExposed());
+        root->setProperty("testSource", QUrl::fromLocalFile(path));
+        QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+        auto *image = root->property("image").value<QQuickItem *>();
+        QVERIFY(image);
+        const QPointF center((viewport->width()/2-image->x()),
+                             (viewport->height()/2-image->y()));
+        viewport->setWidth(1000);
+        viewport->setHeight(700);
+        qInfo() << "[FIX:viewer-resize] center" << center << "image" << image->position();
+        QCOMPARE(QPointF(viewport->width()/2-image->x(),
+                         viewport->height()/2-image->y()), center);
+        QCOMPARE(root->property("zoomScale").toReal(), 1.0);
+        QTRY_VERIFY(root->property("imageTextureReady").toBool());
+        auto *base = root->findChild<QQuickItem *>(QStringLiteral("galleryViewerBaseImage"));
+        QVERIFY(base);
+        const QPointF origin = base->mapToItem(view.contentItem(), QPointF());
+        const qreal dpr = view.devicePixelRatio();
+        QVERIFY(qAbs(origin.x()*dpr-qRound(origin.x()*dpr)) < 0.01);
+        QVERIFY(qAbs(origin.y()*dpr-qRound(origin.y()*dpr)) < 0.01);
+        QCOMPARE(base->mapToItem(view.contentItem(), QPointF(1,0))-origin, QPointF(1,0));
+        QCOMPARE(base->mapToItem(view.contentItem(), QPointF(0,1))-origin, QPointF(0,1));
+        view.requestUpdate();
+        QTest::qWait(100);
+        const QImage rendered = view.grabWindow();
+        bool hasGrid = false;
+        for (int y = 0; y < rendered.height() && !hasGrid; ++y)
+            for (int x = 0; x < rendered.width() && !hasGrid; ++x)
+                hasGrid = rendered.pixelColor(x, y).lightness() < 128;
+        QVERIFY(hasGrid);
+        QVERIFY(rendered.save(QStringLiteral("/tmp/f4-resize-grid-175.png")));
+        QVERIFY(QMetaObject::invokeMethod(root, "zoomToFit", Q_ARG(QVariant, true)));
+        for (const QSizeF size : {QSizeF(500, 900), QSizeF(1200, 400), QSizeF(640, 420)}) {
+            viewport->setSize(size);
+            const qreal scale = qMin(size.width()/1600, size.height()/1200);
+            QVERIFY(qAbs(root->property("zoomScale").toReal()-scale) < 0.0001);
+            QVERIFY(qAbs(image->x()-(size.width()-1600*scale)/2) < 0.01);
+            QVERIFY(qAbs(image->y()-(size.height()-1200*scale)/2) < 0.01);
+            QVERIFY(root->property("zoomFitView").toBool());
+        }
+    }
+
     void coldTierSizeChangeKeepsAnAtomicFittedViewport() {
         QQuickView view;
         view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));

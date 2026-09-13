@@ -10,11 +10,15 @@ Item {
     opacity: content.entry.hiddenEntry ? 0.5 : 1
 
     function pixelOffset(item) {
-        // Include every ancestor: horizontal paging and host placement can
-        // change the scene origin without changing the leaf's local geometry.
-        let revision = 0
-        for (let parent = item.parent; parent; parent = parent.parent)
-            revision += parent.x + parent.y + parent.width + parent.height
+        // The row observes its complete ancestor chain once. Labels only
+        // need their local chain plus that shared scene-space origin.
+        const origin = content.entry.iconSceneOrigin
+        let revision = origin.x + origin.y
+        for (let parent = item.parent; parent && parent !== content.entry; parent = parent.parent) {
+            revision += parent.x + parent.y + parent.scale + parent.rotation
+            if (parent.scale !== 1 || parent.rotation !== 0)
+                revision += parent.width + parent.height + parent.transformOrigin
+        }
         const point = item.parent.mapToItem(null, item.x, item.y)
         const dpr = content.entry.renderDpr
         return Qt.point(Math.round(point.x * dpr) / dpr - point.x + revision * 0,
@@ -47,6 +51,7 @@ Item {
 
         Text {
             id: baseNameLabel
+            readonly property point pixelCorrection: content.pixelOffset(baseNameLabel)
             objectName: "galleryBaseName-" + content.entry.viewIndex
             x: 0
             width: Math.max(0, (extensionLabel.visible
@@ -71,13 +76,14 @@ Item {
             verticalAlignment: Text.AlignVCenter
             font.pixelSize: -1
             transform: Translate {
-                x: content.pixelOffset(baseNameLabel).x
-                y: content.pixelOffset(baseNameLabel).y
+                x: baseNameLabel.pixelCorrection.x
+                y: baseNameLabel.pixelCorrection.y
             }
         }
 
         Text {
             id: extensionLabel
+            readonly property point pixelCorrection: content.pixelOffset(extensionLabel)
             objectName: "galleryExtension-" + content.entry.viewIndex
             visible: content.entry.panelRoot.separateFileExtensions
                      && content.entry.displayExtension !== ""
@@ -100,8 +106,8 @@ Item {
             elide: Text.ElideLeft
             font.pixelSize: -1
             transform: Translate {
-                x: content.pixelOffset(extensionLabel).x
-                y: content.pixelOffset(extensionLabel).y
+                x: extensionLabel.pixelCorrection.x
+                y: extensionLabel.pixelCorrection.y
             }
         }
 

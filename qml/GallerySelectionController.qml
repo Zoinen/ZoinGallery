@@ -103,6 +103,9 @@ QtObject {
         }
         const previousIndex = controller.currentIndex
         panel.forceActiveFocus()
+        // A host may keep this panel's cursor while command input owns keys.
+        // Even a press on the current row must let it reclaim navigation.
+        panel.activateRequested()
 
         // Middle-button ownership lives on the panel-level input layer.
         if ((button & Qt.MiddleButton) !== 0)

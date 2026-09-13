@@ -38,8 +38,12 @@ BrickItem {
         let dependency = 0
         let ancestor = entry
         while (ancestor) {
-            dependency += ancestor.x + ancestor.y + ancestor.width
-                    + ancestor.height + ancestor.scale + ancestor.rotation
+            dependency += ancestor.x + ancestor.y + ancestor.scale + ancestor.rotation
+            // Size does not affect an untransformed item's origin. Anchors
+            // publish x/y when resizing actually moves it; subscribing every
+            // row to every ancestor's size repeats the whole chain on resize.
+            if (ancestor.scale !== 1 || ancestor.rotation !== 0)
+                dependency += ancestor.width + ancestor.height + ancestor.transformOrigin
             ancestor = ancestor.parent
         }
         return entry.mapToItem(null, dependency * 0, dependency * 0)

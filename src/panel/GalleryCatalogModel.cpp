@@ -19,6 +19,8 @@ const QHash<int, QByteArray> &fixedRoles() {
          QByteArrayLiteral("isSelected")},
         {GalleryCatalogModel::KnownImageSizeRole,
          QByteArrayLiteral("knownImageSize")},
+        {GalleryCatalogModel::MetadataSettledRole,
+         QByteArrayLiteral("metadataSettled")},
         {GalleryCatalogModel::ImageIdUrlRole,
          QByteArrayLiteral("imageIdUrl")},
         {GalleryCatalogModel::VisualSnapshotRole,
@@ -151,7 +153,12 @@ QVariant GalleryCatalogModel::data(const QModelIndex &proxyIndex,
 
 
 QHash<int, QByteArray> GalleryCatalogModel::roleNames() const {
-    return fixedRoles();
+    auto roles = fixedRoles();
+    // Older/local catalogs have no completion state. Do not advertise a
+    // barrier they cannot satisfy or synthesize one by materializing images.
+    if (!_sourceRoles.contains(MetadataSettledRole))
+        roles.remove(MetadataSettledRole);
+    return roles;
 }
 
 void GalleryCatalogModel::setSourceModel(QAbstractItemModel *sourceModel) {

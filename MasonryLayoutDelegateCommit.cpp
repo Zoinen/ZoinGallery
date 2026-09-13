@@ -186,6 +186,9 @@ bool MasonryLayout::prepareDelegateRow(
     if (!row->item) {
         return false;
     }
+    // Close before rebinding a recycled slot; publish only after its geometry.
+    if (!brick.masonryGeometryReady)
+        row->item->setProperty("masonryGeometryReady", false);
     const bool initialStateInstalled = row->itemPopped
         && row->item->viewIndex() == index
         && (_visualSnapshotRole < 0
@@ -357,6 +360,7 @@ void MasonryLayout::applyDelegateRowLayout(
     // once with stale Details geometry and immediately evaluate all of those
     // bindings again after setGeometry()/setPreviewRect().
     row->item->setPresentationMode(static_cast<int>(_presentationMode));
+    row->item->setProperty("masonryGeometryReady", row->brick->masonryGeometryReady);
 }
 
 void MasonryLayout::finalizeDelegateRow(

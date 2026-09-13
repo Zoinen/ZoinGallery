@@ -1,4 +1,5 @@
 #include <ZoinGallery/GallerySession.h>
+#include <ZoinGallery/MediaTimingTrace.h>
 
 #include "ExternalCatalogModel.h"
 #include "GalleryViewModel.h"
@@ -378,8 +379,20 @@ bool GallerySession::applyExternalCatalog(
         return true;
     }
     const QVariantMap delta = options.value(QStringLiteral("catalogDelta")).toMap();
+    // A completed dense catalog must leave sparse mode even when it carries
+    // an identity delta. Sparse reconciliation retains the uniform placeholder
+    // geometry, so natural image dimensions would never reach Masonry.
+    const bool densePromotion = !context.catalogRowsDeferred && d->external->sparseCatalog();
+    if (densePromotion) {
+        MediaTimingTrace::event(QStringLiteral("qt.gallery.catalog.dense_promotion"), {
+            {QStringLiteral("fix"), QStringLiteral("[FIX:masonry-dense-promotion]")},
+            {QStringLiteral("sessionId"), sessionId()},
+            {QStringLiteral("rows"), entries.size()},
+            {QStringLiteral("hasDelta"), !delta.isEmpty()},
+        });
+    }
     const bool canReconcile = !context.pathChanged
-        && (context.catalogRowsDeferred || d->external->sparseCatalog()) && !delta.isEmpty()
+        && context.catalogRowsDeferred && !delta.isEmpty()
         && delta.value(QStringLiteral("baseCatalogRevision")).toULongLong() == d->catalogRevision;
     const bool applied = canReconcile
         ? d->external->reconcileSparseCatalog(entries, context.metadataDeferred,

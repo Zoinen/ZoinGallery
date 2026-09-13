@@ -28,6 +28,7 @@ void MasonryLayout::updateModelRoleCache() {
     _localPathRole = -1;
     _entryNameRole = -1;
     _knownImageSizeRole = -1;
+    _metadataSettledRole = -1;
     _visualSnapshotRole = -1;
     if (!_model) {
         return;
@@ -49,6 +50,9 @@ void MasonryLayout::updateModelRoleCache() {
         }
         else if (role.value() == QByteArrayLiteral("knownImageSize")) {
             _knownImageSizeRole = role.key();
+        }
+        else if (role.value() == QByteArrayLiteral("metadataSettled")) {
+            _metadataSettledRole = role.key();
         }
         else if (role.value() == QByteArrayLiteral("visualSnapshot")) {
             _visualSnapshotRole = role.key();
@@ -99,6 +103,9 @@ MasonryLayout::MasonryBrick MasonryLayout::lightweightBrickForModelRow(
     MasonryBrick brick;
     populateBrickModelState(brick, row);
     QSize imageSize = brick.modelKnownSize;
+    if (_presentationMode == Masonry && _metadataSettledRole >= 0 && brick.modelIsImage
+        && diagnosticMasonryDelayMs() > 0)
+        imageSize = {};
     if (imageSize.isEmpty()) {
         if (brick.modelIsFolder && _listView) {
             brick.lineBreakAfter = true;
@@ -109,6 +116,9 @@ MasonryLayout::MasonryBrick MasonryLayout::lightweightBrickForModelRow(
         }
     }
     brick.originalSize = imageSize;
+    brick.masonryGeometryReady = _metadataSettledRole < 0 || !brick.modelIsImage
+        || _sparseCatalogRows || (_presentationMode != Masonry
+            && (!brick.modelKnownSize.isEmpty() || brick.modelMetadataSettled));
     return brick;
 }
 
@@ -138,6 +148,8 @@ void MasonryLayout::populateBrickModelState(
         brick.modelKnownSize = modelIndex.data(
             _knownImageSizeRole).toSize();
     }
+    brick.modelMetadataSettled = _metadataSettledRole >= 0
+        && modelIndex.data(_metadataSettledRole).toBool();
     if (brick.image) {
         brick.modelIsImage = brick.image->isImage();
         brick.modelIsFolder = brick.image->isFolder();
@@ -356,6 +368,8 @@ void MasonryLayout::rebuildIncrementalBricks(
             brick.modelPath = modelState.modelPath;
             brick.modelText = modelState.modelText;
             brick.modelKnownSize = modelState.modelKnownSize;
+            brick.modelMetadataSettled = modelState.modelMetadataSettled;
+            brick.masonryGeometryReady = modelState.masonryGeometryReady;
             brick.modelSourceIndex = modelState.modelSourceIndex;
             brick.modelIsImage = modelState.modelIsImage;
             brick.modelIsFolder = modelState.modelIsFolder;
@@ -442,6 +456,11 @@ void MasonryLayout::restoreIncrementalViewport(
 
 void MasonryLayout::finishIncrementalModelChange(
     const IncrementalModelChangeContext &context) {
+    // Insertions and sorting rebuild row boundaries without a model reset or
+    // another metadata event. Revalidate retained thumbnails against those rows.
+    if (_presentationMode == Masonry && canUseLightweightRows()
+        && !_sparseCatalogRows && _metadataSettledRole >= 0)
+        scheduleLightweightRewrap();
     const int previousImageCount = _imageCount;
     _imageCount = 0;
     for (int index = 0; index < _bricks.size(); ++index) {
@@ -842,16 +861,20 @@ void MasonryLayout::materializeDeferredDelegateBatch(
     });
 }
 
+int MasonryLayout::diagnosticMasonryDelayMs() {
+    return qBound(0, qEnvironmentVariableIntValue("F4_GALLERY_ROW_DELAY_MS"), 60000);
+}
+
 void MasonryLayout::scheduleLightweightRewrap() {
     if (_lightweightRewrapPending) {
         return;
     }
     _lightweightRewrapPending = true;
     const quint64 generation = ++_lightweightRewrapGeneration;
-    // Header readers finish independently and their historical isLast marker
-    // follows submission order, not completion order. Gate relayout to at
-    // most one pass per frame instead of treating that marker as a barrier.
-    QTimer::singleShot(16, this, [this, generation]() {
+    // Coalesce completions, but commit only complete visual rows. isLast marks
+    // submission order and cannot be used as a completion barrier.
+    const int delay = _metadataSettledRole >= 0 ? diagnosticMasonryDelayMs() : 0;
+    QTimer::singleShot(delay > 0 ? delay : 16, Qt::PreciseTimer, this, [this, generation]() {
         if (generation != _lightweightRewrapGeneration) {
             return;
         }
@@ -859,17 +882,110 @@ void MasonryLayout::scheduleLightweightRewrap() {
         if (_presentationMode != Masonry || !canUseLightweightRows()) {
             return;
         }
+        if (_metadataSettledRole >= 0 && !commitReadyMasonryRows()) {
+            return;
+        }
         rewrap(false);
         // Rewrap can change the exact target tier without changing the set of
         // overscan indexes, so explicitly re-plan that bounded window.
         planViewportThumbnails(_overscanIndexSet);
+        if (_metadataSettledRole >= 0 && diagnosticMasonryDelayMs() > 0)
+            scheduleLightweightRewrap();
     });
 }
 
+bool MasonryLayout::commitReadyMasonryRows() {
+    // Find future row boundaries using the same strategy as the actual layout.
+    // Placeholder rows are too short for portrait images: committing those
+    // boundaries would repeatedly pull one more pending image into the row.
+    QVector<ZoinGallery::GalleryLayoutEntry> entries;
+    entries.reserve(_bricks.size());
+    bool pending = false;
+    for (const MasonryBrick &brick : std::as_const(_bricks)) {
+        const QSizeF size = brick.modelIsImage
+            ? (brick.modelKnownSize.isEmpty() ? GridView_Folder
+                                              : QSizeF(brick.modelKnownSize))
+            : brick.originalSize;
+        pending = pending || size != brick.originalSize || !brick.masonryGeometryReady;
+        entries.append({.originalSize = size,
+                        .lineBreakAfter = brick.lineBreakAfter});
+    }
+    if (!pending)
+        return false;
+    ZoinGallery::GalleryLayoutRequest request;
+    request.mode = ZoinGallery::GalleryPresentationMode::Masonry;
+    request.viewportSize = QSizeF(qMax<qreal>(0, width() - _paddingLeft - _paddingRight),
+                                  _targetHeight);
+    request.insets.top = _paddingTop;
+    request.density = _targetHeight;
+    request.spacing = _spacing;
+    request.lastRowMatchesPrevious = !_listView;
+    request.singleRow = layoutMode() == CalcLayoutSingleRow;
+    const auto candidate = ZoinGallery::JustifiedMasonryStrategy::layout(request, entries);
+    bool changed = false;
+    for (int first = 0; first < _bricks.size();) {
+        int last = first + 1;
+        while (last < _bricks.size() && candidate.cells[last].row == candidate.cells[first].row)
+            ++last;
+        bool ready = true;
+        // The next entry decides whether the row wraps. Its placeholder width
+        // is not a safe boundary either; require one resolved lookahead unless
+        // this is the final row or an explicit line break.
+        const int barrierEnd = last < _bricks.size() && !_bricks[last - 1].lineBreakAfter
+            ? last + 1 : last;
+        for (int index = first; index < barrierEnd; ++index) {
+            const MasonryBrick &brick = _bricks[index];
+            if (brick.modelIsImage && brick.modelKnownSize.isEmpty()
+                && !brick.modelMetadataSettled) {
+                ready = false;
+                break;
+            }
+        }
+        int applied = 0;
+        if (ready) {
+            for (int index = first; index < last; ++index) {
+                MasonryBrick &brick = _bricks[index];
+                const QSize size = brick.modelKnownSize.isEmpty()
+                    ? GridView_Folder.toSize() : brick.modelKnownSize;
+                if (brick.modelIsImage
+                    && (brick.originalSize != size || !brick.masonryGeometryReady)) {
+                    brick.originalSize = size;
+                    brick.masonryGeometryReady = true;
+                    ++applied;
+                }
+            }
+        }
+        if (applied > 0) {
+            changed = true;
+            ZoinGallery::MediaTimingTrace::event(
+                QStringLiteral("qt.gallery.masonry.row_metadata_commit"), {
+                    {QStringLiteral("fix"), QStringLiteral("[FIX:masonry-row-metadata]")},
+                    {QStringLiteral("first"), first},
+                    {QStringLiteral("last"), last - 1},
+                    {QStringLiteral("applied"), applied},
+                    {QStringLiteral("diagnosticDelayMs"), diagnosticMasonryDelayMs()},
+                    {QStringLiteral("firstIdentity"), _bricks[first].modelIdentity},
+                });
+            if (diagnosticMasonryDelayMs() > 0)
+                return true;
+        }
+        first = last;
+    }
+    return changed;
+}
+
 void MasonryLayout::flushLightweightRewrap() {
+    if (_metadataSettledRole >= 0 && diagnosticMasonryDelayMs() > 0) {
+        scheduleLightweightRewrap();
+        return;
+    }
     if (_lightweightRewrapPending) {
         _lightweightRewrapPending = false;
         ++_lightweightRewrapGeneration;
+    }
+    if (_presentationMode == Masonry && canUseLightweightRows()
+        && _metadataSettledRole >= 0) {
+        commitReadyMasonryRows();
     }
     rewrap(false);
     planViewportThumbnails(_overscanIndexSet);
@@ -953,6 +1069,9 @@ bool MasonryLayout::commitModelResetLayout() {
 }
 
 void MasonryLayout::finishModelResetViewport() {
+    if (_presentationMode == Masonry && canUseLightweightRows()
+        && !_sparseCatalogRows && _metadataSettledRole >= 0)
+        scheduleLightweightRewrap();
     restorePendingThumbnailRequestsAfterModelReset();
     if (_preserveDecodeQueueForCurrentRebuild) {
         _skipThumbnailBackfillUntilFlush = true;

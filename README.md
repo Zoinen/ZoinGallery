@@ -38,6 +38,26 @@ engine-scoped providers and bounded decode scheduler; independent
 `GalleryViewer` components. External sessions accept an authoritative catalog
 from a host such as f4 and never scan or mutate the filesystem themselves.
 
+External masonry catalogs commit newly read image dimensions by complete visual
+row, including the final partial row. Future row boundaries are calculated with
+the real dimensions and one resolved lookahead entry, not placeholder widths.
+Completion order does not matter, and an
+unreadable image settles with placeholder geometry after retries are exhausted.
+The optional `metadataSettled` role passes through `GalleryCatalogModel`; older
+catalogs without that role retain their existing behavior. Cached dimension
+batches still apply atomically without waiting for uncached rows. Opt-in
+`F4_MEDIA_TIMING_TRACE` includes `qt.gallery.masonry.row_metadata_commit` events.
+
+In natural-size masonry, a decoded or cached thumbnail becomes visible only
+after its row geometry is committed. The publication gate also covers reused
+delegates and cached folder reentry, including settled metadata failures whose
+geometry stays square. Grid, Icons, Details, Columns, and the fixed-geometry
+sparse-catalog placeholder view continue publishing thumbnails immediately.
+
+For visual diagnostics, launch with `F4_GALLERY_ROW_DELAY_MS=1000` to apply at
+most one ready masonry row per second, including cached metadata on reentry.
+This uses nonblocking timers; leave the variable unset for normal performance.
+
 To build the embeddable package without the standalone shell:
 
 ```sh

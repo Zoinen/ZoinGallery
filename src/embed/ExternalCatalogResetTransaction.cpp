@@ -220,12 +220,14 @@ bool ExternalCatalogResetTransaction::adoptPreviousState(
     if (hadOldEntry && !sourceChanged) {
         entry.imageInfo = old.imageInfo;
         entry.originalSize = old.originalSize;
+        entry.metadataSettled = old.metadataSettled;
         entry.iconPath = old.iconPath;
     }
     if (sourceChanged) {
         m_model._viewerImageCache.remove(old.sourceIdentity);
         m_model.clearPublishedImage(old);
         entry.originalSize = {};
+        entry.metadataSettled = false;
         if (entry.item) {
             entry.item->setFullSize({});
         }

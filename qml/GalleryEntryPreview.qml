@@ -114,7 +114,8 @@ Item {
         height: Math.round(parent.height * preview.entry.renderDpr)
                 / preview.entry.renderDpr
         property url source:
-            preview.entry.imageIdUrl
+            !preview.entry.masonryMode || preview.entry.masonryGeometryReady
+                ? preview.entry.imageIdUrl : ""
         visible: thumbnail.source.toString() !== ""
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId

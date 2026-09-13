@@ -89,6 +89,11 @@ void ExternalCatalogModel::applyImageInfoResult(
                                    !info.highPriority)) {
             QList<int> pendingRows;
             for (const int row : std::as_const(authorityRows)) {
+                loadedEntry(row).metadataSettled = true;
+                state.firstChangedRow = state.firstChangedRow < 0
+                    ? row : qMin(state.firstChangedRow, row);
+                state.lastChangedRow = qMax(state.lastChangedRow, row);
+                state.allChangedMetadataCached = false;
                 if (viewerRequestStateAt(row) ==
                     QStringLiteral("pending")) {
                     pendingRows.append(row);
@@ -171,6 +176,7 @@ bool ExternalCatalogModel::applyImageInfoToRow(
         currentInfo.fileSize = entry.size;
     }
     entry.imageInfo = currentInfo;
+    entry.metadataSettled = true;
     entry.originalSize = rotateToOrientation(
         currentInfo.imageSize, currentInfo.orientation);
     MediaTimingTrace::event(
@@ -203,7 +209,7 @@ void ExternalCatalogModel::publishImageInfoBatch(
     // Masonry ignores ImageFiles whose fullSize is still invalid.
     if (state.firstChangedRow >= 0) {
         QList<int> roles{FileListModel::ImageFullSizeRole,
-                         KnownImageSizeRole};
+                         KnownImageSizeRole, MetadataSettledRole};
         if (state.allChangedMetadataCached) {
             roles.append(FileListModel::CachedMetadataBatchRole);
         }

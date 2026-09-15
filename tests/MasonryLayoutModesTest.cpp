@@ -10,6 +10,7 @@
 #include "src/embed/ExternalCatalogModel.h"
 
 #include <QCoreApplication>
+#include <QStandardItemModel>
 #include <QColor>
 #include <QColorSpace>
 #include <QCursor>
@@ -258,6 +259,62 @@ class MasonryLayoutModesTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void destroyedPreviewModelDetachesLayout() {
+        MasonryLayout layout;
+        layout.setContainedPreview(true);
+        auto *model = new QStandardItemModel;
+        layout.setModel(model);
+        QSignalSpy changed(&layout, &MasonryLayout::modelChanged);
+        delete model;
+        QCOMPARE(layout.model(), nullptr);
+        QCOMPARE(layout.count(), 0);
+        QCOMPARE(changed.size(), 1);
+        QTest::qWait(40);
+    }
+
+    void folderPreviewRepeatedNavigation() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("photo.png");
+        QImage image(80, 60, QImage::Format_RGB32);
+        image.fill(Qt::green);
+        QVERIFY(image.save(path));
+        QQuickView view;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->imagePath = path;
+        provider->names = {"photo.png"};
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("folder-navigation");
+        QVariantList folders;
+        for (int i = 0; i < 38; ++i) folders.append(previewFolder(i));
+        QVariantList parentFolders;
+        for (int i = 0; i < 20; ++i) {
+            auto folder = previewFolder(i + 100);
+            folder["index"] = i;
+            parentFolders.append(folder);
+        }
+        QVERIFY(session->applyExternalCatalog(folders, 1, {{"currentPath", "/year"}}));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "folderNavigationSession"));
+        QVERIFY(panel);
+        panel->setProperty("presentationMode", "masonry");
+        panel->setProperty("listView", false);
+        for (int iteration = 0; iteration < 20; ++iteration) {
+            QTRY_VERIFY_WITH_TIMEOUT(findVisualItem(panel, "galleryFolderPreview-0"), 5000);
+            QTRY_VERIFY_WITH_TIMEOUT(findVisualItem(panel, "galleryFolderPreview-0")->property("hasUsablePreview").toBool(), 5000);
+            QTest::qWait(80);
+            QVERIFY(session->applyExternalCatalog(parentFolders, iteration * 2 + 2, {{"currentPath", "/parent"}}));
+            QTest::qWait(80);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QVERIFY(session->applyExternalCatalog(folders, iteration * 2 + 3, {{"currentPath", "/year"}}));
+        }
+        QVERIFY(session->applyExternalCatalog({}, 42, {{"currentPath", "/empty"}}));
+        QTest::qWait(50);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QCOMPARE(provider->leases.load(), 0);
+    }
+
     void folderPreviewGridAndPixels() {
         QTemporaryDir dir;
         if (QFileInfo::exists("C:/Windows/Fonts/segoeui.ttf"))

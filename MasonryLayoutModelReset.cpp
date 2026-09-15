@@ -531,7 +531,7 @@ void MasonryLayout::onModelAboutToBeReset() {
     _resetSlotDensity = _density;
     _resetSlotDelegate = delegateComponent(_presentationMode);
     _resetSlotViewport = _viewport;
-    _resetSlotReusePending = _resetSlotDelegate && _viewport;
+    _resetSlotReusePending = _model && _resetSlotDelegate && _viewport;
     QSet<BrickItem *> retainedItems;
     if (_resetSlotReusePending) {
         _resetSlotItems.reserve(_activeBrickIndexes.size());

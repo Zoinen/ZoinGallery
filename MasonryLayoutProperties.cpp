@@ -738,6 +738,16 @@ void MasonryLayout::setModel(QAbstractItemModel *newModel) {
     _model = newModel;
     updateModelRoleCache();
     if (_model) {
+        connect(_model, &QObject::destroyed, this, [this]() {
+            // Preview catalogs can expire while their pooled QML delegate and
+            // a metadata-triggered rewrap timer still exist. The derived model
+            // and its ImageFiles are already gone: do not call setModel(),
+            // query the old source, or preserve its visual facades here.
+            _model = nullptr;
+            updateModelRoleCache();
+            onModelAboutToBeReset();
+            onModelReset();
+        });
         connect(_model, &QAbstractItemModel::dataChanged,
                 this, &MasonryLayout::onDataChanged);
         connect(_model, &QAbstractItemModel::modelAboutToBeReset,

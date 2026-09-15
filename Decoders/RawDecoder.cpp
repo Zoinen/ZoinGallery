@@ -1,4 +1,6 @@
 #include "RawDecoder.h"
+#include "RawBitmapPreview.h"
+#include <QBuffer>
 #include "ImageFile.h"
 #include "Exiftool/LensDatabase.h"
 
@@ -217,11 +219,28 @@ bool RawDecoder::readPreviewAndMime(ImageData &result) {
         return false;
     }
 
-    result.previewData.reset(reinterpret_cast<char *>(thumb->data), [=] (char *ptr) { LibRaw::dcraw_clear_mem(thumb); });
-    result.previewDataSize = thumb->data_size;
-    result.previewMimeType = "image/jpeg";
     result.previewUsed = QString("%1 of %2 (%3x%4 %5 %6)").arg(thumbnailIndex).arg(rawProcessor->imgdata.thumbs_list.thumbcount)
                              .arg(thumb->width).arg(thumb->height).arg(thumb->colors).arg(thumb->bits);
+    if (thumb->type == LIBRAW_IMAGE_BITMAP) {
+        const QImage bitmap = rawBitmapPreview(thumb->data, thumb->data_size,
+            thumb->width, thumb->height, thumb->colors, thumb->bits);
+        LibRaw::dcraw_clear_mem(thumb);
+        QByteArray png;
+        QBuffer buffer(&png);
+        buffer.open(QIODevice::WriteOnly);
+        if (bitmap.isNull() || !bitmap.save(&buffer, "PNG")) return false;
+        auto storage = std::make_shared<QByteArray>(std::move(png));
+        result.previewData = std::shared_ptr<char>(storage, storage->data());
+        result.previewDataSize = storage->size();
+        result.previewMimeType = "image/png";
+    } else if (thumb->type == LIBRAW_IMAGE_JPEG) {
+        result.previewData.reset(reinterpret_cast<char *>(thumb->data), [thumb](char *) { LibRaw::dcraw_clear_mem(thumb); });
+        result.previewDataSize = thumb->data_size;
+        result.previewMimeType = "image/jpeg";
+    } else {
+        LibRaw::dcraw_clear_mem(thumb);
+        return false;
+    }
 
     return true;
 }

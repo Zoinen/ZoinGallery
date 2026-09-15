@@ -3,6 +3,7 @@
 
 #include "DecodeManager.h"
 #include "Decoders/HeicDecoder.h"
+#include "Decoders/RawBitmapPreview.h"
 #include "FileListModel.h"
 #include "GalleryViewModel.h"
 #include "PersistentImageCache.h"
@@ -3272,6 +3273,32 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!imageFile->imageIdUrl().isEmpty(), 5000);
 
         runtime->shutdown();
+    }
+
+    void rawBitmapThumbnailSamples() {
+        const unsigned char rgb[] = {255, 0, 0, 0, 255, 0, 0, 0, 255};
+        const QImage image = rawBitmapPreview(rgb, sizeof(rgb), 3, 1, 3, 8);
+        QCOMPARE(image.size(), QSize(3, 1));
+        QCOMPARE(image.pixelColor(0, 0), QColor(Qt::red));
+        QCOMPARE(image.pixelColor(1, 0), QColor(Qt::green));
+        QCOMPARE(image.pixelColor(2, 0), QColor(Qt::blue));
+        const quint16 gray[] = {0, 65535};
+        const auto grayscale = rawBitmapPreview(reinterpret_cast<const unsigned char *>(gray), sizeof(gray), 2, 1, 1, 16);
+        QCOMPARE(grayscale.pixelColor(0, 0), QColor(Qt::black));
+        QCOMPARE(grayscale.pixelColor(1, 0), QColor(Qt::white));
+        QVERIFY(rawBitmapPreview(rgb, 2, 3, 1, 3, 8).isNull());
+    }
+
+    void rawEmbeddedPreviewFromRuntimeFixture() {
+        const QString path = qEnvironmentVariable("F4_TEST_RAW_PREVIEW");
+        if (path.isEmpty()) QSKIP("Set F4_TEST_RAW_PREVIEW to exercise a real RAW preview");
+        ImageInfo info{.path = path};
+        QVERIFY(ThumbnailLoader::readMetadata(info));
+        ImageData data(ImageDecodeRequest{.info = info, .targetSize = QSize(100, 100), .checkCache = true,
+            .expandToCacheResolution = false, .storeInPersistentCache = false});
+        QVERIFY(ThumbnailLoader::readImage(data));
+        DecodedImageInfo decoded;
+        QVERIFY(!ThumbnailLoader::decode(data, decoded).isNull());
     }
 
     void heicEmbeddedThumbnailDoesNotRequireJpegPlugin() {

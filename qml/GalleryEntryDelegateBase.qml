@@ -14,7 +14,7 @@ BrickItem {
     readonly property Item thumbnailItem: sharedPreview.thumbnailItem
     readonly property Item previewContainerItem: sharedPreview
     readonly property real paintedContentHeight:
-        modeVisual.item ? modeVisual.item.paintedHeight : height
+        folderPreviewActive ? height : (modeVisual.item ? modeVisual.item.paintedHeight : height)
 
     readonly property bool pointerHovered:
         panelRoot.hoveredIndex === viewIndex
@@ -28,11 +28,11 @@ BrickItem {
         : (panelRoot.controllerReady
            ? panelRoot.controller.entryNameAt(sourceIndex) : "")
     readonly property bool folderPreviewRequested:
-        masonryMode && panelRoot.controllerReady
+        (masonryMode || gridMode || iconsMode) && panelRoot.controllerReady
         && panelRoot.controller.directoryPreviewEnabled
         && Boolean(model && model.folderView)
     readonly property bool folderPreviewActive:
-        folderPreviewRequested && Boolean(modeVisual.item && modeVisual.item.folderPreviewReady)
+        folderPreviewRequested && Boolean(folderLoader.item && folderLoader.item.hasUsablePreview)
     readonly property real renderDpr:
         Math.max(0.01, Number(panelRoot.devicePixelRatio) || 1)
     readonly property point iconSceneOrigin: {
@@ -199,6 +199,7 @@ BrickItem {
 
     Loader {
         id: modeVisual
+        visible: !entry.folderPreviewActive
         anchors.fill: parent
         asynchronous: false
         z: 2
@@ -214,6 +215,16 @@ BrickItem {
         GalleryMasonryEntryDelegate {
             anchors.fill: parent
             entry: entry
+        }
+    }
+
+    Loader {
+        id: folderLoader
+        anchors.fill: parent
+        z: 2
+        active: entry.folderPreviewRequested
+        sourceComponent: Component {
+            GalleryFolderPreview { entry: entry }
         }
     }
 

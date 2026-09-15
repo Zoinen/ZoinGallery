@@ -315,7 +315,14 @@ private slots:
         QCOMPARE(provider->leases.load(), 0);
     }
 
+    void folderPreviewGridAndPixels_data() {
+        QTest::addColumn<QString>("mode");
+        for (const auto &mode : {"masonry", "grid", "icons"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
     void folderPreviewGridAndPixels() {
+        QFETCH(QString, mode);
         QTemporaryDir dir;
         if (QFileInfo::exists("C:/Windows/Fonts/segoeui.ttf"))
             QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
@@ -340,7 +347,7 @@ private slots:
         QVERIFY(session->applyExternalCatalog({previewFolder(0)}, 1));
         auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "folderPixelSession"));
         QVERIFY(panel);
-        panel->setProperty("presentationMode", "masonry");
+        panel->setProperty("presentationMode", mode);
         panel->setProperty("listView", false);
         panel->setProperty("devicePixelRatio", view.devicePixelRatio());
         QQuickItem *preview = nullptr;
@@ -365,7 +372,8 @@ private slots:
         auto *outerLayout = panel->findChild<MasonryLayout *>("galleryViewportItem");
         const QRectF outer = outerLayout->itemForIndex(0)->boundingRect();
         qInfo() << "outer folder geometry" << outer;
-        QVERIFY(qAbs(outer.width() - outer.height()) < 2);
+        if (mode == "masonry")
+            QVERIFY(qAbs(outer.width() - outer.height()) < 2);
         const auto checkPoint = [&](QQuickItem *leaf) {
             const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
             const qreal dpr = view.devicePixelRatio();
@@ -423,7 +431,17 @@ private slots:
         QVERIFY(!capture.isNull());
         QVERIFY(capture.save(dir.filePath("folder-preview.png")));
         if (!qEnvironmentVariable("F4_FOLDER_PREVIEW_CAPTURE").isEmpty())
-            QVERIFY(capture.save(qEnvironmentVariable("F4_FOLDER_PREVIEW_CAPTURE")));
+            QVERIFY(capture.save(qEnvironmentVariable("F4_FOLDER_PREVIEW_CAPTURE") + "-" + mode + ".png"));
+        for (const auto &nextMode : {"details", "grid", "icons", "masonry"}) {
+            panel->setProperty("presentationMode", nextMode);
+            if (QString::fromLatin1(nextMode) == "details") {
+                QTRY_VERIFY(!findVisualItem(panel, "galleryFolderPreview-0"));
+            } else {
+                QTRY_VERIFY((preview = findVisualItem(panel, "galleryFolderPreview-0")));
+                QTRY_VERIFY(preview->property("hasUsablePreview").toBool());
+                checkPoint(findVisualItem(preview, "folderPreviewTitle"));
+            }
+        }
     }
 
     void initTestCase() {

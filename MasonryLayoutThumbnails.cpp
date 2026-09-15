@@ -70,6 +70,8 @@ void MasonryLayout::updateViewportIndexSets() {
     const bool overscanChanged = nextOverscan != _overscanIndexSet;
     _visibleIndexSet = nextVisible;
     _overscanIndexSet = nextOverscan;
+    if (auto *source = dynamic_cast<ZoinGallery::GalleryCatalogSource *>(_model))
+        source->requestDirectoryPreviews(isVisible() && _presentationMode == Masonry ? visible : QList<int>{});
 
     if (_visibleIndexSet.isEmpty()) {
         _visibleStart = -1;

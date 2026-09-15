@@ -1,4 +1,5 @@
 #include "ExternalCatalogModelPrivate.h"
+#include "ExternalDirectoryPreviews.h"
 #include "ExternalCatalogThumbnailPlanner.h"
 
 namespace ZoinGallery {
@@ -261,13 +262,14 @@ quint64 ExternalCatalogModel::metadataSubmittedBatchCount() const {
 
 void ExternalCatalogModel::decodeImages(
     const QList<ImageDecodeRequest> &requests) {
+    if (_previewReadsSuspended) return;
     ExternalCatalogThumbnailPlanner planner(*this, requests);
     planner.run();
 }
 
 void ExternalCatalogModel::requestImageMetadata(
     const QList<int> &rows, bool highPriority, bool catalogWide) {
-    if (_shutdown) {
+    if (_shutdown || _previewReadsSuspended) {
         return;
     }
 
@@ -382,6 +384,7 @@ void ExternalCatalogModel::shutdown() {
         return;
     }
     _shutdown = true;
+    if (_directoryPreviews) _directoryPreviews->clear();
     _decodeManager->cancelRequests(_sessionId);
     if (_thumbnailCache) {
         _thumbnailCache->cancelRequests(_sessionId);

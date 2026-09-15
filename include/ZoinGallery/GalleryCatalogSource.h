@@ -25,6 +25,7 @@ public:
         Q_UNUSED(catalogWide)
     }
     virtual void cancelAllRunners() = 0;
+    virtual void requestDirectoryPreviews(const QList<int> &rows) { Q_UNUSED(rows) }
     virtual void cancelAllDecodeRunners() = 0;
     virtual bool preserveViewStateOnReset() const { return false; }
     virtual ::ImageFile *rootItem() const { return nullptr; }

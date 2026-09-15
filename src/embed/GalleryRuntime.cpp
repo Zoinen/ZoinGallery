@@ -68,6 +68,7 @@ public:
     QSharedPointer<ProviderImageStore> store;
     QSharedPointer<ThumbnailMemoryCache> thumbnailCache;
     QSharedPointer<ImageSourceProvider> imageSourceProvider;
+    QSharedPointer<QThreadPool> directoryPool = QSharedPointer<QThreadPool>::create();
     DecodeManager *decodeManager = nullptr;
     QmlAsyncImageProvider *asyncProvider = nullptr; // owned by QQmlEngine
     QList<QPointer<GallerySession>> sessions;
@@ -137,6 +138,7 @@ GalleryRuntime::GalleryRuntime(
     : QObject(engine), d(new Private) {
     d->engine = engine;
     d->options = options;
+    d->directoryPool->setMaxThreadCount(2);
     d->options.providerPrefix = normalizedProviderPrefix(
         d->options.providerPrefix);
     if (!StorageLocations::configure(d->options.storageNamespace)) {
@@ -240,6 +242,7 @@ GallerySession *GalleryRuntime::createExternalSession(
         d->options.viewerNativeCacheByteBudget,
         parent ? parent : this);
     d->sessions.append(session);
+    session->configureDirectoryPreviews(d->options.directoryPreviewProvider, d->directoryPool);
     connect(session, &QObject::destroyed, this, [this] {
         d->sessions.removeIf([](const QPointer<GallerySession> &candidate) {
             return candidate.isNull();

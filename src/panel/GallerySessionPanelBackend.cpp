@@ -142,7 +142,7 @@ bool GallerySessionPanelBackend::canDropIntoDirectories() const {
 }
 
 bool GallerySessionPanelBackend::canPreviewDirectories() const {
-    return canDragEntries();
+    return canDragEntries() || (_session && _session->canPreviewDirectories());
 }
 
 GalleryDragDescriptor GallerySessionPanelBackend::prepareDrag(
@@ -195,6 +195,7 @@ GallerySessionPanelBackend::dropUrlsIntoDirectory(
 
 QAbstractItemModel *GallerySessionPanelBackend::directoryPreviewModel(
     int index) {
+    if (_session && _session->canPreviewDirectories()) return _session->directoryPreviewModel(index);
     auto *files = _session
         ? qobject_cast<FileListModel *>(_session->fileListModel()) : nullptr;
     const int sourceIndex = _session ? _session->sourceIndexAt(index) : -1;

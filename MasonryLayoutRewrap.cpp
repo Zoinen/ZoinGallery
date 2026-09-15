@@ -243,15 +243,44 @@ void MasonryLayout::rewrapMasonry(bool animate, qreal currentIndexOffset)
     calcLayout(_bricks, width() - _paddingLeft - _paddingRight,
                _targetHeight, _spacing, !_listView, _paddingTop,
                layoutMode());
+    if (_containedPreview) {
+        const qreal dpr = devicePixelRatio();
+        const int columns = width() < 80 ? 1 : width() < 150 ? 2 : width() < 300 ? 3 : 4;
+        const int gap = qMax(1, qRound(_spacing * dpr));
+        const int canvasWidth = qMax(0, qRound(width() * dpr));
+        const int canvasHeight = qMax(0, qRound(height() * dpr));
+        for (int i = 0; i < _bricks.size(); ++i) {
+            auto &brick = _bricks[i];
+            if (i >= columns * columns) { brick.normalizedSize = {}; continue; }
+            const int column = i % columns, row = i / columns;
+            const auto edge = [gap, columns](int extent, int cell) {
+                return gap + qRound(qreal(extent - gap) * cell / columns);
+            };
+            const int left = edge(canvasWidth, column), top = edge(canvasHeight, row);
+            const int right = edge(canvasWidth, column + 1) - gap;
+            const int bottom = edge(canvasHeight, row + 1) - gap;
+            const QSizeF original = brick.originalSize.isEmpty() ? QSizeF(1, 1) : brick.originalSize;
+            const QSizeF fit = original.scaled(QSizeF(qMax(0, right - left), qMax(0, bottom - top)), Qt::KeepAspectRatio);
+            const int w = qRound(fit.width()), h = qRound(fit.height());
+            brick.x = (left + (right - left - w) / 2) / dpr;
+            brick.y = (top + (bottom - top - h) / 2) / dpr;
+            brick.normalizedSize = QSizeF(w / dpr, h / dpr);
+            brick.row = row;
+            brick.column = column;
+        }
+    }
     for (MasonryBrick &brick : _bricks) {
         const QRectF geometry = brick.geometry();
-        brick.previewGeometry = geometry.isValid() && !geometry.isEmpty()
+        brick.previewGeometry = _containedPreview ? geometry : geometry.isValid() && !geometry.isEmpty()
             ? geometry.adjusted(_spacing / 2.0, _spacing / 2.0,
                                 -_spacing / 2.0, -_spacing / 2.0)
             : QRectF();
     }
     rebuildLayoutBands();
-    if (_bricks.isEmpty()) {
+    if (_containedPreview) {
+        setContentHeight(height());
+        _contentY = 0;
+    } else if (_bricks.isEmpty()) {
         setContentHeight(0);
     } else {
         setContentHeight(static_cast<int>(

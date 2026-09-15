@@ -895,6 +895,18 @@ void MasonryLayout::scheduleLightweightRewrap() {
 }
 
 bool MasonryLayout::commitReadyMasonryRows() {
+    if (_containedPreview) {
+        bool changed = false;
+        for (auto &brick : _bricks) {
+            if (brick.modelIsImage && (!brick.modelKnownSize.isEmpty() || brick.modelMetadataSettled)) {
+                const QSizeF size = brick.modelKnownSize.isEmpty() ? GridView_Folder : QSizeF(brick.modelKnownSize);
+                changed |= brick.originalSize != size || !brick.masonryGeometryReady;
+                brick.originalSize = size;
+                brick.masonryGeometryReady = true;
+            }
+        }
+        return changed;
+    }
     // Find future row boundaries using the same strategy as the actual layout.
     // Placeholder rows are too short for portrait images: committing those
     // boundaries would repeatedly pull one more pending image into the row.

@@ -110,6 +110,10 @@ void MasonryLayout::zoom(bool in) {
 }
 
 void MasonryLayout::updateNeedScroll() {
+    if (_containedPreview) {
+        if (_needScroll) { _needScroll = false; emit needScrollChanged(); }
+        return;
+    }
     // Sparse fixed layouts intentionally leave _bricks empty: only the
     // viewport-sized facade window is materialized. Their overflow is defined
     // by the model's logical row count and analytic content extent.
@@ -727,6 +731,8 @@ void MasonryLayout::setModel(QAbstractItemModel *newModel) {
         return;
     }
     if (_model) {
+        if (auto *source = dynamic_cast<ZoinGallery::GalleryCatalogSource *>(_model))
+            source->requestDirectoryPreviews({});
         disconnect(_model, nullptr, this, nullptr);
     }
     _model = newModel;

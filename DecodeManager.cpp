@@ -1,3 +1,4 @@
+#include "FolderPreviewSelection.h"
 #include "DecodeManager.h"
 #include "DecodeQueuePolicy.h"
 
@@ -150,28 +151,7 @@ void insertViewerStageAheadOfSameRequest(QQueue<Runner *> &queue,
     queue.insert(index, runner);
 }
 
-QList<FileInfo> previewImages(const QList<FileInfo> &entries, int totalImages) {
-    QList<FileInfo> images;
-    for (const FileInfo &entry : entries) {
-        if (!entry.isDirectory && ThumbnailLoader::isFormatSupported(entry.name)) {
-            images.append(entry);
-        }
-    }
-    sortFileInfosNaturally(images);
-    if (totalImages < 0 || images.size() <= totalImages) {
-        return images;
-    }
-    if (totalImages == 0) {
-        return {};
-    }
 
-    QList<FileInfo> sampled;
-    const float step = qMax(1.0f, float(images.size()) / totalImages);
-    for (float index = 0; index < images.size() && sampled.size() < totalImages; index += step) {
-        sampled.append(images.at(static_cast<int>(index)));
-    }
-    return sampled;
-}
 }
 
 namespace DecodeQueuePolicy {
@@ -623,7 +603,7 @@ void DecodeManager::readFolderList(const QStringList &paths, int totalImages,
     }
     for (FolderInfo &result : results) {
         emit folderListReady(result.path,
-                             previewImages(result.subfiles, totalImages),
+                             selectFolderPreviewImages(result.subfiles, totalImages),
                              true, requestGeneration);
     }
 

@@ -8,6 +8,8 @@
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
+#include <ZoinGallery/DirectoryPreviewProvider.h>
+#include <QThreadPool>
 
 class QAbstractItemModel;
 class ProviderImageStore;
@@ -64,6 +66,9 @@ public:
     Q_ENUM(SourceKind)
 
     ~GallerySession() override;
+    void configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool);
+    bool canPreviewDirectories() const;
+    QAbstractItemModel *directoryPreviewModel(int index) const;
 
     QString sessionId() const;
     SourceKind sourceKind() const;

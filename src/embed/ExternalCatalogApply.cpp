@@ -83,9 +83,23 @@ bool ExternalCatalogModel::reconcileSparseCatalog(
     const QString cursorId = entryIdAt(_cursorRow);
     QList<Entry> next;
     QList<Entry> removed;
+    QHash<QString, DirectorySourceDescriptor> directorySources;
+    for (const auto &value : values) {
+        const auto map = value.toMap();
+        const auto descriptor = map.value(QStringLiteral("directorySource")).toMap();
+        directorySources.insert(map.value(QStringLiteral("entryId")).toString(),
+            {descriptor.value(QStringLiteral("resourceId")).toString(),
+             descriptor.value(QStringLiteral("sourceKey")).toString(),
+             descriptor.value(QStringLiteral("version")).toString()});
+    }
     for (const Entry &entry : std::as_const(_entries)) {
         const int row = mapRow(entry.sourceIndex);
-        if (row >= 0) { Entry retained = entry; retained.sourceIndex = row; next.append(std::move(retained)); }
+        if (row >= 0) {
+            Entry retained = entry;
+            retained.sourceIndex = row;
+            if (directorySources.contains(entry.id)) retained.directorySource = directorySources.value(entry.id);
+            next.append(std::move(retained));
+        }
         else removed.append(entry);
     }
     // Crossing the paging threshold changes storage, not row identities.

@@ -210,6 +210,10 @@ void GalleryCatalogModel::cancelAllRunners() {
     }
 }
 
+void GalleryCatalogModel::requestDirectoryPreviews(const QList<int> &rows) {
+    if (auto *source = catalogSource()) source->requestDirectoryPreviews(rows);
+}
+
 void GalleryCatalogModel::cancelAllDecodeRunners() {
     if (GalleryCatalogSource *source = catalogSource()) {
         source->cancelAllDecodeRunners();

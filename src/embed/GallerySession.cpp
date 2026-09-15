@@ -151,6 +151,12 @@ GallerySession::~GallerySession() {
     delete d;
 }
 
+void GallerySession::configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool) {
+    if (d->external) d->external->configureDirectoryPreviews(std::move(provider), std::move(pool));
+}
+bool GallerySession::canPreviewDirectories() const { return d->external && d->external->canPreviewDirectories(); }
+QAbstractItemModel *GallerySession::directoryPreviewModel(int index) const { return d->external ? d->external->directoryPreviewModel(index) : nullptr; }
+
 QString GallerySession::sessionId() const {
     return d->sessionId;
 }

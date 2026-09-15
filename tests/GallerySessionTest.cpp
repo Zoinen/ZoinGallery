@@ -9,6 +9,8 @@
 #include "QmlAsyncImageProvider.h"
 #include "src/embed/ExternalCatalogModel.h"
 #include "tests/HeicTestFixture.h"
+#include "tests/DirectoryPreviewFixture.h"
+#include "FolderPreviewSelection.h"
 
 #include <QAbstractItemModel>
 #include <QAbstractItemModelTester>
@@ -423,6 +425,90 @@ class GallerySessionTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void directorySparseRefreshAndCanceledDemand() {
+        QQmlEngine engine;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"image.jpg"};
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("sparse-directories");
+        QVariantMap catalog{{"catalogRowsDeferred", true}, {"totalCount", 1000}, {"currentPath", "/root"}};
+        QVERIFY(session->applyExternalCatalog({previewFolder(40)}, 1, catalog));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        model->requestDirectoryPreviews({40});
+        QTRY_VERIFY(model->directoryPreviewAvailable(40));
+        auto *children = model->directoryPreviewModel(40);
+        catalog["catalogDelta"] = QVariantMap{{"baseCatalogRevision", 1}, {"oldTotalCount", 1000},
+            {"ranges", QVariantList{QVariantMap{{"oldIndex",0},{"index",0},{"count",1000}}}}};
+        QVERIFY(session->applyExternalCatalog({previewFolder(40, 2)}, 2, catalog));
+        QTRY_COMPARE(provider->enumerations.load(), 2);
+        QTRY_COMPARE(provider->leases.load(), 1);
+        QCOMPARE(model->directoryPreviewModel(40), children);
+        provider->block = true;
+        model->requestDirectoryPreviews({});
+        model->requestDirectoryPreviews({40});
+        QTRY_COMPARE(provider->enumerations.load(), 3);
+        model->requestDirectoryPreviews({});
+        QVERIFY(session->applyExternalCatalog({}, 3, {{"currentPath", "/other"}}));
+        QTRY_COMPARE(provider->leases.load(), 0);
+        QVERIFY(!model->directoryPreviewModel(40));
+    }
+
+    void directorySelectionAndLifecycle() {
+        QCOMPARE(selectFolderPreviewNames({"img10.JPG", "img2.jpg", "note.txt", "img1.png"}),
+                 QStringList({"img1.png", "img2.jpg", "img10.JPG"}));
+        QStringList many;
+        for (int i = 0; i < 32; ++i) many.prepend(QStringLiteral("фото%1.png").arg(i));
+        const auto selected = selectFolderPreviewNames(many);
+        QCOMPARE(selected.size(), 16);
+        for (int i = 0; i < 16; ++i) QCOMPARE(selected[i], QStringLiteral("фото%1.png").arg(i * 2));
+        QQmlEngine engine;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"one.jpg", "two.jpg"};
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("directory-preview");
+        QVERIFY(session->applyExternalCatalog({previewFolder(0)}, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        QCOMPARE(provider->enumerations.load(), 0);
+        model->requestDirectoryPreviews({0});
+        QTRY_VERIFY(model->directoryPreviewAvailable(0));
+        QPointer<QAbstractItemModel> children = model->directoryPreviewModel(0);
+        QCOMPARE(children->rowCount(), 2);
+        QCOMPARE(provider->leases.load(), 1);
+        const auto facade = model->data(model->index(0), FileListModel::ImageFileRole);
+        QVERIFY(facade.value<ImageFile *>()->folderView());
+        provider->fail = true;
+        QVERIFY(session->applyExternalCatalog({previewFolder(0, 2)}, 2));
+        QTRY_COMPARE(provider->enumerations.load(), 2);
+        QTest::qWait(40);
+        QVERIFY(model->directoryPreviewAvailable(0));
+        QCOMPARE(model->directoryPreviewModel(0), children.data());
+        provider->fail = false;
+        provider->names.clear();
+        QVERIFY(session->applyExternalCatalog({previewFolder(0, 3)}, 3));
+        QTRY_VERIFY(!model->directoryPreviewAvailable(0));
+        QCOMPARE(children->rowCount(), 0);
+        QCOMPARE(provider->leases.load(), 0);
+        QVariantList folders;
+        for (int i = 0; i < 40; ++i) folders.append(previewFolder(i));
+        QVERIFY(session->applyExternalCatalog(folders, 4));
+        for (int i = 0; i < 40; ++i) model->requestDirectoryPreviews({i});
+        model->requestDirectoryPreviews({});
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(!children);
+        int retained = 0;
+        for (int i = 0; i < 40; ++i) retained += model->directoryPreviewModel(i) != nullptr;
+        QCOMPARE(retained, 32);
+        model->shutdown();
+        QTRY_COMPARE(provider->leases.load(), 0);
+    }
+
     void sparseRefreshRetainsMaterializedRowsAndRejectsInvalidRanges() {
         QQmlEngine engine;
         auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);

@@ -63,6 +63,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(QVariantList currentImageExif READ currentImageExif NOTIFY currentIndexChanged)
     Q_PROPERTY(QQuickItem *viewport READ viewport NOTIFY viewportChanged)
     Q_PROPERTY(bool persistSettings MEMBER _persistSettings)
+    Q_PROPERTY(bool containedPreview READ containedPreview WRITE setContainedPreview NOTIFY containedPreviewChanged)
     Q_PROPERTY(qreal devicePixelRatio READ devicePixelRatio WRITE setDevicePixelRatio NOTIFY devicePixelRatioChanged)
     Q_PROPERTY(QFont iconLabelFont READ iconLabelFont WRITE setIconLabelFont NOTIFY iconLabelFontChanged)
     // Embedders which hide a path-replacement transaction may stage delegate
@@ -99,6 +100,8 @@ public:
 
     explicit MasonryLayout(QQuickItem *parent = nullptr);
     void componentComplete() override;
+    bool containedPreview() const { return _containedPreview; }
+    void setContainedPreview(bool value);
 
     Q_INVOKABLE QQuickItem *itemAt(qreal x, qreal y) const;
     Q_INVOKABLE QQuickItem *itemForIndex(int index) const;
@@ -230,6 +233,7 @@ public:
     void setDeferDelegateRefreshOnReset(bool defer);
 
 signals:
+    void containedPreviewChanged();
     void presentationModeChanged();
     void columnCountChanged();
     void densityChanged();
@@ -660,6 +664,7 @@ private:
     bool _showTransparentGrid;
     bool _animateResizing;
     bool _persistSettings = true;
+    bool _containedPreview = false;
     int _listRowHeight;
 
     qreal _paddingLeft;

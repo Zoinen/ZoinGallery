@@ -1,4 +1,5 @@
 #include "ExternalCatalogModelPrivate.h"
+#include "ExternalDirectoryPreviews.h"
 
 namespace ZoinGallery {
 
@@ -188,6 +189,7 @@ ImageFile *ExternalCatalogModel::ensureItem(int row) const {
         item->setFullSize(entry->originalSize);
     }
     entry->item = item;
+    item->setIsFolderView(directoryPreviewAvailable(row));
     return item;
 }
 
@@ -336,7 +338,7 @@ QVariant ExternalCatalogModel::data(const QModelIndex &index, int role) const {
     case FileListModel::ImageFullSizeRole:
         return entry->originalSize;
     case FileListModel::FolderViewRole:
-        return false;
+        return directoryPreviewAvailable(index.row());
     case FileListModel::LastModifiedRole:
         return entry->imageInfo.lastModified;
     case FileListModel::FileSizeRole:
@@ -441,6 +443,10 @@ bool ExternalCatalogModel::catalogMatches(
             sourceDescriptor(map, name, size, mtimeNs);
         const QVariantMap normalizedDisplayFields = catalogDisplayFields(
             map, metadataDeferred);
+        const auto directorySource = map.value(QStringLiteral("directorySource")).toMap();
+        if (current.directorySource.resourceId != directorySource.value(QStringLiteral("resourceId")).toString()
+            || current.directorySource.sourceKey != directorySource.value(QStringLiteral("sourceKey")).toString()
+            || current.directorySource.version != directorySource.value(QStringLiteral("version")).toString()) return false;
 
         if (current.id != id || current.sourceIndex != sourceIndex ||
             current.name != name || current.localPath != localPath ||
@@ -479,6 +485,9 @@ bool ExternalCatalogModel::parseCatalogEntry(
     Entry parsed;
     parsed.loaded = true;
     parsed.id = id;
+    const auto directorySource = map.value(QStringLiteral("directorySource")).toMap();
+    parsed.directorySource = {directorySource.value(QStringLiteral("resourceId")).toString(),
+        directorySource.value(QStringLiteral("sourceKey")).toString(), directorySource.value(QStringLiteral("version")).toString()};
     parsed.sourceIndex = sourceIndex;
     parsed.name = map.value(QStringLiteral("name")).toString();
     parsed.localPath = map.value(

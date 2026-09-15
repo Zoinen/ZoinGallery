@@ -66,6 +66,7 @@ public:
                               bool highPriority,
                               bool catalogWide = false) override;
     void cancelAllRunners() override;
+    void requestDirectoryPreviews(const QList<int> &rows) override;
     void cancelAllDecodeRunners() override;
     bool preserveViewStateOnReset() const override;
     ::ImageFile *rootItem() const override;

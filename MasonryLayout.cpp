@@ -112,6 +112,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
 
 void MasonryLayout::componentComplete() {
     QQuickItem::componentComplete();
+    connect(this, &MasonryLayout::visibleChanged, this, &MasonryLayout::updateViewportIndexSets);
 
     connect(this, &MasonryLayout::widthChanged,
             this, [this]() { requestRewrap(); });
@@ -436,7 +437,15 @@ bool MasonryLayout::applyPreparedResetViewport() {
 }
 
 MasonryLayout::CalcLayoutMode MasonryLayout::layoutMode() const {
+    if (_containedPreview) return CalcLayoutGrid;
     return !isEmbedded() ? CalcLayoutMasonry : _listView ? CalcLayoutSingleRow : CalcLayoutGrid;
+}
+
+void MasonryLayout::setContainedPreview(bool value) {
+    if (_containedPreview == value) return;
+    _containedPreview = value;
+    emit containedPreviewChanged();
+    requestRewrap(false);
 }
 
 QRectF fitRectInCell(const QRectF &cellRect, const QSizeF &originalSize) {

@@ -237,6 +237,7 @@ set(ZOIN_CORE_SOURCES
     Exiftool/LensDatabase.cpp
     Exiftool/LensDatabase.h
     include/ZoinGallery/GalleryRuntime.h
+    include/ZoinGallery/DirectoryPreviewProvider.h
     include/ZoinGallery/GallerySession.h
     include/ZoinGallery/GalleryCatalogSource.h
     include/ZoinGallery/GalleryCatalogModel.h
@@ -252,6 +253,8 @@ set(ZOIN_CORE_SOURCES
     src/embed/SharedImageSourceProvider.cpp
     src/embed/ExternalCatalogModel.h
     src/embed/ExternalCatalogModel.cpp
+    src/embed/ExternalDirectoryPreviews.cpp
+    src/embed/ExternalDirectoryPreviews.h
     src/embed/ExternalCatalogModelPrivate.h
     src/embed/ExternalCatalogApply.cpp
     src/embed/ExternalCatalogSparseExtension.cpp
@@ -576,6 +579,7 @@ if(BUILD_TESTING)
             "MasonryVisualDpr${_zoin_visual_dpr_suffix}Test")
         add_test(NAME ${_zoin_visual_test}
             COMMAND ZoinGalleryMasonryLayoutModesTests
+                folderPreviewGridAndPixels
                 panelThemeColorsUpdateLiveAfterConstruction
                 presentationSwitchInstantlyRevealsStableCurrentItem
                 settledCursorUsesPhysicalPixelGridButAnimationsStaySmooth

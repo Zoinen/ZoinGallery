@@ -1,3 +1,4 @@
+#include "FolderPreviewSelection.h"
 #include "FolderListReadRunner.h"
 
 #include "NaturalSort.h"
@@ -12,28 +13,7 @@
 #include <system_error>
 
 namespace {
-QList<FileInfo> previewImages(const QList<FileInfo> &entries, int totalImages) {
-    QList<FileInfo> images;
-    for (const FileInfo &entry : entries) {
-        if (!entry.isDirectory && ThumbnailLoader::isFormatSupported(entry.name)) {
-            images.append(entry);
-        }
-    }
-    sortFileInfosNaturally(images);
-    if (totalImages < 0 || images.size() <= totalImages) {
-        return images;
-    }
-    if (totalImages == 0) {
-        return {};
-    }
 
-    QList<FileInfo> sampled;
-    const float step = qMax(1.0f, float(images.size()) / totalImages);
-    for (float index = 0; index < images.size() && sampled.size() < totalImages; index += step) {
-        sampled.append(images.at(static_cast<int>(index)));
-    }
-    return sampled;
-}
 
 std::filesystem::path nativeFileSystemPath(const QString &path) {
 #ifdef Q_OS_WIN
@@ -187,7 +167,7 @@ void FolderListReadRunner::run() {
         PersistentFolderCache::storeFolder(FolderInfo{_path, entries}, _cacheGeneration);
     }
     if (!isCanceled()) {
-        emit folderListReady(_path, previewImages(entries, _totalImages),
+        emit folderListReady(_path, selectFolderPreviewImages(entries, _totalImages),
                              _requestGeneration);
     }
     emit finished(this);

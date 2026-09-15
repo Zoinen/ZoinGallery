@@ -7,6 +7,7 @@ Item {
 
     required property GalleryEntryDelegateBase entry
     readonly property real paintedHeight: content.paintedHeight
+    readonly property bool folderPreviewReady: Boolean(folderLoader.item && folderLoader.item.hasUsablePreview)
 
     MasonryEntryDelegate {
         id: content
@@ -16,8 +17,9 @@ Item {
     }
 
     Loader {
+        id: folderLoader
         anchors.fill: parent
-        active: visual.entry.folderPreviewActive
+        active: visual.entry.folderPreviewRequested
         sourceComponent: Component {
             GalleryFolderPreview { entry: visual.entry }
         }

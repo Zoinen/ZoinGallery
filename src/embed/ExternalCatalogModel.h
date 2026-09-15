@@ -3,6 +3,8 @@
 
 #include "FileListModel.h"
 #include "ImageProbe.h"
+#include <ZoinGallery/DirectoryPreviewProvider.h>
+#include <QThreadPool>
 
 #include <QAbstractListModel>
 #include <QHash>
@@ -26,6 +28,7 @@ class ExternalCatalogRowsTransaction;
 class ExternalCatalogAppendTransaction;
 class ExternalCatalogMetadataPlanner;
 class ExternalCatalogThumbnailPlanner;
+class ExternalDirectoryPreviews;
 
 class ExternalCatalogModel final : public QAbstractListModel,
                                    public GalleryCatalogSource {
@@ -132,6 +135,15 @@ public:
     void cancelAllDecodeRunners() override;
     bool preserveViewStateOnReset() const override;
     void shutdown();
+    void configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool);
+    void requestDirectoryPreviews(const QList<int> &rows) override;
+    QAbstractItemModel *directoryPreviewModel(int row) const;
+    bool directoryPreviewAvailable(int row) const;
+    bool canPreviewDirectories() const { return _directoryPreviews != nullptr; }
+    void suspendPreviewReads(bool suspended) {
+        _previewReadsSuspended = suspended;
+        if (suspended) cancelAllRunners();
+    }
 
 signals:
     void viewerImageUrlChanged();
@@ -146,6 +158,9 @@ private:
     friend class ExternalCatalogAppendTransaction;
     friend class ExternalCatalogMetadataPlanner;
     friend class ExternalCatalogThumbnailPlanner;
+    friend class ExternalDirectoryPreviews;
+    ExternalDirectoryPreviews *_directoryPreviews = nullptr;
+    bool _previewReadsSuspended = false;
 
     struct Entry {
         QString id;
@@ -153,6 +168,7 @@ private:
         bool loaded = false;
         QString name;
         ImageSourceDescriptor source;
+        DirectorySourceDescriptor directorySource;
         QString contentVersion;
         QString localPath;
         bool directory = false;

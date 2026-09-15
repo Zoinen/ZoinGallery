@@ -6,6 +6,7 @@
 #include <QString>
 
 #include <ZoinGallery/ImageSourceProvider.h>
+#include <ZoinGallery/DirectoryPreviewProvider.h>
 
 class QQmlEngine;
 
@@ -46,6 +47,7 @@ struct RuntimeOptions {
     // interpreted as a local path by LocalImageSourceProvider. Calls happen
     // synchronously on decode workers and may overlap across sessions.
     QSharedPointer<ImageSourceProvider> imageSourceProvider;
+    QSharedPointer<DirectoryPreviewProvider> directoryPreviewProvider;
 };
 
 class GalleryRuntime final : public QObject {

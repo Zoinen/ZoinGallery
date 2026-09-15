@@ -330,7 +330,7 @@ void MasonryLayout::applyDelegateRowLayout(
         row->phaseStartedNs = now;
     }
 
-    const bool preserveFractional = _presentationMode == Details
+    const bool preserveFractional = _containedPreview || _presentationMode == Details
         || _presentationMode == Columns;
     const bool geometryDiffers = preserveFractional
         ? row->item->geometry() != row->brick->geometry()

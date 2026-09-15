@@ -112,6 +112,7 @@ void ExternalCatalogResetTransaction::rebuildRows() {
         if (old.name != entry.name) roles.append(ExternalCatalogModel::EntryNameRole);
         if (old.sourceIndex != entry.sourceIndex) roles.append(ExternalCatalogModel::SourceIndexRole);
         if (old.directory != entry.directory) roles.append(FileListModel::FolderRole);
+        if (!(old.directorySource == entry.directorySource)) roles.append(FileListModel::FolderViewRole);
         if (old.selected != entry.selected) roles.append(FileListModel::SelectedRole);
         if (old.size != entry.size) roles.append(FileListModel::FileSizeRole);
         if (old.mtimeNs != entry.mtimeNs) roles.append(FileListModel::LastModifiedRole);
@@ -158,6 +159,10 @@ void ExternalCatalogResetTransaction::initializeRow(
         : (!m_metadataDeferred && !entry.directory
            && FileListModel::isImage(entry.name));
     entry.selected = map.value(QStringLiteral("selected")).toBool();
+    const auto directorySource = map.value(QStringLiteral("directorySource")).toMap();
+    entry.directorySource = {directorySource.value(QStringLiteral("resourceId")).toString(),
+        directorySource.value(QStringLiteral("sourceKey")).toString(),
+        directorySource.value(QStringLiteral("version")).toString()};
     if (m_metadataDeferred) {
         entry.mtimeNs = 0;
         entry.size = -1;

@@ -28,6 +28,7 @@ bool ExternalCatalogSparseExtension::sameBaseEntry(
         && current.name == incoming.name
         && current.localPath == incoming.localPath
         && current.directory == incoming.directory
+        && current.directorySource == incoming.directorySource
         && current.image == incoming.image
         && current.source.resourceId == incoming.source.resourceId
         && current.source.sourceKey == incoming.source.sourceKey

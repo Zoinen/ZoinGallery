@@ -2,6 +2,7 @@
 #include "DecodeManager.h"
 #include "MasonryLayout.h"
 #include "SvgCursor.h"
+#include "tests/DirectoryPreviewFixture.h"
 
 #include <ZoinGallery/GalleryRuntime.h>
 #include <ZoinGallery/GallerySession.h>
@@ -15,6 +16,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QImage>
 #include <QKeyEvent>
@@ -256,6 +258,98 @@ class MasonryLayoutModesTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void folderPreviewGridAndPixels() {
+        QTemporaryDir dir;
+        if (QFileInfo::exists("C:/Windows/Fonts/segoeui.ttf"))
+            QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
+        QQuickView view;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->imagePath = dir.path();
+        for (int i = 0; i < 16; ++i) {
+            const QString name = QStringLiteral("photo%1.png").arg(i);
+            provider->names.append(name);
+            QImage image(i % 3 == 1 ? 41 : 73, i % 3 == 0 ? 41 : 73, QImage::Format_RGB32);
+            image.fill(QColor::fromHsv(i * 23, 130, 210));
+            for (int x = 0; x < image.width(); ++x)
+                for (int y = 0; y < image.height(); ++y)
+                    if ((x / 10 + y / 10) % 2 == 0) image.setPixelColor(x, y, image.pixelColor(x, y).lighter(120));
+            QVERIFY(image.save(dir.filePath(name)));
+        }
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("folder-pixels");
+        QVERIFY(session->applyExternalCatalog({previewFolder(0)}, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "folderPixelSession"));
+        QVERIFY(panel);
+        panel->setProperty("presentationMode", "masonry");
+        panel->setProperty("listView", false);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        QQuickItem *preview = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT((preview = findVisualItem(panel, "galleryFolderPreview-0")), 5000);
+        auto *grid = preview->findChild<MasonryLayout *>("folderPreviewGrid");
+        QVERIFY(grid);
+        QVERIFY(grid->property("containedPreview").toBool());
+        QTRY_COMPARE(grid->count(), 16);
+        const QSizeF normalGridSize = grid->size();
+        auto *outerLayout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        const QRectF outer = outerLayout->itemForIndex(0)->boundingRect();
+        qInfo() << "outer folder geometry" << outer;
+        QVERIFY(qAbs(outer.width() - outer.height()) < 2);
+        const auto checkPoint = [&](QQuickItem *leaf) {
+            const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+            const qreal dpr = view.devicePixelRatio();
+            qInfo() << leaf->objectName() << "physical origin" << origin * dpr;
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.01);
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - origin, QPointF(0, 1));
+        };
+        for (int width : {79, 80, 149, 150, 299, 300}) {
+            grid->setWidth(width);
+            grid->setHeight(width);
+            grid->setTargetHeight(width);
+            const int cells = width < 80 ? 1 : width < 150 ? 4 : width < 300 ? 9 : 16;
+            QTest::qWait(150);
+            int displayed = 0;
+            for (int i = 0; i < 16; ++i) {
+                auto *leaf = findVisualItem(preview, QStringLiteral("folderPreviewImage-%1").arg(i));
+                if (!leaf || !leaf->isVisible() || leaf->width() <= 0) continue;
+                ++displayed;
+                QTRY_COMPARE_WITH_TIMEOUT(leaf->property("status").toInt(), 1, 3000);
+                checkPoint(leaf);
+                const QSize original = grid->indexOriginalSize(i);
+                QVERIFY(original.width() > 1 && original.height() > 1);
+                const QRectF geometry = grid->indexGeometry(i);
+                QVERIFY(qAbs(geometry.width() / geometry.height() - qreal(original.width()) / original.height()) < .05);
+            }
+            QCOMPARE(displayed, cells);
+        }
+        auto *title = findVisualItem(preview, "folderPreviewTitle");
+        QVERIFY(title);
+        title->setProperty("font", QFont("Segoe UI", 9));
+        checkPoint(title);
+        for (const QString name : {"folderPreviewFrame", "folderPreviewTab"}) {
+            auto *frame = findVisualItem(preview, name);
+            QVERIFY(frame);
+            checkPoint(frame);
+            const qreal dpr = view.devicePixelRatio();
+            QVERIFY(qAbs(frame->width()*dpr - qRound(frame->width()*dpr)) < 0.01);
+            QVERIFY(qAbs(frame->height()*dpr - qRound(frame->height()*dpr)) < 0.01);
+            QCOMPARE(QQmlProperty(frame, "border.width").read().toReal() * dpr, 1.0);
+        }
+        grid->setSize(normalGridSize);
+        grid->setTargetHeight(qRound(normalGridSize.height()));
+        QTest::qWait(300);
+        QCOMPARE(outerLayout->itemForIndex(0)->boundingRect(), outer);
+        const auto capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        QVERIFY(capture.save(dir.filePath("folder-preview.png")));
+        if (!qEnvironmentVariable("F4_FOLDER_PREVIEW_CAPTURE").isEmpty())
+            QVERIFY(capture.save(qEnvironmentVariable("F4_FOLDER_PREVIEW_CAPTURE")));
+    }
+
     void initTestCase() {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     }

@@ -27,10 +27,12 @@ BrickItem {
         ? displayName
         : (panelRoot.controllerReady
            ? panelRoot.controller.entryNameAt(sourceIndex) : "")
-    readonly property bool folderPreviewActive:
+    readonly property bool folderPreviewRequested:
         masonryMode && panelRoot.controllerReady
         && panelRoot.controller.directoryPreviewEnabled
         && Boolean(model && model.folderView)
+    readonly property bool folderPreviewActive:
+        folderPreviewRequested && Boolean(modeVisual.item && modeVisual.item.folderPreviewReady)
     readonly property real renderDpr:
         Math.max(0.01, Number(panelRoot.devicePixelRatio) || 1)
     readonly property point iconSceneOrigin: {

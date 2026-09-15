@@ -355,6 +355,12 @@ private slots:
         // Contained cards have independent geometry. They must not start the
         // top-level catalog-wide probe/fit pass for the twelve hidden samples.
         QVERIFY(childCatalog->imageOriginalSizeAt(15).isEmpty());
+        auto *title = findVisualItem(preview, "folderPreviewTitle");
+        QVERIFY(title);
+        title->setProperty("font", QFont("Segoe UI", 9));
+        title->setProperty("text", QStringLiteral("Folder with a long filename that wraps onto two lines"));
+        QTest::qWait(100);
+        QCOMPARE(title->property("lineCount").toInt(), 2);
         const QSizeF normalGridSize = grid->size();
         auto *outerLayout = panel->findChild<MasonryLayout *>("galleryViewportItem");
         const QRectF outer = outerLayout->itemForIndex(0)->boundingRect();
@@ -389,9 +395,14 @@ private slots:
             }
             QCOMPARE(displayed, cells);
         }
-        auto *title = findVisualItem(preview, "folderPreviewTitle");
-        QVERIFY(title);
-        title->setProperty("font", QFont("Segoe UI", 9));
+        QCOMPARE(title->property("horizontalAlignment").toInt(), int(Qt::AlignHCenter));
+        QCOMPARE(title->property("maximumLineCount").toInt(), 2);
+        QCOMPARE(title->property("elide").toInt(), int(Qt::ElideRight));
+        QCOMPARE(title->property("wrapMode").toInt(), 4); // Text.Wrap
+        auto *folderFill = findVisualItem(preview, "folderPreviewFill");
+        QVERIFY(folderFill);
+        QCOMPARE(folderFill->property("color").value<QColor>(), QColor("#304051"));
+        checkPoint(folderFill);
         checkPoint(title);
         for (const QString name : {"folderPreviewFrame", "folderPreviewTab"}) {
             auto *frame = findVisualItem(preview, name);
@@ -400,11 +411,13 @@ private slots:
             const qreal dpr = view.devicePixelRatio();
             QVERIFY(qAbs(frame->width()*dpr - qRound(frame->width()*dpr)) < 0.01);
             QVERIFY(qAbs(frame->height()*dpr - qRound(frame->height()*dpr)) < 0.01);
-            QCOMPARE(QQmlProperty(frame, "border.width").read().toReal() * dpr, 1.0);
+            QCOMPARE(frame->property("color").value<QColor>(), QColor("#397db1"));
         }
         grid->setSize(normalGridSize);
         grid->setTargetHeight(qRound(normalGridSize.height()));
         QTest::qWait(300);
+        QVERIFY(grid->mapToItem(preview, QPointF(0, grid->height())).y()
+                < title->mapToItem(preview, QPointF()).y());
         QCOMPARE(outerLayout->itemForIndex(0)->boundingRect(), outer);
         const auto capture = view.grabWindow();
         QVERIFY(!capture.isNull());

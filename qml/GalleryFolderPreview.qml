@@ -1,6 +1,5 @@
 pragma ComponentBehavior: Bound
 import QtQuick
-import QtQuick.Controls
 import ZoinGallery.Native 1.0
 
 Item {
@@ -10,6 +9,11 @@ Item {
     readonly property var panelRoot: entry.panelRoot
     readonly property var childModel: panelRoot.controller.directoryPreviewModelAt(entry.viewIndex)
     readonly property real dpr: entry.renderDpr
+    readonly property real outerSpacing: panelRoot.itemSpacing
+    readonly property real contentMargin: snap(outerSpacing / 2)
+    readonly property real folderTopOffset: snap(Math.round(width / 20))
+    readonly property bool darkTheme: Qt.styleHints.colorScheme !== Qt.Light
+    readonly property color folderColor: darkTheme ? "#397db1" : "#397db2"
     property int readyImages: 0
     readonly property bool hasUsablePreview: readyImages > 0
     readonly property point sceneOrigin: {
@@ -26,52 +30,59 @@ Item {
     Item {
         id: content
         opacity: preview.hasUsablePreview ? 1 : 0
-        x: preview.snap(preview.sceneOrigin.x + 3) - preview.sceneOrigin.x
-        y: preview.snap(preview.sceneOrigin.y + 3) - preview.sceneOrigin.y
-        width: Math.max(0, preview.snap(preview.width - x - 3))
-        height: Math.max(0, preview.snap(preview.height - y - 3))
+        x: preview.snap(preview.sceneOrigin.x + preview.contentMargin) - preview.sceneOrigin.x
+        y: preview.snap(preview.sceneOrigin.y + preview.contentMargin) - preview.sceneOrigin.y
+        width: Math.max(0, preview.snap(preview.width - x - preview.contentMargin))
+        height: Math.max(0, preview.snap(preview.height - y - preview.contentMargin))
         Rectangle {
             id: tab
             objectName: "folderPreviewTab"
             width: preview.snap(Math.min(110, content.width * 0.44))
-            height: preview.snap(24)
+            height: preview.folderTopOffset + preview.snap(20)
             radius: 4
             color: frame.color
-            border.width: 1 / preview.dpr
-            border.color: frame.border.color
         }
         Rectangle {
             id: frame
             objectName: "folderPreviewFrame"
-            y: preview.snap(10)
+            y: preview.folderTopOffset
             width: content.width
-            height: Math.max(0, title.y - y - preview.snap(4))
+            height: Math.max(0, content.height - y - title.height - preview.snap(preview.outerSpacing))
             radius: 4
-            color: preview.panelRoot.directoryBackgroundColor
-            border.width: 1 / preview.dpr
-            border.color: preview.panelRoot.separatorColor
+            color: preview.folderColor
+            Rectangle {
+                objectName: "folderPreviewFill"
+                x: 1 / preview.dpr
+                y: 1 / preview.dpr
+                width: Math.max(0, parent.width - 2 / preview.dpr)
+                height: Math.max(0, parent.height - 2 / preview.dpr)
+                radius: 4
+                color: preview.darkTheme ? "#304051" : "#60b0eb"
+            }
         }
-        Label {
+        Text {
             id: title
             objectName: "folderPreviewTitle"
-            x: preview.snap(2)
-            y: content.height - height
-            width: Math.max(0, content.width - preview.snap(4))
+            x: preview.contentMargin
+            y: content.height - height - preview.contentMargin
+            width: Math.max(0, content.width - preview.contentMargin * 2)
             height: preview.snap(implicitHeight)
-            padding: 0
             text: preview.panelRoot.quickSearchFormatter.styledText(preview.entry.effectiveDisplayName, preview.entry.entryId, 0)
             textFormat: preview.panelRoot.quickSearchFormatter.matchForEntry(preview.entry.entryId) ? Text.StyledText : Text.PlainText
             color: preview.entry.itemTextColor
-            elide: Text.ElideMiddle
+            horizontalAlignment: Text.AlignHCenter
+            maximumLineCount: 2
+            wrapMode: Text.Wrap
+            elide: Text.ElideRight
             verticalAlignment: Text.AlignTop
         }
         GalleryViewportItem {
             id: children
             objectName: "folderPreviewGrid"
-            x: frame.x + preview.snap(3)
-            y: frame.y + preview.snap(3)
-            width: Math.max(0, frame.width - preview.snap(3) * 2)
-            height: Math.max(0, frame.height - preview.snap(3) * 2)
+            x: frame.x + preview.snap(2)
+            y: frame.y + preview.snap(2)
+            width: Math.max(0, frame.width - preview.snap(2) * 2)
+            height: Math.max(0, frame.height - preview.snap(2) * 2)
             clip: true
             persistSettings: false
             containedPreview: true

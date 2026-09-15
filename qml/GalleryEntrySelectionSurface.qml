@@ -63,6 +63,8 @@ Rectangle {
                 && !entry.cursorChromeSuppressed)
             return entry.panelRoot.cursorColor
         if (entry.masonryMode || entry.gridMode) {
+            if (entry.folderPreviewActive)
+                return "transparent"
             return entry.isFolder
                     ? entry.panelRoot.directoryBackgroundColor
                     : entry.panelRoot.itemBackgroundColor

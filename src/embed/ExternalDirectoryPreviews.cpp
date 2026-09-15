@@ -135,9 +135,9 @@ void ExternalDirectoryPreviews::request(const QString &id, const QSharedPointer<
             entry.insert(QStringLiteral("isDir"), false);
             entries.append(entry);
         }
-        record->model->suspendPreviewReads(false);
         record->model->applyCatalog(entries, false, true);
         record->lease = result.lease;
+        record->model->suspendPreviewReads(false);
         record->available = !entries.isEmpty();
         publish(id);
     });

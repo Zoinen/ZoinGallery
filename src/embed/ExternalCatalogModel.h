@@ -141,8 +141,16 @@ public:
     bool directoryPreviewAvailable(int row) const;
     bool canPreviewDirectories() const { return _directoryPreviews != nullptr; }
     void suspendPreviewReads(bool suspended) {
+        if (_previewReadsSuspended == suspended) return;
         _previewReadsSuspended = suspended;
         if (suspended) cancelAllRunners();
+        else if (rowCount() > 0) {
+            // A retained preview may have resized while reads were suspended.
+            // Re-publish readiness so its current viewport requests every
+            // newly exposed cell even when the refreshed catalog is identical.
+            emit dataChanged(index(0), index(rowCount() - 1),
+                             {FileListModel::ImageFullSizeRole});
+        }
     }
 
 signals:

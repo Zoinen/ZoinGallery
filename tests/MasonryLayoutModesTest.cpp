@@ -315,6 +315,71 @@ private slots:
         QCOMPARE(provider->leases.load(), 0);
     }
 
+    void folderPreviewIconsToGrid_data() {
+        QTest::addColumn<qreal>("iconDensity");
+        QTest::newRow("one-cell") << qreal(70);
+        QTest::newRow("four-cells") << qreal(160);
+    }
+
+    void folderPreviewIconsToGrid() {
+        QFETCH(qreal, iconDensity);
+        QTemporaryDir dir;
+        QImage image(80, 60, QImage::Format_RGB32);
+        image.fill(Qt::green);
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->imagePath = dir.path();
+        for (int i = 0; i < 16; ++i) {
+            const auto name = QStringLiteral("photo%1.png").arg(i);
+            provider->names.append(name);
+            QVERIFY(image.save(dir.filePath(name)));
+        }
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("folder-mode-transition");
+        QVariantList folders;
+        for (int i = 0; i < 38; ++i) folders.append(previewFolder(i));
+        QVERIFY(session->applyExternalCatalog(folders, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "folderTransitionSession"));
+        QVERIFY(panel);
+        panel->setProperty("listView", false);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        for (const auto &mode : {"icons", "grid", "icons", "grid"}) {
+            panel->setProperty("presentationMode", mode);
+            if (QString::fromLatin1(mode) == "icons")
+                panel->findChild<MasonryLayout *>("galleryViewportItem")->setDensity(iconDensity);
+            QTest::qWait(500);
+            for (int row = 0; row < 6; ++row) {
+                QQuickItem *preview = nullptr;
+                QTRY_VERIFY((preview = findVisualItem(panel, QStringLiteral("galleryFolderPreview-%1").arg(row))));
+                auto *grid = preview->findChild<MasonryLayout *>("folderPreviewGrid");
+                QVERIFY(grid);
+                const int expected = grid->width() < 80 ? 1 : grid->width() < 150 ? 4 : grid->width() < 300 ? 9 : 16;
+                const auto readyCount = [&]() {
+                    int ready = 0;
+                    for (int i = 0; i < 16; ++i) {
+                        auto *leaf = findVisualItem(preview, QStringLiteral("folderPreviewImage-%1").arg(i));
+                        if (leaf && leaf->isVisible() && leaf->width() > 0 && leaf->height() > 0
+                            && leaf->property("status").toInt() == 1) ++ready;
+                    }
+                    return ready;
+                };
+                qInfo() << mode << row << grid->size() << "ready" << readyCount() << "expected" << expected;
+                if (readyCount() != expected) {
+                    for (int i = 0; i < expected; ++i) {
+                        auto *leaf = findVisualItem(preview, QStringLiteral("folderPreviewImage-%1").arg(i));
+                        qInfo() << i << grid->indexGeometry(i) << grid->indexOriginalSize(i)
+                                << "leaf" << leaf << (leaf ? leaf->property("source") : QVariant())
+                                << (leaf ? leaf->isVisible() : false);
+                    }
+                }
+                QTRY_COMPARE_WITH_TIMEOUT(readyCount(), expected, 3000);
+            }
+        }
+    }
+
     void folderPreviewGridAndPixels_data() {
         QTest::addColumn<QString>("mode");
         for (const auto &mode : {"masonry", "grid", "icons"})

@@ -9,6 +9,7 @@
 #include "GalleryViewModel.h"
 #include "PersistentImageCache.h"
 #include "PersistentDerivedImageCache.h"
+#include "StorageLocations.h"
 #include "QmlAsyncImageProvider.h"
 #include "src/embed/ExternalCatalogModel.h"
 #include "tests/HeicTestFixture.h"
@@ -428,7 +429,14 @@ private:
 class GallerySessionTest : public QObject {
     Q_OBJECT
 
+    QTemporaryDir _cacheDirectory;
+
 private slots:
+    void initTestCase() {
+        QVERIFY(_cacheDirectory.isValid());
+        QVERIFY(ZoinGallery::StorageLocations::configureCacheRoot(_cacheDirectory.path()));
+    }
+
     void galleryPreferencesDefaultsAndDecoderInventory() {
         QTemporaryDir dir;
         const auto oldFormat = QSettings::defaultFormat();
@@ -466,12 +474,22 @@ private slots:
         changed["imageMode"] = 2;
         changed["folderMode"] = 1;
         changed["animateResizing"] = true;
+        // A read-only usage poll must not block an explicit settings change.
+        preferences.refresh();
+        QVERIFY(!preferences.busy());
         QVERIFY2(preferences.apply(changed), qPrintable(preferences.error()));
         QTRY_VERIFY(!preferences.busy());
         QCOMPARE(PersistentDerivedImageCache::byteBudget(), 4096LL * 1024 * 1024);
         QCOMPARE(decoder.imageCacheMode(), CacheUsageMode::OnlyCache);
         QCOMPARE(QSettings().value("Cache/diskLimitMiB").toInt(), 4096);
         QVERIFY(preferences.animateResizing());
+        QSignalSpy cleared(&preferences, &ZoinGallery::GalleryPreferences::cacheCleared);
+        preferences.refresh();
+        preferences.clearCache();
+        QVERIFY(preferences.busy());
+        QCOMPARE(cleared.size(), 0);
+        QTRY_COMPARE(cleared.size(), 1);
+        QVERIFY(!preferences.busy());
         PersistentDerivedImageCache::setByteBudget(512LL * 1024 * 1024);
     }
 

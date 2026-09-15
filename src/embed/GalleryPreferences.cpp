@@ -24,7 +24,7 @@ GalleryPreferences::GalleryPreferences(DecodeManager *decoder, bool persistent, 
         {"activeLocation", StorageLocations::cacheRoot()},
         {"convertColors", DisplayColorSpace::conversionEnabled()},
         {"animateResizing", settings.value("Gallery/animateResizing", false).toBool()}};
-    if (persistent) refresh();
+    if (persistent) runCacheOperation(false, true);
 }
 QVariantMap GalleryPreferences::values() const { return _values; }
 QVariantList GalleryPreferences::decoders() const { return _decoders; }
@@ -64,31 +64,43 @@ bool GalleryPreferences::apply(const QVariantMap &values) {
     MediaTimingTrace::event("qt.gallery.preferences", {{"diskLimitMiB", limit}, {"imageMode", imageMode}, {"folderMode", folderMode}});
     _error.clear();
     emit changed();
-    refresh();
+    runCacheOperation(false, true);
     return true;
 }
-void GalleryPreferences::refresh() { runCacheOperation(false); }
+void GalleryPreferences::refresh() { runCacheOperation(false, false); }
 void GalleryPreferences::clearCache() {
     if (_busy) return;
     emit clearSnapshotsRequested();
     emit pixelsInvalidated();
-    runCacheOperation(true);
+    runCacheOperation(true, true);
 }
-void GalleryPreferences::runCacheOperation(bool clear) {
-    if (_busy) return;
-    _busy = true;
-    emit changed();
+void GalleryPreferences::runCacheOperation(bool clear, bool maintenance) {
+    if (_busy || (!maintenance && _refreshing)) return;
+    if (maintenance) {
+        _busy = true;
+        emit changed();
+    } else {
+        _refreshing = true;
+    }
+    // Read-only polls leave controls available. An explicit operation may queue
+    // behind the one outstanding poll on our single worker, so it is never lost.
+    MediaTimingTrace::event("qt.gallery.cache.started", {{"fix", "[FIX:cache-usage-refresh]"},
+        {"clear", clear}, {"maintenance", maintenance}});
     const qint64 budget = _values.value("diskLimitMiB").toLongLong() * 1024 * 1024;
     auto *watcher = new QFutureWatcher<qint64>(this);
-    connect(watcher, &QFutureWatcher<qint64>::finished, this, [this, watcher] {
+    connect(watcher, &QFutureWatcher<qint64>::finished, this, [this, watcher, clear, maintenance] {
         _diskBytes = watcher->result();
         watcher->deleteLater();
-        _busy = false;
+        if (maintenance) _busy = false;
+        else _refreshing = false;
+        MediaTimingTrace::event("qt.gallery.cache.completed", {{"fix", "[FIX:cache-usage-refresh]"},
+            {"clear", clear}, {"maintenance", maintenance}, {"bytes", _diskBytes}});
         emit changed();
+        if (clear) emit cacheCleared();
     });
-    watcher->setFuture(QtConcurrent::run(&_cachePool, [budget, clear] {
+    watcher->setFuture(QtConcurrent::run(&_cachePool, [budget, clear, maintenance] {
         if (clear) PersistentImageCache::clear();
-        PersistentDerivedImageCache::setByteBudget(budget);
+        if (maintenance) PersistentDerivedImageCache::setByteBudget(budget);
         return PersistentImageCache::cacheSize();
     }));
 }

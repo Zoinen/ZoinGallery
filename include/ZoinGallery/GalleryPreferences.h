@@ -31,15 +31,17 @@ public:
     Q_INVOKABLE void updateDisplay(QObject *window);
 signals:
     void changed();
+    void cacheCleared();
     void clearSnapshotsRequested();
     void pixelsInvalidated();
 private:
-    void runCacheOperation(bool clear);
+    void runCacheOperation(bool clear, bool maintenance);
     DecodeManager *_decoder;
     QVariantMap _values;
     QVariantList _decoders;
     qint64 _diskBytes = 0;
     bool _busy = false;
+    bool _refreshing = false;
     QString _error;
     // Its destructor joins cache I/O before the runtime's owner is destroyed.
     QThreadPool _cachePool;

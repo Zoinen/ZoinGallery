@@ -292,6 +292,12 @@ private slots:
         QVERIFY(grid);
         QVERIFY(grid->property("containedPreview").toBool());
         QTRY_COMPARE(grid->count(), 16);
+        QTest::qWait(200);
+        auto *childCatalog = qobject_cast<ZoinGallery::ExternalCatalogModel *>(grid->model());
+        QVERIFY(childCatalog);
+        // Contained cards have independent geometry. They must not start the
+        // top-level catalog-wide probe/fit pass for the twelve hidden samples.
+        QVERIFY(childCatalog->imageOriginalSizeAt(15).isEmpty());
         const QSizeF normalGridSize = grid->size();
         auto *outerLayout = panel->findChild<MasonryLayout *>("galleryViewportItem");
         const QRectF outer = outerLayout->itemForIndex(0)->boundingRect();

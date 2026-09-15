@@ -90,7 +90,7 @@ Item {
                         objectName: "folderPreviewImage-" + cell.viewIndex
                         property bool countedReady: false
                         function updateReady() {
-                            const ready = status === Image.Ready && width > 0 && height > 0
+                            const ready = visible && status === Image.Ready && width > 0 && height > 0
                             if (ready === countedReady) return
                             preview.readyImages += ready ? 1 : -1
                             countedReady = ready
@@ -98,6 +98,7 @@ Item {
                         onStatusChanged: updateReady()
                         onWidthChanged: updateReady()
                         onHeightChanged: updateReady()
+                        onVisibleChanged: updateReady()
                         Component.onDestruction: { if (countedReady) --preview.readyImages }
                         anchors.fill: parent
                         source: cell.masonryGeometryReady && cell.model ? cell.model.imageIdUrl : ""

@@ -301,7 +301,7 @@ void MasonryLayout::planViewportThumbnails(
     // aspect-ratio lease because every preceding row affects later geometry.
     requestModel->requestImageMetadata(windowPlan.visible, true, false);
     requestModel->requestImageMetadata(windowPlan.background, false, false);
-    if (windowPlan.catalogWideMetadata) {
+    if (windowPlan.catalogWideMetadata && !_containedPreview) {
         requestModel->requestImageMetadata({}, false, true);
     }
 

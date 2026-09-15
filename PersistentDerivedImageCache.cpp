@@ -25,9 +25,7 @@ constexpr quint32 DerivedFileMagic = 0x5a474431; // "ZGD1"
 constexpr quint16 DerivedFileVersion = 3;
 constexpr quint32 MetadataFileMagic = 0x5a474d31; // "ZGM1"
 constexpr quint16 MetadataFileVersion = 1;
-constexpr qint64 DerivedCacheBudget = 512LL * 1024LL * 1024LL;
-constexpr qint64 DerivedCachePruneTarget =
-    DerivedCacheBudget * 9 / 10;
+qint64 derivedCacheBudget = 512LL * 1024LL * 1024LL; // guarded by cacheMutex
 constexpr qint64 MaximumEntryBytes = 64LL * 1024LL * 1024LL;
 constexpr qint64 MaximumMetadataEntryBytes = 1024LL * 1024LL;
 constexpr float CacheWebpQuality = 82.0F;
@@ -436,24 +434,29 @@ void pruneDiskCacheLocked(const QString &path, qint64 &knownSize) {
     if (knownSize < 0) {
         knownSize = scanDiskSizeLocked(path);
     }
-    if (knownSize <= DerivedCacheBudget) {
+    if (knownPersistentDiskSize < 0) knownPersistentDiskSize = scanDiskSizeLocked(cacheDirectoryPath());
+    if (knownSessionDiskSize < 0) knownSessionDiskSize = scanDiskSizeLocked(sessionCacheDirectoryPath());
+    if (knownPersistentDiskSize + knownSessionDiskSize <= derivedCacheBudget) {
         return;
     }
-    QDir directory(path);
+    QDir directory(cacheDirectoryPath());
     QFileInfoList files = directory.entryInfoList(
         {QStringLiteral("*.zgd"), QStringLiteral("*.zgm")}, QDir::Files);
+    files.append(QDir(sessionCacheDirectoryPath()).entryInfoList(
+        {QStringLiteral("*.zgd"), QStringLiteral("*.zgm")}, QDir::Files));
     std::sort(files.begin(), files.end(),
               [](const QFileInfo &left, const QFileInfo &right) {
                   return left.lastModified() < right.lastModified();
               });
     for (const QFileInfo &file : files) {
-        if (knownSize <= DerivedCachePruneTarget) {
+        if (knownPersistentDiskSize + knownSessionDiskSize <= derivedCacheBudget * 9 / 10) {
             break;
         }
         const qint64 fileSize = file.size();
         if (QFile::remove(file.absoluteFilePath())) {
-            knownSize = qMax<qint64>(
-                0, knownSize - qMax<qint64>(0, fileSize));
+            auto &size = file.absolutePath() == directory.absolutePath()
+                ? knownPersistentDiskSize : knownSessionDiskSize;
+            size = qMax<qint64>(0, size - qMax<qint64>(0, fileSize));
         }
     }
 }
@@ -847,6 +850,17 @@ void PersistentDerivedImageCache::storeMetadata(const ImageInfo &info) {
         return;
     }
     writeMetadataEntry(key, entry);
+}
+
+qint64 PersistentDerivedImageCache::byteBudget() {
+    QMutexLocker locker(&cacheMutex);
+    return derivedCacheBudget;
+}
+
+void PersistentDerivedImageCache::setByteBudget(qint64 bytes) {
+    QMutexLocker locker(&cacheMutex);
+    derivedCacheBudget = qBound<qint64>(64LL * 1024 * 1024, bytes, 64LL * 1024 * 1024 * 1024);
+    pruneDiskCacheLocked(cacheDirectoryPath(), knownPersistentDiskSize);
 }
 
 qint64 PersistentDerivedImageCache::cacheSize() {

@@ -10,6 +10,8 @@ namespace ZoinGallery::StorageLocations {
 // same namespace is harmless; a different namespace is rejected so an already
 // loaded database can never silently switch backing files.
 bool configure(const QString &storageNamespace);
+// Startup-only override. Existing cache databases must never switch roots live.
+bool configureCacheRoot(const QString &path);
 QString storageNamespace();
 
 QString cacheRoot();

@@ -57,6 +57,8 @@ public:
     static void storeMetadata(const ImageInfo &info);
 
     static qint64 cacheSize();
+    static qint64 byteBudget();
+    static void setByteBudget(qint64 bytes);
     static qint64 persistentCacheSize();
     static qint64 sessionCacheSize();
     static void clear();

@@ -53,6 +53,7 @@ struct RuntimeOptions {
 class GalleryRuntime final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString thumbnailProviderName READ thumbnailProviderName CONSTANT)
+    Q_PROPERTY(QObject *preferences READ preferences CONSTANT)
     Q_PROPERTY(QString asyncProviderName READ asyncProviderName CONSTANT)
     Q_PROPERTY(int decodeWorkerCount READ decodeWorkerCount CONSTANT)
     Q_PROPERTY(qint64 thumbnailCacheByteBudget READ thumbnailCacheByteBudget CONSTANT)
@@ -61,6 +62,7 @@ class GalleryRuntime final : public QObject {
     Q_PROPERTY(qsizetype thumbnailCachePendingRequestCount READ thumbnailCachePendingRequestCount)
 
 public:
+    QObject *preferences() const;
     static GalleryRuntime *install(
         QQmlEngine *engine, const RuntimeOptions &options = RuntimeOptions());
     static void registerTypes();

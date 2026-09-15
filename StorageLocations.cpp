@@ -10,6 +10,8 @@ namespace {
 
 QMutex storageMutex;
 QString configuredNamespace;
+QString configuredCacheRoot;
+bool cacheRootInUse = false;
 
 QString normalizedNamespace(QString value) {
     value = value.trimmed();
@@ -78,7 +80,18 @@ QString dataRootForNamespace(const QString &storageNamespace) {
 }
 
 QString cacheRoot() {
-    return cacheRootForNamespace(storageNamespace());
+    QMutexLocker locker(&storageMutex);
+    cacheRootInUse = true;
+    return configuredCacheRoot.isEmpty() ? cacheRootForNamespace(currentNamespaceLocked()) : configuredCacheRoot;
+}
+
+bool configureCacheRoot(const QString &path) {
+    QMutexLocker locker(&storageMutex);
+    const QString normalized = path.trimmed().isEmpty() ? QString() : QDir::cleanPath(path.trimmed());
+    if (!normalized.isEmpty() && !QDir::isAbsolutePath(normalized)) return false;
+    if (cacheRootInUse && configuredCacheRoot != normalized) return false;
+    configuredCacheRoot = normalized;
+    return true;
 }
 
 QString dataRoot() {

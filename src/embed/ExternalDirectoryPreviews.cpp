@@ -12,6 +12,15 @@ void ExternalCatalogModel::configureDirectoryPreviews(QSharedPointer<DirectoryPr
     if (!_directoryPreviews && provider && pool) _directoryPreviews = new ExternalDirectoryPreviews(this, std::move(provider), std::move(pool));
 }
 void ExternalCatalogModel::requestDirectoryPreviews(const QList<int> &rows) { if (_directoryPreviews) _directoryPreviews->demand(rows); }
+void ExternalCatalogModel::clearDirectoryPreviews() { if (_directoryPreviews) _directoryPreviews->clear(); }
+void ExternalCatalogModel::setDirectoryCacheMode(int mode) { if (_directoryPreviews) _directoryPreviews->setCacheMode(mode); }
+void ExternalCatalogModel::invalidatePreviewPixels() {
+    cancelAllRunners();
+    clearDirectoryPreviews();
+    _viewerImageCache.clear();
+    for (auto &entry : _entries) clearPublishedImage(entry);
+    if (rowCount()) emit dataChanged(index(0), index(rowCount() - 1), {FileListModel::ImageFullSizeRole});
+}
 QAbstractItemModel *ExternalCatalogModel::directoryPreviewModel(int row) const { return _directoryPreviews ? _directoryPreviews->model(entryIdAt(row)) : nullptr; }
 bool ExternalCatalogModel::directoryPreviewAvailable(int row) const { return _directoryPreviews && _directoryPreviews->available(entryIdAt(row)); }
 
@@ -32,7 +41,12 @@ ExternalDirectoryPreviews::ExternalDirectoryPreviews(ExternalCatalogModel *catal
     connect(catalog, &QAbstractItemModel::layoutChanged, this, changed);
 }
 ExternalDirectoryPreviews::~ExternalDirectoryPreviews() { clear(); }
-void ExternalDirectoryPreviews::clear() { _demand.clear(); for (const auto &id : _records.keys()) retire(id); }
+void ExternalDirectoryPreviews::clear() {
+    _clearing = true;
+    _demand.clear();
+    for (const auto &id : _records.keys()) retire(id);
+    _clearing = false;
+}
 void ExternalDirectoryPreviews::retire(const QString &id) {
     const auto record = _records.take(id);
     if (!record) return;
@@ -44,9 +58,24 @@ void ExternalDirectoryPreviews::retire(const QString &id) {
 bool ExternalDirectoryPreviews::available(const QString &id) const { const auto r = _records.value(id); return r && r->available; }
 ExternalCatalogModel *ExternalDirectoryPreviews::model(const QString &id) const { const auto r = _records.value(id); return r ? r->model : nullptr; }
 void ExternalDirectoryPreviews::demand(const QList<int> &rows) { _demand = rows; synchronize(); }
+void ExternalDirectoryPreviews::setCacheMode(int mode) {
+    if (_cacheMode == mode) return;
+    _cacheMode = mode;
+    if (mode == 2) {
+        for (const auto &record : _records) {
+            ++record->serial;
+            if (record->cancel) record->cancel->cancel();
+            record->cancel.reset();
+            record->model->suspendPreviewReads(true);
+            record->lease.reset();
+            record->settled = false;
+        }
+    }
+    synchronize();
+}
 
 void ExternalDirectoryPreviews::synchronize() {
-    if (_catalog->_shutdown) return;
+    if (_catalog->_shutdown || _clearing) return;
     QSet<QString> visible;
     for (int row : _demand) {
         const auto *entry = _catalog->entryAt(row);
@@ -55,7 +84,22 @@ void ExternalDirectoryPreviews::synchronize() {
     for (const auto &id : _records.keys()) {
         const auto record = _records.value(id);
         const auto *entry = _catalog->entryAt(_catalog->rowForEntryId(id));
-        if (!entry || !entry->directorySource.isValid()) { retire(id); continue; }
+        if (!entry) {
+            if (_cacheMode == 0) { retire(id); continue; }
+            // Keep render state across navigation, but never retain authority
+            // to start reads from a catalog that is no longer displayed.
+            if (record->demanded || record->cancel || record->lease) {
+                ++record->serial;
+                if (record->cancel) record->cancel->cancel();
+                record->cancel.reset();
+                record->model->suspendPreviewReads(true);
+                record->lease.reset();
+            }
+            record->demanded = false;
+            record->settled = false;
+            continue;
+        }
+        if (!entry->directorySource.isValid()) { retire(id); continue; }
         const bool sourceChanged = !(record->source == entry->directorySource);
         if (sourceChanged || (record->demanded && !visible.contains(id))) {
             ++record->serial;
@@ -81,12 +125,19 @@ void ExternalDirectoryPreviews::synchronize() {
         }
         record->demanded = true;
         record->touched = ++_clock;
-        if (!record->settled && !record->cancel) request(id, record);
+        if (_cacheMode != 2 && !record->settled && !record->cancel) request(id, record);
     }
-    QList<QString> inactive;
-    for (auto it = _records.cbegin(); it != _records.cend(); ++it) if (!it.value()->demanded) inactive.append(it.key());
-    std::sort(inactive.begin(), inactive.end(), [this](const QString &a, const QString &b) { return _records.value(a)->touched < _records.value(b)->touched; });
-    while (inactive.size() > 32) retire(inactive.takeFirst());
+    QList<QString> inactive, history;
+    for (auto it = _records.cbegin(); it != _records.cend(); ++it) {
+        if (it.value()->demanded) continue;
+        (_catalog->rowForEntryId(it.key()) < 0 ? history : inactive).append(it.key());
+    }
+    const auto evict = [this](QList<QString> &ids, int limit) {
+        std::sort(ids.begin(), ids.end(), [this](const QString &a, const QString &b) { return _records.value(a)->touched < _records.value(b)->touched; });
+        while (ids.size() > limit) retire(ids.takeFirst());
+    };
+    evict(inactive, _cacheMode == 0 ? 0 : 32);
+    evict(history, 128);
 }
 
 void ExternalDirectoryPreviews::publish(const QString &id) {

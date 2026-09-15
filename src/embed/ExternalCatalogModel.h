@@ -137,6 +137,9 @@ public:
     void shutdown();
     void configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool);
     void requestDirectoryPreviews(const QList<int> &rows) override;
+    void clearDirectoryPreviews();
+    void setDirectoryCacheMode(int mode);
+    void invalidatePreviewPixels();
     QAbstractItemModel *directoryPreviewModel(int row) const;
     bool directoryPreviewAvailable(int row) const;
     bool canPreviewDirectories() const { return _directoryPreviews != nullptr; }

@@ -277,6 +277,8 @@ set(ZOIN_CORE_SOURCES
     src/embed/LocalFilesystemSource.h
     src/embed/LocalFilesystemSource.cpp
     src/embed/GalleryRuntime.cpp
+    src/embed/GalleryPreferences.cpp
+    include/ZoinGallery/GalleryPreferences.h
     src/embed/GallerySession.cpp
     src/panel/GalleryCatalogModel.cpp
     src/panel/GalleryPanelBackend.cpp

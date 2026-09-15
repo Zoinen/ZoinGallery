@@ -1,4 +1,6 @@
 #include <ZoinGallery/GalleryRuntime.h>
+#include <ZoinGallery/GalleryPreferences.h>
+#include "ExternalCatalogModel.h"
 
 #include <ZoinGallery/GallerySession.h>
 #include <ZoinGallery/GalleryCatalogModel.h>
@@ -70,6 +72,7 @@ public:
     QSharedPointer<ImageSourceProvider> imageSourceProvider;
     QSharedPointer<QThreadPool> directoryPool = QSharedPointer<QThreadPool>::create();
     DecodeManager *decodeManager = nullptr;
+    GalleryPreferences *preferences = nullptr;
     QmlAsyncImageProvider *asyncProvider = nullptr; // owned by QQmlEngine
     QList<QPointer<GallerySession>> sessions;
     bool shutdown = false;
@@ -149,6 +152,8 @@ GalleryRuntime::GalleryRuntime(
         d->options.storageNamespace = StorageLocations::storageNamespace();
     }
     d->thumbnailProviderName = d->options.thumbnailProviderName.trimmed();
+    if (d->options.persistentCache)
+        StorageLocations::configureCacheRoot(QSettings().value("Cache/location").toString());
     if (d->thumbnailProviderName.isEmpty()) {
         d->thumbnailProviderName =
             d->options.providerPrefix + QStringLiteral("-thumbnails");
@@ -191,6 +196,24 @@ GalleryRuntime::GalleryRuntime(
         d->decodeManager->setFileListCacheMode(CacheUsageMode::Off);
     }
 
+    d->preferences = new GalleryPreferences(d->decodeManager, d->options.persistentCache, this);
+    connect(d->preferences, &GalleryPreferences::changed, this, [this] {
+        if (!d->options.persistentCache) return;
+        for (const auto &session : d->sessions) if (session)
+            if (auto *model = qobject_cast<ExternalCatalogModel *>(session->model()))
+                model->setDirectoryCacheMode(d->preferences->values().value("folderMode").toInt());
+    });
+    connect(d->preferences, &GalleryPreferences::clearSnapshotsRequested, this, [this] {
+        for (const auto &session : d->sessions) if (session)
+            if (auto *model = qobject_cast<ExternalCatalogModel *>(session->model()))
+                model->clearDirectoryPreviews();
+    });
+    connect(d->preferences, &GalleryPreferences::pixelsInvalidated, this, [this] {
+        d->thumbnailCache->clear();
+        for (const auto &session : d->sessions) if (session)
+            if (auto *model = qobject_cast<ExternalCatalogModel *>(session->model()))
+                model->invalidatePreviewPixels();
+    });
     engine->addImageProvider(
         d->thumbnailProviderName,
         new QmlImageProvider(d->thumbnailProviderName, d->store));
@@ -243,6 +266,9 @@ GallerySession *GalleryRuntime::createExternalSession(
         parent ? parent : this);
     d->sessions.append(session);
     session->configureDirectoryPreviews(d->options.directoryPreviewProvider, d->directoryPool);
+    if (d->options.persistentCache)
+        if (auto *model = qobject_cast<ExternalCatalogModel *>(session->model()))
+            model->setDirectoryCacheMode(d->preferences->values().value("folderMode").toInt());
     connect(session, &QObject::destroyed, this, [this] {
         d->sessions.removeIf([](const QPointer<GallerySession> &candidate) {
             return candidate.isNull();
@@ -295,6 +321,8 @@ QString GalleryRuntime::storageNamespace() const {
 int GalleryRuntime::decodeWorkerCount() const {
     return d->decodeManager ? d->decodeManager->workerCount() : 0;
 }
+
+QObject *GalleryRuntime::preferences() const { return d->preferences; }
 
 qint64 GalleryRuntime::thumbnailCacheByteBudget() const {
     return d->thumbnailCache ? d->thumbnailCache->byteBudget() : 0;

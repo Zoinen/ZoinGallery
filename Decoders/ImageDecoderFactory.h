@@ -5,6 +5,7 @@
 #include <memory>
 #include <QString>
 #include <QList>
+#include <QVariantList>
 
 class ImageDecoderInterface;
 
@@ -28,12 +29,12 @@ public:
     // linkers are free to discard decoder-only translation units.
     static void registerBuiltInDecoders();
 
-    static bool registerClass(CreatorFunc creator, int priority) {
+    static bool registerClass(CreatorFunc creator, int priority, const QString &library = {}) {
         auto it = _decoders.begin();
         while (it != _decoders.end() && it->priority >= priority) {
             ++it;
         }
-        _decoders.insert(it, {creator, priority});
+        _decoders.insert(it, {creator, priority, library});
         return true;
     }
 
@@ -41,6 +42,7 @@ public:
         registerBuiltInDecoders();
         return _decoders.size();
     }
+    static QVariantList decoderInventory();
 
     static std::unique_ptr<ImageDecoderInterface> createDecoder(
         int decoderIndex) {
@@ -59,6 +61,7 @@ private:
     struct Decoder {
         CreatorFunc creatorFunc;
         int priority;
+        QString library;
     };
 
     static QList<Decoder> _decoders;

@@ -16,6 +16,7 @@ public:
     bool available(const QString &id) const;
     ExternalCatalogModel *model(const QString &id) const;
     void clear();
+    void setCacheMode(int mode);
 private:
     struct Record {
         DirectorySourceDescriptor source;
@@ -35,6 +36,8 @@ private:
     QList<int> _demand;
     quint64 _clock = 0;
     bool _scheduled = false;
+    bool _clearing = false;
     bool _retryScheduled = false;
+    int _cacheMode = 1;
 };
 }

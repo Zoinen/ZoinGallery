@@ -121,11 +121,16 @@ void persist(const ImageDecodeRequest &request, const QImage &image) {
 
 class PersistentDerivedImageCacheTest final : public QObject {
     Q_OBJECT
+    QTemporaryDir cacheRoot;
 
 private slots:
     void initTestCase() {
         QVERIFY(ZoinGallery::StorageLocations::configure(
             QStringLiteral("derived-cache-tests")));
+        QVERIFY(cacheRoot.isValid());
+        QVERIFY(ZoinGallery::StorageLocations::configureCacheRoot(cacheRoot.path()));
+        QCOMPARE(ZoinGallery::StorageLocations::cacheRoot(), cacheRoot.path());
+        QVERIFY(!ZoinGallery::StorageLocations::configureCacheRoot(cacheRoot.filePath("changed")));
         PersistentImageCache::clear();
     }
 
@@ -135,6 +140,23 @@ private slots:
 
     void cleanupTestCase() {
         PersistentImageCache::clear();
+    }
+
+    void configurableDiskBudgetPrunesExistingEntries() {
+        QCOMPARE(PersistentDerivedImageCache::byteBudget(), 512LL * 1024 * 1024);
+        PersistentDerivedImageCache::setByteBudget(4096LL * 1024 * 1024);
+        QCOMPARE(PersistentDerivedImageCache::byteBudget(), 4096LL * 1024 * 1024);
+        const QString path = cacheRoot.filePath("zg_derived_v1/budget-test.zgd");
+        QVERIFY(QDir().mkpath(QFileInfo(path).absolutePath()));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.resize(80LL * 1024 * 1024));
+        file.close();
+        QCOMPARE(PersistentDerivedImageCache::cacheSize(), 80LL * 1024 * 1024);
+        PersistentDerivedImageCache::setByteBudget(64LL * 1024 * 1024);
+        QVERIFY(!QFile::exists(path));
+        QCOMPARE(PersistentDerivedImageCache::cacheSize(), 0);
+        PersistentDerivedImageCache::setByteBudget(512LL * 1024 * 1024);
     }
 
     void strongHitSkipsSourceMaterialization() {

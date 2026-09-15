@@ -1,5 +1,6 @@
 #include <ZoinGallery/GalleryRuntime.h>
 #include <ZoinGallery/GallerySession.h>
+#include <ZoinGallery/GalleryPreferences.h>
 
 #include "DecodeManager.h"
 #include "Decoders/HeicDecoder.h"
@@ -7,6 +8,7 @@
 #include "FileListModel.h"
 #include "GalleryViewModel.h"
 #include "PersistentImageCache.h"
+#include "PersistentDerivedImageCache.h"
 #include "QmlAsyncImageProvider.h"
 #include "src/embed/ExternalCatalogModel.h"
 #include "tests/HeicTestFixture.h"
@@ -28,6 +30,7 @@
 #include <QQmlEngine>
 #include <QSignalSpy>
 #include <QSet>
+#include <QSettings>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimeZone>
@@ -426,6 +429,112 @@ class GallerySessionTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void galleryPreferencesDefaultsAndDecoderInventory() {
+        QTemporaryDir dir;
+        const auto oldFormat = QSettings::defaultFormat();
+        const auto oldOrganization = QCoreApplication::organizationName();
+        const auto oldApplication = QCoreApplication::applicationName();
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, dir.path());
+        QCoreApplication::setOrganizationName("GalleryPreferencesTests");
+        QCoreApplication::setApplicationName("isolated-preferences");
+        const auto restore = qScopeGuard([=] {
+            QSettings::setDefaultFormat(oldFormat);
+            QCoreApplication::setOrganizationName(oldOrganization);
+            QCoreApplication::setApplicationName(oldApplication);
+        });
+        DecodeManager decoder(nullptr, 4);
+        ZoinGallery::GalleryPreferences preferences(&decoder, false);
+        QCOMPARE(preferences.values().value("diskLimitMiB").toInt(), 512);
+        QVERIFY(!preferences.animateResizing());
+        int lastPriority = std::numeric_limits<int>::max();
+        const auto inventory = preferences.decoders();
+        QVERIFY(inventory.size() >= 8);
+        for (const auto &value : inventory) {
+            const auto row = value.toMap();
+            QVERIFY(!row.value("library").toString().isEmpty());
+            QVERIFY(!row.value("formats").toStringList().isEmpty());
+            QVERIFY(row.value("priority").toInt() <= lastPriority);
+            lastPriority = row.value("priority").toInt();
+        }
+        auto invalid = preferences.values();
+        invalid["diskLimitMiB"] = 0;
+        QVERIFY(!preferences.apply(invalid));
+        QCOMPARE(preferences.values().value("diskLimitMiB").toInt(), 512);
+        auto changed = preferences.values();
+        changed["diskLimitMiB"] = 4096;
+        changed["imageMode"] = 2;
+        changed["folderMode"] = 1;
+        changed["animateResizing"] = true;
+        QVERIFY2(preferences.apply(changed), qPrintable(preferences.error()));
+        QTRY_VERIFY(!preferences.busy());
+        QCOMPARE(PersistentDerivedImageCache::byteBudget(), 4096LL * 1024 * 1024);
+        QCOMPARE(decoder.imageCacheMode(), CacheUsageMode::OnlyCache);
+        QCOMPARE(QSettings().value("Cache/diskLimitMiB").toInt(), 4096);
+        QVERIFY(preferences.animateResizing());
+        PersistentDerivedImageCache::setByteBudget(512LL * 1024 * 1024);
+    }
+
+    void directoryPreviewSurvivesNavigationWithoutAuthority() {
+        QTemporaryDir directory;
+        QImage source(180, 120, QImage::Format_RGB32);
+        source.fill(Qt::blue);
+        QVERIFY(source.save(directory.filePath("one.png")));
+        QVERIFY(source.save(directory.filePath("two.png")));
+        QQmlEngine engine;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"one.png", "two.png"};
+        provider->imagePath = directory.path();
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("directory-history");
+        QVERIFY(session->applyExternalCatalog({previewFolder(0)}, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        model->requestDirectoryPreviews({0});
+        QTRY_VERIFY(model->directoryPreviewAvailable(0));
+        QPointer<ZoinGallery::ExternalCatalogModel> children =
+            qobject_cast<ZoinGallery::ExternalCatalogModel *>(model->directoryPreviewModel(0));
+        QVERIFY(children);
+        children->requestImageMetadata({0, 1}, true);
+        QTRY_COMPARE(children->imageOriginalSizeAt(0), source.size());
+        QTRY_COMPARE(children->imageOriginalSizeAt(1), source.size());
+        auto *first = children->data(children->index(0), FileListModel::ImageFileRole).value<ImageFile *>();
+        auto *second = children->data(children->index(1), FileListModel::ImageFileRole).value<ImageFile *>();
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QSignalSpy decoded(decoder, &DecodeManager::imageReady);
+        children->decodeImages({{.info = first->info(), .targetSize = QSize(90, 60)},
+                                {.info = second->info(), .targetSize = QSize(90, 60)}});
+        QTRY_COMPARE(decoded.size(), 2);
+        QVERIFY(!first->imageIdUrl().isEmpty());
+        QVERIFY(!second->imageIdUrl().isEmpty());
+        const auto firstUrl = first->imageIdUrl();
+        const auto secondUrl = second->imageIdUrl();
+        QSignalSpy resized(first, &ImageFile::fullSizeChanged);
+        QVERIFY(session->applyExternalCatalog({}, 2));
+        QTRY_COMPARE(provider->leases.load(), 0);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(children);
+        provider->block = true;
+        QVERIFY(session->applyExternalCatalog({previewFolder(0, 3)}, 3));
+        model->requestDirectoryPreviews({0});
+        QCOMPARE(model->directoryPreviewModel(0), children.data());
+        QVERIFY(model->directoryPreviewAvailable(0));
+        QCOMPARE(first->imageIdUrl(), firstUrl);
+        QCOMPARE(second->imageIdUrl(), secondUrl);
+        QTRY_COMPARE(provider->enumerations.load(), 2);
+        provider->block = false;
+        QTRY_COMPARE(provider->leases.load(), 1);
+        QTest::qWait(100);
+        QCOMPARE(first->imageIdUrl(), firstUrl);
+        QCOMPARE(second->imageIdUrl(), secondUrl);
+        QCOMPARE(first->fullSize(), source.size());
+        QCOMPARE(resized.size(), 0);
+        QCOMPARE(decoded.size(), 2);
+        model->shutdown();
+    }
+
     void directorySparseRefreshAndCanceledDemand() {
         QQmlEngine engine;
         auto provider = QSharedPointer<DirectoryPreviewFixture>::create();

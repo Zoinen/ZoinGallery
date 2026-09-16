@@ -658,7 +658,9 @@ void ExternalCatalogModel::attachThumbnail(
         }
     }
     entry.thumbnailProviderId = providerId;
+    const bool hadThumbnails = hasPublishedThumbnails();
     _providerEntryIds.insert(providerId, entry.id);
+    if (!hadThumbnails) emit publishedThumbnailsChanged();
     const QVariantMap attachFields = MediaTimingTrace::mergedFields(
         MediaTimingTrace::sourceFields(entry.source), {
             {QStringLiteral("sessionId"), _sessionId},
@@ -692,6 +694,7 @@ void ExternalCatalogModel::attachThumbnail(
 }
 
 void ExternalCatalogModel::detachThumbnail(Entry &entry) {
+    const bool hadThumbnails = hasPublishedThumbnails();
     if (!entry.item) {
         return;
     }
@@ -706,6 +709,7 @@ void ExternalCatalogModel::detachThumbnail(Entry &entry) {
         }
     }
     entry.thumbnailProviderId.clear();
+    if (hadThumbnails && !hasPublishedThumbnails()) emit publishedThumbnailsChanged();
     entry.item->setImageId({});
     entry.item->setImage({}, {});
 }

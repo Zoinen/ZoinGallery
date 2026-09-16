@@ -1,4 +1,5 @@
 #include "ExternalCatalogModelPrivate.h"
+#include "PersistentDerivedImageCache.h"
 #include "ExternalDirectoryPreviews.h"
 
 namespace ZoinGallery {
@@ -25,6 +26,8 @@ ExternalCatalogModel::ExternalCatalogModel(
           viewerFitCacheByteBudget, viewerNativeCacheByteBudget) {
     Q_ASSERT(_decodeManager);
     Q_ASSERT(_thumbnailCache);
+    connect(this, &QAbstractItemModel::modelReset,
+            this, &ExternalCatalogModel::publishedThumbnailsChanged);
 
     connect(_decodeManager, &DecodeManager::imageProbeReady, this,
             &ExternalCatalogModel::handleImageProbe);
@@ -466,6 +469,21 @@ bool ExternalCatalogModel::catalogMatches(
     return true;
 }
 
+void ExternalCatalogModel::restoreCachedMetadata(Entry &entry) const {
+    if (!entry.image || entry.originalSize.isValid()
+        || !cacheReadsEnabled(_decodeManager->imageCacheMode())
+        || !PersistentDerivedImageCache::retrieveMemoryMetadata(entry.imageInfo)) return;
+    entry.originalSize = rotateToOrientation(entry.imageInfo.imageSize, entry.imageInfo.orientation);
+    entry.metadataSettled = true;
+    if (entry.item) {
+        entry.item->setInfo(entry.imageInfo);
+        entry.item->setFullSize(entry.originalSize);
+    }
+    MediaTimingTrace::event(QStringLiteral("qt.gallery.metadata.restored"),
+        {{QStringLiteral("fix"), QStringLiteral("[FIX:cached-catalog-geometry]")},
+         {QStringLiteral("sessionId"), _sessionId}, {QStringLiteral("row"), entry.sourceIndex}});
+}
+
 bool ExternalCatalogModel::parseCatalogEntry(
     const QVariantMap &map, int row, bool metadataDeferred,
     Entry *entry) const {
@@ -503,7 +521,10 @@ bool ExternalCatalogModel::parseCatalogEntry(
     parsed.selected = map.value(QStringLiteral("selected")).toBool();
     if (metadataDeferred) {
         parsed.mtimeNs = 0;
-        parsed.size = -1;
+        // Display fields are deferred, but a supplied byte-source descriptor
+        // already has authoritative cache identity, including its byte size.
+        parsed.size = map.value(QStringLiteral("resourceId")).toString().isEmpty()
+            ? -1 : sourceSizeValue(map);
     }
     else {
         parsed.mtimeNs = integerValue(
@@ -526,6 +547,7 @@ bool ExternalCatalogModel::parseCatalogEntry(
               parsed.mtimeNs / 1000000, QTimeZone::UTC)
         : QDateTime{};
     parsed.imageInfo.fileSize = parsed.size;
+    restoreCachedMetadata(parsed);
     if (map.contains(QStringLiteral("highlightStyle"))) {
         parsed.highlightStyle = map.value(
             QStringLiteral("highlightStyle")).toMap();

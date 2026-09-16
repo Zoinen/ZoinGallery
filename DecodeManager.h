@@ -177,6 +177,7 @@ private:
                                bool highPriority = false,
                                const QString &requestNamespace = QString(),
                                const QString &sourceVersionToken = QString());
+    void finishVersionedImageInfoLookup(QList<ImageInfo> hits, QList<ImageInfo> misses);
     void queueVersionedImageInfoSourceReads(
         const QList<ImageInfo> &requests);
     void cancelDecodeRequests(const QString &requestNamespace,

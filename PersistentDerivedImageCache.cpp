@@ -5,6 +5,7 @@
 #include "StorageLocations.h"
 
 #include <QCryptographicHash>
+#include <QCache>
 #include <QBuffer>
 #include <QDataStream>
 #include <QDateTime>
@@ -81,6 +82,8 @@ QDataStream &operator<<(QDataStream &stream, const MetadataKey &key);
 QDataStream &operator>>(QDataStream &stream, MetadataKey &key);
 
 QMutex cacheMutex;
+QMutex metadataMemoryMutex;
+QCache<QByteArray, ImageInfo> metadataMemory(16 * 1024 * 1024);
 QMutex lookupRegistryMutex;
 QHash<QString, QWeakPointer<PersistentDerivedLookupGate>> lookupRegistry;
 qint64 knownPersistentDiskSize = -1;
@@ -190,6 +193,34 @@ MetadataKey metadataKeyForInfo(const ImageInfo &info) {
         .sourceSize = info.source.size,
         .schema = QString::fromLatin1(MetadataSchema),
     };
+}
+
+QByteArray metadataMemoryKey(const ImageInfo &info) {
+    if (!info.source.isValid()
+        || (!hasPersistentVersionStrength(info) && !hasSessionVersionStrength(info))) return {};
+    const auto key = metadataKeyForInfo(info);
+    if (!key.isValid()) return {};
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_6_0);
+    // StorageLocations freezes this choice after first use. Resolving the OS
+    // temp/cache path for every hit can itself perform expensive OS queries.
+    static const QString storageRoot = ZoinGallery::StorageLocations::cacheRoot();
+    stream << storageRoot << key;
+    return bytes;
+}
+
+void rememberMetadata(const ImageInfo &info, qsizetype serializedBytes) {
+    const auto key = metadataMemoryKey(info);
+    if (key.isEmpty()) return;
+    // Keep derived values only; the caller supplies its current authority.
+    auto *stored = new ImageInfo;
+    stored->imageSize = info.imageSize;
+    stored->orientation = info.orientation;
+    stored->exif = info.exif;
+    QMutexLocker locker(&metadataMemoryMutex);
+    metadataMemory.insert(key, stored,
+        static_cast<int>(serializedBytes + key.size() + sizeof(ImageInfo)));
 }
 
 QByteArray serializedKey(const DerivedKey &key) {
@@ -737,6 +768,25 @@ bool PersistentDerivedImageCache::retrieveMetadata(ImageInfo &info) {
     return true;
 }
 
+bool PersistentDerivedImageCache::retrieveMemoryMetadata(ImageInfo &info) {
+    const auto key = metadataMemoryKey(info);
+    if (key.isEmpty()) return false;
+    QMutexLocker locker(&metadataMemoryMutex);
+    const auto *cached = metadataMemory.object(key);
+    if (!cached) return false;
+    info.imageSize = cached->imageSize;
+    info.orientation = cached->orientation;
+    info.exif = cached->exif;
+    info.fileSize = info.source.size;
+    info.isCached = true;
+    return true;
+}
+
+void PersistentDerivedImageCache::clearMemoryMetadata() {
+    QMutexLocker locker(&metadataMemoryMutex);
+    metadataMemory.clear();
+}
+
 void PersistentDerivedImageCache::retrieveMetadataBatch(
     const QList<ImageInfo> &candidates, QList<ImageInfo> &hits,
     QList<ImageInfo> &misses) {
@@ -746,6 +796,7 @@ void PersistentDerivedImageCache::retrieveMetadataBatch(
         QString path;
         QByteArray entry;
         bool eligible = false;
+        bool memoryHit = false;
     };
 
     hits.clear();
@@ -757,6 +808,11 @@ void PersistentDerivedImageCache::retrieveMetadataBatch(
     reads.reserve(candidates.size());
     for (const ImageInfo &candidate : candidates) {
         MetadataRead read{.info = candidate};
+        if (retrieveMemoryMetadata(read.info)) {
+            read.memoryHit = true;
+            reads.append(std::move(read));
+            continue;
+        }
         if (candidate.source.isValid() &&
             (hasPersistentVersionStrength(candidate) ||
              hasSessionVersionStrength(candidate))) {
@@ -801,6 +857,10 @@ void PersistentDerivedImageCache::retrieveMetadataBatch(
     }
 
     for (MetadataRead &read : reads) {
+        if (read.memoryHit) {
+            hits.append(std::move(read.info));
+            continue;
+        }
         if (!read.eligible || read.entry.isEmpty()) {
             misses.append(std::move(read.info));
             continue;
@@ -822,6 +882,7 @@ void PersistentDerivedImageCache::retrieveMetadataBatch(
         read.info.exif = std::move(exif);
         read.info.fileSize = read.info.source.size;
         read.info.isCached = true;
+        rememberMetadata(read.info, read.entry.size());
         hits.append(std::move(read.info));
     }
 }
@@ -849,6 +910,7 @@ void PersistentDerivedImageCache::storeMetadata(const ImageInfo &info) {
         entry.size() > MaximumMetadataEntryBytes) {
         return;
     }
+    rememberMetadata(info, entry.size());
     writeMetadataEntry(key, entry);
 }
 
@@ -887,6 +949,7 @@ qint64 PersistentDerivedImageCache::sessionCacheSize() {
 
 void PersistentDerivedImageCache::clear() {
     QMutexLocker locker(&cacheMutex);
+    clearMemoryMetadata();
     QDir directory(cacheDirectoryPath());
     if (directory.exists() && !directory.removeRecursively()) {
         knownPersistentDiskSize = -1;
@@ -906,6 +969,7 @@ void PersistentDerivedImageCache::clear() {
 
 void PersistentDerivedImageCache::clearSession() {
     QMutexLocker locker(&cacheMutex);
+    clearMemoryMetadata();
     QDir directory(sessionCacheDirectoryPath());
     if (directory.exists() && !directory.removeRecursively()) {
         knownSessionDiskSize = -1;

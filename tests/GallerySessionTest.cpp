@@ -539,6 +539,9 @@ private slots:
         model->requestDirectoryPreviews({0});
         QCOMPARE(model->directoryPreviewModel(0), children.data());
         QVERIFY(model->directoryPreviewAvailable(0));
+        // The folder frame must be recoverable before a new QML Image has
+        // emitted Ready. Existing provider publications are sufficient.
+        QVERIFY(children->property("hasPublishedThumbnails").toBool());
         QCOMPARE(first->imageIdUrl(), firstUrl);
         QCOMPARE(second->imageIdUrl(), secondUrl);
         QTRY_COMPARE(provider->enumerations.load(), 2);
@@ -3155,6 +3158,50 @@ private slots:
         QVERIFY(model->metadataPeakPendingRequestCount() <=
                 model->metadataRequestLimit());
 
+        runtime->shutdown();
+    }
+
+    void cachedDimensionsExistBeforeCatalogPublication() {
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        decoder->setImageCacheMode(CacheUsageMode::On);
+        auto *session = runtime->createExternalSession("warm-dimensions");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVariantList catalog;
+        for (int row = 0; row < 355; ++row) {
+            const auto key = QStringLiteral("warm-dimension-%1").arg(row);
+            ImageInfo info;
+            info.source = {.resourceId = key, .sourceKey = key, .contentVersion = "v1",
+                .versionStrength = "strong", .displayName = "image.jpg", .size = 4096 + row};
+            info.sourceVersionToken = "v1";
+            info.imageSize = QSize(900 + row, 600 + row);
+            PersistentDerivedImageCache::storeMetadata(info);
+            catalog.append(QVariantMap{{"entryId", key}, {"index", row}, {"name", "image.jpg"},
+                {"isImage", true}, {"resourceId", key}, {"sourceKey", key}, {"contentVersion", "v1"},
+                {"versionStrength", "strong"}, {"size", 4096 + row}, {"sizeKnown", true}});
+        }
+        // Exercise deferred display metadata and sparse page installation as F4 does.
+        QVariantMap context{{"metadataDeferred", true}, {"catalogRowsDeferred", true}, {"totalCount", 355}};
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            QVERIFY(session->applyExternalCatalog(catalog.mid(0, 64), cycle * 2 + 1, context));
+            for (int row = 0; row < 64; ++row)
+                QCOMPARE(model->imageOriginalSizeAt(row), QSize(900 + row, 600 + row));
+            for (int offset = 64; offset < 355; offset += 64)
+                QVERIFY(model->applyCatalogRows(catalog.mid(offset, 64), true));
+            for (int row = 0; row < 355; ++row)
+                QCOMPARE(model->imageOriginalSizeAt(row), QSize(900 + row, 600 + row));
+            auto *image = model->data(model->index(0), FileListModel::ImageFileRole).value<ImageFile *>();
+            QSignalSpy resized(image, &ImageFile::fullSizeChanged);
+            QVERIFY(model->applyMetadata({QVariantMap{{"entryId", "warm-dimension-0"}, {"index", 0},
+                {"localPath", "/newly-resolved/image.jpg"}, {"mtimeNs", qint64(123456789)},
+                {"size", 4096}, {"sizeText", "4 KB"}}}));
+            QCOMPARE(resized.size(), 0);
+            QCOMPARE(model->imageOriginalSizeAt(0), QSize(900, 600));
+            QCOMPARE(model->metadataSubmittedBatchCount(), quint64(0));
+            QVERIFY(session->applyExternalCatalog({}, cycle * 2 + 2));
+        }
         runtime->shutdown();
     }
 

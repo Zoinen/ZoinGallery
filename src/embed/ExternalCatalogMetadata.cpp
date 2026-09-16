@@ -181,13 +181,19 @@ void ExternalCatalogMetadataTransaction::reconcileSource(
 bool ExternalCatalogMetadataTransaction::sourceChanged(
     const ExternalCatalogModel::Entry &entry,
     const RowState &previous) {
+    // Resolving a local backing path or display timestamp for the same opaque
+    // resource is enrichment, not a new image. Preserve its dimensions/pixels.
+    const bool sameOpaqueRevision = !entry.contentVersion.isEmpty()
+        && entry.contentVersion == previous.contentVersion
+        && previous.source.resourceId != previous.localPath
+        && sourceAuthorityMatches(entry.source, previous.source);
     return previous.image != entry.image
-        || previous.localPath != entry.localPath
+        || (!sameOpaqueRevision && previous.localPath != entry.localPath)
         || previous.sourceIdentity != entry.sourceIdentity
         || previous.contentVersion != entry.contentVersion
         || previous.source.resourceId != entry.source.resourceId
         || previous.source.sourceKey != entry.source.sourceKey
-        || previous.mtimeNs != entry.mtimeNs
+        || (!sameOpaqueRevision && previous.mtimeNs != entry.mtimeNs)
         || previous.size != entry.size;
 }
 
@@ -275,6 +281,7 @@ void ExternalCatalogMetadataTransaction::updateImageInfo(
         : QDateTime{};
     imageInfo.fileSize = entry.size;
     entry.imageInfo = imageInfo;
+    _model.restoreCachedMetadata(entry);
     if (!entry.item) {
         return;
     }

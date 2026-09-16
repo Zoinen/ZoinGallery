@@ -181,6 +181,36 @@ private slots:
         QCOMPARE(provider->rangeReads.load(), 0);
     }
 
+    void jpegWithoutOrientationRetainsMetadata() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("without-orientation.jpg");
+        QVERIFY(testImage(QSize(120, 80)).save(path, "JPEG"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QByteArray jpeg = file.readAll();
+        file.close();
+        // Valid EXIF with an ImageDescription, but no Orientation tag.
+        jpeg.insert(2, QByteArray::fromHex(
+            "ffe1002245786966000049492a000800000001000e010200040000007465737400000000"));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(jpeg), jpeg.size());
+        file.close();
+        auto request = requestFor("strong", "jpeg-without-orientation");
+        request.info.source.size = jpeg.size();
+        auto provider = QSharedPointer<MetadataSourceProvider>::create(path);
+        ImageInfoReadRunner reader(request.info.source.runtimeIdentity(), true, false, false,
+            0, false, "jpeg-first", request.info.sourceVersionToken, request.info.source, provider);
+        QSignalSpy result(&reader, &ImageInfoReadRunner::imageInfoReady);
+        reader.run();
+        QCOMPARE(result.size(), 1);
+        const auto discovered = result.first().first().value<ImageInfo>();
+        QCOMPARE(discovered.imageSize, QSize(120, 80));
+        QCOMPARE(discovered.orientation, ExifOrientation::Horizontal);
+        auto cached = request.info;
+        QVERIFY(PersistentDerivedImageCache::retrieveMetadata(cached));
+        QCOMPARE(cached.imageSize, QSize(120, 80));
+    }
+
     void coldMetadataManifestReachesDerivedHitWithoutMaterialization() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -309,6 +339,20 @@ private slots:
         QCOMPARE(misses.first().source.contentVersion,
                  QStringLiteral("batch-revision-128"));
         QVERIFY(misses.first().isLast);
+    }
+
+    void diskMetadataLookupDoesNotBlockCaller() {
+        auto request = requestFor("strong", "async-disk-metadata");
+        PersistentDerivedImageCache::storeMetadata(request.info);
+        PersistentDerivedImageCache::clearMemoryMetadata();
+        auto provider = QSharedPointer<CountingSourceProvider>::create();
+        DecodeManager manager(nullptr, 4, provider);
+        QSignalSpy ready(&manager, &DecodeManager::imagesInfoReady);
+        manager.readVersionedImagesInfo({{request.info.source.runtimeIdentity(),
+            request.info.sourceVersionToken, request.info.source}}, false, false, "disk-lookup");
+        QCOMPARE(ready.size(), 0);
+        QTRY_COMPARE(ready.size(), 1);
+        QCOMPARE(provider->materializations.load(), 0);
     }
 
     void decodeManagerPublishesCachedMetadataAsOneBatch() {

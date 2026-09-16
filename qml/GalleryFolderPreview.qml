@@ -16,6 +16,7 @@ Item {
     readonly property color folderColor: darkTheme ? "#397db1" : "#397db2"
     property int readyImages: 0
     readonly property bool hasUsablePreview: readyImages > 0
+        || Boolean(childModel && childModel.hasPublishedThumbnails)
     readonly property point sceneOrigin: {
         let dependency = entry.iconSceneOrigin.x + entry.iconSceneOrigin.y
         let ancestor = preview

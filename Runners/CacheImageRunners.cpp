@@ -1,6 +1,7 @@
 #include "CacheImageRunners.h"
 
 #include "PersistentImageCache.h"
+#include <ZoinGallery/MediaTimingTrace.h>
 
 #include <utility>
 
@@ -55,7 +56,31 @@ CachedImageInfoRunner::CachedImageInfoRunner(const QStringList &imagePaths, bool
       _sourceVersionToken(std::move(sourceVersionToken)) {
 }
 
+CachedImageInfoRunner::CachedImageInfoRunner(QList<ImageInfo> candidates)
+    : CachedImageInfoRunner(QStringList{}, false, false) {
+    _versionedCandidates = std::move(candidates);
+    if (!_versionedCandidates.isEmpty()) {
+        _requestNamespace = _versionedCandidates.first().requestNamespace;
+        _highPriority = std::any_of(_versionedCandidates.cbegin(), _versionedCandidates.cend(),
+            [](const ImageInfo &info) { return info.highPriority; });
+    }
+}
+
 void CachedImageInfoRunner::run() {
+    if (!_versionedCandidates.isEmpty()) {
+        if (!isCanceled()) {
+            ZoinGallery::MediaTimingTrace::Span span(QStringLiteral("qt.gallery.metadata_cache_disk"),
+                {{QStringLiteral("requestCount"), _versionedCandidates.size()},
+                 {QStringLiteral("requestNamespace"), _requestNamespace}});
+            QList<ImageInfo> hits, misses;
+            PersistentDerivedImageCache::retrieveMetadataBatch(_versionedCandidates, hits, misses);
+            span.set(QStringLiteral("hitCount"), hits.size());
+            span.set(QStringLiteral("missCount"), misses.size());
+            if (!isCanceled()) emit versionedInfoRetrieved(hits, misses);
+        }
+        emit finished(this);
+        return;
+    }
     if (!_imagePaths.size()) {
         emit finished(this);
         return;

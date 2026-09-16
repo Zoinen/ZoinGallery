@@ -33,6 +33,12 @@ bool ThumbnailLoader::readMetadata(ImageInfo &result) {
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
         const auto decoder = ImageDecoderFactory::createDecoder(i);
         if (decoder && decoder->readMetadata(result)) {
+            // Missing EXIF orientation is commonly reported as zero. Its
+            // dimensions are unrotated and must remain cacheable.
+            if (result.orientation < ExifOrientation::Horizontal
+                || result.orientation > ExifOrientation::Rotate270CW) {
+                result.orientation = ExifOrientation::Horizontal;
+            }
             metadataRead = true;
             break;
         }

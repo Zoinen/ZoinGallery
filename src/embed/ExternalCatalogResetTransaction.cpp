@@ -165,7 +165,8 @@ void ExternalCatalogResetTransaction::initializeRow(
         directorySource.value(QStringLiteral("version")).toString()};
     if (m_metadataDeferred) {
         entry.mtimeNs = 0;
-        entry.size = -1;
+        entry.size = map.value(QStringLiteral("resourceId")).toString().isEmpty()
+            ? -1 : sourceSizeValue(map);
     } else {
         entry.mtimeNs = integerValue(
             map, QStringLiteral("mtimeNs"),
@@ -272,6 +273,7 @@ void ExternalCatalogResetTransaction::updateMaterializedItem(
         : QDateTime{};
     info.fileSize = entry.size;
     entry.imageInfo = info;
+    m_model.restoreCachedMetadata(entry);
     if (!entry.item) {
         return;
     }

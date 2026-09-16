@@ -35,8 +35,10 @@ class ExternalCatalogModel final : public QAbstractListModel,
     Q_OBJECT
     Q_PROPERTY(bool sparseCatalog READ sparseCatalog)
     Q_PROPERTY(QVariantList materializedRows READ materializedRows)
+    Q_PROPERTY(bool hasPublishedThumbnails READ hasPublishedThumbnails NOTIFY publishedThumbnailsChanged)
 
 public:
+    bool hasPublishedThumbnails() const { return !_providerEntryIds.isEmpty(); }
     enum ExternalRole {
         EntryIdRole = FileListModel::FileSizeRole + 1,
         SourceIndexRole,
@@ -157,6 +159,7 @@ public:
     }
 
 signals:
+    void publishedThumbnailsChanged();
     void viewerImageUrlChanged();
     void viewerSourceAtChanged(int row);
     void viewerRequestStateAtChanged(int row);
@@ -204,6 +207,7 @@ private:
 
     bool setEntryHighlightStyle(Entry &entry,
                                 const QVariantMap &highlightStyle) const;
+    void restoreCachedMetadata(Entry &entry) const;
 
     struct ViewerPlan {
         QSize viewportSize;

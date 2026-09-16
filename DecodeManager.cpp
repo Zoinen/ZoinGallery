@@ -351,8 +351,10 @@ void DecodeManager::readVersionedImagesInfo(
             {{QStringLiteral("requestCount"), candidates.size()},
              {QStringLiteral("requestNamespace"), requestNamespace},
              {QStringLiteral("highPriorityCount"), highPriorityCount}});
-        PersistentDerivedImageCache::retrieveMetadataBatch(
-            candidates, hits, misses);
+        for (ImageInfo candidate : candidates) {
+            if (PersistentDerivedImageCache::retrieveMemoryMetadata(candidate)) hits.append(std::move(candidate));
+            else misses.append(std::move(candidate));
+        }
         cacheSpan.set(QStringLiteral("hitCount"), hits.size());
         cacheSpan.set(QStringLiteral("missCount"), misses.size());
     }
@@ -360,6 +362,27 @@ void DecodeManager::readVersionedImagesInfo(
         misses = candidates;
     }
 
+    if (cacheReadsEnabled(_imageCacheMode) && !misses.isEmpty()) {
+        // The tiny RAM lookup above is the only cache work on the UI thread.
+        // Cold manifests use the existing bounded cache worker and cancellation.
+        for (ImageInfo &hit : hits) hit.isLast = false;
+        if (!hits.isEmpty()) emit imagesInfoReady(hits);
+        for (ImageInfo &miss : misses) miss.isLast = false;
+        misses.last().isLast = true;
+        auto *runner = new CachedImageInfoRunner(std::move(misses));
+        runner->connections.append(connect(runner, &CachedImageInfoRunner::versionedInfoRetrieved,
+            this, [this, runner](const QList<ImageInfo> &cached, const QList<ImageInfo> &absent) {
+                if (!runner->isCanceled()) finishVersionedImageInfoLookup(cached, absent);
+            }));
+        if (runner->isHighPriority()) insertAheadOfLowerPriority(_taskQueue, runner);
+        else _taskQueue.insert(firstBackgroundTask(_taskQueue), runner);
+        processQueue();
+        return;
+    }
+    finishVersionedImageInfoLookup(std::move(hits), std::move(misses));
+}
+
+void DecodeManager::finishVersionedImageInfoLookup(QList<ImageInfo> hits, QList<ImageInfo> misses) {
     // A mixed batch must flush after its slowest tier, not after a cached
     // entry which happened to be last in catalog order. Move the single batch
     // marker to the final miss; an all-hit batch keeps its original marker.

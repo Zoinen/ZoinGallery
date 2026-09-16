@@ -8,6 +8,7 @@ class CachedImageInfoRunner : public Runner {
     Q_OBJECT
 
 public:
+    explicit CachedImageInfoRunner(QList<ImageInfo> versionedCandidates);
     CachedImageInfoRunner(const QStringList &imagePaths, bool isFromEmbeddedView,
                           bool validateSource, int directOpenGeneration = 0,
                           bool highPriority = false,
@@ -20,6 +21,7 @@ public:
     QString requestNamespace() const override { return _requestNamespace; }
 
 signals:
+    void versionedInfoRetrieved(const QList<ImageInfo> &hits, const QList<ImageInfo> &misses);
     void cachedImageInfoRetrieved(const QList<ImageInfo> &result, const QStringList &notFound, bool isFromEmbeddedView,
                                   const QString &lastPath, int directOpenGeneration,
                                   bool highPriority,
@@ -30,6 +32,7 @@ private:
     friend class DecodeManager;
 
     QStringList _imagePaths;
+    QList<ImageInfo> _versionedCandidates;
     bool _isFromEmbeddedView;
     bool _validateSource;
     int _directOpenGeneration;

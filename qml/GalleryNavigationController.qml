@@ -293,6 +293,11 @@ QtObject {
 
     function invalidateMasonryPageGeometry() {
         const stalePageScroll = masonryPageScrollActive
+        panel.traceBenchmarkStage("navigation.page.geometry-invalidated", {
+            "pageScrollActive": stalePageScroll,
+            "scrollRunning": panelScrollAnimation.running,
+            "scrollTarget": panelScrollAnimation.to
+        })
         resetMasonryPageSequence()
         if (galleryLayout.presentationMode !== GalleryViewportItem.Masonry
                 || !stalePageScroll
@@ -527,6 +532,16 @@ QtObject {
         const targetIndex = Number(targetNode.targetIndex)
         const destination = Number(targetNode.contentY)
         const hitEdge = Boolean(targetNode.hitEdge)
+        panel.traceBenchmarkStage("navigation.page.planned", {
+            "fix": "[FIX:masonry-page]",
+            "anchorX": currentItemCenterX,
+            "anchorY": currentItemCenterY,
+            "plannedContentY": plannedContentY,
+            "destination": destination,
+            "targetIndex": targetIndex,
+            "direction": direction,
+            "rowViewportY": masonryPageRowViewportY
+        })
         moveCursorWithSelection(targetIndex, togglePrevious,
                                 !hitEdge, deferCursorCommit, true)
         currentItemCenterX = Number(targetNode.anchorX)

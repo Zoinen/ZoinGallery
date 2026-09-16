@@ -9,6 +9,9 @@ struct GalleryGeometryRecord {
     int index = -1;
     int row = -1;
     QRectF geometry;
+
+    friend bool operator==(const GalleryGeometryRecord &,
+                           const GalleryGeometryRecord &) = default;
 };
 
 // Compact index for the one active variable-geometry presentation. Fixed
@@ -17,7 +20,9 @@ struct GalleryGeometryRecord {
 class GalleryGeometryIndex final {
 public:
     void clear();
-    void rebuild(const QVector<GalleryGeometryRecord> &records);
+    // Return whether hit-test geometry changed. Repeated metadata publication
+    // must not invalidate an in-flight page navigation over identical cells.
+    bool rebuild(const QVector<GalleryGeometryRecord> &records);
 
     [[nodiscard]] bool empty() const;
     [[nodiscard]] qsizetype size() const;
@@ -27,6 +32,7 @@ public:
                                                    qreal end) const;
 
 private:
+    QVector<GalleryGeometryRecord> _records;
     QVector<GalleryLayoutBand> _bands;
 };
 

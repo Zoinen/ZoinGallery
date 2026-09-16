@@ -346,8 +346,8 @@ QList<int> MasonryLayout::materializedModelRows() const {
 }
 
 void MasonryLayout::rebuildLayoutBands() {
-    _geometryIndex.clear();
     if (_presentationMode != Masonry || sparseVirtualLayout()) {
+        _geometryIndex.clear();
         // Fixed sparse layouts are arithmetic. Building one heap-backed band
         // (and one heavyweight brick lookup) per logical row defeats model
         // paging even though only a viewport-sized range can be painted.
@@ -366,7 +366,8 @@ void MasonryLayout::rebuildLayoutBands() {
             .geometry = brick.geometry(),
         });
     }
-    _geometryIndex.rebuild(records);
+    if (!_geometryIndex.rebuild(records))
+        return;
     ++_layoutRevision;
     emit layoutRevisionChanged();
     emit layoutBandsChanged();

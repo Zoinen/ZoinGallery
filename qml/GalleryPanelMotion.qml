@@ -105,6 +105,11 @@ QtObject {
         easing.type: Easing.OutSine
         onRunningChanged: {
             const panel = motion.panel
+            panel.traceBenchmarkStage("navigation.scroll.running-changed", {
+                "running": running,
+                "from": from,
+                "to": to
+            })
             if (running)
                 motion.cursorFinalizeTimer.stop()
             else {

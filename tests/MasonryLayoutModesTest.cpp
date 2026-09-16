@@ -1,5 +1,6 @@
 #include "FileListModel.h"
 #include "DecodeManager.h"
+#include "PersistentDerivedImageCache.h"
 #include "MasonryLayout.h"
 #include "SvgCursor.h"
 #include "tests/DirectoryPreviewFixture.h"
@@ -6094,6 +6095,104 @@ private slots:
                 panel, "endPresentationStateUpdate", Q_ARG(QVariant, false)));
             QCOMPARE(layout->contentY(), qreal(0));
         }
+    }
+
+    void masonryPageNavigationSurvivesCachedMetadataAfterReentry() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 2;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("first-page-after-entry");
+        const auto parent = prefixedCatalog("page-parent", 80);
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        decoder->setImageCacheMode(CacheUsageMode::On);
+        QVariantList child{QVariantMap{{"entryId", "page-up"}, {"index", 0},
+            {"name", ".."}, {"isDir", true}, {"isImage", false}}};
+        for (int row = 1; row < 356; ++row) {
+            const QString key = QStringLiteral("page-child-%1").arg(row);
+            ImageInfo info;
+            info.source = {.resourceId = key, .sourceKey = key, .contentVersion = "v1",
+                .versionStrength = "strong", .displayName = "image.jpg", .size = 4096 + row};
+            info.sourceVersionToken = "v1";
+            info.imageSize = row % 3 ? QSize(3000, 2000) : QSize(2000, 3000);
+            PersistentDerivedImageCache::storeMetadata(info);
+            child.append(QVariantMap{{"entryId", key}, {"index", row}, {"name", "image.jpg"},
+                {"isImage", true}, {"resourceId", key}, {"sourceKey", key}, {"contentVersion", "v1"},
+                {"versionStrength", "strong"}, {"size", 4096 + row}, {"sizeKnown", true}});
+        }
+        qulonglong revision = 0;
+        const auto apply = [&](const QVariantList &rows, const QString &path, int cursor) {
+            return session->applyExternalCatalog(rows, ++revision, {
+                {"currentPath", path}, {"cursorIndex", cursor},
+                {"cursorEntryId", rows.at(cursor).toMap().value("entryId")}
+            });
+        };
+        QVERIFY(apply(child, "/child", 0));
+        auto *panel = createPanel(view, session, "firstPageSession");
+        QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        auto *animation = panel->findChild<QObject *>("galleryPanelScrollAnimation");
+        QVERIFY(panelItem && layout && animation);
+        panelItem->setSize(QSizeF(1000, 900));
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        layout->setDensity(160);
+        QTest::qWait(400);
+        panelItem->forceActiveFocus();
+        view.requestActivate();
+        const auto pageKey = [&](Qt::Key key) {
+            QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+            QCoreApplication::sendEvent(&view, &press);
+            QKeyEvent release(QEvent::KeyRelease, key, Qt::NoModifier);
+            QCoreApplication::sendEvent(&view, &release);
+        };
+        for (int cycle = 0; cycle < 4; ++cycle) {
+            QVERIFY(apply(parent, "/", 70));
+            QTest::qWait(250);
+            QVERIFY(layout->contentY() > 0);
+            QVERIFY(QMetaObject::invokeMethod(panel, "beginPresentationStateUpdate", Q_ARG(QVariant, false)));
+            QVariantMap state{{"currentPath", "/child"}, {"cursorIndex", 0},
+                {"cursorEntryId", "page-up"}, {"metadataDeferred", true},
+                {"catalogRowsDeferred", true}, {"totalCount", child.size()}};
+            QVERIFY(session->applyExternalCatalog(child.mid(0, 48), ++revision, state));
+            QVERIFY(QMetaObject::invokeMethod(panel, "endPresentationStateUpdate", Q_ARG(QVariant, false)));
+            QTest::qWait(40);
+            QVERIFY(QMetaObject::invokeMethod(panel, "beginPresentationStateUpdate", Q_ARG(QVariant, false)));
+            state["catalogRowsDeferred"] = false;
+            state["catalogDelta"] = QVariantMap{{"baseCatalogRevision", revision},
+                {"oldTotalCount", child.size()}, {"ranges", QVariantList{QVariantMap{
+                    {"oldIndex", 0}, {"index", 0}, {"count", child.size()}}}}};
+            QVERIFY(session->applyExternalCatalog(child, ++revision, state));
+            QVERIFY(QMetaObject::invokeMethod(panel, "endPresentationStateUpdate", Q_ARG(QVariant, false)));
+            QTest::qWait(cycle % 2 ? 250 : 40);
+            QCOMPARE(session->currentIndex(), 0);
+            QCOMPARE(layout->contentY(), qreal(0));
+            QTimer::singleShot(30, session, [session]() {
+                // A newly visible row can publish the same cached dimensions
+                // while PageDown is animating. Its geometry stays unchanged.
+                auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+                emit model->dataChanged(model->index(0), model->index(355),
+                    {FileListModel::IsImageRole, FileListModel::FolderRole,
+                     FileListModel::ImageFullSizeRole});
+            });
+            pageKey(Qt::Key_PageDown);
+            const qreal destination = animation->property("to").toReal();
+            QVERIFY2(destination >= layout->height() * .65,
+                     qPrintable(QStringLiteral("PageDown moved only %1 of %2 pixels")
+                         .arg(destination).arg(layout->height())));
+            QTest::qWait(300);
+            QVERIFY2(qAbs(layout->contentY() - destination) < 1,
+                qPrintable(QStringLiteral("PageDown stopped at %1 instead of %2 after cached metadata")
+                    .arg(layout->contentY()).arg(destination)));
+            QVERIFY(layout->indexGeometry(session->currentIndex()).top() >= destination - 1);
+            pageKey(Qt::Key_PageUp);
+            QTest::qWait(300);
+            QCOMPARE(layout->contentY(), qreal(0));
+            pageKey(Qt::Key_Home);
+            QTest::qWait(250);
+        }
+        runtime->shutdown();
     }
 
     void masonryCatalogResetRetainsSlotsAndBoundsMaterialization() {

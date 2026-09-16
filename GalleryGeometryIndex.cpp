@@ -7,11 +7,15 @@
 namespace ZoinGallery {
 
 void GalleryGeometryIndex::clear() {
+    _records.clear();
     _bands.clear();
 }
 
-void GalleryGeometryIndex::rebuild(
+bool GalleryGeometryIndex::rebuild(
     const QVector<GalleryGeometryRecord> &records) {
+    if (_records == records)
+        return false;
+    _records = records;
     QMap<int, GalleryLayoutBand> rows;
     for (const GalleryGeometryRecord &record : records) {
         if (record.index < 0 || !record.geometry.isValid()
@@ -38,6 +42,7 @@ void GalleryGeometryIndex::rebuild(
                   }
                   return left.bottom < right.bottom;
               });
+    return true;
 }
 
 bool GalleryGeometryIndex::empty() const {

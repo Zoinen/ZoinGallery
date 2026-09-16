@@ -29,6 +29,8 @@ struct GalleryEntryVisual::SnapshotValues {
     QString localPath;
     QString text;
     bool isFolder = false;
+    int folderPreviewState = 0;
+    quint64 folderPreviewRevision = 0;
     bool isImage = false;
     bool isSelected = false;
     QString iconPath;
@@ -65,6 +67,8 @@ GalleryEntryVisual::SnapshotValues GalleryEntryVisual::parseSnapshot(
         .text = snapshot.value(QStringLiteral("text")).toString(),
         .isFolder = snapshot.value(
             QStringLiteral("isFolder")).toBool(),
+        .folderPreviewState = snapshot.value(QStringLiteral("folderPreviewState")).toInt(),
+        .folderPreviewRevision = snapshot.value(QStringLiteral("folderPreviewRevision")).toULongLong(),
         .isImage = snapshot.value(QStringLiteral("isImage")).toBool(),
         .isSelected = snapshot.value(
             QStringLiteral("isSelected")).toBool(),
@@ -116,6 +120,8 @@ bool GalleryEntryVisual::applyIdentity(const SnapshotValues &values) {
 bool GalleryEntryVisual::applyMedia(const SnapshotValues &values) {
     bool changed = false;
     changed |= assignChanged(_isFolder, values.isFolder);
+    changed |= assignChanged(_folderPreviewState, values.folderPreviewState);
+    changed |= assignChanged(_folderPreviewRevision, values.folderPreviewRevision);
     changed |= assignChanged(_isImage, values.isImage);
     changed |= assignChanged(_iconPath, values.iconPath);
     changed |= assignChanged(_iconKey, values.iconKey);

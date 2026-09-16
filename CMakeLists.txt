@@ -255,6 +255,10 @@ set(ZOIN_CORE_SOURCES
     src/embed/ExternalCatalogModel.cpp
     src/embed/ExternalDirectoryPreviews.cpp
     src/embed/ExternalDirectoryPreviews.h
+    src/embed/ExternalDirectoryPreviewSnapshots.cpp
+    src/embed/DirectoryPreviewCache.cpp
+    src/embed/DirectoryPreviewCache.h
+    src/embed/DirectoryPreviewScheduler.h
     src/embed/ExternalCatalogModelPrivate.h
     src/embed/ExternalCatalogApply.cpp
     src/embed/ExternalCatalogSparseExtension.cpp

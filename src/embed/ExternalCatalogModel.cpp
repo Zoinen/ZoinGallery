@@ -253,6 +253,8 @@ QVariantMap ExternalCatalogModel::visualSnapshot(int row) const {
         {QStringLiteral("localPath"), entry->localPath},
         {QStringLiteral("text"), entry->name},
         {QStringLiteral("isFolder"), entry->directory},
+        {QStringLiteral("folderPreviewState"), int(entry->directoryPreviewState)},
+        {QStringLiteral("folderPreviewRevision"), entry->directoryPreviewRevision},
         {QStringLiteral("isImage"), entry->image},
         {QStringLiteral("isSelected"), entry->selected},
         {QStringLiteral("iconPath"), entry->iconPath},
@@ -514,6 +516,9 @@ bool ExternalCatalogModel::parseCatalogEntry(
     parsed.directory = map.value(
         QStringLiteral("isDir"), map.value(QStringLiteral("directory")))
                            .toBool();
+    if (parsed.directory && parsed.directorySource.isValid())
+        parsed.directoryPreviewState = _incomingDirectoryStates.value(
+            parsed.directorySource.sourceKey, DirectoryPreviewState::Unknown);
     parsed.image = map.contains(QStringLiteral("isImage"))
         ? map.value(QStringLiteral("isImage")).toBool()
         : (!metadataDeferred && !parsed.directory

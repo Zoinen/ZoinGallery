@@ -305,6 +305,11 @@ void GalleryPanelController::ensurePreviews() {
     }
 }
 
+QAbstractItemModel *GalleryPanelController::directoryPreviewModelForEntry(const QString &entryId) {
+    const int row = indexForEntryId(entryId);
+    return row >= 0 ? directoryPreviewModelAt(row) : nullptr;
+}
+
 bool GalleryPanelController::setQuickSearchQuery(const QString &query) {
     if (!_quickSearch) {
         return query.isEmpty();

@@ -149,6 +149,7 @@ public:
         const QVariantList &urls, int directoryIndex, int dropAction);
     Q_INVOKABLE void removeEntry(int index);
     Q_INVOKABLE QAbstractItemModel *directoryPreviewModelAt(int index);
+    Q_INVOKABLE QAbstractItemModel *directoryPreviewModelForEntry(const QString &entryId);
 
 signals:
     void sessionChanged();

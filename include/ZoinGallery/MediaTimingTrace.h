@@ -91,16 +91,15 @@ inline void eventAt(const QString &name, qint64 monotonicNs,
     // Navigation profiling also needs the library-internal catalog phases.
     // Keep this opt-in and share the host's existing output file so a live
     // cross-process trace does not depend on a console sink being present.
-    static const QString outputPath = qEnvironmentVariable(
-        "F4_NAV_BENCHMARK_QT_OUTPUT");
+    static const QString outputPath = qEnvironmentVariable("F4_MEDIA_TIMING_QT_OUTPUT",
+        qEnvironmentVariable("F4_NAV_BENCHMARK_QT_OUTPUT"));
     if (outputPath.isEmpty()) {
         qInfo().noquote() << "F4_MEDIA_TIMING_TRACE" << json;
     }
     else {
         static QMutex outputMutex;
         static QFile *output = []() -> QFile * {
-            auto *file = new QFile(qEnvironmentVariable(
-                "F4_NAV_BENCHMARK_QT_OUTPUT"));
+            auto *file = new QFile(outputPath);
             if (!file->open(QIODevice::WriteOnly | QIODevice::Append)) {
                 delete file;
                 return nullptr;

@@ -66,7 +66,8 @@ public:
     Q_ENUM(SourceKind)
 
     ~GallerySession() override;
-    void configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool);
+    void configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool,
+        QSharedPointer<class DirectoryPreviewCache> cache = {}, QSharedPointer<class DirectoryPreviewScheduler> scheduler = {});
     bool canPreviewDirectories() const;
     QAbstractItemModel *directoryPreviewModel(int index) const;
 

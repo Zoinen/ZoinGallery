@@ -112,7 +112,9 @@ void ExternalCatalogResetTransaction::rebuildRows() {
         if (old.name != entry.name) roles.append(ExternalCatalogModel::EntryNameRole);
         if (old.sourceIndex != entry.sourceIndex) roles.append(ExternalCatalogModel::SourceIndexRole);
         if (old.directory != entry.directory) roles.append(FileListModel::FolderRole);
-        if (!(old.directorySource == entry.directorySource)) roles.append(FileListModel::FolderViewRole);
+        if (!(old.directorySource == entry.directorySource)
+            || old.directoryPreviewState != entry.directoryPreviewState)
+            roles.append(FileListModel::FolderViewRole);
         if (old.selected != entry.selected) roles.append(FileListModel::SelectedRole);
         if (old.size != entry.size) roles.append(FileListModel::FileSizeRole);
         if (old.mtimeNs != entry.mtimeNs) roles.append(FileListModel::LastModifiedRole);
@@ -163,6 +165,9 @@ void ExternalCatalogResetTransaction::initializeRow(
     entry.directorySource = {directorySource.value(QStringLiteral("resourceId")).toString(),
         directorySource.value(QStringLiteral("sourceKey")).toString(),
         directorySource.value(QStringLiteral("version")).toString()};
+    if (entry.directory && entry.directorySource.isValid())
+        entry.directoryPreviewState = m_model._incomingDirectoryStates.value(
+            entry.directorySource.sourceKey, DirectoryPreviewState::Unknown);
     if (m_metadataDeferred) {
         entry.mtimeNs = 0;
         entry.size = map.value(QStringLiteral("resourceId")).toString().isEmpty()
@@ -201,6 +206,8 @@ bool ExternalCatalogResetTransaction::adoptPreviousState(
         }
     }
     entry.item = old.item;
+    if (entry.directorySource.sourceKey == old.directorySource.sourceKey)
+        entry.directoryPreviewRevision = old.directoryPreviewRevision;
     entry.highlightStyle = old.highlightStyle;
     if (m_incremental && m_metadataDeferred && hadOldEntry
         && old.source.resourceId == entry.source.resourceId
@@ -213,7 +220,10 @@ bool ExternalCatalogResetTransaction::adoptPreviousState(
         entry.displayFields = old.displayFields;
     }
 
-    const bool sourceChanged = hadOldEntry &&
+    const bool restoredPresentation = hadOldEntry && !old.source.isValid()
+        && old.sourceIdentity == entry.sourceIdentity
+        && old.contentVersion == entry.contentVersion && old.size == entry.size;
+    const bool sourceChanged = hadOldEntry && !restoredPresentation &&
         (old.source.resourceId != entry.source.resourceId
          || old.source.sourceKey != entry.source.sourceKey
          || old.contentVersion != entry.contentVersion
@@ -282,6 +292,7 @@ void ExternalCatalogResetTransaction::updateMaterializedItem(
     entry.item->setFileName(fileName);
     entry.item->setIndex(row);
     entry.item->setIsFolder(entry.directory);
+    entry.item->setIsFolderView(entry.directoryPreviewState == DirectoryPreviewState::HasImages);
     entry.item->setIsImage(entry.image);
     entry.item->setHighlightStyle(entry.highlightStyle);
     entry.item->setIconPath(entry.iconPath);

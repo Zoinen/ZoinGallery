@@ -262,7 +262,15 @@ quint64 ExternalCatalogModel::metadataSubmittedBatchCount() const {
 
 void ExternalCatalogModel::decodeImages(
     const QList<ImageDecodeRequest> &requests) {
-    if (_previewReadsSuspended) return;
+    if (_shutdown) return;
+    if (_previewReadsSuspended) {
+        // Geometry-ready visible cells may use existing RAM pixels while a
+        // retained snapshot has no read authority. Never enqueue a miss.
+        for (const auto &request : requests) {
+            for (int row : sourceRows(request.info.path)) adoptCachedThumbnail(row);
+        }
+        return;
+    }
     ExternalCatalogThumbnailPlanner planner(*this, requests);
     planner.run();
 }

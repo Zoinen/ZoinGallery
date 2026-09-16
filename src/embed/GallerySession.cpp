@@ -151,8 +151,9 @@ GallerySession::~GallerySession() {
     delete d;
 }
 
-void GallerySession::configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool) {
-    if (d->external) d->external->configureDirectoryPreviews(std::move(provider), std::move(pool));
+void GallerySession::configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool,
+    QSharedPointer<DirectoryPreviewCache> cache, QSharedPointer<DirectoryPreviewScheduler> scheduler) {
+    if (d->external) d->external->configureDirectoryPreviews(std::move(provider), std::move(pool), std::move(cache), std::move(scheduler));
 }
 bool GallerySession::canPreviewDirectories() const { return d->external && d->external->canPreviewDirectories(); }
 QAbstractItemModel *GallerySession::directoryPreviewModel(int index) const { return d->external ? d->external->directoryPreviewModel(index) : nullptr; }
@@ -380,6 +381,11 @@ bool GallerySession::applyExternalCatalog(
     }
     ExternalCatalogApplyContext context = externalCatalogContext(
         entries, options);
+    if (MediaTimingTrace::enabled()) {
+        if (options.contains(QStringLiteral("benchmarkTraceId")))
+            d->external->setProperty("directoryTraceId", options.value(QStringLiteral("benchmarkTraceId")));
+        d->external->setProperty("directoryTraceRevision", revision);
+    }
     prepareExternalCatalogPath(context, entries, options);
     if (applySameExternalCatalogRevision(context, revision)) {
         return true;

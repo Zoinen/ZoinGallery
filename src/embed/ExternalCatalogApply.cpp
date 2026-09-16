@@ -2,6 +2,7 @@
 #include "ExternalCatalogResetTransaction.h"
 #include "ExternalCatalogRowsTransaction.h"
 #include "ExternalCatalogSparseExtension.h"
+#include "ExternalDirectoryPreviews.h"
 
 namespace ZoinGallery {
 
@@ -17,6 +18,8 @@ bool ExternalCatalogModel::tryExtendSparseCatalog(
 bool ExternalCatalogModel::reconcileSparseCatalog(
     const QVariantList &values, bool metadataDeferred, int totalCount,
     const QVariantMap &delta) {
+    if (_directoryPreviews) _directoryPreviews->invalidateSources(values, false);
+    prepareDirectoryPreviewStates(values);
     const int oldCount = logicalRowCount();
     if (_shutdown || totalCount < 0
         || delta.value(QStringLiteral("ranges")).metaType().id() != QMetaType::QVariantList
@@ -97,7 +100,14 @@ bool ExternalCatalogModel::reconcileSparseCatalog(
         if (row >= 0) {
             Entry retained = entry;
             retained.sourceIndex = row;
-            if (directorySources.contains(entry.id)) retained.directorySource = directorySources.value(entry.id);
+            if (directorySources.contains(entry.id)) {
+                retained.directorySource = directorySources.value(entry.id);
+                retained.directoryPreviewState = retained.directorySource.isValid()
+                    ? _incomingDirectoryStates.value(retained.directorySource.sourceKey, DirectoryPreviewState::Unknown)
+                    : DirectoryPreviewState::Unknown;
+                if (retained.item) retained.item->setIsFolderView(
+                    retained.directoryPreviewState == DirectoryPreviewState::HasImages);
+            }
             next.append(std::move(retained));
         }
         else removed.append(entry);
@@ -241,6 +251,8 @@ bool ExternalCatalogModel::applySparseCatalog(
 
 bool ExternalCatalogModel::applyCatalogRows(
     const QVariantList &values, bool metadataDeferred) {
+    if (_directoryPreviews) _directoryPreviews->invalidateSources(values, false);
+    prepareDirectoryPreviewStates(values);
     ExternalCatalogRowsTransaction transaction(
         *this, values, metadataDeferred);
     return transaction.run();
@@ -249,6 +261,8 @@ bool ExternalCatalogModel::applyCatalogRows(
 bool ExternalCatalogModel::applyCatalog(
     const QVariantList &values, bool metadataDeferred,
     bool checkEquivalentCatalog, int totalCount) {
+    if (_directoryPreviews) _directoryPreviews->invalidateSources(values, !checkEquivalentCatalog);
+    prepareDirectoryPreviewStates(values);
     MediaTimingTrace::Span timingSpan(
         QStringLiteral("qt.gallery.model.catalog_apply"), {
             {QStringLiteral("sessionId"), _sessionId},
@@ -328,6 +342,7 @@ bool ExternalCatalogModel::applyCatalog(
 
 bool ExternalCatalogModel::appendCatalog(const QVariantList &values,
                                          bool metadataDeferred) {
+    prepareDirectoryPreviewStates(values);
     MediaTimingTrace::Span timingSpan(
         QStringLiteral("qt.gallery.model.catalog_append"), {
             {QStringLiteral("sessionId"), _sessionId},

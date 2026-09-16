@@ -518,9 +518,16 @@ void MasonryLayout::updateProperties(bool animate)
         if (!prepareDelegateRow(index, &row, &context)) {
             continue;
         }
+        // Hide the outgoing photo before activating a cached folder frame.
+        // Both visual identity and square geometry are committed in this call;
+        // QML must not lay out either presentation against the other's size.
+        const bool folderRebind = _visualSnapshotRole >= 0
+            && row.brick->modelIsFolder && !row.item->isFolder();
+        if (folderRebind) row.item->setProperty("visualGeometryReady", false);
         bindDelegateRowIdentity(&row, &context);
         bindDelegateRowVisual(&row, &context);
         applyDelegateRowLayout(&row, animate, &context);
+        if (folderRebind) row.item->setProperty("visualGeometryReady", true);
         finalizeDelegateRow(&row, &context);
     }
     context.delegatesCompletedNs = context.trace

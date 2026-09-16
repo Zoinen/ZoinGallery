@@ -11,10 +11,13 @@ public:
     std::atomic_int enumerations{0};
     std::atomic_bool fail{false};
     std::atomic_bool block{false};
-    std::atomic_int leases{0};
+    std::atomic_bool blockResolve{false};
+    std::atomic_int resolutions{0};
+    QSharedPointer<std::atomic_int> leaseCount = QSharedPointer<std::atomic_int>::create(0);
+    std::atomic_int &leases = *leaseCount;
     struct Lease final : ZoinGallery::DirectoryPreviewLease {
-        std::atomic_int *count;
-        explicit Lease(std::atomic_int *value) : count(value) { ++*count; }
+        QSharedPointer<std::atomic_int> count;
+        explicit Lease(QSharedPointer<std::atomic_int> value) : count(std::move(value)) { ++*count; }
         ~Lease() override { --*count; }
     };
     ZoinGallery::DirectoryPreviewListing enumerate(
@@ -23,16 +26,19 @@ public:
         ++enumerations;
         while (block && !cancel->isCanceled()) QThread::msleep(1);
         if (cancel->isCanceled() || fail) return {.error = QStringLiteral("failed")};
-        return {names, QSharedPointer<Lease>::create(&leases), {}};
+        return {names, QSharedPointer<Lease>::create(leaseCount), {}};
     }
     ZoinGallery::DirectoryPreviewResult resolve(
         const ZoinGallery::DirectorySourceDescriptor &,
         const ZoinGallery::DirectoryPreviewListing &, const QStringList &selected,
         const QSharedPointer<ZoinGallery::ImageSourceCancellation> &) override {
+        ++resolutions;
+        // Simulates a provider which ignores cancellation while resolving.
+        while (blockResolve) QThread::msleep(1);
         QVariantList entries;
         for (const auto &name : selected)
             entries.append(QVariantMap{{"name", name}, {"localPath", QDir(imagePath).exists() ? QDir(imagePath).filePath(name) : imagePath}});
-        return {entries, QSharedPointer<Lease>::create(&leases), {}};
+        return {entries, QSharedPointer<Lease>::create(leaseCount), {}};
     }
 };
 

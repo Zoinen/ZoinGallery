@@ -7,7 +7,13 @@ Item {
     objectName: "galleryFolderPreview-" + entry.viewIndex
     required property var entry
     readonly property var panelRoot: entry.panelRoot
-    readonly property var childModel: panelRoot.controller.directoryPreviewModelAt(entry.viewIndex)
+    readonly property var childModel: {
+        // Replacement and row recycling invalidate this binding independently
+        // of the delayed ImageFile facade. Lookup uses stable folder identity.
+        const revision = entry.visualModel.folderPreviewRevision
+        return revision >= 0
+            ? panelRoot.controller.directoryPreviewModelForEntry(entry.entryId) : null
+    }
     readonly property real dpr: entry.renderDpr
     readonly property real outerSpacing: panelRoot.itemSpacing
     readonly property real contentMargin: snap(outerSpacing / 2)
@@ -15,12 +21,16 @@ Item {
     readonly property bool darkTheme: Qt.styleHints.colorScheme !== Qt.Light
     readonly property color folderColor: darkTheme ? "#397db1" : "#397db2"
     property int readyImages: 0
-    readonly property bool hasUsablePreview: readyImages > 0
+    readonly property bool hasUsablePreview: entry.visualModel.folderPreviewState === 2 || readyImages > 0
         || Boolean(childModel && childModel.hasPublishedThumbnails)
     readonly property point sceneOrigin: {
+        if (!entry.folderPreviewRequested) return Qt.point(0, 0)
+        // The entry already observes the complete ancestor chain. Only add
+        // the short chain inside it; repeating all ancestors makes every row
+        // reevaluate the same geometry bindings during a catalog transition.
         let dependency = entry.iconSceneOrigin.x + entry.iconSceneOrigin.y
         let ancestor = preview
-        while (ancestor) {
+        while (ancestor && ancestor !== preview.entry) {
             dependency += ancestor.x + ancestor.y + ancestor.scale + ancestor.rotation
             ancestor = ancestor.parent
         }
@@ -68,7 +78,8 @@ Item {
             y: content.height - height - preview.contentMargin
             width: Math.max(0, content.width - preview.contentMargin * 2)
             height: preview.snap(implicitHeight)
-            text: preview.panelRoot.quickSearchFormatter.styledText(preview.entry.effectiveDisplayName, preview.entry.entryId, 0)
+            text: preview.entry.folderPreviewRequested
+                ? preview.panelRoot.quickSearchFormatter.styledText(preview.entry.effectiveDisplayName, preview.entry.entryId, 0) : ""
             textFormat: preview.panelRoot.quickSearchFormatter.matchForEntry(preview.entry.entryId) ? Text.StyledText : Text.PlainText
             color: preview.entry.itemTextColor
             horizontalAlignment: Text.AlignHCenter
@@ -77,45 +88,55 @@ Item {
             elide: Text.ElideRight
             verticalAlignment: Text.AlignTop
         }
-        GalleryViewportItem {
-            id: children
-            objectName: "folderPreviewGrid"
+        Loader {
+            id: gridLoader
+            objectName: "folderPreviewGridLoader"
+            asynchronous: true
+            active: preview.entry.folderPreviewRequested && Boolean(preview.childModel)
+                && preview.entry.masonryGeometryReady
             x: frame.x + preview.snap(2)
             y: frame.y + preview.snap(2)
             width: Math.max(0, frame.width - preview.snap(2) * 2)
             height: Math.max(0, frame.height - preview.snap(2) * 2)
-            clip: true
-            persistSettings: false
-            containedPreview: true
-            animateResizing: false
-            devicePixelRatio: preview.dpr
-            model: preview.childModel
-            spacing: 1
-            targetHeight: height
-            delegate: Component {
-                BrickItem {
-                    id: cell
-                    property var model
-                    property bool masonryGeometryReady: false
-                    Image {
-                        id: thumbnail
-                        objectName: "folderPreviewImage-" + cell.viewIndex
-                        property bool countedReady: false
-                        function updateReady() {
-                            const ready = visible && status === Image.Ready && width > 0 && height > 0
-                            if (ready === countedReady) return
-                            preview.readyImages += ready ? 1 : -1
-                            countedReady = ready
+            sourceComponent: Component {
+                GalleryViewportItem {
+                    id: children
+                    objectName: "folderPreviewGrid"
+                    anchors.fill: parent
+                    clip: true
+                    persistSettings: false
+                    containedPreview: true
+                    animateResizing: false
+                    devicePixelRatio: preview.dpr
+                    model: preview.childModel
+                    spacing: 1
+                    targetHeight: height
+                    delegate: Component {
+                        BrickItem {
+                            id: cell
+                            property var model
+                            property bool masonryGeometryReady: false
+                            Image {
+                                id: thumbnail
+                                objectName: "folderPreviewImage-" + cell.viewIndex
+                                property bool countedReady: false
+                                function updateReady() {
+                                    const ready = visible && status === Image.Ready && width > 0 && height > 0
+                                    if (ready === countedReady) return
+                                    preview.readyImages += ready ? 1 : -1
+                                    countedReady = ready
+                                }
+                                onStatusChanged: updateReady()
+                                onWidthChanged: updateReady()
+                                onHeightChanged: updateReady()
+                                onVisibleChanged: updateReady()
+                                Component.onDestruction: { if (countedReady) --preview.readyImages }
+                                anchors.fill: parent
+                                source: cell.masonryGeometryReady && cell.model ? cell.model.imageIdUrl : ""
+                                fillMode: Image.Stretch
+                                cache: false
+                            }
                         }
-                        onStatusChanged: updateReady()
-                        onWidthChanged: updateReady()
-                        onHeightChanged: updateReady()
-                        onVisibleChanged: updateReady()
-                        Component.onDestruction: { if (countedReady) --preview.readyImages }
-                        anchors.fill: parent
-                        source: cell.masonryGeometryReady && cell.model ? cell.model.imageIdUrl : ""
-                        fillMode: Image.Stretch
-                        cache: false
                     }
                 }
             }

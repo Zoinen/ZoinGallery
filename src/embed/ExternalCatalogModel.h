@@ -3,6 +3,7 @@
 
 #include "FileListModel.h"
 #include "ImageProbe.h"
+#include "DirectoryPreviewCache.h"
 #include <ZoinGallery/DirectoryPreviewProvider.h>
 #include <QThreadPool>
 
@@ -29,6 +30,7 @@ class ExternalCatalogAppendTransaction;
 class ExternalCatalogMetadataPlanner;
 class ExternalCatalogThumbnailPlanner;
 class ExternalDirectoryPreviews;
+class DirectoryPreviewScheduler;
 
 class ExternalCatalogModel final : public QAbstractListModel,
                                    public GalleryCatalogSource {
@@ -137,7 +139,8 @@ public:
     void cancelAllDecodeRunners() override;
     bool preserveViewStateOnReset() const override;
     void shutdown();
-    void configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool);
+    void configureDirectoryPreviews(QSharedPointer<DirectoryPreviewProvider> provider, QSharedPointer<QThreadPool> pool,
+        QSharedPointer<DirectoryPreviewCache> cache = {}, QSharedPointer<DirectoryPreviewScheduler> scheduler = {});
     void requestDirectoryPreviews(const QList<int> &rows) override;
     void clearDirectoryPreviews();
     void setDirectoryCacheMode(int mode);
@@ -174,6 +177,9 @@ private:
     friend class ExternalCatalogThumbnailPlanner;
     friend class ExternalDirectoryPreviews;
     ExternalDirectoryPreviews *_directoryPreviews = nullptr;
+    QSharedPointer<DirectoryPreviewCache> _directoryPreviewCache;
+    QHash<QString, DirectoryPreviewState> _incomingDirectoryStates;
+    void prepareDirectoryPreviewStates(const QVariantList &values);
     bool _previewReadsSuspended = false;
 
     struct Entry {
@@ -183,6 +189,8 @@ private:
         QString name;
         ImageSourceDescriptor source;
         DirectorySourceDescriptor directorySource;
+        DirectoryPreviewState directoryPreviewState = DirectoryPreviewState::Unknown;
+        quint64 directoryPreviewRevision = 0;
         QString contentVersion;
         QString localPath;
         bool directory = false;

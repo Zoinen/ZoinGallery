@@ -367,6 +367,9 @@ private slots:
                  static_cast<QAbstractItemModel *>(backend.catalogModel()
                      ->sourceModel()));
         QCOMPARE(backend.previewDirectoryIndex, 3);
+        QCOMPARE(controller.directoryPreviewModelForEntry(QStringLiteral("four")),
+                 controller.directoryPreviewModelAt(3));
+        QCOMPARE(controller.directoryPreviewModelForEntry(QStringLiteral("missing")), nullptr);
     }
 
     void unavailableCapabilitiesDoNotInvokeBackend() {

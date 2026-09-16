@@ -48,7 +48,7 @@ Item {
         readonly property color effectiveIconColor:
             preview.entry.fallbackIconColor
         property url modelIconSource:
-            preview.entry.panelRoot.iconResolver.resolve(
+            !preview.activePresentation ? "" : preview.entry.panelRoot.iconResolver.resolve(
                         preview.entry.iconKey, preview.entry.iconPath,
                         preview.entry.largePreviewMode,
                         preview.entry.isFolder,
@@ -62,7 +62,7 @@ Item {
         // window. At that point Qt uses the maximum screen DPR (for example
         // 2 instead of this panel's 1.75) and keeps the oversized raster after
         // attachment. Start the image request only with the owning window.
-        source: !Window.window ? "" : lucideSource
+        source: !preview.activePresentation || !Window.window ? "" : lucideSource
                 ? preview.entry.sourceColorIconAtSize(
                       modelIconSource, width, effectiveIconColor)
                 : (systemFileSource
@@ -114,7 +114,8 @@ Item {
         height: Math.round(parent.height * preview.entry.renderDpr)
                 / preview.entry.renderDpr
         property url source:
-            !preview.entry.masonryMode || preview.entry.masonryGeometryReady
+            preview.activePresentation
+                && (!preview.entry.masonryMode || preview.entry.masonryGeometryReady)
                 ? preview.entry.imageIdUrl : ""
         visible: thumbnail.source.toString() !== ""
                  && !(preview.entry.panelRoot.viewerTransitionActive
@@ -124,6 +125,7 @@ Item {
 
     Loader {
         id: previewContent
+        active: preview.activePresentation
         readonly property bool sourceColorIconNeeded:
             !fallbackIcon.lucideSource
             && thumbnail.source.toString() === ""

@@ -11,6 +11,8 @@ BrickItem {
     property var model
     // Installed by the layout after committing the whole metadata-ready row.
     property bool masonryGeometryReady: false
+    // Cleared only during synchronous photo-to-folder delegate reassignment.
+    property bool visualGeometryReady: true
     readonly property Item thumbnailItem: sharedPreview.thumbnailItem
     readonly property Item previewContainerItem: sharedPreview
     readonly property real paintedContentHeight:
@@ -28,11 +30,15 @@ BrickItem {
         : (panelRoot.controllerReady
            ? panelRoot.controller.entryNameAt(sourceIndex) : "")
     readonly property bool folderPreviewRequested:
-        (masonryMode || gridMode || iconsMode) && panelRoot.controllerReady
+        visualGeometryReady && (masonryMode || gridMode || iconsMode) && panelRoot.controllerReady
         && panelRoot.controller.directoryPreviewEnabled
-        && Boolean(model && model.folderView)
+        && (visualModel.folderPreviewState === 2 || Boolean(model && model.folderView))
     readonly property bool folderPreviewActive:
         folderPreviewRequested && Boolean(folderLoader.item && folderLoader.item.hasUsablePreview)
+    onFolderPreviewActiveChanged: if (panelRoot.benchmarkTracingEnabled) panelRoot.traceBenchmarkStage("directory.appearance.changed", {
+        "entryId": entryId, "row": viewIndex, "active": folderPreviewActive,
+        "requested": folderPreviewRequested, "facadeReady": Boolean(model)
+    })
     readonly property real renderDpr:
         Math.max(0.01, Number(panelRoot.devicePixelRatio) || 1)
     readonly property point iconSceneOrigin: {
@@ -193,12 +199,15 @@ BrickItem {
         id: sharedPreview
         entry: entry
         shaderThumbnail: entry.masonryMode || entry.gridMode
-        activePresentation: true
+        activePresentation: entry.visualGeometryReady && (!entry.folderPreviewRequested
+            || entry.visualModel.folderPreviewState !== 2)
         z: 1
     }
 
     Loader {
         id: modeVisual
+        active: entry.visualGeometryReady && !(entry.folderPreviewRequested
+            && (entry.visualModel.folderPreviewState === 2 || entry.folderPreviewActive))
         visible: !entry.folderPreviewActive
         anchors.fill: parent
         asynchronous: false
@@ -220,9 +229,14 @@ BrickItem {
 
     Loader {
         id: folderLoader
+        // This small shell follows the existing bounded delegate pool. Its
+        // image grid has a separate lifetime inside GalleryFolderPreview.
+        property bool frameCreated: false
         anchors.fill: parent
         z: 2
-        active: entry.folderPreviewRequested
+        active: entry.folderPreviewRequested || frameCreated
+        visible: entry.folderPreviewRequested
+        onLoaded: frameCreated = true
         sourceComponent: Component {
             GalleryFolderPreview { entry: entry }
         }

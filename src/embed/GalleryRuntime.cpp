@@ -1,6 +1,7 @@
 #include <ZoinGallery/GalleryRuntime.h>
 #include <ZoinGallery/GalleryPreferences.h>
 #include "ExternalCatalogModel.h"
+#include "DirectoryPreviewScheduler.h"
 
 #include <ZoinGallery/GallerySession.h>
 #include <ZoinGallery/GalleryCatalogModel.h>
@@ -71,6 +72,8 @@ public:
     QSharedPointer<ThumbnailMemoryCache> thumbnailCache;
     QSharedPointer<ImageSourceProvider> imageSourceProvider;
     QSharedPointer<QThreadPool> directoryPool = QSharedPointer<QThreadPool>::create();
+    QSharedPointer<DirectoryPreviewCache> directoryCache = QSharedPointer<DirectoryPreviewCache>::create();
+    QSharedPointer<DirectoryPreviewScheduler> directoryScheduler = QSharedPointer<DirectoryPreviewScheduler>::create(directoryPool);
     DecodeManager *decodeManager = nullptr;
     GalleryPreferences *preferences = nullptr;
     QmlAsyncImageProvider *asyncProvider = nullptr; // owned by QQmlEngine
@@ -204,11 +207,13 @@ GalleryRuntime::GalleryRuntime(
                 model->setDirectoryCacheMode(d->preferences->values().value("folderMode").toInt());
     });
     connect(d->preferences, &GalleryPreferences::clearSnapshotsRequested, this, [this] {
+        d->directoryCache->clear();
         for (const auto &session : d->sessions) if (session)
             if (auto *model = qobject_cast<ExternalCatalogModel *>(session->model()))
                 model->clearDirectoryPreviews();
     });
     connect(d->preferences, &GalleryPreferences::pixelsInvalidated, this, [this] {
+        d->directoryCache->clear();
         d->thumbnailCache->clear();
         for (const auto &session : d->sessions) if (session)
             if (auto *model = qobject_cast<ExternalCatalogModel *>(session->model()))
@@ -265,7 +270,8 @@ GallerySession *GalleryRuntime::createExternalSession(
         d->options.viewerNativeCacheByteBudget,
         parent ? parent : this);
     d->sessions.append(session);
-    session->configureDirectoryPreviews(d->options.directoryPreviewProvider, d->directoryPool);
+    session->configureDirectoryPreviews(d->options.directoryPreviewProvider, d->directoryPool,
+        d->directoryCache, d->directoryScheduler);
     if (d->options.persistentCache)
         if (auto *model = qobject_cast<ExternalCatalogModel *>(session->model()))
             model->setDirectoryCacheMode(d->preferences->values().value("folderMode").toInt());

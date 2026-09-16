@@ -273,6 +273,144 @@ private slots:
         QTest::qWait(40);
     }
 
+    void folderPreviewKnownAppearanceInFirstFrame() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("photo.png");
+        QImage image(80, 60, QImage::Format_RGB32);
+        image.fill(Qt::green);
+        QVERIFY(image.save(path));
+        QQuickView view;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->imagePath = path;
+        provider->names = {"photo.png"};
+        const auto unblock = qScopeGuard([&] { provider->block = false; });
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("folder-first-frame");
+        QVariantList folders;
+        for (int i = 0; i < 38; ++i) folders.append(previewFolder(i));
+        QVERIFY(session->applyExternalCatalog(folders, 1, {{"currentPath", "/year"}}));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "firstFrameSession"));
+        QVERIFY(panel);
+        panel->setSize({1400, 1200});
+        view.resize(1400, 1200);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("listView", false);
+        const auto appearanceCount = [&] {
+            int count = 0;
+            for (int row = 0; row < 38; ++row) {
+                auto *preview = findVisualItem(panel,
+                    QStringLiteral("galleryFolderPreview-%1").arg(row));
+                if (preview && preview->isVisible()
+                    && preview->property("hasUsablePreview").toBool()) ++count;
+            }
+            return count;
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(appearanceCount(), 38, 10000);
+        QTest::qWait(100);
+        QVERIFY(session->applyExternalCatalog({}, 2, {{"currentPath", "/other"}}));
+        QTest::qWait(50);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        provider->block = true;
+        int firstFrameCount = -1;
+        int firstFrameFacades = -1;
+        qint64 firstFrameNs = 0;
+        QElapsedTimer firstFrameTimer;
+        QList<qint64> firstFrameTimes;
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        const auto connection = connect(&view, &QQuickWindow::beforeSynchronizing,
+            &view, [&] {
+                if (firstFrameCount >= 0 || layout->count() != 38) return;
+                firstFrameNs = firstFrameTimer.nsecsElapsed();
+                firstFrameCount = appearanceCount();
+                firstFrameFacades = 0;
+                for (int row = 0; row < 38; ++row) {
+                    auto *item = layout->itemForIndex(row);
+                    if (item && item->property("model").value<QObject *>())
+                        ++firstFrameFacades;
+                }
+            }, Qt::DirectConnection);
+        const auto disconnectFrame = qScopeGuard([&] { disconnect(connection); });
+        for (int iteration = 0; iteration < 20; ++iteration) {
+            firstFrameCount = firstFrameFacades = -1;
+            firstFrameTimer.start();
+            QVERIFY(session->applyExternalCatalog(folders, iteration * 2 + 3, {{"currentPath", "/year"}}));
+            view.update();
+            QTRY_VERIFY_WITH_TIMEOUT(firstFrameCount >= 0, 2000);
+            qInfo() << "first frame" << iteration << ": folder appearances" << firstFrameCount
+                    << "of 38; ImageFile facades" << firstFrameFacades << "ns" << firstFrameNs;
+            QCOMPARE(firstFrameFacades, 0);
+            QCOMPARE(firstFrameCount, 38);
+            firstFrameTimes.append(firstFrameNs);
+            QVERIFY(session->applyExternalCatalog({}, iteration * 2 + 4, {{"currentPath", "/other"}}));
+            QTest::qWait(30);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+        std::sort(firstFrameTimes.begin(), firstFrameTimes.end());
+        qInfo() << "38-folder first frame p95 ns" << firstFrameTimes[18];
+        QVERIFY(firstFrameTimes[18] <= 50000000);
+    }
+
+    void folderPreviewReusesLightFrameAcrossImageNavigation() {
+        QTemporaryDir dir;
+        const QString path = dir.filePath("photo.png");
+        QImage image(80, 60, QImage::Format_RGB32);
+        image.fill(Qt::green);
+        QVERIFY(image.save(path));
+        QQuickView view;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->imagePath = path;
+        provider->names = {"photo.png"};
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("folder-recycled-frame");
+        QVERIFY(session->applyExternalCatalog({previewFolder(0)}, 1, {{"currentPath", "/folders"}}));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "recycledFrameSession"));
+        QVERIFY(panel);
+        panel->setProperty("listView", false);
+        QQuickItem *preview = nullptr;
+        QTRY_VERIFY((preview = findVisualItem(panel, "galleryFolderPreview-0")));
+        QPointer<QQuickItem> retainedFrame = preview;
+        QPointer<MasonryLayout> grid;
+        QTRY_VERIFY((grid = preview->findChild<MasonryLayout *>("folderPreviewGrid")));
+        QVERIFY(session->applyExternalCatalog({catalogEntry(0, path)}, 2, {{"currentPath", "/photos"}}));
+        QTest::qWait(60);
+        QVERIFY2(retainedFrame, "Recycled delegates must retain their lightweight folder frame");
+        QVERIFY(!retainedFrame->isVisible());
+        QTRY_VERIFY(!grid);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        auto *tile = layout->itemForIndex(0);
+        QVERIFY(tile);
+        view.engine()->rootContext()->setContextProperty("recycledFolderTile", tile);
+        QQmlComponent observerComponent(view.engine());
+        observerComponent.setData(R"QML(
+            import QtQuick
+            QtObject {
+                id: observer
+                property size activatedSize: Qt.size(0, 0)
+                property Connections connection: Connections {
+                    target: recycledFolderTile
+                    function onFolderPreviewActiveChanged() {
+                        if (recycledFolderTile.folderPreviewActive)
+                            observer.activatedSize = Qt.size(recycledFolderTile.width, recycledFolderTile.height)
+                    }
+                }
+            }
+        )QML", QUrl("inline:FolderActivationObserver.qml"));
+        QScopedPointer<QObject> observer(observerComponent.create());
+        QVERIFY2(observer, qPrintable(observerComponent.errorString()));
+        QVERIFY(session->applyExternalCatalog({previewFolder(0, 3)}, 3, {{"currentPath", "/folders"}}));
+        QTRY_VERIFY(retainedFrame->isVisible());
+        QCOMPARE(findVisualItem(panel, "galleryFolderPreview-0"), retainedFrame.data());
+        QCOMPARE(observer->property("activatedSize").toSizeF(), tile->size());
+    }
+
     void folderPreviewRepeatedNavigation() {
         QTemporaryDir dir;
         const QString path = dir.filePath("photo.png");
@@ -355,8 +493,8 @@ private slots:
             for (int row = 0; row < 6; ++row) {
                 QQuickItem *preview = nullptr;
                 QTRY_VERIFY((preview = findVisualItem(panel, QStringLiteral("galleryFolderPreview-%1").arg(row))));
-                auto *grid = preview->findChild<MasonryLayout *>("folderPreviewGrid");
-                QVERIFY(grid);
+                MasonryLayout *grid = nullptr;
+                QTRY_VERIFY((grid = preview->findChild<MasonryLayout *>("folderPreviewGrid")));
                 const int expected = grid->width() < 80 ? 1 : grid->width() < 150 ? 4 : grid->width() < 300 ? 9 : 16;
                 const auto readyCount = [&]() {
                     int ready = 0;
@@ -418,8 +556,8 @@ private slots:
         panel->setProperty("devicePixelRatio", view.devicePixelRatio());
         QQuickItem *preview = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT((preview = findVisualItem(panel, "galleryFolderPreview-0")), 5000);
-        auto *grid = preview->findChild<MasonryLayout *>("folderPreviewGrid");
-        QVERIFY(grid);
+        MasonryLayout *grid = nullptr;
+        QTRY_VERIFY((grid = preview->findChild<MasonryLayout *>("folderPreviewGrid")));
         QVERIFY(grid->property("containedPreview").toBool());
         QTRY_COMPARE(grid->count(), 16);
         QTest::qWait(200);
@@ -450,8 +588,8 @@ private slots:
             QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - origin, QPointF(0, 1));
         };
         for (int width : {79, 80, 149, 150, 299, 300}) {
-            grid->setWidth(width);
-            grid->setHeight(width);
+            // The lazy Loader owns the grid's final geometry.
+            grid->parentItem()->setSize({qreal(width), qreal(width)});
             grid->setTargetHeight(width);
             const int cells = width < 80 ? 1 : width < 150 ? 4 : width < 300 ? 9 : 16;
             QTest::qWait(150);
@@ -487,7 +625,7 @@ private slots:
             QVERIFY(qAbs(frame->height()*dpr - qRound(frame->height()*dpr)) < 0.01);
             QCOMPARE(frame->property("color").value<QColor>(), QColor("#397db1"));
         }
-        grid->setSize(normalGridSize);
+        grid->parentItem()->setSize(normalGridSize);
         grid->setTargetHeight(qRound(normalGridSize.height()));
         QTest::qWait(300);
         QVERIFY(grid->mapToItem(preview, QPointF(0, grid->height())).y()
@@ -501,7 +639,8 @@ private slots:
         for (const auto &nextMode : {"details", "grid", "icons", "masonry"}) {
             panel->setProperty("presentationMode", nextMode);
             if (QString::fromLatin1(nextMode) == "details") {
-                QTRY_VERIFY(!findVisualItem(panel, "galleryFolderPreview-0"));
+                QTRY_VERIFY(!findVisualItem(panel, "galleryFolderPreview-0")
+                    || !findVisualItem(panel, "galleryFolderPreview-0")->isVisible());
             } else {
                 QTRY_VERIFY((preview = findVisualItem(panel, "galleryFolderPreview-0")));
                 QTRY_VERIFY(preview->property("hasUsablePreview").toBool());

@@ -493,6 +493,216 @@ private slots:
         PersistentDerivedImageCache::setByteBudget(512LL * 1024 * 1024);
     }
 
+    void directorySnapshotCacheBudgetAndBatch() {
+        using namespace ZoinGallery;
+        DirectoryPreviewCache cache(4096);
+        DirectoryPreviewSnapshot sample;
+        sample.state = DirectoryPreviewState::HasImages;
+        sample.children.append({"photo.png", "source", "version", 10, 20,
+            {180, 120}, {90, 60}, "transform"});
+        for (int i = 0; i < 100; ++i) cache.store(QString::number(i), sample);
+        QVERIFY(cache.retainedBytes() <= cache.byteBudget());
+        QCOMPARE(cache.snapshot("0").state, DirectoryPreviewState::Unknown);
+        QCOMPARE(cache.snapshot("99").children[0].originalSize, QSize(180, 120));
+        QCOMPARE(cache.snapshot("99").children[0].thumbnailSize, QSize(90, 60));
+        cache.store("empty", {DirectoryPreviewState::Empty, {}});
+        QCOMPARE(cache.states({"empty", "99", "missing"}).size(), 2);
+        QCOMPARE(cache.snapshot("empty").state, DirectoryPreviewState::Empty);
+        cache.clear();
+        QCOMPARE(cache.count(), 0);
+        QCOMPARE(cache.retainedBytes(), 0);
+
+        DirectoryPreviewCache runtimeCache;
+        QCOMPARE(runtimeCache.byteBudget(), 8LL * 1024 * 1024);
+        QStringList keys;
+        for (int i = 0; i < 38; ++i) {
+            keys.append(QString::number(i));
+            runtimeCache.store(keys.last(), sample);
+        }
+        QList<qint64> elapsed;
+        for (int i = 0; i < 20; ++i) {
+            QElapsedTimer timer;
+            timer.start();
+            const auto states = runtimeCache.states(keys);
+            elapsed.append(timer.nsecsElapsed());
+            QCOMPARE(states.size(), 38);
+        }
+        std::sort(elapsed.begin(), elapsed.end());
+        qInfo() << "38-folder RAM batch p95 ns" << elapsed[18];
+        QVERIFY(elapsed[18] <= 2000000);
+    }
+
+    void directorySnapshotsSurviveEvictionAndShareAcrossPanels() {
+        QQmlEngine engine;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"photo.jpg"};
+        const auto unblock = qScopeGuard([&] { provider->block = false; });
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("directory-snapshot-owner");
+        QVariantList folders;
+        QList<int> rows;
+        for (int i = 0; i < 38; ++i) { folders.append(previewFolder(i)); rows.append(i); }
+        QVERIFY(session->applyExternalCatalog(folders, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        model->requestDirectoryPreviews(rows);
+        const auto ready = [&] {
+            int count = 0;
+            for (int row : rows) count += model->directoryPreviewAvailable(row);
+            return count;
+        };
+        QTRY_COMPARE(ready(), 38);
+        QPointer<QAbstractItemModel> evicted = model->directoryPreviewModel(0);
+        QVERIFY(evicted);
+        QVERIFY(session->applyExternalCatalog({}, 2));
+        QTRY_COMPARE(provider->leases.load(), 0);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(!evicted);
+        provider->block = true;
+        const int oldRequests = provider->enumerations.load();
+        QVERIFY(session->applyExternalCatalog(folders, 3));
+        // No demand, ImageFile creation, disk or VFS is needed to restore any
+        // row, including the six whose heavy models were evicted.
+        QCOMPARE(ready(), 38);
+        QCOMPARE(provider->enumerations.load(), oldRequests);
+        auto *other = runtime->createExternalSession("directory-snapshot-other");
+        QVERIFY(other->applyExternalCatalog(folders, 1));
+        auto *otherModel = qobject_cast<ZoinGallery::ExternalCatalogModel *>(other->model());
+        for (int row : rows) {
+            QCOMPARE(otherModel->data(otherModel->index(row), ZoinGallery::ExternalCatalogModel::VisualSnapshotRole)
+                .toMap().value("folderPreviewState").toInt(), 2);
+        }
+        auto replacement = previewFolder(0, 4);
+        auto descriptor = replacement["directorySource"].toMap();
+        descriptor["sourceKey"] = "another-vfs-session/folder-0";
+        replacement["directorySource"] = descriptor;
+        QVERIFY(other->applyExternalCatalog({replacement}, 2));
+        QVERIFY(!otherModel->directoryPreviewAvailable(0));
+        model->requestDirectoryPreviews(rows);
+        QTRY_COMPARE(provider->enumerations.load(), oldRequests + 2);
+        QTest::qWait(60);
+        QCOMPARE(provider->enumerations.load(), oldRequests + 2);
+        session->shutdown();
+        QTRY_COMPARE(provider->leases.load(), 0);
+        QVERIFY(other->applyExternalCatalog(folders, 3));
+        QVERIFY(otherModel->directoryPreviewAvailable(0));
+        otherModel->clearDirectoryPreviews();
+        QVERIFY(!otherModel->directoryPreviewAvailable(0));
+    }
+
+    void directorySnapshotRestoresGeometryAndPixelsAfterEviction() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("photo.png");
+        QImage source(180, 120, QImage::Format_RGB32);
+        source.fill(Qt::blue);
+        QVERIFY(source.save(path));
+        QQmlEngine engine;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"photo.png"};
+        provider->imagePath = path;
+        const auto unblock = qScopeGuard([&] { provider->block = false; });
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("directory-evicted-pixels");
+        QVERIFY(session->applyExternalCatalog({previewFolder(0)}, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        model->requestDirectoryPreviews({0});
+        QTRY_VERIFY(model->directoryPreviewAvailable(0));
+        auto *children = qobject_cast<ZoinGallery::ExternalCatalogModel *>(model->directoryPreviewModel(0));
+        children->requestImageMetadata({0}, true);
+        QTRY_COMPARE(children->imageOriginalSizeAt(0), source.size());
+        auto *first = children->data(children->index(0), FileListModel::ImageFileRole).value<ImageFile *>();
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QSignalSpy decoded(decoder, &DecodeManager::imageReady);
+        children->decodeImages({{.info = first->info(), .targetSize = QSize(90, 60)}});
+        QTRY_VERIFY(!first->imageIdUrl().isEmpty());
+        const auto url = first->imageIdUrl();
+        const int decodedCount = decoded.size();
+        QPointer<QAbstractItemModel> oldChildren = children;
+        provider->block = true;
+        QVariantList evictionCatalog;
+        for (int i = 0; i < 40; ++i) {
+            auto folder = previewFolder(i + 100);
+            folder["index"] = i;
+            evictionCatalog.append(folder);
+        }
+        QVERIFY(session->applyExternalCatalog(evictionCatalog, 2));
+        for (int i = 0; i < 40; ++i) model->requestDirectoryPreviews({i});
+        QVERIFY(session->applyExternalCatalog({}, 3));
+        QTest::qWait(50);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(!oldChildren);
+        QTRY_COMPARE(provider->leases.load(), 0);
+        QVERIFY(session->applyExternalCatalog({previewFolder(0, 4)}, 4));
+        QVERIFY(model->directoryPreviewAvailable(0));
+        model->requestDirectoryPreviews({0});
+        children = qobject_cast<ZoinGallery::ExternalCatalogModel *>(model->directoryPreviewModel(0));
+        QVERIFY(children);
+        QCOMPARE(children->imageOriginalSizeAt(0), source.size());
+        first = children->data(children->index(0), FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(!first->info().source.isValid());
+        children->decodeImages({{.info = first->info(), .targetSize = QSize(90, 60)}});
+        QCOMPARE(first->imageIdUrl(), url);
+        QTest::qWait(60);
+        QCOMPARE(decoded.size(), decodedCount);
+        // Revalidation replaces authority while preserving matching objects,
+        // geometry and already displayed pixels.
+        provider->block = false;
+        QTRY_COMPARE(provider->leases.load(), 1);
+        QCOMPARE(children->data(children->index(0), FileListModel::ImageFileRole).value<ImageFile *>(), first);
+        QCOMPARE(first->fullSize(), source.size());
+        QCOMPARE(first->imageIdUrl(), url);
+        QCOMPARE(decoded.size(), decodedCount);
+    }
+
+    void directoryLateRepliesKeepSlotsAndCannotPopulateSnapshots() {
+        QQmlEngine engine;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"photo.jpg"};
+        provider->blockResolve = true;
+        const auto unblock = qScopeGuard([&] { provider->blockResolve = false; });
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("directory-late-reply");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(session->applyExternalCatalog({previewFolder(0)}, 1));
+        model->requestDirectoryPreviews({0});
+        QTRY_COMPARE(provider->resolutions.load(), 1);
+        auto replacement = previewFolder(0, 2);
+        auto descriptor = replacement["directorySource"].toMap();
+        descriptor["sourceKey"] = "replacement-source";
+        replacement["directorySource"] = descriptor;
+        QVERIFY(session->applyExternalCatalog({replacement}, 2));
+        model->requestDirectoryPreviews({0});
+        QTRY_COMPARE(provider->resolutions.load(), 2);
+        QVERIFY(session->applyExternalCatalog({}, 3));
+        auto *other = runtime->createExternalSession("directory-after-late-reply");
+        QVERIFY(other->applyExternalCatalog({previewFolder(1)}, 1));
+        auto *otherModel = qobject_cast<ZoinGallery::ExternalCatalogModel *>(other->model());
+        otherModel->requestDirectoryPreviews({0});
+        QTest::qWait(60);
+        QCOMPARE(provider->enumerations.load(), 2);
+        QVERIFY(!otherModel->directoryPreviewAvailable(0));
+        provider->blockResolve = false;
+        QTRY_VERIFY(otherModel->directoryPreviewAvailable(0));
+        QTRY_COMPARE(provider->leases.load(), 1);
+        QVERIFY(session->applyExternalCatalog({previewFolder(0)}, 4));
+        QVERIFY(!model->directoryPreviewAvailable(0));
+        QVERIFY(session->applyExternalCatalog({replacement}, 5));
+        QVERIFY(!model->directoryPreviewAvailable(0));
+        delete session;
+        QVERIFY(otherModel->directoryPreviewAvailable(0));
+        QCOMPARE(provider->leases.load(), 1);
+        other->shutdown();
+        QTRY_COMPARE(provider->leases.load(), 0);
+    }
+
     void directoryPreviewSurvivesNavigationWithoutAuthority() {
         QTemporaryDir directory;
         QImage source(180, 120, QImage::Format_RGB32);

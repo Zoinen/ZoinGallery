@@ -42,6 +42,11 @@ public:
         // against the Fit budget so it receives the same retention guarantee
         // as a scaled Fit frame.
         bool fitPrepared = false;
+        // True only when this full-size frame came from the source decode,
+        // rather than a persistent Fit artifact or embedded preview. Native
+        // presentation may use a cached Fit frame as a fallback, but it must
+        // not label that frame authoritative or suppress the source decode.
+        bool nativePrepared = false;
     };
 
     struct StoredImage {
@@ -129,7 +134,7 @@ private:
     static qint64 entryByteSize(const Entry &entry);
     static bool usesFitBudget(const Entry &entry, bool fullSize);
     bool needsDecode(const ImageInfo &info, const QSize &targetSize,
-                     bool fullSize) const;
+                     bool fullSize, bool requireNativeSource) const;
     void recordPlannedTargetLocked(const ImageDecodeRequest &request);
     QSize latestPlannedTargetLocked(
         const ImageDecodeRequest &request) const;

@@ -533,15 +533,14 @@ private slots:
         QVERIFY(swipeNeighborShader);
         QCOMPARE(swipeNeighborShader->parentItem(),
                  swipeNeighborImage->parentItem());
-        QCOMPARE(swipeNeighborShader->property("source").value<QObject *>(),
+        QCOMPARE(swipeNeighborShader->property("imageSource").value<QObject *>(),
                  static_cast<QObject *>(swipeNeighborImage));
         QVERIFY(swipeNeighborShader->isVisible());
         QCOMPARE(swipeNeighborShader->x(), swipeNeighborImage->x());
         QCOMPARE(swipeNeighborShader->y(), swipeNeighborImage->y());
         QCOMPARE(swipeNeighborShader->width(), swipeNeighborImage->width());
         QCOMPARE(swipeNeighborShader->height(), swipeNeighborImage->height());
-        QCOMPARE(swipeNeighborShader->property("sharpenAmount").toReal(),
-                 1.5);
+        QVERIFY(!swipeNeighborShader->property("sharpenAmount").isValid());
         const QSizeF expectedTransitionViewportSize(
             swipeNeighborShader->width() * viewerDpr,
             swipeNeighborShader->height() * viewerDpr);
@@ -549,7 +548,19 @@ private slots:
                  expectedTransitionViewportSize);
         QCOMPARE(swipeNeighborShader->property("fragmentShader").toUrl(),
                  QUrl(QStringLiteral(
-                     "qrc:/ZoinGallery/resources/shader.frag.qsb")));
+                     "qrc:/ZoinGallery/resources/viewer_resample.frag.qsb")));
+        for (QQuickItem *leaf : {swipeNeighborImage, swipeNeighborShader}) {
+            const QPointF origin = leaf->mapToScene(QPointF());
+            const auto aligned = [viewerDpr](qreal value) {
+                return qAbs(value * viewerDpr - qRound(value * viewerDpr)) < 0.001;
+            };
+            QVERIFY(aligned(origin.x()));
+            QVERIFY(aligned(origin.y()));
+            QVERIFY(aligned(leaf->width()));
+            QVERIFY(aligned(leaf->height()));
+            QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        }
         QCOMPARE(layout->currentIndex(), swipeStartIndex);
 
         // Commit directly instead of feeding the deliberately high-velocity

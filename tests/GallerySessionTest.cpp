@@ -1123,13 +1123,13 @@ private slots:
         QVERIFY(directory.isValid());
         const QString backing = directory.filePath(
             QStringLiteral("viewer-barrier.png"));
-        QImage source(320, 240, QImage::Format_RGBA8888);
+        QImage source(800, 600, QImage::Format_RGBA8888);
         source.fill(Qt::darkBlue);
         QVERIFY(source.save(backing, "PNG"));
 
         constexpr int CatalogSize = 6;
         const QString blockedSourceKey =
-            QStringLiteral("network/barrier/%1").arg(CatalogSize - 1);
+            QStringLiteral("network/barrier/1");
         auto provider = QSharedPointer<ViewerProbeBarrierProvider>::create(
             backing, blockedSourceKey);
         QQmlEngine engine;
@@ -1175,6 +1175,9 @@ private slots:
         QVERIFY(session->applyExternalCatalog(catalog, 1));
         QVERIFY(session->applyExternalState(
             QStringLiteral("remote-0"), 0, {}, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(model);
 
         session->ensurePreviews();
         QTRY_VERIFY_WITH_TIMEOUT(
@@ -1183,7 +1186,7 @@ private slots:
         QCOMPARE(provider->completedProbes.load(), CatalogSize - 1);
 
         session->setViewerOpen(true);
-        session->requestViewer(320, 240);
+        session->requestViewer(160, 120);
         QTRY_COMPARE_WITH_TIMEOUT(provider->materializations.load(), 1, 5000);
         QTest::qWait(300);
         // Explicit current may bypass pass 1 after its own probe. Neighbor
@@ -1191,10 +1194,23 @@ private slots:
         // catalog probe is still outstanding.
         QCOMPARE(provider->materializations.load(), 1);
 
+        session->requestViewer(0, 0);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            model->viewerNativeFrameCount(), qsizetype(1), 5000);
+        QTest::qWait(500);
+        // The blocked neighbor still prevents native prefetch, but it must not
+        // hold the selected image's 100% texture behind the same barrier.
+        QCOMPARE(provider->completedProbes.load(), CatalogSize - 1);
+        QCOMPARE(model->viewerNativeFrameCount(), qsizetype(1));
+
         provider->releaseBlockedProbe.store(true,
                                              std::memory_order_release);
         QTRY_COMPARE_WITH_TIMEOUT(
             provider->completedProbes.load(), CatalogSize, 5000);
+        QTest::qWait(250);
+        // Metadata completion replays the retained viewer plan. It must stay
+        // current-only until the Fit window has completed its 450 ms dwell.
+        QCOMPARE(model->viewerNativeFrameCount(), qsizetype(1));
         QTRY_COMPARE_WITH_TIMEOUT(
             provider->materializations.load(), CatalogSize, 15000);
 
@@ -1603,10 +1619,11 @@ private slots:
         QCOMPARE(provider->materializations.load(), CatalogSize);
 
         session->requestViewer(0, 0);
-        QTest::qWait(250);
-        // Native work has a separate dwell after the current +/-2 Fit window
-        // is ready. A brief native-mode request must remain Fit-only.
-        QCOMPARE(model->viewerNativeFrameCount(), 0);
+        // The actively displayed image must enter its native decode immediately:
+        // stretching the prepared Fit tier at 100% leaves the viewer visibly
+        // soft. Neighbor native prefetch still waits for the separate dwell.
+        QTRY_VERIFY_WITH_TIMEOUT(
+            model->viewerNativeFrameCount() >= 1, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(
             model->viewerNativeFrameCount() == 5, 20000);
         // Fit and Native reuse the same bounded strong leases: no second
@@ -4505,9 +4522,11 @@ private slots:
             }
             return rows;
         };
-        // Native pixels are deliberately limited to current +/-2; the wider
-        // 16-item navigation window remains prepared only at the Fit tier.
-        QTRY_COMPARE_WITH_TIMEOUT(nativeRows().size(), 5, 10000);
+        // Without a prepared Fit viewport there is no neighbor dwell to
+        // satisfy. Native work remains current-only instead of letting a
+        // retained metadata plan bypass that admission rule.
+        QTRY_COMPARE_WITH_TIMEOUT(nativeRows().size(), 1, 10000);
+        QVERIFY(nativeRows().contains(centerRow));
         QCOMPARE(session->viewerSource().toString().startsWith(
                      QStringLiteral("image://zoingallery-async/")),
                  true);
@@ -4528,6 +4547,7 @@ private slots:
             session->viewerSourceAt(outsideRow).toString().startsWith(
                 QStringLiteral("image://zoingallery-async/")),
             5000);
+        QTRY_COMPARE_WITH_TIMEOUT(nativeRows().size(), 2, 5000);
 
         runtime->shutdown();
     }

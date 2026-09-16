@@ -539,11 +539,13 @@ void ExternalCatalogModel::scheduleViewerDecode() {
     const bool nativeRequest = _viewerViewportSize.isEmpty();
     const int prefetchCount = nativeRequest ? 5 : 16;
     _viewerPlans.insert(
-        _viewerEntryId, {_viewerViewportSize, prefetchCount});
+        _viewerEntryId,
+        {_viewerViewportSize, nativeRequest ? 1 : prefetchCount});
     if (nativeRequest) {
         _deferredNativeEntryId = _viewerEntryId;
         scheduleViewerDecodeAt(
             row, _lastViewerFitViewportSize, prefetchCount);
+        scheduleViewerDecodeAt(row, _viewerViewportSize, 1);
         tryScheduleDeferredNative();
         return;
     }
@@ -614,8 +616,8 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
                 sourceEntry.contentVersion;
         }
         // Fit artifacts are safe to persist by opaque source revision. Native
-        // frames remain RAM-only and are produced only for the deferred
-        // current +/-2 window.
+        // frames remain RAM-only: the active frame is immediate, while its
+        // current +/-2 neighbors are admitted by the deferred window.
         request.checkCache = request.fitToViewerRequest;
         request.expandToCacheResolution = false;
         request.storeInPersistentCache = request.fitToViewerRequest;

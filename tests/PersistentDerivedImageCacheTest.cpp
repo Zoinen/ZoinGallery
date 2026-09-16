@@ -6,6 +6,8 @@
 #include "StorageLocations.h"
 
 #include <QFileInfo>
+#include <QColorSpace>
+#include <QDataStream>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -124,6 +126,85 @@ class PersistentDerivedImageCacheTest final : public QObject {
     QTemporaryDir cacheRoot;
 
 private slots:
+    void oldViewerFilterCacheIsNotReused_data() {
+        QTest::addColumn<QString>("oldTransform");
+        QTest::newRow("area") << QStringLiteral("viewer-fit-v1");
+        QTest::newRow("encoded-pyramid-v1") << QStringLiteral("viewer-fit-bc-pyramid-v1");
+        QTest::newRow("encoded-pyramid-v2") << QStringLiteral("viewer-fit-bc-pyramid-v2");
+        QTest::newRow("fast-idct-pyramid-v3")
+            << QStringLiteral("viewer-fit-bc-pyramid-v3-linear-half-dither");
+    }
+
+    void oldViewerFilterCacheIsNotReused() {
+        QFETCH(QString, oldTransform);
+        auto request = requestFor(QStringLiteral("strong"));
+        request.viewerRequest = true;
+        request.fitToViewerRequest = true;
+        const QByteArray prepared = PersistentImageCache::createImageForCache(
+            request, testImage(request.targetSize));
+        QVERIFY(!prepared.isEmpty());
+
+        // Recreate the previous cache entry with unchanged source/tier and
+        // encoded image. Only the transform differs from the current entry.
+        QDataStream input(prepared);
+        input.setVersion(QDataStream::Qt_6_0);
+        quint32 magic = 0;
+        quint16 version = 0;
+        QString sourceKey, contentVersion, authority, transform, decoder;
+        qint64 sourceSize = 0;
+        quint8 artifact = 0;
+        QSize targetTier, pixelSize;
+        QByteArray encoded;
+        input >> magic >> version >> sourceKey >> contentVersion >> authority
+              >> sourceSize >> artifact >> targetTier >> transform >> decoder
+              >> pixelSize >> encoded;
+        QCOMPARE(input.status(), QDataStream::Ok);
+        QVERIFY(transform != oldTransform);
+        QByteArray oldEntry;
+        QDataStream output(&oldEntry, QIODevice::WriteOnly);
+        output.setVersion(QDataStream::Qt_6_0);
+        output << magic << version << sourceKey << contentVersion << authority
+               << sourceSize << artifact << targetTier
+               << oldTransform << decoder << pixelSize << encoded;
+        PersistentImageCache::storeImage(request.info, oldEntry);
+        QVERIFY(!PersistentImageCache::hasImage(request));
+        QVERIFY(PersistentImageCache::retrieveImage(request).isNull());
+
+        PersistentImageCache::storeImage(request.info, prepared);
+        QVERIFY(PersistentImageCache::hasImage(request));
+        QVERIFY(!PersistentImageCache::retrieveImage(request).isNull());
+    }
+
+    void viewerFitCachePreservesEncodedPixels() {
+        auto request = requestFor(QStringLiteral("strong"));
+        request.viewerRequest = true;
+        request.fitToViewerRequest = true;
+        request.targetSize = QSize(67, 43);
+        QImage image(request.targetSize, QImage::Format_RGBA8888);
+        image.setColorSpace(QColorSpace(QColorSpace::SRgb));
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                // Fine color/dither variations and partially transparent pixels
+                // must survive a persistent Fit-cache round trip unchanged.
+                image.setPixelColor(x, y, QColor((x * 43 + y * 17) % 256,
+                    (x * 7 + y * 59) % 256, (x * 31 + y * 3) % 256,
+                    (x + y) % 5 == 0 ? (x * 11 + y * 19) % 256 : 255));
+            }
+        }
+        persist(request, image);
+        const QImage cached = PersistentImageCache::retrieveImage(request, true)
+                                  .convertToFormat(QImage::Format_RGBA8888);
+        QCOMPARE(cached.size(), image.size());
+        QCOMPARE(cached.colorSpace(), image.colorSpace());
+        int changedPixels = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                changedPixels += cached.pixel(x, y) != image.pixel(x, y);
+            }
+        }
+        QCOMPARE(changedPixels, 0);
+    }
+
     void initTestCase() {
         QVERIFY(ZoinGallery::StorageLocations::configure(
             QStringLiteral("derived-cache-tests")));

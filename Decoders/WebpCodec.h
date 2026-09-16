@@ -16,6 +16,6 @@ struct Features {
 
 Features readFeatures(const QByteArray &data);
 QImage decode(const QByteArray &data, const QSize &targetSize = {});
-QByteArray encode(const QImage &image, float quality);
+QByteArray encode(const QImage &image, float quality, bool lossless = false);
 
 }

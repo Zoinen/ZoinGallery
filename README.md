@@ -74,6 +74,50 @@ ZoinGallery targets.
 installs headers, CMake exports, the QML plugin/import tree, compiled shaders,
 assets, and codec dependencies as `zoingallery/0.1.0`.
 
+### Viewer resampling
+
+The image viewer uses a scale-aware BC cubic filter (`B=-0.4`, `C=0.8`).
+`ViewerResampler` prepares CPU fit frames with normalized separable weights;
+`ViewerResample.qml` uses the same kernel in a GPU shader. Both reduce through
+floor-rounded half-size levels on an exact 2:1 sampling grid before filtering
+the remaining scale. A one-pixel axis stays one pixel. The GPU
+keeps generated levels for the current source during pan and zoom, and selects
+the smallest level that still covers the physical output size. Sampling is
+based on physical pixel derivatives, including the window DPR. One-to-one
+display bypasses the reduction filter. Once a native 100% view has settled on
+the physical pixel grid, the shader fetches one exact source texel per output
+pixel; during pan and zoom it retains continuous linear sampling and snaps only
+after interaction or inertia ends. There is no automatic unsharp mask.
+
+Viewer requests ask decoders for native pixels before preparing a fit frame,
+avoiding scaled-decode shortcuts with a different kernel. Embedded previews
+remain a fallback when the full image cannot be decoded. Gallery
+thumbnails retain their existing decode and rendering paths. Fit-derived cache
+keys include the filter version and use lossless WebP to preserve filtered
+pixels and dither. Thumbnail cache compression is unchanged. Returning from
+native zoom to fit selects a
+ready fit frame consistently; transient crops and navigation neighbors use the
+same viewer shader. Entering native zoom schedules the selected full-size frame
+immediately; the fit-first dwell remains in place for neighboring native
+prefetch, so a blocked neighbor cannot leave the current 100% image stretched
+from its fit preview.
+
+Filtering decodes the sRGB transfer function before combining samples and
+encodes it again after each stage. Intermediate levels use RGBA8 with ordered
+dither. Existing ICC profile conversion and tagging are unchanged. Negative
+cubic lobes are bounded before compositing. The kernel balances sharpness and
+suppression of aliasing; its finite support does not remove every above-Nyquist
+pattern.
+
+Numerical tests cover constant colors, transparency, periodic patterns, native
+decode, and large reductions. QML state tests cover source selection, pyramid
+reuse, interaction continuity, and settled physical-pixel geometry at 175%
+scale. Offscreen GPU texture readbacks verify exact native texels, fractional
+motion sampling, linear-light averaging, transparency, and CPU/GPU agreement at
+23%, 25%, odd source dimensions, and 175% scale. These checks compare pixel
+values without screenshots or human visual inspection; interactive image
+quality and GPU performance still require a separate visual check.
+
 ### Collection layouts
 
 `MasonryLayout` is the compatibility name of the module's virtualized

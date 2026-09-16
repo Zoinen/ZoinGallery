@@ -21,6 +21,9 @@ public:
 
     virtual bool readMetadata(ImageInfo& result) = 0;
     virtual bool readPreviewAndMime(ImageData &result) = 0;
+    // Preview readers for formats without a full-pixel decode path can keep
+    // the original preview-only I/O behavior for viewer requests.
+    virtual bool supportsNativeDecode() const { return true; }
     virtual QImage decode(const QString& mimeType, const QByteArray& data, QSize targetSize) = 0;
 
 protected:

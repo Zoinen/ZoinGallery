@@ -19,6 +19,7 @@ public:
     static bool readImage(ImageData &result);
     static QImage decode(const ImageData &imageData, DecodedImageInfo &decodedInfo);
     static QImage createThumbnail(const QImage &image, QSize dimensions);
+    static QImage createViewerImage(const QImage &image, QSize dimensions);
     // Embedded first-pass probes decode their tiny payload independently of
     // the full-file decoder but must apply the parent image's Exif transform
     // before publishing the provisional frame.

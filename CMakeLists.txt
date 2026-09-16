@@ -109,6 +109,8 @@ set(ZOIN_CORE_SOURCES
     DisplayColorSpace.cpp
     ThumbnailLoader.h
     ThumbnailLoader.cpp
+    ViewerResampler.h
+    ViewerResampler.cpp
     CacheUsageMode.h
     StorageLocations.h
     StorageLocations.cpp
@@ -444,6 +446,26 @@ if(BUILD_TESTING)
     )
     add_test(NAME ViewerImageCacheTest COMMAND ZoinGalleryViewerCacheTests)
 
+    add_executable(ViewerResamplerTests
+        tests/ViewerResamplerTest.cpp
+        ViewerResampler.cpp)
+    target_include_directories(ViewerResamplerTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ViewerResamplerTests PRIVATE
+        Qt${QT_VERSION_MAJOR}::Gui
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME ViewerResamplerTest COMMAND ViewerResamplerTests)
+
+    add_executable(ViewerDecodeSourceTests tests/ViewerDecodeSourceTest.cpp)
+    target_include_directories(ViewerDecodeSourceTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${TURBOJPEG_INCLUDE_DIR})
+    target_link_libraries(ViewerDecodeSourceTests PRIVATE
+        ZoinGallery::Core
+        libjpeg-turbo::libjpeg-turbo
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME ViewerDecodeSourceTest COMMAND ViewerDecodeSourceTests)
+
     add_executable(ZoinGalleryThumbnailMemoryCacheTests
         tests/ThumbnailMemoryCacheTest.cpp)
     target_include_directories(ZoinGalleryThumbnailMemoryCacheTests PRIVATE
@@ -536,6 +558,19 @@ if(BUILD_TESTING)
         COMMAND ZoinGalleryReusableViewerPrimitivesTests)
     set_tests_properties(ReusableViewerPrimitivesTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic")
+
+    add_executable(ViewerResampleGpuTests tests/ViewerResampleGpuTest.cpp)
+    target_compile_definitions(ViewerResampleGpuTests PRIVATE
+        ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    target_include_directories(ViewerResampleGpuTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ViewerResampleGpuTests PRIVATE
+        ZoinGallery::Qml Qt${QT_VERSION_MAJOR}::GuiPrivate
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME ViewerResampleGpuTest COMMAND ViewerResampleGpuTests)
+    set_tests_properties(ViewerResampleGpuTest PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1"
+        LABELS "gpu;numeric")
 
     add_executable(ZoinGalleryEntryHoverTests
         tests/GalleryEntryHoverTest.cpp)
@@ -721,6 +756,7 @@ if(ZOIN_BUILD_BENCHMARKS)
 endif()
 
 set(ZOIN_QML_FILES
+    qml/ViewerResample.qml
     qml/AutoScrollController.qml
     qml/GalleryPanel.qml
     qml/GalleryViewport.qml
@@ -832,6 +868,7 @@ qt_add_shaders(ZoinGalleryQml zoin_gallery_shaders
     PREFIX "/ZoinGallery"
     FILES
         "resources/shader.frag"
+        "resources/viewer_resample.frag"
         "resources/sphere.frag"
         "resources/outline.frag")
 
@@ -934,6 +971,7 @@ foreach(_zoin_qml_entry_point IN ITEMS
     ZoinGallerySessionTests
     ZoinGalleryQmlInteractionTests
     ZoinGalleryReusableViewerPrimitivesTests
+    ViewerResampleGpuTests
     ZoinGalleryEntryHoverTests
     ZoinGalleryPanelGestureTests
     ZoinGalleryMasonryLayoutModesTests

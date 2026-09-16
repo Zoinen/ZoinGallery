@@ -141,7 +141,7 @@ QImage decode(const QByteArray &data, const QSize &targetSize) {
     return image;
 }
 
-QByteArray encode(const QImage &image, float quality) {
+QByteArray encode(const QImage &image, float quality, bool lossless) {
     if (image.isNull()) {
         return {};
     }
@@ -151,6 +151,7 @@ QByteArray encode(const QImage &image, float quality) {
         return {};
     }
     config.method = 3;
+    config.lossless = lossless ? 1 : 0;
     config.thread_level = 1;
     config.alpha_quality = 100;
     config.exact = 1;
@@ -171,6 +172,9 @@ QByteArray encode(const QImage &image, float quality) {
     }
     picture.width = pixels.width();
     picture.height = pixels.height();
+    // Lossless WebP needs RGB input; importing through YUV would discard
+    // chroma detail before lossless compression even starts.
+    picture.use_argb = lossless ? 1 : 0;
 
     QByteArray output;
     picture.writer = writeWebp;

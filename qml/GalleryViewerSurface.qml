@@ -40,6 +40,7 @@ Item {
             anchors.fill: parent
             opacity: root.viewer.viewerNavigationCurrentOpacity
             transform: Translate {
+                id: navigationTranslation
                 x: root.viewer.viewerNavigationCurrentOffsetX
             }
 
@@ -74,6 +75,12 @@ Item {
                         && !root.viewer.completingClose
                 animationDuration: root.viewer.animationDuration
                 devicePixelRatio: root.viewer.devicePixelRatio
+                pixelAlignmentRevision: navigationTranslation.x
+                externalTransformMoving:
+                    root.viewer.viewerNavigationActive
+                    || root.viewer.viewerNavigationAnimationRunning
+                    || root.viewer.viewerNavigationCommitAfterAnimation
+                sphericTextureMipmapsEnabled: root.viewer.sphericViewerMode
                 topInset: 0
                 checkerboardEnabled: true
                 scrollBarTheme: root.viewer.theme
@@ -136,16 +143,23 @@ Item {
                 height: root.viewer.viewerNavigationTargetDisplayHeight
 
                 Item {
-                    x: (parent.width - width) / 2
-                    y: (parent.height - height) / 2
-                    width: root.viewer.viewerNavigationTargetHasSize
+                    readonly property point alignedOrigin:
+                        viewportItem.image.alignedPosition(parent,
+                            (parent.width - width) / 2,
+                            (parent.height - height) / 2,
+                            width, height, rotation)
+                    x: alignedOrigin.x
+                    y: alignedOrigin.y
+                    width: viewportItem.image.snapExtent(
+                           root.viewer.viewerNavigationTargetHasSize
                            ? root.viewer.viewerNavigationTargetDisplayOriginalSize.width
                              * root.viewer.viewerNavigationTargetScale
-                           : parent.width
-                    height: root.viewer.viewerNavigationTargetHasSize
+                           : parent.width)
+                    height: viewportItem.image.snapExtent(
+                            root.viewer.viewerNavigationTargetHasSize
                             ? root.viewer.viewerNavigationTargetDisplayOriginalSize.height
                               * root.viewer.viewerNavigationTargetScale
-                            : parent.height
+                            : parent.height)
                     rotation: viewportItem.rotationMode * 90
 
                     Image {
@@ -157,30 +171,23 @@ Item {
                         asynchronous: true
                         cache: false
                         visible: false
-                        mipmap:
-                            root.viewer.viewerNavigationTargetSourceLevel === 2
+                        mipmap: false
                     }
 
-                    ShaderEffect {
+                    ViewerResample {
                         objectName: "galleryViewerNavigationNeighborShader"
                         anchors.fill: parent
 
-                        property var source: neighborImage
-                        property size viewportSize: Qt.size(
+                        imageSource: neighborImage
+                        viewportSize: Qt.size(
                             width * root.viewer.devicePixelRatio,
                             height * root.viewer.devicePixelRatio)
-                        property real sharpenAmount:
-                            root.viewer.viewerNavigationTargetScale < 1
-                            ? 1.5 : 0
-                        property bool showCheckerboard:
+                        showCheckerboard:
                             viewportItem.checkerboardEnabled
                             && neighborImage.status === Image.Ready
-                        property int checkerboardSize:
+                        checkerboardSize:
                             4 * root.viewer.devicePixelRatio
-                        property int borderRadius: 0
-
-                        fragmentShader:
-                            "qrc:/ZoinGallery/resources/shader.frag.qsb"
+                        borderRadius: 0
                     }
                 }
             }

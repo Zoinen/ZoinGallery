@@ -96,15 +96,18 @@ Item {
         } else {
             const crop = nativeCropGeometry(targetX, targetY, scale,
                                             originalSize)
-            viewport.viewerImageCrop.unscaledX = crop.x
-            viewport.viewerImageCrop.unscaledY = crop.y
-            viewport.viewerImageCrop.unscaledWidth = crop.width
-            viewport.viewerImageCrop.unscaledHeight = crop.height
+            const dpr = viewport.devicePixelRatio
+            const pixels = Qt.rect(Math.round(crop.x * dpr),
+                                   Math.round(crop.y * dpr),
+                                   Math.round(crop.width * dpr),
+                                   Math.round(crop.height * dpr))
+            viewport.viewerImageCrop.unscaledX = pixels.x / dpr
+            viewport.viewerImageCrop.unscaledY = pixels.y / dpr
+            viewport.viewerImageCrop.unscaledWidth = pixels.width / dpr
+            viewport.viewerImageCrop.unscaledHeight = pixels.height / dpr
             viewport.viewerImageCrop.source = imageIdUrl + "/"
-                    + Math.round(crop.x * viewport.devicePixelRatio) + ","
-                    + Math.round(crop.y * viewport.devicePixelRatio) + ","
-                    + Math.round(crop.width * viewport.devicePixelRatio) + ","
-                    + Math.round(crop.height * viewport.devicePixelRatio)
+                    + pixels.x + "," + pixels.y + ","
+                    + pixels.width + "," + pixels.height
             viewport.viewerImage2.fromIndex = fromIndex
         }
         delayedIdSetter.idToSet = imageIdUrl

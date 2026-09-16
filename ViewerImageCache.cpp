@@ -187,6 +187,9 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
         _currentPath = request.info.sourceIdentity();
     }
 
+    const bool incomingNativePrepared = fullSize &&
+        !decodedInfo.isFromCache && decodedInfo.previewUsed.isEmpty();
+
     QHash<QString, Entry> &cache =
         fullSize ? _fullSizeImages : _viewerImages;
     QHash<QString, QString> &idToPath =
@@ -221,8 +224,9 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
         const bool equalSizeSourceReplacement =
             sameSize && !needsSourceUpgrade(decodedInfo);
         const bool qualityDowngrade =
-            !needsSourceUpgrade(cacheIt->decodedInfo) &&
-            needsSourceUpgrade(decodedInfo);
+            (!needsSourceUpgrade(cacheIt->decodedInfo) &&
+             needsSourceUpgrade(decodedInfo)) ||
+            (cacheIt->nativePrepared && !incomingNativePrepared);
         const bool existingCoversIncoming =
             covers(cacheIt->image.size(), image.size());
 
@@ -258,6 +262,7 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
         .sourceFileSize = request.info.fileSize,
         .sourceVersionToken = request.info.sourceVersionToken,
         .fitPrepared = request.fitToViewerRequest || !fullSize,
+        .nativePrepared = incomingNativePrepared,
     };
     cache.insert(sourceIdentity, entry);
     addRetainedBytesLocked(entry, fullSize);
@@ -368,13 +373,15 @@ QList<QPair<QString, int>> ViewerImageCache::cachedImagesForPath(
         !fullSizeIt->image.isNull() &&
         (!minimumFullSize.isValid() ||
          satisfies(fullSizeIt.value(), minimumFullSize))) {
+        const bool presentAsFitImage =
+            presentFullSizeAsFitImage || !fullSizeIt->nativePrepared;
         result.append({
             QStringLiteral("image://") +
-                (presentFullSizeAsFitImage
+                (presentAsFitImage
                     ? _thumbnailProviderName
                     : _asyncProviderName) + QLatin1Char('/') +
                 fullSizeIt->imageId,
-            presentFullSizeAsFitImage ? 1 : 2
+            presentAsFitImage ? 1 : 2
         });
     }
     return result;
@@ -410,11 +417,13 @@ ViewerImageCache::Entry ViewerImageCache::entryForPath(
 bool ViewerImageCache::needsDecode(
     const ImageDecodeRequest &request) const {
     return needsDecode(request.info, request.targetSize,
-                       isFullSizeRequest(request));
+                       isFullSizeRequest(request),
+                       !request.fitToViewerRequest);
 }
 
 bool ViewerImageCache::needsDecode(
-    const ImageInfo &info, const QSize &targetSize, bool fullSize) const {
+    const ImageInfo &info, const QSize &targetSize, bool fullSize,
+    bool requireNativeSource) const {
     QReadLocker locker(&_lock);
     const QHash<QString, Entry> &cache =
         fullSize ? _fullSizeImages : _viewerImages;
@@ -432,6 +441,7 @@ bool ViewerImageCache::needsDecode(
     return it == cache.constEnd() ||
         !sameVersion ||
         !satisfies(it.value(), targetSize) ||
+        (requireNativeSource && !it->nativePrepared) ||
         (it->decodedInfo.isFromCache &&
          !it->decodedInfo.isAuthoritativeDerivedCache);
 }

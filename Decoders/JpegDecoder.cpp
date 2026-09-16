@@ -167,6 +167,12 @@ QImage JpegDecoder::decode(const QString& mimeType, const QByteArray &data, QSiz
     int num = 0;
     tjscalingfactor *factors = tjGetScalingFactors(&num);
     int denomIndex = 0;
+    // Empty size is the native-resolution contract used by the viewer;
+    // libjpeg-turbo also exposes upscale factors, so find 1/1 explicitly.
+    if (targetSize.isEmpty()) {
+        targetSize = QSize(width, height);
+    }
+    const QSize encodedSize(width, height);
     for (; denomIndex < num; denomIndex++) {
         int scaledWidth = TJSCALED(width, factors[denomIndex]);
         int scaledHeight = TJSCALED(height, factors[denomIndex]);
@@ -189,7 +195,15 @@ QImage JpegDecoder::decode(const QString& mimeType, const QByteArray &data, QSiz
     int pitch = TJPAD(width * tjPixelSize[TJPF_RGB]);
     unsigned char *buffer = new unsigned char[pitch * height];
 
-    res = tjDecompress2(_jpegDecompressor, _compressedImage, _jpegSize, buffer, width, pitch, height, TJPF_RGB, TJFLAG_FASTDCT);
+    // The approximate IDCT was mostly hidden while the viewer
+    // blurred native pixels, but a pixel-exact 1:1 path exposes its extra
+    // ringing and block-boundary error.  Preserve the fast scaled decode for
+    // ordinary thumbnails; full-resolution viewer pixels must be authoritative.
+    const int decodeFlags = QSize(width, height) == encodedSize
+        ? TJFLAG_ACCURATEDCT : TJFLAG_FASTDCT;
+    res = tjDecompress2(_jpegDecompressor, _compressedImage, _jpegSize, buffer,
+                        width, pitch, height, TJPF_RGB,
+                        decodeFlags);
     if (res == -1) {
         if (tjGetErrorCode(_jpegDecompressor) == TJERR_FATAL) {
             qDebug() << "JPEG decode error:" << tjGetErrorStr2(_jpegDecompressor) << ",";

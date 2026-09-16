@@ -147,7 +147,12 @@ QString versionForRequest(const ImageDecodeRequest &request) {
 QString transformForRequest(const ImageDecodeRequest &request,
                             Artifact artifact) {
     if (artifact == Artifact::ViewerFit) {
-        return QStringLiteral("viewer-fit-v1");
+        // v4 invalidates full-size Fit entries produced before native JPEG
+        // decoding switched from the approximate IDCT. Those pixels may be
+        // stored in lossless WebP, but lossless storage cannot repair the
+        // already-approximated decoder output.
+        return QStringLiteral(
+            "viewer-fit-bc-pyramid-v4-linear-half-dither-lossless");
     }
     if (artifact == Artifact::Thumbnail) {
         const QString transform =
@@ -744,8 +749,11 @@ QByteArray PersistentDerivedImageCache::createImageForCache(
     if (converted.isNull()) {
         return {};
     }
+    // A Fit frame already contains the viewer filter's final pixels, including
+    // quantization dither. Preserve them through the disk-cache round trip.
+    const bool lossless = artifactForRequest(request) == Artifact::ViewerFit;
     const QByteArray encoded = WebpCodec::encode(converted,
-                                                  CacheWebpQuality);
+                                                CacheWebpQuality, lossless);
     if (encoded.isEmpty()) {
         return {};
     }

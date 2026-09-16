@@ -14,6 +14,7 @@ public:
 
     bool readMetadata(ImageInfo& result) override;
     bool readPreviewAndMime(ImageData &result) override;
+    bool supportsNativeDecode() const override { return false; }
     QImage decode(const QString& mimeType, const QByteArray& data, QSize targetSize) override { return QImage(); }
 
 private:

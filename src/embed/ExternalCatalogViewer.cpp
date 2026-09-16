@@ -116,7 +116,11 @@ void ExternalCatalogModel::requestViewer(
         notifyViewerImageUrlChanged();
     }
     const int prefetchCount = nativeRequest ? 5 : 16;
-    _viewerPlans.insert(entryId, {viewportSize, prefetchCount});
+    // Metadata/retry callbacks replay this retained plan. Until the Fit window
+    // has completed its dwell, keep native replay restricted to the selected
+    // frame; finishDeferredNativeDwell() widens it to the +/-2 window.
+    _viewerPlans.insert(
+        entryId, {viewportSize, nativeRequest ? 1 : prefetchCount});
     const int requiredLevel = nativeRequest ? 2 : 1;
     const auto currentSources = viewerImageSourcesAt(row);
     const bool requestedTierReady = std::any_of(
@@ -128,12 +132,16 @@ void ExternalCatalogModel::requestViewer(
         {row}, requestedTierReady ? QStringLiteral("ready")
                                   : QStringLiteral("pending"));
     if (nativeRequest) {
-        // First guarantee a usable Fit base for current +/-2. Native pixels
-        // are admitted only after a separate dwell below, so a quick swipe or
-        // resize cannot spend bandwidth on a frame the user never examines.
+        // Native pixels for the active image are presentation-critical: at
+        // 100% the Fit fallback is stretched and visibly soft. Decode that one
+        // immediately, while retaining the Fit-first dwell for neighbor native
+        // prefetch below.
         _deferredNativeEntryId = entryId;
         scheduleViewerDecodeAt(
             row, _lastViewerFitViewportSize, prefetchCount);
+        // Submit this after Fit so its newer decode generation remains first
+        // in the priority queue when the workers are saturated.
+        scheduleViewerDecodeAt(row, viewportSize, 1);
         tryScheduleDeferredNative();
         return;
     }
@@ -160,7 +168,10 @@ void ExternalCatalogModel::requestViewerAt(
             _viewerPlans.insert(_viewerEntryId, activePlan);
         }
     }
-    _viewerPlans.insert(entryId, {viewportSize, prefetchCount});
+    _viewerPlans.insert(
+        entryId, {viewportSize,
+                  nativeRequest && entryId == _viewerEntryId
+                      ? 1 : prefetchCount});
     const int requiredLevel = nativeRequest ? 2 : 1;
     const auto currentSources = viewerImageSourcesAt(row);
     const bool requestedTierReady = std::any_of(
@@ -178,6 +189,7 @@ void ExternalCatalogModel::requestViewerAt(
         _deferredNativeEntryId = entryId;
         scheduleViewerDecodeAt(
             row, _lastViewerFitViewportSize, prefetchCount);
+        scheduleViewerDecodeAt(row, viewportSize, 1);
         tryScheduleDeferredNative();
     }
     else {
@@ -201,7 +213,7 @@ void ExternalCatalogModel::setViewerIndex(int row) {
     _viewerEntryId = entryId;
     _viewerPlans.clear();
     if (_viewerViewportSize.isValid()) {
-        const int prefetchCount = _viewerViewportSize.isEmpty() ? 5 : 16;
+        const int prefetchCount = _viewerViewportSize.isEmpty() ? 1 : 16;
         _viewerPlans.insert(
             entryId, {_viewerViewportSize, prefetchCount});
     }

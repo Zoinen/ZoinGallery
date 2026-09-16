@@ -13,6 +13,10 @@ Item {
     // All application state is explicit, so embedders need no dynamic root.
     property bool active: true
     property real devicePixelRatio: 1.0
+    // Host-owned transform values invalidate the final scene-space correction.
+    property real pixelAlignmentRevision: 0
+    property bool externalTransformMoving: false
+    property bool sphericTextureMipmapsEnabled: false
     property real topInset: 0
     property bool checkerboardEnabled: false
     property GalleryThemePalette scrollBarTheme: GalleryThemePalette {}
@@ -35,7 +39,9 @@ Item {
     readonly property alias zoomAnimation: viewportMotion.zoomAnimation
     readonly property alias xAnimation: viewportMotion.xAnimation
     readonly property alias yAnimation: viewportMotion.yAnimation
-    property var textureSource: viewerImage2.status === Image.Ready ? viewerImage2 : viewerImageBase
+    property var textureSource: sphericTextureMipmapsEnabled
+                                && viewerImage2.status === Image.Ready
+                                ? viewerImage2 : viewerImageShader.imageSource
     property size originalSize
     property int rotationMode: 0
     property bool animateRotation: false
@@ -93,7 +99,13 @@ Item {
 
     property bool forceShowScrollBars: false
     property bool hideVerticalScrollBar: false
-    property bool dragZoomActive: pointerLayer.pressed || viewportAnimation.running
+    property bool pinchZoomActive: false
+    readonly property bool directManipulationActive: pinchZoomActive
+                                                     || wheelPanActive
+                                                     || hbar.pressed
+                                                     || vbar.pressed
+    property bool dragZoomActive: directManipulationActive
+                                  || viewportAnimation.running
     property bool scrollBarsVisible: (hbar.hovered || hbar.pressed ||
             (!hideVerticalScrollBar && (vbar.hovered || vbar.pressed)) ||
             dragZoomActive || frameAnimation.running || forceShowScrollBars) && !zoomFitView
@@ -229,12 +241,18 @@ Item {
     }
 
     onActiveChanged: {
-        if (!active)
+        if (!active) {
+            pinchZoomActive = false
+            cancelWheelPan()
             stopZoomScrollingAnimation()
+        }
     }
     onVisibleChanged: {
-        if (!visible)
+        if (!visible) {
+            pinchZoomActive = false
+            cancelWheelPan()
             stopZoomScrollingAnimation()
+        }
     }
     Component.onDestruction: stopZoomScrollingAnimation()
 
@@ -382,6 +400,7 @@ Item {
 
         viewportAnimation.stop()
         frameAnimation.running = false
+        pinchZoomActive = true
         pinchZoomOutToThumbnailsActive = false
         pinchZoomOutToThumbnailsProgress = 0
         pinchStartZoomScale = zoomScale
@@ -439,6 +458,7 @@ Item {
     }
 
     function finishPinchZoom() {
+        pinchZoomActive = false
         if (pinchZoomOutToThumbnailsActive) {
             let commit = pinchZoomOutToThumbnailsProgress >= pinchZoomOutToThumbnailsCommitProgress
             pinchZoomOutToThumbnailsActive = false

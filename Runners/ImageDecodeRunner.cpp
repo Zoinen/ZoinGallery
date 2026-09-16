@@ -40,8 +40,17 @@ void ImageDecodeRunner::run() {
     {
         ZoinGallery::MediaTimingTrace::Span resizeSpan(
             QStringLiteral("qt.gallery.decode.resize"), timingFields);
-        thumbnail = ThumbnailLoader::createThumbnail(
-            image, _imageData.request.targetSize);
+        if (_imageData.request.viewerRequest) {
+            thumbnail = ThumbnailLoader::createViewerImage(
+                image, _imageData.request.targetSize);
+        } else {
+            thumbnail = ThumbnailLoader::createThumbnail(
+                image, _imageData.request.targetSize);
+        }
+        resizeSpan.set(QStringLiteral("resampler"),
+                       _imageData.request.viewerRequest
+                           ? QStringLiteral("viewer-bc-pyramid-v1")
+                           : QStringLiteral("qt-smooth"));
         resizeSpan.set(QStringLiteral("ok"), !thumbnail.isNull());
         resizeSpan.set(QStringLiteral("outputWidth"), thumbnail.width());
         resizeSpan.set(QStringLiteral("outputHeight"), thumbnail.height());

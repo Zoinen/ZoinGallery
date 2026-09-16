@@ -95,6 +95,79 @@ private slots:
                  imageIdFromUrl(stored.url));
     }
 
+    void authoritativeFitCacheCannotSatisfyNativePlanForSmallImage() {
+        const QSize originalSize(640, 480);
+        const QSize viewportSize(2048, 1536);
+
+        ImageFile item;
+        configureImage(item, QStringLiteral("small-derived-cache.jpg"),
+                       originalSize);
+        const QList<ImageFile *> items{&item};
+
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        ViewerImageCache cache(QStringLiteral("small-derived-"), store);
+
+        const ViewerImageCache::RequestPlan fitPlan =
+            cache.planRequest(items, 0, viewportSize, 1);
+        QCOMPARE(fitPlan.decodeRequests.size(), 1);
+        const ImageDecodeRequest fitRequest = fitPlan.decodeRequests.first();
+        QVERIFY(fitRequest.fitToViewerRequest);
+        QVERIFY(ViewerImageCache::isFullSizeRequest(fitRequest));
+
+        QImage cachedPixels(originalSize, QImage::Format_RGBA8888);
+        cachedPixels.fill(QColor(191, 31, 47));
+        DecodedImageInfo cachedInfo;
+        cachedInfo.decoderUsed = QStringLiteral("derived-cache");
+        cachedInfo.isFromCache = true;
+        cachedInfo.isAuthoritativeDerivedCache = true;
+        const ViewerImageCache::StoredImage fitStored =
+            cache.storeDecodedImage(fitRequest, cachedPixels, cachedInfo);
+        QVERIFY(fitStored.accepted);
+        QCOMPARE(fitStored.level, 1);
+
+        const ViewerImageCache::RequestPlan nativePlan =
+            cache.planRequest(items, 0, QSize(), 1);
+        QCOMPARE(nativePlan.cachedImages.size(), 1);
+        QCOMPARE(nativePlan.cachedImages.first().second, 1);
+        QVERIFY(nativePlan.cachedImages.first().first.startsWith(
+            QStringLiteral("image://thumbnails/")));
+        QCOMPARE(nativePlan.decodeRequests.size(), 1);
+        const ImageDecodeRequest nativeRequest =
+            nativePlan.decodeRequests.first();
+        QVERIFY(!nativeRequest.fitToViewerRequest);
+        QCOMPARE(nativeRequest.targetSize, originalSize);
+
+        QImage sourcePixels(originalSize, QImage::Format_RGBA8888);
+        sourcePixels.fill(QColor(31, 159, 223));
+        DecodedImageInfo sourceInfo;
+        sourceInfo.decoderUsed = QStringLiteral("source-decoder");
+        const ViewerImageCache::StoredImage nativeStored =
+            cache.storeDecodedImage(nativeRequest, sourcePixels,
+                                    sourceInfo);
+        QVERIFY(nativeStored.accepted);
+        QCOMPARE(nativeStored.level, 2);
+        QVERIFY(nativeStored.url.startsWith(QStringLiteral("image://async/")));
+        QCOMPARE(cache.entryForPath(item.fullPath(), true)
+                     .image.pixelColor(0, 0),
+                 QColor(31, 159, 223));
+
+        const ViewerImageCache::StoredImage lateFitCache =
+            cache.storeDecodedImage(fitRequest, cachedPixels, cachedInfo);
+        QVERIFY2(!lateFitCache.accepted,
+                 "A late Fit-cache hit must not replace source-native pixels");
+        QCOMPARE(cache.entryForPath(item.fullPath(), true)
+                     .image.pixelColor(0, 0),
+                 QColor(31, 159, 223));
+
+        const ViewerImageCache::RequestPlan repeatedNative =
+            cache.planRequest(items, 0, QSize(), 1);
+        QVERIFY(repeatedNative.decodeRequests.isEmpty());
+        QCOMPARE(repeatedNative.cachedImages.size(), 1);
+        QCOMPARE(repeatedNative.cachedImages.first().second, 2);
+        QCOMPARE(repeatedNative.cachedImages.first().first,
+                 nativeStored.url);
+    }
+
     void returnNavigationToSmallImagePrefersReadyNativeFrame() {
         const QSize originalSize(640, 480);
         const QSize viewportSize(2048, 1536);

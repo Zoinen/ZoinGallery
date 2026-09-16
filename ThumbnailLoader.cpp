@@ -1,6 +1,7 @@
 #include "ThumbnailLoader.h"
 #include "Decoders/ImageDecoderInterface.h"
 #include "DisplayColorSpace.h"
+#include "ViewerResampler.h"
 
 #include <QDebug>
 #include <QImage>
@@ -54,10 +55,12 @@ bool ThumbnailLoader::readMetadata(ImageInfo &result) {
 
 bool ThumbnailLoader::readImage(ImageData &result) {
     bool previewLoaded = false;
+    bool nativeDecodeSupported = true;
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
         const auto decoder = ImageDecoderFactory::createDecoder(i);
         previewLoaded = decoder && decoder->readPreviewAndMime(result);
         if (previewLoaded) {
+            nativeDecodeSupported = decoder->supportsNativeDecode();
             break;
         }
     }
@@ -82,11 +85,13 @@ bool ThumbnailLoader::readImage(ImageData &result) {
         targetSize = expandToCacheImageResolution(targetSize);
     }
     QSize sizeRotated = rotateToOrientation(result.request.info.imageSize, result.request.info.orientation);
-    if (!previewLoaded || sizeRotated.width() < targetSize.width() ||
-                          sizeRotated.height() < targetSize.height()) {
+    if (result.data.isNull() &&
+        ((result.request.viewerRequest && nativeDecodeSupported) || !previewLoaded ||
+                          sizeRotated.width() < targetSize.width() ||
+                          sizeRotated.height() < targetSize.height())) {
         QFile f(result.request.info.path);
         if (!f.open(QFile::ReadOnly)) {
-            return false;
+            return previewLoaded;
         }
         result.data = f.readAll();
         f.close();
@@ -99,6 +104,12 @@ QImage ThumbnailLoader::decode(const ImageData &imageData, DecodedImageInfo &dec
     if (!imageData.request.checkCache &&
         imageData.request.expandToCacheResolution) {
         targetSize = expandToCacheImageResolution(targetSize);
+    }
+    // A decoder's scaled-IDCT/area shortcut discards frequencies before the
+    // viewer's scale-aware filter can process them. Keep the request's tier
+    // unchanged for caching, and decode source (or fallback preview) natively.
+    if (imageData.request.viewerRequest) {
+        targetSize = {};
     }
 
     QImage image;
@@ -150,6 +161,10 @@ QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions) {
         return image.scaled(dimensions, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
     return image;
+}
+
+QImage ThumbnailLoader::createViewerImage(const QImage &image, QSize dimensions) {
+    return ZoinGallery::ViewerResampler::downsample(image, dimensions);
 }
 
 QImage ThumbnailLoader::rotateAndFlip(const QImage &image, ExifOrientation orientation) {

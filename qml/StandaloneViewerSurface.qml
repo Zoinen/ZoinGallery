@@ -79,6 +79,12 @@ Item {
             sourceMasonry: surface.viewer.sourceMasonry
             active: surface.shell.state === "viewer"
             devicePixelRatio: surface.devicePixelRatio
+            pixelAlignmentRevision: navigationTranslation.x
+            externalTransformMoving:
+                surface.viewer.viewerNavigationActive
+                || viewerNavigationOffsetAnimation.running
+                || surface.viewer.viewerNavigationCommitAfterAnimation
+            sphericTextureMipmapsEnabled: surface.viewer.sphericViewerMode
             topInset: surface.titleBarItem.viewerHeight
             checkerboardEnabled: Boolean(surface.viewer.sourceMasonry && surface.viewer.sourceMasonry.view
                                          && surface.viewer.sourceMasonry.view.showTransparentGrid)
@@ -94,7 +100,10 @@ Item {
                     surface.viewer.viewerNavigationCommitAfterAnimation || Math.abs(surface.viewer.viewerNavigationOffsetX) > 0.1
             pinchZoomEnabled: !surface.viewer.sphericViewerMode
             opacity: surface.viewer.viewerNavigationCurrentOpacity
-            transform: Translate { x: surface.viewer.viewerNavigationCurrentOffsetX }
+            transform: Translate {
+                id: navigationTranslation
+                x: surface.viewer.viewerNavigationCurrentOffsetX
+            }
             onPinchZoomOutToThumbnailsProgressed: (progress) =>
                     surface.viewer.pinchZoomOutToThumbnailsProgressed(progress)
             onPinchZoomOutToThumbnailsFinished: (commit) =>
@@ -254,14 +263,20 @@ Item {
             // texture into the already-swapped effective bounds.
             Item {
                 id: viewerNavigationNeighborUnrotatedContent
-                x: (parent.width - width) / 2
-                y: (parent.height - height) / 2
-                width: surface.viewer.viewerNavigationTargetHasSize
+                readonly property point alignedOrigin:
+                    flickableArea.image.alignedPosition(parent,
+                        (parent.width - width) / 2,
+                        (parent.height - height) / 2, width, height, rotation)
+                x: alignedOrigin.x
+                y: alignedOrigin.y
+                width: flickableArea.image.snapExtent(
+                       surface.viewer.viewerNavigationTargetHasSize
                        ? surface.viewer.viewerNavigationTargetDisplayOriginalSize.width
-                         * viewerNavigationTargetScale : parent.width
-                height: surface.viewer.viewerNavigationTargetHasSize
+                         * surface.viewer.viewerNavigationTargetScale : parent.width)
+                height: flickableArea.image.snapExtent(
+                        surface.viewer.viewerNavigationTargetHasSize
                         ? surface.viewer.viewerNavigationTargetDisplayOriginalSize.height
-                          * viewerNavigationTargetScale : parent.height
+                          * surface.viewer.viewerNavigationTargetScale : parent.height)
                 rotation: flickableArea.rotationMode * 90
 
                 Image {
@@ -273,27 +288,21 @@ Item {
                     asynchronous: true
                     cache: false
                     visible: false
-                    // Level 1 already covers the requested physical Fit size.
-                    // Native level 2 can still need minification.
-                    mipmap: surface.viewer.viewerNavigationTargetSourceLevel === 2
+                    mipmap: false
                 }
 
-                ShaderEffect {
+                ViewerResample {
                     objectName: "standaloneViewerNavigationNeighborShader"
                     anchors.fill: parent
 
-                    property var source: viewerNavigationNeighborImage
-                    property var viewportSize: Qt.size(width * surface.devicePixelRatio,
+                    imageSource: viewerNavigationNeighborImage
+                    viewportSize: Qt.size(width * surface.devicePixelRatio,
                                                        height * surface.devicePixelRatio)
-                    property real sharpenAmount:
-                        surface.viewer.viewerNavigationTargetScale < 1 ? 1.5 : 0
-                    property bool showCheckerboard:
+                    showCheckerboard:
                         flickableArea.checkerboardEnabled
                         && viewerNavigationNeighborImage.status === Image.Ready
-                    property int checkerboardSize: 4 * surface.devicePixelRatio
-                    property int borderRadius: 0
-
-                    fragmentShader: "qrc:/ZoinGallery/resources/shader.frag.qsb"
+                    checkerboardSize: 4 * surface.devicePixelRatio
+                    borderRadius: 0
                 }
             }
         }

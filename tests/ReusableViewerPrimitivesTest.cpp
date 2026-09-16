@@ -1,5 +1,8 @@
+#include <ZoinGallery/GalleryRuntime.h>
+
 #include <QQmlComponent>
 #include <QQmlEngine>
+#include <QLineF>
 #include <QQuickImageProvider>
 #include <QQuickItem>
 #include <QQuickStyle>
@@ -96,6 +99,7 @@ class ReusableViewerPrimitivesTest : public QObject {
 private slots:
     void initTestCase() {
         QQuickStyle::setStyle(QStringLiteral("Basic"));
+        ZoinGallery::GalleryRuntime::registerTypes();
     }
 
     void pathControlAcceptsNativeWindowsSeparators() {
@@ -645,6 +649,282 @@ private slots:
         QVERIFY(!zoomable->property("zoomFitView").toBool());
     }
 
+    void fitUsesPreparedTierAfterNativeZoom() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString basePath = directory.filePath(QStringLiteral("fit.png"));
+        const QString nativePath = directory.filePath(QStringLiteral("native.png"));
+        QImage base(350, 210, QImage::Format_ARGB32_Premultiplied);
+        QImage native(1400, 840, QImage::Format_ARGB32_Premultiplied);
+        base.fill(Qt::white);
+        native.fill(Qt::white);
+        QVERIFY(base.save(basePath));
+        QVERIFY(native.save(nativePath));
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            FlickableZoomable {
+                width: 200; height: 120
+                devicePixelRatio: 1.75
+                animationDuration: 0
+                property url testBase
+                property url testNative
+                function installBase() {
+                    setImage(testBase, Qt.size(1400, 840), 0, 1)
+                    zoomToFit(true)
+                }
+                function installNative() {
+                    // At this scale an entire axis is visible, so a file URL
+                    // does not enter the provider-only native crop route.
+                    setViewport(0.1, 0, 0)
+                    setImage(testNative, Qt.size(1400, 840), 0, 2)
+                }
+            }
+        )QML", QStringLiteral("FitTierAfterNative.qml"));
+        QVERIFY(root);
+        root->setProperty("testBase", QUrl::fromLocalFile(basePath));
+        root->setProperty("testNative", QUrl::fromLocalFile(nativePath));
+        QVERIFY(QMetaObject::invokeMethod(root, "installBase"));
+        auto *baseItem = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerBaseImage"));
+        auto *nativeItem = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerNativeImage"));
+        QVERIFY(baseItem);
+        QVERIFY(nativeItem);
+        QTRY_COMPARE(root->property("textureSource").value<QQuickItem *>(), baseItem);
+        QVERIFY(QMetaObject::invokeMethod(root, "installNative"));
+        QTRY_COMPARE(root->property("textureSource").value<QQuickItem *>(), nativeItem);
+        QVERIFY(QMetaObject::invokeMethod(root, "zoomToFit", Q_ARG(QVariant, true)));
+        QTRY_COMPARE(root->property("textureSource").value<QQuickItem *>(), baseItem);
+        root->setProperty("sphericTextureMipmapsEnabled", true);
+        QTRY_COMPARE(root->property("textureSource").value<QQuickItem *>(), nativeItem);
+        root->setProperty("sphericTextureMipmapsEnabled", false);
+        QTRY_COMPARE(root->property("textureSource").value<QQuickItem *>(), baseItem);
+
+        // An undersized preview must not displace an already decoded original.
+        auto *imageItem = root->property("image").value<QQuickItem *>();
+        QVERIFY(imageItem);
+        imageItem->setProperty("fromLevel", 0);
+        QTRY_COMPARE(root->property("textureSource").value<QQuickItem *>(), nativeItem);
+        imageItem->setProperty("fromLevel", 1);
+        root->setProperty("width", 400);
+        root->setProperty("height", 240);
+        QTRY_COMPARE(root->property("textureSource").value<QQuickItem *>(), nativeItem);
+    }
+
+    void imageLeavesSnapThroughFractionalAncestors() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("pixel-grid.png"));
+        QImage image(1201, 799, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        QVERIFY(image.save(path));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                id: testRoot
+                width: 700; height: 500
+                property url testSource
+                property real ancestorOffset: 0.13
+                property real transformOffset: 0.17
+                property alias cropCheckerboardEnabled: zoomable.checkerboardEnabled
+                property alias sphereMipmapsEnabled: zoomable.sphericTextureMipmapsEnabled
+                function prepare() {
+                    zoomable.setImage(testSource, Qt.size(1201, 799), 0, 1)
+                    zoomable.zoomToFit(true)
+                    zoomable.viewerImageCrop.source = testSource
+                    zoomable.viewerImageCrop.unscaledX = 13.7
+                    zoomable.viewerImageCrop.unscaledY = 21.3
+                    zoomable.viewerImageCrop.unscaledWidth = 201.1
+                    zoomable.viewerImageCrop.unscaledHeight = 151.7
+                }
+                function prepareThinImage() {
+                    zoomable.originalSize = Qt.size(8000 / 1.75, 1 / 1.75)
+                    zoomable.zoomScale = 0.1
+                }
+                function enableCrop() { zoomable.zoomFitView = false }
+                Item {
+                    x: parent.ancestorOffset; y: 0.19
+                    transform: Translate {
+                        id: testTranslation
+                        x: testRoot.transformOffset
+                    }
+                    FlickableZoomable {
+                        id: zoomable
+                        objectName: "zoomable"
+                        x: 0.23; y: 0.29
+                        width: 613; height: 401
+                        devicePixelRatio: 1.75
+                        pixelAlignmentRevision: testTranslation.x
+                        animationDuration: 0
+                    }
+                }
+            }
+        )QML", QStringLiteral("ViewerPhysicalGrid.qml"));
+        QVERIFY(root);
+        root->setProperty("testSource", QUrl::fromLocalFile(path));
+        QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+        view.show();
+        QTRY_VERIFY(view.isExposed());
+        QCOMPARE(view.devicePixelRatio(), qreal(1.75));
+        QCoreApplication::processEvents();
+
+        for (qreal ancestorOffset : {0.13, 0.31}) {
+            root->setProperty("ancestorOffset", ancestorOffset);
+            root->setProperty("transformOffset", ancestorOffset * 2);
+            QCoreApplication::processEvents();
+            for (const QString &name : {
+                     QStringLiteral("galleryViewerBaseImage"),
+                     QStringLiteral("galleryViewerNativeImage"),
+                     QStringLiteral("galleryViewerImageShader"),
+                     QStringLiteral("galleryViewerCropImage"),
+                     QStringLiteral("galleryViewerCropShader")}) {
+                auto *leaf = root->findChild<QQuickItem *>(name);
+                QVERIFY(leaf);
+                const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+                const qreal dpr = view.devicePixelRatio();
+                const QString details = QStringLiteral(
+                    "%1 physical origin=(%2,%3), size=(%4,%5)")
+                    .arg(name).arg(origin.x() * dpr, 0, 'f', 6)
+                    .arg(origin.y() * dpr, 0, 'f', 6)
+                    .arg(leaf->width() * dpr, 0, 'f', 6)
+                    .arg(leaf->height() * dpr, 0, 'f', 6);
+                qInfo().noquote() << details;
+                const auto aligned = [dpr](qreal value) {
+                    return qAbs(value * dpr - qRound(value * dpr)) < 0.001;
+                };
+                QVERIFY2(aligned(origin.x()), qPrintable(details));
+                QVERIFY2(aligned(origin.y()), qPrintable(details));
+                QVERIFY2(aligned(leaf->width()), qPrintable(details));
+                QVERIFY2(aligned(leaf->height()), qPrintable(details));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0))
+                             - origin, QPointF(1, 0));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1))
+                             - origin, QPointF(0, 1));
+            }
+        }
+        auto *nativeLeaf = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerNativeImage"));
+        QVERIFY(nativeLeaf);
+        QCOMPARE(nativeLeaf->property("mipmap").toBool(), false);
+        root->setProperty("sphereMipmapsEnabled", true);
+        QCOMPARE(nativeLeaf->property("mipmap").toBool(), true);
+        root->setProperty("sphereMipmapsEnabled", false);
+        QCOMPARE(nativeLeaf->property("mipmap").toBool(), false);
+
+        auto *cropLeaf = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerCropShader"));
+        QVERIFY(cropLeaf);
+        QVERIFY(QMetaObject::invokeMethod(root, "enableCrop"));
+        QTRY_VERIFY(cropLeaf->isVisible());
+        root->setProperty("cropCheckerboardEnabled", true);
+        QTRY_VERIFY(cropLeaf->isVisible());
+        root->setProperty("cropCheckerboardEnabled", false);
+        QVERIFY(cropLeaf->isVisible());
+
+        QVERIFY(QMetaObject::invokeMethod(root, "prepareThinImage"));
+        auto *thinLeaf = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerImageShader"));
+        QVERIFY(thinLeaf);
+        QCOMPARE(thinLeaf->height() * view.devicePixelRatio(), 1.0);
+        QVERIFY(thinLeaf->width() > 0);
+    }
+
+    void navigationImageLeavesSnapThroughFractionalAncestors() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 700; height: 500
+                property real ancestorOffset: 0.13
+                Item {
+                    id: viewerState
+                    x: parent.ancestorOffset; y: 0.19
+                    width: 613; height: 401
+                    property Item customContent: null
+                    property bool viewerContentVisible: true
+                    property color backgroundColor: "black"
+                    property color foregroundColor: "white"
+                    property real surfaceProgress: 1
+                    property bool transitionHasGeometry: false
+                    property real transitionProgress: 1
+                    property bool pinchCloseActive: false
+                    property bool completingClose: false
+                    property int animationDuration: 0
+                    property real devicePixelRatio: 1.75
+                    property GalleryThemePalette theme: GalleryThemePalette {}
+                    property bool sphericViewerMode: false
+                    property bool viewerNavigationActive: true
+                    property bool viewerNavigationAnimationRunning: false
+                    property bool viewerNavigationCommitAfterAnimation: false
+                    property real viewerNavigationOffsetX: 0
+                    property real viewerNavigationCurrentOpacity: 1
+                    property real viewerNavigationCurrentOffsetX: 0.31
+                    property int viewerNavigationDirection: 1
+                    property real viewerNavigationTargetOpacity: 1
+                    property int viewerNavigationTargetIndex: 1
+                    property url viewerNavigationTargetSource: ""
+                    property real viewerNavigationTargetImageX: 4.73
+                    property real viewerNavigationTargetImageY: 11.27
+                    property real viewerNavigationTargetDisplayWidth: 531.19
+                    property real viewerNavigationTargetDisplayHeight: 353.77
+                    property bool viewerNavigationTargetHasSize: true
+                    property size viewerNavigationTargetDisplayOriginalSize:
+                        Qt.size(1201 / 1.75, 799 / 1.75)
+                    property real viewerNavigationTargetScale: 0.773
+                    property var session: null
+                    function scheduleDecodeRequest() {}
+                    GalleryViewerSurface {
+                        anchors.fill: parent
+                        viewer: viewerState
+                    }
+                }
+            }
+        )QML", QStringLiteral("NavigationPhysicalGrid.qml"));
+        QVERIFY(root);
+        view.show();
+        QTRY_VERIFY(view.isExposed());
+        QCOMPARE(view.devicePixelRatio(), qreal(1.75));
+        for (qreal offset : {0.13, 0.31}) {
+            root->setProperty("ancestorOffset", offset);
+            QCoreApplication::processEvents();
+            for (const QString &name : {
+                     QStringLiteral("galleryViewerNavigationNeighborImage"),
+                     QStringLiteral("galleryViewerNavigationNeighborShader")}) {
+                auto *leaf = root->findChild<QQuickItem *>(name);
+                QVERIFY(leaf);
+                const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+                const qreal dpr = view.devicePixelRatio();
+                const auto aligned = [dpr](qreal value) {
+                    return qAbs(value * dpr - qRound(value * dpr)) < 0.001;
+                };
+                QVERIFY2(aligned(origin.x()), qPrintable(name));
+                QVERIFY2(aligned(origin.y()), qPrintable(name));
+                QVERIFY2(aligned(leaf->width()), qPrintable(name));
+                QVERIFY2(aligned(leaf->height()), qPrintable(name));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0))
+                             - origin, QPointF(1, 0));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1))
+                             - origin, QPointF(0, 1));
+            }
+        }
+    }
+
+    void resamplerChoosesAndRetainsPyramidLevels();
+    void nativeScaleShaderIsPixelExactThroughFractionalNavigation();
+    void interactiveGeometryIsContinuousAndSettlesToPixelGrid();
+    void centeredMinificationKeepsItsPhysicalCenter_data();
+    void centeredMinificationKeepsItsPhysicalCenter();
+    void wheelMinificationKeepsItsCenterDuringAnimation();
+
     void sphericViewerIsWindowlessAndKeepsLegacyInputMath() {
         QQuickView view;
         view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
@@ -792,6 +1072,552 @@ private slots:
         QCOMPARE(closeSpy.size(), 0);
     }
 };
+
+void ReusableViewerPrimitivesTest::resamplerChoosesAndRetainsPyramidLevels() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 10; height: 10
+                property alias outputSize: resampler.viewportSize
+                property alias inputSize: sourceMetadata.sourceSize
+                property alias sourceKey: sourceMetadata.source
+                property alias resampler: resampler
+                readonly property int rgba8Format: ShaderEffectSource.RGBA8
+                function selectLevel(w, h, outW, outH) {
+                    return resampler.levelForSize(Qt.size(w, h),
+                                                  Qt.size(outW, outH))
+                }
+                QtObject {
+                    id: sourceMetadata
+                    property size sourceSize: Qt.size(8000, 5000)
+                    property url source: "file:///first.png"
+                }
+                ViewerResample {
+                    id: resampler
+                    imageSource: sourceMetadata
+                    viewportSize: Qt.size(1728, 1080)
+                }
+            }
+        )QML", QStringLiteral("ResamplerPyramid.qml"));
+        QVERIFY(root);
+        QObject *resampler = root->property("resampler").value<QObject *>();
+        QVERIFY(resampler);
+        QCOMPARE(resampler->property("requiredLevels").toInt(), 2);
+        QCOMPARE(resampler->property("retainedLevels").toInt(), 2);
+        QObject *levelTwo = resampler->property("source").value<QObject *>();
+        QVERIFY(levelTwo);
+        QCOMPARE(levelTwo->property("textureSize").toSize(), QSize(2000, 1250));
+
+        root->setProperty("outputSize", QSize(7200, 4500));
+        QCOMPARE(resampler->property("requiredLevels").toInt(), 0);
+        QCOMPARE(resampler->property("retainedLevels").toInt(), 2);
+        QCOMPARE(resampler->property("source").value<QObject *>(),
+                 resampler->property("imageSource").value<QObject *>());
+        root->setProperty("outputSize", QSize(1728, 1080));
+        QCOMPARE(resampler->property("source").value<QObject *>(), levelTwo);
+
+        root->setProperty("inputSize", QSize(8001, 5001));
+        QObject *oddLevel = resampler->property("source").value<QObject *>();
+        QVERIFY(oddLevel);
+        QCOMPARE(oddLevel->property("textureSize").toSize(), QSize(2000, 1250));
+        QObject *oddReduction = oddLevel->property("sourceItem").value<QObject *>();
+        QVERIFY(oddReduction);
+        QCOMPARE(oddReduction->property("sourceExtent").toSize(), QSize(4000, 2500));
+        QObject *firstLevel = oddReduction->property("source").value<QObject *>();
+        QVERIFY(firstLevel);
+        QCOMPARE(firstLevel->property("textureSize").toSize(), QSize(4000, 2500));
+        QObject *firstReduction = firstLevel->property("sourceItem").value<QObject *>();
+        QVERIFY(firstReduction);
+        QCOMPARE(firstReduction->property("sourceExtent").toSize(), QSize(8000, 5000));
+        QCOMPARE(firstLevel->property("format").toInt(), root->property("rgba8Format").toInt());
+        QCOMPARE(oddLevel->property("format").toInt(), root->property("rgba8Format").toInt());
+        QCOMPARE(resampler->property("sourceExtent").toSize(), QSize(0, 0));
+        root->setProperty("inputSize", QSize(8000, 1));
+        root->setProperty("outputSize", QSize(1000, 1));
+        QCOMPARE(resampler->property("requiredLevels").toInt(), 3);
+        QObject *scanlineLevel = resampler->property("source").value<QObject *>();
+        QVERIFY(scanlineLevel);
+        QCOMPARE(scanlineLevel->property("textureSize").toSize(), QSize(1000, 1));
+        QObject *scanlineReduction = scanlineLevel->property("sourceItem").value<QObject *>();
+        QVERIFY(scanlineReduction);
+        QCOMPARE(scanlineReduction->property("sourceExtent").toSize(), QSize(2000, 1));
+
+        root->setProperty("outputSize", QSize(7200, 1));
+        QCOMPARE(resampler->property("retainedLevels").toInt(), 3);
+        root->setProperty("sourceKey", QUrl(QStringLiteral("file:///second.png")));
+        QCOMPARE(resampler->property("retainedLevels").toInt(), 0);
+        const int cases[][5] = {
+            {8000, 5000, 7920, 4950, 0},
+            {8000, 5000, 4000, 2500, 1},
+            {8000, 5000, 4001, 2501, 0},
+            {8001, 5001, 2001, 1251, 1},
+            {8001, 5001, 2000, 1250, 2},
+            {8192, 6144, 2048, 1536, 2},
+            {8192, 6144, 1884, 1414, 2},
+            {8000, 1, 1000, 1, 3}
+        };
+        for (const auto &dimensions : cases) {
+            QVariant result;
+            QVERIFY(QMetaObject::invokeMethod(root, "selectLevel",
+                Q_RETURN_ARG(QVariant, result),
+                Q_ARG(QVariant, dimensions[0]), Q_ARG(QVariant, dimensions[1]),
+                Q_ARG(QVariant, dimensions[2]), Q_ARG(QVariant, dimensions[3])));
+            QCOMPARE(result.toInt(), dimensions[4]);
+        }
+    }
+
+
+void ReusableViewerPrimitivesTest::nativeScaleShaderIsPixelExactThroughFractionalNavigation() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("native-pixel-grid.png"));
+    QImage source(1201, 799, QImage::Format_ARGB32_Premultiplied);
+    source.fill(Qt::white);
+    QVERIFY(source.save(sourcePath));
+
+    QQuickView view;
+    view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+    QObject *root = createRoot(view, R"QML(
+        import QtQuick
+        import ZoinGallery 1.0
+
+        Item {
+            id: testRoot
+            width: 700
+            height: 500
+            property url testSource
+            property real navigationOffsetX: 0.17
+            property real navigationOffsetY: 0.11
+            property bool externalMoving: false
+            property alias zoomable: zoomable
+            function prepare() {
+                zoomable.setImage(testSource, Qt.size(1201, 799), 0, 0)
+                zoomable.setViewport(1, -71.137, -46.219)
+                zoomable.setImage(testSource, Qt.size(1201, 799), 0, 2)
+            }
+            Item {
+                x: 0.13
+                y: 0.19
+                transform: Translate {
+                    x: testRoot.navigationOffsetX
+                    y: testRoot.navigationOffsetY
+                }
+                FlickableZoomable {
+                    id: zoomable
+                    x: 0.23
+                    y: 0.29
+                    width: 480
+                    height: 320
+                    devicePixelRatio: 1.75
+                    pixelAlignmentRevision: testRoot.navigationOffsetX
+                                            + testRoot.navigationOffsetY
+                    externalTransformMoving: testRoot.externalMoving
+                    animationDuration: 80
+                }
+            }
+        }
+    )QML", QStringLiteral("NativeScalePhysicalGrid.qml"));
+    QVERIFY(root);
+    root->setProperty("testSource", QUrl::fromLocalFile(sourcePath));
+    QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+    view.show();
+    QTRY_VERIFY_WITH_TIMEOUT(view.isExposed(), 3000);
+    QCOMPARE(view.devicePixelRatio(), qreal(1.75));
+
+    auto *shader = root->findChild<QQuickItem *>(
+        QStringLiteral("galleryViewerImageShader"));
+    auto *viewport = root->property("zoomable").value<QQuickItem *>();
+    QVERIFY(shader);
+    QVERIFY(viewport);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        shader->property("pixelAlignedIdentity").toBool(), 5000);
+    const qreal dpr = view.devicePixelRatio();
+    const auto physicallyAligned = [dpr](qreal value) {
+        return qAbs(value * dpr - qRound(value * dpr)) < 0.001;
+    };
+
+    for (const QPointF navigationOffset : {
+             QPointF(0.17, 0.11), QPointF(0.31, 0.27)}) {
+        root->setProperty("navigationOffsetX", navigationOffset.x());
+        root->setProperty("navigationOffsetY", navigationOffset.y());
+        QCoreApplication::processEvents();
+        QCOMPARE(viewport->property("pixelAlignmentRevision").toReal(),
+                 navigationOffset.x() + navigationOffset.y());
+        QTRY_VERIFY(shader->property("pixelAlignedIdentity").toBool());
+
+        const QPointF origin = shader->mapToItem(view.contentItem(), QPointF());
+        const QPointF unitX = shader->mapToItem(
+            view.contentItem(), QPointF(1, 0)) - origin;
+        const QPointF unitY = shader->mapToItem(
+            view.contentItem(), QPointF(0, 1)) - origin;
+        const QString details = QStringLiteral(
+            "navigation=(%1,%2) origin=(%3,%4) extent=(%5,%6) "
+            "unitX=(%7,%8) unitY=(%9,%10)")
+            .arg(navigationOffset.x()).arg(navigationOffset.y())
+            .arg(origin.x() * dpr).arg(origin.y() * dpr)
+            .arg(shader->width() * dpr).arg(shader->height() * dpr)
+            .arg(unitX.x()).arg(unitX.y()).arg(unitY.x()).arg(unitY.y());
+        QVERIFY2(physicallyAligned(origin.x()), qPrintable(details));
+        QVERIFY2(physicallyAligned(origin.y()), qPrintable(details));
+        QVERIFY2(physicallyAligned(shader->width()), qPrintable(details));
+        QVERIFY2(physicallyAligned(shader->height()), qPrintable(details));
+        QVERIFY2(qAbs(shader->width() * dpr - 1201) < 0.001,
+                 qPrintable(details));
+        QVERIFY2(qAbs(shader->height() * dpr - 799) < 0.001,
+                 qPrintable(details));
+        QVERIFY2(QLineF(unitX, QPointF(1, 0)).length() < 0.001,
+                 qPrintable(details));
+        QVERIFY2(QLineF(unitY, QPointF(0, 1)).length() < 0.001,
+                 qPrintable(details));
+    }
+
+    // Host navigation is continuous while its Translate is moving. Exact
+    // native fetch resumes only after the final transform has settled.
+    root->setProperty("externalMoving", true);
+    QCoreApplication::processEvents();
+    QVERIFY(!shader->property("pixelAlignedIdentity").toBool());
+    const QPointF movingOrigin = shader->mapToItem(
+        view.contentItem(), QPointF());
+    root->setProperty("navigationOffsetX", 0.447);
+    root->setProperty("navigationOffsetY", 0.463);
+    QCoreApplication::processEvents();
+    const QPointF movedOrigin = shader->mapToItem(
+        view.contentItem(), QPointF());
+    QVERIFY(qAbs((movedOrigin.x() - movingOrigin.x()) * dpr
+                 - 0.137 * dpr) < 0.001);
+    QVERIFY(qAbs((movedOrigin.y() - movingOrigin.y()) * dpr
+                 - 0.193 * dpr) < 0.001);
+    root->setProperty("externalMoving", false);
+    QTRY_VERIFY(shader->property("pixelAlignedIdentity").toBool());
+    const QPointF settledOrigin = shader->mapToItem(
+        view.contentItem(), QPointF());
+    QVERIFY(physicallyAligned(settledOrigin.x()));
+    QVERIFY(physicallyAligned(settledOrigin.y()));
+}
+
+
+void ReusableViewerPrimitivesTest::interactiveGeometryIsContinuousAndSettlesToPixelGrid() {
+    QQuickView view;
+    view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+    QObject *root = createRoot(view, R"QML(
+        import QtQuick
+        import ZoinGallery 1.0
+
+        Item {
+            id: testRoot
+            width: 700
+            height: 500
+            property alias zoomable: zoomable
+            function prepare() {
+                zoomable.originalSize = Qt.size(1201 / 1.75, 799 / 1.75)
+                zoomable.setViewport(1, -71.137, -46.219)
+            }
+            function beginPinch() { zoomable.beginPinchZoom(233.17, 151.29) }
+            function updatePinch(scale) { zoomable.updatePinchZoom(scale) }
+            function finishPinch() { zoomable.finishPinchZoom() }
+            function wheelZoom() {
+                zoomable.handleZoomWheel(-120, Qt.ControlModifier, Qt.NoButton)
+            }
+            function beginWheelPan() { zoomable.beginWheelPan() }
+            function wheelPan(dx, dy) { zoomable.panBy(dx, dy, true) }
+            function finishWheelPan() { zoomable.finishWheelPan() }
+            Item {
+                x: 0.13
+                y: 0.19
+                transform: Translate { x: 0.17; y: 0.11 }
+                FlickableZoomable {
+                    id: zoomable
+                    x: 0.23
+                    y: 0.29
+                    width: 480
+                    height: 320
+                    active: true
+                    devicePixelRatio: 1.75
+                    pixelAlignmentRevision: 0.28
+                    animationDuration: 80
+                }
+            }
+        }
+    )QML", QStringLiteral("InteractivePhysicalGrid.qml"));
+    QVERIFY(root);
+    QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+    view.show();
+    view.requestActivate();
+    QTRY_VERIFY_WITH_TIMEOUT(view.isExposed(), 3000);
+    QCOMPARE(view.devicePixelRatio(), qreal(1.75));
+
+    auto *viewport = root->property("zoomable").value<QQuickItem *>();
+    auto *image = viewport ? viewport->property("image").value<QQuickItem *>()
+                           : nullptr;
+    auto *shader = root->findChild<QQuickItem *>(
+        QStringLiteral("galleryViewerImageShader"));
+    auto *pointer = root->findChild<QQuickItem *>(
+        QStringLiteral("galleryViewerPointerArea"));
+    QVERIFY(viewport);
+    QVERIFY(image);
+    QVERIFY(shader);
+    QVERIFY(pointer);
+    const qreal dpr = view.devicePixelRatio();
+    const auto sceneOrigin = [&view](QQuickItem *item) {
+        return item->mapToItem(view.contentItem(), QPointF());
+    };
+    const auto verifyContinuous = [&]() {
+        const QPointF imageOrigin = sceneOrigin(image);
+        const QPointF shaderOrigin = sceneOrigin(shader);
+        const qreal scale = viewport->property("zoomScale").toReal();
+        const QString details = QStringLiteral(
+            "imageOrigin=(%1,%2) shaderOrigin=(%3,%4) scale=%5 extent=(%6,%7)")
+            .arg(imageOrigin.x() * dpr).arg(imageOrigin.y() * dpr)
+            .arg(shaderOrigin.x() * dpr).arg(shaderOrigin.y() * dpr)
+            .arg(scale).arg(shader->width() * dpr).arg(shader->height() * dpr);
+        QVERIFY2(QLineF(imageOrigin, shaderOrigin).length() < 0.001,
+                 qPrintable(details));
+        QVERIFY2(qAbs(shader->width() * dpr - 1201 * scale) < 0.001,
+                 qPrintable(details));
+        QVERIFY2(qAbs(shader->height() * dpr - 799 * scale) < 0.001,
+                 qPrintable(details));
+    };
+    const auto verifySettled = [&]() {
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !viewport->property("viewportAnimationRunning").toBool(), 1500);
+        QCoreApplication::processEvents();
+        const QPointF origin = sceneOrigin(shader);
+        const QPointF corner = shader->mapToItem(
+            view.contentItem(), QPointF(shader->width(), shader->height()));
+        const QString details = QStringLiteral(
+            "settled origin=(%1,%2) corner=(%3,%4) extent=(%5,%6)")
+            .arg(origin.x() * dpr).arg(origin.y() * dpr)
+            .arg(corner.x() * dpr).arg(corner.y() * dpr)
+            .arg(shader->width() * dpr).arg(shader->height() * dpr);
+        for (const qreal edge : {origin.x() * dpr, origin.y() * dpr,
+                                 corner.x() * dpr, corner.y() * dpr}) {
+            QVERIFY2(qAbs(edge - qRound(edge)) < 0.001, qPrintable(details));
+        }
+    };
+
+    // A press without motion must not switch geometry or sampling modes.
+    const QPointF beforePressOrigin = sceneOrigin(shader);
+    const QSizeF beforePressExtent(shader->width(), shader->height());
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, QPoint(240, 160));
+    QTRY_VERIFY(pointer->property("pressed").toBool());
+    QCoreApplication::processEvents();
+    QCOMPARE(sceneOrigin(shader), beforePressOrigin);
+    QCOMPARE(QSizeF(shader->width(), shader->height()), beforePressExtent);
+
+    // The real pointer path starts continuous presentation in the same event
+    // that applies its first fractional delta.
+    QTest::mouseMove(&view, QPoint(247, 155));
+    QTRY_VERIFY(viewport->property("viewportAnimationRunning").toBool());
+    verifyContinuous();
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, QPoint(247, 155));
+    verifySettled();
+
+    // Pinch changes both scale and position synchronously while the fingers move.
+    QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+    QVERIFY(QMetaObject::invokeMethod(root, "beginPinch"));
+    QVERIFY(QMetaObject::invokeMethod(root, "updatePinch",
+        Q_ARG(QVariant, 1.0137)));
+    QCoreApplication::processEvents();
+    verifyContinuous();
+    QVERIFY(QMetaObject::invokeMethod(root, "finishPinch"));
+    verifySettled();
+
+    // Ctrl-wheel zoom and its animation stay continuous, then return to the grid.
+    QVERIFY(QMetaObject::invokeMethod(root, "wheelZoom"));
+    QTRY_VERIFY(viewport->property("viewportAnimationRunning").toBool());
+    verifyContinuous();
+    QTest::qWait(16);
+    verifyContinuous();
+    verifySettled();
+
+    // Wheel panning is direct manipulation; finishWheelPan starts inertia.
+    QVERIFY(QMetaObject::invokeMethod(root, "beginWheelPan"));
+    QVERIFY(QMetaObject::invokeMethod(root, "wheelPan",
+        Q_ARG(QVariant, -0.137), Q_ARG(QVariant, 0.193)));
+    QCoreApplication::processEvents();
+    verifyContinuous();
+    QVERIFY(QMetaObject::invokeMethod(root, "finishWheelPan"));
+    QTRY_VERIFY(viewport->property("viewportAnimationRunning").toBool());
+    verifyContinuous();
+    QTest::qWait(16);
+    verifyContinuous();
+    verifySettled();
+}
+
+
+void ReusableViewerPrimitivesTest::centeredMinificationKeepsItsPhysicalCenter_data() {
+    QTest::addColumn<QSize>("nativeSize");
+    QTest::addColumn<int>("rotation");
+    QTest::newRow("odd") << QSize(1201, 799) << 0;
+    QTest::newRow("even") << QSize(1200, 800) << 0;
+    QTest::newRow("mixed-rotated") << QSize(1201, 800) << 1;
+}
+
+void ReusableViewerPrimitivesTest::centeredMinificationKeepsItsPhysicalCenter() {
+    QFETCH(QSize, nativeSize);
+    QFETCH(int, rotation);
+    QQuickView view;
+    view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+    QObject *root = createRoot(view, R"QML(
+        import QtQuick
+        import ZoinGallery 1.0
+        Item {
+            width: 700; height: 500
+            function prepare(w, h, rotation) {
+                zoomable.originalSize = Qt.size(w / 1.75, h / 1.75)
+                zoomable.rotationMode = rotation
+            }
+            function applyScale(value) { zoomable.setViewport(value, 0, 0) }
+            function fitNativeViewport(w, h) {
+                zoomable.width = w / 1.75
+                zoomable.height = h / 1.75
+                zoomable.setViewport(1, 0, 0)
+            }
+            Item {
+                x: 0.13; y: 0.19
+                FlickableZoomable {
+                    id: zoomable
+                    x: 0.23; y: 0.29
+                    width: 613; height: 401
+                    devicePixelRatio: 1.75
+                    animationDuration: 0
+                }
+            }
+        }
+    )QML", QStringLiteral("CenteredMinification.qml"));
+    QVERIFY(root);
+    QVERIFY(QMetaObject::invokeMethod(root, "prepare",
+        Q_ARG(QVariant, nativeSize.width()), Q_ARG(QVariant, nativeSize.height()),
+        Q_ARG(QVariant, rotation)));
+    view.show();
+    QTRY_VERIFY(view.isExposed());
+    const qreal dpr = view.devicePixelRatio();
+    QCOMPARE(dpr, qreal(1.75));
+    auto *leaf = root->findChild<QQuickItem *>(
+        QStringLiteral("galleryViewerImageShader"));
+    QVERIFY(leaf);
+    QPointF fixedCenter;
+    for (int step = 0; step != 30; ++step) {
+        const qreal scale = 0.3 - step * 0.001;
+        QVERIFY(QMetaObject::invokeMethod(root, "applyScale", Q_ARG(QVariant, scale)));
+        QCoreApplication::processEvents();
+        const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF()) * dpr;
+        const QPointF corner = leaf->mapToItem(view.contentItem(),
+            QPointF(leaf->width(), leaf->height())) * dpr;
+        const QPointF center = (origin + corner) / 2;
+        if (step == 0) fixedCenter = center;
+        const QString details = QStringLiteral(
+            "step=%1 scale=%2 origin=(%3,%4) center=(%5,%6) expected=(%7,%8)")
+            .arg(step).arg(scale).arg(origin.x()).arg(origin.y())
+            .arg(center.x()).arg(center.y()).arg(fixedCenter.x()).arg(fixedCenter.y());
+        QVERIFY2(qAbs(center.x() - fixedCenter.x()) < 0.001, qPrintable(details));
+        QVERIFY2(qAbs(center.y() - fixedCenter.y()) < 0.001, qPrintable(details));
+        for (qreal edge : {origin.x(), origin.y(), corner.x(), corner.y()})
+            QVERIFY2(qAbs(edge - qRound(edge)) < 0.001, qPrintable(details));
+        QVERIFY(qAbs(leaf->width() * dpr - nativeSize.width() * scale) <= 1.001);
+        QVERIFY(qAbs(leaf->height() * dpr - nativeSize.height() * scale) <= 1.001);
+    }
+    QVERIFY(QMetaObject::invokeMethod(root, "applyScale", Q_ARG(QVariant, 1.0)));
+    QCOMPARE(qRound(leaf->width() * dpr), nativeSize.width());
+    QCOMPARE(qRound(leaf->height() * dpr), nativeSize.height());
+    // A fractional ancestor can leave less than N physical pixels inside an
+    // N-pixel viewport after alignment. Native 1:1 must still remain N pixels.
+    QVERIFY(QMetaObject::invokeMethod(root, "fitNativeViewport",
+        Q_ARG(QVariant, nativeSize.width()), Q_ARG(QVariant, nativeSize.height())));
+    QCOMPARE(qRound(leaf->width() * dpr), nativeSize.width());
+    QCOMPARE(qRound(leaf->height() * dpr), nativeSize.height());
+
+    // The terminal one-pixel size cannot preserve even source parity. It
+    // must stay visible and aligned instead of becoming a two-pixel scanline.
+    QVERIFY(QMetaObject::invokeMethod(root, "prepare", Q_ARG(QVariant, 2),
+        Q_ARG(QVariant, 2), Q_ARG(QVariant, 0)));
+    QVERIFY(QMetaObject::invokeMethod(root, "applyScale", Q_ARG(QVariant, 0.5)));
+    QCOMPARE(leaf->width() * dpr, 1.0);
+    QCOMPARE(leaf->height() * dpr, 1.0);
+    const QPointF terminalOrigin = leaf->mapToItem(view.contentItem(), QPointF()) * dpr;
+    QVERIFY(qAbs(terminalOrigin.x() - qRound(terminalOrigin.x())) < 0.001);
+    QVERIFY(qAbs(terminalOrigin.y() - qRound(terminalOrigin.y())) < 0.001);
+}
+
+void ReusableViewerPrimitivesTest::wheelMinificationKeepsItsCenterDuringAnimation() {
+    QQuickView view;
+    view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+    QObject *root = createRoot(view, R"QML(
+        import QtQuick
+        import ZoinGallery 1.0
+        Item {
+            width: 700; height: 500
+            property alias zoomable: zoomable
+            function prepare() {
+                zoomable.originalSize = Qt.size(1201 / 1.75, 799 / 1.75)
+                zoomable.setViewport(0.3, 0, 0)
+            }
+            function zoomOut() {
+                zoomable.handleZoomWheel(-120, Qt.ControlModifier, Qt.NoButton)
+            }
+            Item {
+                x: 0.13; y: 0.19
+                FlickableZoomable {
+                    id: zoomable
+                    x: 0.23; y: 0.29
+                    width: 613; height: 401
+                    devicePixelRatio: 1.75
+                    animationDuration: 100
+                }
+            }
+        }
+    )QML", QStringLiteral("CenteredWheelMinification.qml"));
+    QVERIFY(root);
+    QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+    view.show();
+    QTRY_VERIFY(view.isExposed());
+    const qreal dpr = view.devicePixelRatio();
+    QCOMPARE(dpr, qreal(1.75));
+    auto *viewport = root->property("zoomable").value<QQuickItem *>();
+    auto *leaf = root->findChild<QQuickItem *>(
+        QStringLiteral("galleryViewerImageShader"));
+    QVERIFY(viewport);
+    QVERIFY(leaf);
+    const QPointF fixedCenter = leaf->mapToItem(view.contentItem(),
+        QPointF(leaf->width() / 2, leaf->height() / 2)) * dpr;
+    for (int gesture = 0; gesture != 3; ++gesture) {
+        QVERIFY(QMetaObject::invokeMethod(root, "zoomOut"));
+        QTRY_VERIFY(viewport->property("viewportAnimationRunning").toBool());
+        bool sampledAnimation = false;
+        for (int sample = 0; sample != 200
+             && viewport->property("viewportAnimationRunning").toBool(); ++sample) {
+            const QPointF center = leaf->mapToItem(view.contentItem(),
+                QPointF(leaf->width() / 2, leaf->height() / 2)) * dpr;
+            const qreal scale = viewport->property("zoomScale").toReal();
+            const QString details = QStringLiteral(
+                "gesture=%1 scale=%2 center=(%3,%4) expected=(%5,%6) extent=(%7,%8)")
+                .arg(gesture).arg(scale).arg(center.x()).arg(center.y())
+                .arg(fixedCenter.x()).arg(fixedCenter.y())
+                .arg(leaf->width() * dpr).arg(leaf->height() * dpr);
+            QVERIFY2(qAbs(center.x() - fixedCenter.x()) < 0.001, qPrintable(details));
+            QVERIFY2(qAbs(center.y() - fixedCenter.y()) < 0.001, qPrintable(details));
+            QVERIFY2(qAbs(leaf->width() * dpr - 1201 * scale) < 0.001,
+                     qPrintable(details));
+            QVERIFY2(qAbs(leaf->height() * dpr - 799 * scale) < 0.001,
+                     qPrintable(details));
+            sampledAnimation = true;
+            QTest::qWait(8);
+        }
+        QVERIFY(sampledAnimation);
+        QVERIFY(!viewport->property("viewportAnimationRunning").toBool());
+        const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF()) * dpr;
+        const QPointF center = leaf->mapToItem(view.contentItem(),
+            QPointF(leaf->width() / 2, leaf->height() / 2)) * dpr;
+        QVERIFY(qAbs(center.x() - fixedCenter.x()) < 0.001);
+        QVERIFY(qAbs(center.y() - fixedCenter.y()) < 0.001);
+        QVERIFY(qAbs(origin.x() - qRound(origin.x())) < 0.001);
+        QVERIFY(qAbs(origin.y() - qRound(origin.y())) < 0.001);
+    }
+}
 
 QTEST_MAIN(ReusableViewerPrimitivesTest)
 #include "ReusableViewerPrimitivesTest.moc"

@@ -773,6 +773,61 @@ private slots:
         QCOMPARE(nativeItem->property("source").toUrl(), nativeUrl);
     }
 
+    void wheelZoomBurstKeepsPendingTarget() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            import ZoinGallery.Native 1.0
+            FlickableZoomable {
+                id: viewport
+                width: 640; height: 420
+                devicePixelRatio: 1.75
+                animationDuration: 150
+                function prepare() {
+                    setImage("", Qt.size(3200, 1800), 0, 0)
+                    setViewport(1, 0, 0)
+                }
+                ViewerWheelArea {
+                    anchors.fill: parent
+                    // Both navigation controllers finish wheel panning when
+                    // forwarding a zoom event without active navigation.
+                    onWheelForwarded: viewport.finishWheelPan()
+                    onZoomWheelReceived: (delta, modifiers, buttons) =>
+                        viewport.handleZoomWheel(delta, modifiers, buttons)
+                }
+            }
+        )QML", QStringLiteral("WheelZoomBurst.qml"));
+        QVERIFY(root);
+        view.show();
+        QTRY_VERIFY(view.isExposed());
+        QTest::qWait(150);
+        QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+        qreal expected = 1;
+        for (int delta : {120, 120, 120, -120, -120}) {
+            QTest::wheelEvent(&view, QPoint(320, 210), QPoint(0, delta),
+                             QPoint(), Qt::ControlModifier);
+            expected *= delta > 0 ? 1.32 : 1 / 1.32;
+            qInfo() << "wheel burst" << delta << "current"
+                    << root->property("zoomScale") << "target"
+                    << root->property("targetZoomScale");
+            QVERIFY2(qAbs(root->property("targetZoomScale").toReal() - expected) < 1e-8,
+                     "Forwarding a wheel event discarded the previous zoom destination");
+            QTest::qWait(20);
+        }
+        QVERIFY(QMetaObject::invokeMethod(root, "finishWheelPan"));
+        QCOMPARE(root->property("targetZoomScale").toReal(), expected);
+        QTRY_VERIFY(qAbs(root->property("zoomScale").toReal() - expected) < 1e-8);
+        QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+        for (qreal scale : {0.75, 0.5, 0.375}) {
+            QTest::wheelEvent(&view, QPoint(320, 210), QPoint(0, -120),
+                             QPoint(), Qt::ControlModifier | Qt::AltModifier);
+            QCOMPARE(root->property("targetZoomScale").toReal(), scale);
+        }
+        QTRY_COMPARE(root->property("zoomScale").toReal(), 0.375);
+    }
+
     void altZoomUsesLevels() {
         QQuickView view;
         view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));

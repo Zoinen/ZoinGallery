@@ -93,6 +93,7 @@ Item {
     readonly property real minZoomScale: 0.005
     readonly property real maxZoomScale: 128
     property int animationDuration
+    property bool debugWheelZoom: false
 
     property real imagePressedX: 0
     property real imagePressedY: 0
@@ -283,6 +284,9 @@ Item {
         zoomFitView = false
 
         zoomAnimation.to *= delta
+        if (debugWheelZoom)
+            console.debug("[FIX:wheel-zoom] delta", angleDeltaY,
+                          "current", zoomScale, "target", targetZoomScale)
         if (modifiers === Qt.ControlModifier && !(buttons & Qt.LeftButton)) {
             xAnimation.to = flickableArea.width / 2
                     - ((flickableArea.width / 2 - viewerImage.x) / zoomScale)
@@ -726,6 +730,10 @@ Item {
     }
 
     function finishWheelPan() {
+        // Zoom forwarding and delayed pan-end notifications can reach here
+        // without a pan. They must not replace a pending zoom destination.
+        if (!wheelPanActive)
+            return
         if (zoomFitView) {
             cancelWheelPan()
             return

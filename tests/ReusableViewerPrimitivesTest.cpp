@@ -715,6 +715,132 @@ private slots:
         QTRY_COMPARE(root->property("textureSource").value<QQuickItem *>(), nativeItem);
     }
 
+    void underFitNativeTierStartsWithoutAnimationDelay() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString basePath = directory.filePath(QStringLiteral("base.png"));
+        const QString nativePath = directory.filePath(QStringLiteral("native.png"));
+        QImage base(320, 180, QImage::Format_ARGB32_Premultiplied);
+        QImage native(3200, 1800, QImage::Format_ARGB32_Premultiplied);
+        base.fill(Qt::blue);
+        native.fill(Qt::red);
+        QVERIFY(base.save(basePath));
+        QVERIFY(native.save(nativePath));
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            FlickableZoomable {
+                width: 640; height: 420
+                devicePixelRatio: 1
+                animationDuration: 150
+                property url testBase
+                property url testNative
+                function prepareBase() {
+                    setImage(testBase, Qt.size(3200, 1800), 0, 1)
+                    setViewport(0.1, 0, 0)
+                }
+                function installNative() {
+                    setImage(testNative, Qt.size(3200, 1800), 0, 2)
+                }
+            }
+        )QML", QStringLiteral("UnderFitNativeHandoff.qml"));
+        QVERIFY(root);
+        const QUrl baseUrl = QUrl::fromLocalFile(basePath);
+        const QUrl nativeUrl = QUrl::fromLocalFile(nativePath);
+        root->setProperty("testBase", baseUrl);
+        root->setProperty("testNative", nativeUrl);
+        QVERIFY(QMetaObject::invokeMethod(root, "prepareBase"));
+        auto *baseItem = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerBaseImage"));
+        auto *nativeItem = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerNativeImage"));
+        QVERIFY(baseItem);
+        QVERIFY(nativeItem);
+        QTRY_COMPARE(baseItem->property("source").toUrl(), baseUrl);
+        QVERIFY(!root->property("zoomFitView").toBool());
+        const qreal fitScale = root->property("fitToHeight").toBool()
+            ? root->property("height").toReal() / 1800.0
+            : root->property("width").toReal() / 3200.0;
+        QVERIFY(root->property("zoomScale").toReal() < fitScale);
+
+        QVERIFY(QMetaObject::invokeMethod(root, "installNative"));
+        qInfo() << "[FIX:under-fit-native-handoff]"
+                << "zoom" << root->property("zoomScale").toReal()
+                << "nativeSource" << nativeItem->property("source").toUrl();
+        QCOMPARE(nativeItem->property("source").toUrl(), nativeUrl);
+    }
+
+    void altZoomUsesLevels() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            import ZoinGallery.Native 1.0
+            FlickableZoomable {
+                id: viewport
+                width: 640; height: 420
+                devicePixelRatio: 1.75
+                animationDuration: 150
+                property bool zoomInPressed: false
+                property bool zoomOutPressed: false
+                function updateHeldKeyMotion() {}
+                function prepare(scale) {
+                    setImage("", Qt.size(3200, 1800), 0, 0)
+                    setViewport(scale, 0, 0)
+                }
+                function altKey(direction) {
+                    input.handleMotionPressed({key: direction > 0 ? Qt.Key_Plus : Qt.Key_Minus,
+                                               modifiers: Qt.AltModifier, isAutoRepeat: false})
+                }
+                property GalleryViewerInput input: GalleryViewerInput {
+                    viewer: viewport
+                    viewport: viewport
+                }
+                ViewerWheelArea {
+                    anchors.fill: parent
+                    onZoomWheelReceived: (delta, modifiers, buttons) =>
+                        viewport.handleZoomWheel(delta, modifiers, buttons)
+                }
+            }
+        )QML", QStringLiteral("DiscreteViewerZoom.qml"));
+        QVERIFY(root);
+        view.show();
+        QTRY_VERIFY(view.isExposed());
+        QVERIFY(QMetaObject::invokeMethod(root, "prepare", Q_ARG(QVariant, 0.23)));
+        QTest::wheelEvent(&view, QPoint(320, 210), QPoint(0, 120), QPoint(), Qt::AltModifier);
+        QCOMPARE(root->property("targetZoomScale").toReal(), 0.25);
+        // A second event during animation must advance from the pending target.
+        QTest::wheelEvent(&view, QPoint(320, 210), QPoint(0, 120), QPoint(), Qt::AltModifier | Qt::ControlModifier);
+        QCOMPARE(root->property("targetZoomScale").toReal(), 0.375);
+        QVERIFY(QMetaObject::invokeMethod(root, "altKey", Q_ARG(QVariant, -1)));
+        QCOMPARE(root->property("targetZoomScale").toReal(), 0.25);
+        QTRY_COMPARE(root->property("zoomScale").toReal(), 0.25);
+        QVERIFY(!root->property("zoomFitView").toBool());
+        const QList<qreal> levels = {0.0078125, 0.01171875, 0.015625, 0.0234375,
+            0.03125, 0.046875, 0.0625, 0.09375, 0.125, 0.1875, 0.25, 0.375,
+            0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128};
+        QVERIFY(QMetaObject::invokeMethod(root, "prepare", Q_ARG(QVariant, levels.first())));
+        for (int i = 1; i < levels.size(); ++i) {
+            QVERIFY(QMetaObject::invokeMethod(root, "altKey", Q_ARG(QVariant, 1)));
+            QCOMPARE(root->property("targetZoomScale").toReal(), levels[i]);
+        }
+        QVERIFY(QMetaObject::invokeMethod(root, "altKey", Q_ARG(QVariant, 1)));
+        QCOMPARE(root->property("targetZoomScale").toReal(), levels.last());
+        for (int i = levels.size() - 2; i >= 0; --i) {
+            QVERIFY(QMetaObject::invokeMethod(root, "altKey", Q_ARG(QVariant, -1)));
+            QCOMPARE(root->property("targetZoomScale").toReal(), levels[i]);
+        }
+        QVERIFY(QMetaObject::invokeMethod(root, "altKey", Q_ARG(QVariant, -1)));
+        QCOMPARE(root->property("targetZoomScale").toReal(), levels.first());
+        QVERIFY(QMetaObject::invokeMethod(root, "prepare", Q_ARG(QVariant, 1.0)));
+        QTest::wheelEvent(&view, QPoint(320, 210), QPoint(0, 120), QPoint(), Qt::ControlModifier);
+        QVERIFY(qAbs(root->property("targetZoomScale").toReal() - 1.32) < 0.0001);
+    }
+
     void imageLeavesSnapThroughFractionalAncestors() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -1090,7 +1216,7 @@ void ReusableViewerPrimitivesTest::resamplerChoosesAndRetainsPyramidLevels() {
                     return resampler.levelForSize(Qt.size(w, h),
                                                   Qt.size(outW, outH))
                 }
-                QtObject {
+                Item {
                     id: sourceMetadata
                     property size sourceSize: Qt.size(8000, 5000)
                     property url source: "file:///first.png"

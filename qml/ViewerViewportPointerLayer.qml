@@ -156,7 +156,9 @@ Item {
         }
 
         onWheel: wheel => root.viewport.handleZoomWheel(
-                     wheel.angleDelta.y, wheel.modifiers, wheel.buttons)
+                     wheel.angleDelta.y !== 0 ? wheel.angleDelta.y
+                         : (wheel.modifiers & Qt.AltModifier) ? wheel.angleDelta.x : 0,
+                     wheel.modifiers, wheel.buttons)
 
         onDoubleClicked: mouse => {
             if (mouse.button === Qt.LeftButton)

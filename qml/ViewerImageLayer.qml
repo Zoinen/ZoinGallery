@@ -234,15 +234,7 @@ Item {
             viewportSize: Qt.size(
                 width * root.viewport.devicePixelRatio,
                 height * root.viewport.devicePixelRatio)
-            // At a settled native 1:1 scale every fragment represents exactly
-            // one decoded source texel. Bypass bilinear sampling only in that
-            // resting state; active pan and zoom retain continuous filtering.
-            pixelAlignedIdentity: !root.moving
-                && Math.abs(root.viewport.zoomScale - 1) < 0.000001
-                && imageSource === nativeImage
-                && nativeImage.status === Image.Ready
-                && Math.abs(imagePixelSize.width - viewportSize.width) < 0.01
-                && Math.abs(imagePixelSize.height - viewportSize.height) < 0.01
+            pixelAligned: !root.moving
             showCheckerboard: root.viewport.checkerboardEnabled
                              && root.viewport.imageTextureReady
             checkerboardSize: 4 * root.viewport.devicePixelRatio
@@ -284,6 +276,7 @@ Item {
                 width: cropImage.width
                 height: cropImage.height
                 imageSource: cropImage
+                pixelAligned: !root.moving
                 viewportSize: Qt.size(width * root.dpr, height * root.dpr)
                 showCheckerboard: imageShader.showCheckerboard
                 checkerboardSize: imageShader.checkerboardSize

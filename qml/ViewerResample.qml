@@ -2,23 +2,21 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 
-ShaderEffect {
+ViewerResampleEffect {
     id: root
 
     // Input is a texture-providing Image, with its decoded physical sourceSize.
     // Only the final pass follows viewport geometry. Half-size levels remain
     // unchanged during pan/zoom and ShaderEffectSource caches their rendering.
     property var imageSource: null
-    property size viewportSize: Qt.size(width, height)
-    property size sourceExtent: Qt.size(0, 0)
-    property vector2d checkerboardOffset: Qt.vector2d(0, 0)
-    property bool showCheckerboard: false
-    property int checkerboardSize: 4
-    property real borderRadius: 0
-    readonly property bool intermediate: false
-    // Native 1:1 presentation may fetch exact texels once its scene geometry
-    // has settled on the physical pixel grid. Keep this false during motion.
-    property bool pixelAlignedIdentity: false
+    viewportSize: Qt.size(width, height)
+    // Identity belongs to the selected texture, which may already be a half-
+    // or quarter-size level. The final vertex stage resolves resting geometry
+    // against the actual framebuffer; motion keeps continuous coordinates.
+    pixelAlignedIdentity: pixelAligned
+        && selectedPixelSize.width > 0 && selectedPixelSize.height > 0
+        && Math.abs(selectedPixelSize.width - viewportSize.width) < 0.01
+        && Math.abs(selectedPixelSize.height - viewportSize.height) < 0.01
 
     readonly property size imagePixelSize: imageSource
         ? imageSource.sourceSize : Qt.size(0, 0)
@@ -65,13 +63,15 @@ ShaderEffect {
     onRequiredLevelsChanged: retainRequiredLevels()
     Component.onCompleted: retainRequiredLevels()
 
-    property var source: {
+    readonly property size selectedPixelSize: source && source !== imageSource
+        ? source.textureSize : imagePixelSize
+
+    source: {
         root.pyramidRevision
         const level = requiredLevels > 0
             ? pyramid.itemAt(requiredLevels - 1) : null
         return level ? level.texture : imageSource
     }
-    fragmentShader: "qrc:/ZoinGallery/resources/viewer_resample.frag.qsb"
 
     Repeater {
         id: pyramid
@@ -101,24 +101,18 @@ ShaderEffect {
                 return previous ? previous.texture : root.imageSource
             }
 
-            ShaderEffect {
+            ViewerResampleEffect {
                 id: reduction
                 width: level.pixelSize.width
                 height: level.pixelSize.height
-                property var source: level.inputTexture
-                property size viewportSize: level.pixelSize
+                source: level.inputTexture
+                viewportSize: level.pixelSize
                 // Preserve the exact two-source-pixel sampling grid on odd
                 // axes; the trailing source pixel is outside this half level.
-                property size sourceExtent: Qt.size(
+                sourceExtent: Qt.size(
                     Math.min(level.inputPixelSize.width, level.pixelSize.width * 2),
                     Math.min(level.inputPixelSize.height, level.pixelSize.height * 2))
-                property vector2d checkerboardOffset: Qt.vector2d(0, 0)
-                property bool showCheckerboard: false
-                property int checkerboardSize: 4
-                property real borderRadius: 0
-                property bool intermediate: true
-                property bool pixelAlignedIdentity: false
-                fragmentShader: root.fragmentShader
+                intermediate: true
             }
 
             ShaderEffectSource {

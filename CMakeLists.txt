@@ -557,7 +557,7 @@ if(BUILD_TESTING)
     add_test(NAME ReusableViewerPrimitivesTest
         COMMAND ZoinGalleryReusableViewerPrimitivesTests)
     set_tests_properties(ReusableViewerPrimitivesTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic;QT_SCALE_FACTOR=1.75")
 
     add_executable(ViewerResampleGpuTests tests/ViewerResampleGpuTest.cpp)
     target_compile_definitions(ViewerResampleGpuTests PRIVATE
@@ -569,7 +569,7 @@ if(BUILD_TESTING)
         Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME ViewerResampleGpuTest COMMAND ViewerResampleGpuTests)
     set_tests_properties(ViewerResampleGpuTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;QT_QUICK_CONTROLS_STYLE=Basic"
         LABELS "gpu;numeric")
 
     add_executable(ZoinGalleryEntryHoverTests
@@ -868,6 +868,7 @@ qt_add_shaders(ZoinGalleryQml zoin_gallery_shaders
     PREFIX "/ZoinGallery"
     FILES
         "resources/shader.frag"
+        "resources/viewer_resample.vert"
         "resources/viewer_resample.frag"
         "resources/sphere.frag"
         "resources/outline.frag")
@@ -936,6 +937,7 @@ qt6_add_qml_module(ZoinGalleryQml
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery"
     INSTALLED_PLUGIN_TARGET ZoinGallery::ZoinGalleryQmlplugin
     INSTALLED_QMLDIR_PATH "lib/qml/ZoinGallery/qmldir"
+    SOURCES ViewerResampleEffect.h ViewerResampleEffect.cpp
     QML_FILES ${ZOIN_QML_FILES}
     RESOURCES ${ZOIN_QML_RESOURCES}
     )
@@ -1009,6 +1011,7 @@ target_link_libraries(ZoinGalleryCore PUBLIC
 target_link_libraries(ZoinGalleryQml PRIVATE
     Qt${QT_VERSION_MAJOR}::Qml
     Qt${QT_VERSION_MAJOR}::Quick
+    Qt${QT_VERSION_MAJOR}::GuiPrivate
     Qt${QT_VERSION_MAJOR}::QuickControls2)
 
 if(ZOIN_BUILD_STANDALONE)

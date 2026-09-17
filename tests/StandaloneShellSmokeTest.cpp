@@ -546,9 +546,7 @@ private slots:
             swipeNeighborShader->height() * viewerDpr);
         QCOMPARE(swipeNeighborShader->property("viewportSize").toSizeF(),
                  expectedTransitionViewportSize);
-        QCOMPARE(swipeNeighborShader->property("fragmentShader").toUrl(),
-                 QUrl(QStringLiteral(
-                     "qrc:/ZoinGallery/resources/viewer_resample.frag.qsb")));
+        QVERIFY(swipeNeighborShader->inherits("ViewerResampleEffect"));
         for (QQuickItem *leaf : {swipeNeighborImage, swipeNeighborShader}) {
             const QPointF origin = leaf->mapToScene(QPointF());
             const auto aligned = [viewerDpr](qreal value) {

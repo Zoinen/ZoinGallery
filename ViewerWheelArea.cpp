@@ -33,9 +33,15 @@ void ViewerWheelArea::mouseReleaseEvent(QMouseEvent *event)
 
 void ViewerWheelArea::wheelEvent(QWheelEvent *event)
 {
-    if (event->modifiers() == Qt::ControlModifier || (event->buttons() & Qt::LeftButton)) {
+    if (event->modifiers() == Qt::ControlModifier
+            || event->modifiers().testFlag(Qt::AltModifier)
+            || (event->buttons() & Qt::LeftButton)) {
         emit wheelForwarded();
-        emit zoomWheelReceived(event->angleDelta().y(),
+        // Qt's Windows pointer handler reports Alt+vertical-wheel on X.
+        const QPoint delta = event->angleDelta();
+        const int zoomDelta = delta.y() != 0 ? delta.y()
+            : event->modifiers().testFlag(Qt::AltModifier) ? delta.x() : 0;
+        emit zoomWheelReceived(zoomDelta,
                                int(event->modifiers()),
                                int(event->buttons()));
         // The QML handler invokes FlickableZoomable's original wheel math.

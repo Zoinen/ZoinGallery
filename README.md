@@ -76,18 +76,30 @@ assets, and codec dependencies as `zoingallery/0.1.0`.
 
 ### Viewer resampling
 
-The image viewer uses a scale-aware BC cubic filter (`B=-0.4`, `C=0.8`).
+The image viewer reduces images with a scale-aware BC cubic filter
+(`B=-0.4`, `C=0.8`).
 `ViewerResampler` prepares CPU fit frames with normalized separable weights;
 `ViewerResample.qml` uses the same kernel in a GPU shader. Both reduce through
 floor-rounded half-size levels on an exact 2:1 sampling grid before filtering
 the remaining scale. A one-pixel axis stays one pixel. The GPU
 keeps generated levels for the current source during pan and zoom, and selects
 the smallest level that still covers the physical output size. Sampling is
-based on physical pixel derivatives, including the window DPR. One-to-one
-display bypasses the reduction filter. Once a native 100% view has settled on
-the physical pixel grid, the shader fetches one exact source texel per output
-pixel; during pan and zoom it retains continuous linear sampling and snaps only
-after interaction or inertia ends. There is no automatic unsharp mask.
+based on physical pixel derivatives, including the window DPR. The native
+`ViewerResampleEffect` material supplies the actual render-target viewport to
+the vertex shader. At rest, that shader aligns the projected image's center and
+pixel count, including quarter turns, so fractional-DPR window-size rounding
+cannot add a second interpolation. Oversized axes preserve the viewer's pan
+origin when correcting that rounding, including leading/trailing clipping and
+large negative offsets. If the selected texture matches the output
+pixel count, it fetches exact texels; this also covers half/quarter pyramid
+levels and prepared fit frames. During pan, zoom and transitions the geometry
+and sampling stay continuous. Magnification uses a separate interpolating
+Catmull-Rom cubic (`B=0`, `C=0.5`) over 4x4 source texels. Its negative weights
+retain fine-detail contrast and can produce ringing around strong edges.
+Each texel is decoded to linear light before filtering, with premultiplied
+alpha preserved and the result bounded before encoding. Hardware bilinear
+sampling is not used to combine encoded texels for magnification. There is no
+automatic unsharp mask.
 
 Viewer requests ask decoders for native pixels before preparing a fit frame,
 avoiding scaled-decode shortcuts with a different kernel. Embedded previews
@@ -114,7 +126,14 @@ decode, and large reductions. QML state tests cover source selection, pyramid
 reuse, interaction continuity, and settled physical-pixel geometry at 175%
 scale. Offscreen GPU texture readbacks verify exact native texels, fractional
 motion sampling, linear-light averaging, transparency, and CPU/GPU agreement at
-23%, 25%, odd source dimensions, and 175% scale. These checks compare pixel
+23%, 25%, odd source dimensions, and 175% scale. Full-viewer regressions use a
+3840-by-2076 framebuffer at 175% scale, whose rounded logical extent does not
+map exactly to its physical size. They verify every image pixel, the boundary,
+quarter turns, and the return from continuous motion to exact sampling.
+Magnification tests check analytic fine-line contrast at 200%, an independent
+cubic Hermite reference at fractional zoom levels, transparent edges, single-row
+and single-column images, and magnified motion and clipping at 175% display scale.
+These checks compare pixel
 values without screenshots or human visual inspection; interactive image
 quality and GPU performance still require a separate visual check.
 

@@ -104,6 +104,17 @@ QtObject {
         if (viewer.customContent || viewer.completingClose)
             return
         viewer.finishViewerNavigationAnimationNow()
+        // Below Fit, resetting to Fit would enlarge the image on the first
+        // closing frame. Reuse the rectangle-based collapse to preserve the
+        // exact displayed image geometry while moving it back to its tile.
+        if (!imageViewport.zoomFitView
+                && imageViewport.zoomScale < imageViewport.fitZoomScale()
+                && beginPinchClose()) {
+            viewer.clearHeldKeys()
+            finishPinchClose(true)
+            viewer.completingClose = true
+            return
+        }
         viewer.completingClose = true
         viewer.returningFromPinch = false
         viewer.pinchCloseActive = false

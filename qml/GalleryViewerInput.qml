@@ -41,6 +41,15 @@ QtObject {
     function handleMotionPressed(event) {
         if (!isMotionKey(event))
             return false
+        if ((event.modifiers & Qt.AltModifier)
+                && (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal
+                    || event.key === Qt.Key_Minus)) {
+            viewer.zoomInPressed = false
+            viewer.zoomOutPressed = false
+            viewer.updateHeldKeyMotion()
+            viewport.stepZoom(event.key === Qt.Key_Minus ? -1 : 1, false)
+            return true
+        }
         if (event.isAutoRepeat) {
             event.accepted = true
             return true

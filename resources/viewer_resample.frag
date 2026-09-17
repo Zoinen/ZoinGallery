@@ -1,6 +1,7 @@
 #version 450
 
 layout(location = 0) in vec2 qt_TexCoord0;
+layout(location = 1) flat in int pixelGridAligned;
 layout(location = 0) out vec4 fragColor;
 layout(binding = 1) uniform sampler2D source;
 
@@ -15,9 +16,13 @@ layout(std140, binding = 0) uniform buf {
     bool intermediate;
     bool pixelAlignedIdentity;
     vec2 sourceExtent;
+    bool pixelAligned;
+    vec2 itemSize;
+    vec4 framebufferRect;
+    float framebufferYDirection;
 } ubuf;
 
-// sRGB texture reads linearize the samples before convolution.
+// Decode each source texel's transfer function before convolution.
 // These transfer functions operate on the existing RGB data only; ICC profile
 // selection, conversion and tagging remain the decoder's responsibility.
 vec3 linearize(vec3 color)
@@ -72,6 +77,49 @@ float kernel(float distance)
     return 0.0;
 }
 
+// Interpolating Catmull-Rom cubic (B=0, C=0.5). Unlike the reduction kernel,
+// this preserves source samples while retaining contrast between them.
+vec4 magnificationWeights(float phase)
+{
+    return ((vec4(-0.5, 1.5, -1.5, 0.5) * phase
+             + vec4(1.0, -2.5, 2.0, -0.5)) * phase
+             + vec4(-0.5, 0.0, 0.5, 0.0)) * phase
+             + vec4(0.0, 1.0, 0.0, 0.0);
+}
+
+vec4 magnify(vec2 position, vec2 size)
+{
+    vec2 base = floor(position);
+    vec2 phase = position - base;
+    vec4 wx = magnificationWeights(phase.x);
+    vec4 wy = magnificationWeights(phase.y);
+    vec4 color = vec4(0.0);
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 0; x < 4; ++x) {
+            vec2 pixel = clamp(base + vec2(x - 1, y - 1), vec2(0.0), size - 1.0);
+            // Hardware bilinear reads would mix encoded values before their
+            // transfer decoding. Keep all 16 samples in linear light instead.
+            color += linearSample(ivec2(pixel)) * wx[x] * wy[y];
+        }
+    }
+    return color;
+}
+
+vec4 encodeFilteredColor(vec4 color, vec2 outputPosition)
+{
+    // Negative cubic lobes must not escape the premultiplied RGBA domain.
+    color.a = clamp(color.a, 0.0, 1.0);
+    color.rgb = clamp(color.rgb, vec3(0.0), vec3(color.a));
+    if (color.a <= 0.0)
+        return vec4(0.0);
+    color.rgb = encode(color.rgb / color.a) * color.a;
+    // Every completed pass is stored as encoded RGBA8.
+    // Alpha remains linear and is never dithered.
+    color.rgb = clamp(color.rgb + dither(outputPosition),
+                      vec3(0.0), vec3(color.a));
+    return color;
+}
+
 vec4 resample(vec2 uv)
 {
     vec2 size = vec2(textureSize(source, 0));
@@ -80,7 +128,8 @@ vec4 resample(vec2 uv)
     vec2 extent = all(greaterThan(ubuf.sourceExtent, vec2(0.0)))
         ? min(ubuf.sourceExtent, size) : size;
     vec2 sampleUv = uv * extent / size;
-    if (ubuf.pixelAlignedIdentity) {
+    if (ubuf.pixelAlignedIdentity
+            && (!ubuf.pixelAligned || pixelGridAligned != 0)) {
         ivec2 pixel = ivec2(clamp(floor(sampleUv * size), vec2(0.0),
                                   size - 1.0));
         return texelFetch(source, pixel, 0);
@@ -92,7 +141,8 @@ vec4 resample(vec2 uv)
     vec2 footprint = vec2(length(vec2(derivativeX.x, derivativeY.x)),
                           length(vec2(derivativeX.y, derivativeY.y)));
     if (max(footprint.x, footprint.y) <= 1.0001)
-        return texture(source, sampleUv);
+        return encodeFilteredColor(magnify(uv * extent - 0.5, size),
+                                   uv * ubuf.viewportSize);
 
     vec2 scale = 1.0 / max(footprint, vec2(1.0));
     vec2 position = uv * extent - 0.5;
@@ -116,18 +166,8 @@ vec4 resample(vec2 uv)
             totalWeight += weight;
         }
     }
-    vec4 color = total / max(totalWeight, 0.00001);
-    // Negative cubic lobes must not escape the premultiplied RGBA domain.
-    color.a = clamp(color.a, 0.0, 1.0);
-    color.rgb = clamp(color.rgb, vec3(0.0), vec3(color.a));
-    if (color.a <= 0.0)
-        return vec4(0.0);
-    color.rgb = encode(color.rgb / color.a) * color.a;
-    // Every completed pass is stored as encoded RGBA8
-    // Alpha remains linear and is never dithered.
-    color.rgb = clamp(color.rgb + dither(uv * ubuf.viewportSize),
-                      vec3(0.0), vec3(color.a));
-    return color;
+    return encodeFilteredColor(total / max(totalWeight, 0.00001),
+                               uv * ubuf.viewportSize);
 }
 
 void main()

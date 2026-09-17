@@ -224,6 +224,12 @@ Item {
     }
 
     function startZoomScrollingAnimation(x, y, scale) {
+        // Releasing a key (or changing modifiers with no motion key held)
+        // ends continuous motion, not an independent discrete zoom transition.
+        if (!x && !y && !scale) {
+            stopZoomScrollingAnimation()
+            return
+        }
         zoomFitView = false
         viewportAnimation.stop()
 
@@ -261,6 +267,11 @@ Item {
     // lower sibling on every Qt Quick backend, so both input paths call this
     // single copy of ViewerMode's original zoom-wheel implementation.
     function handleZoomWheel(angleDeltaY, modifiers, buttons) {
+        if (modifiers & Qt.AltModifier) {
+            if (angleDeltaY !== 0)
+                stepZoom(angleDeltaY > 0 ? 1 : -1, Boolean(buttons & Qt.LeftButton))
+            return
+        }
         if (modifiers !== Qt.ControlModifier && !(buttons & Qt.LeftButton))
             return
 
@@ -305,6 +316,27 @@ Item {
 
     function clampZoomScale(targetScale) {
         return Math.max(minZoomScale, Math.min(maxZoomScale, targetScale))
+    }
+
+    readonly property var discreteZoomLevels: [
+        0x200, 0x300, 0x400, 0x600, 0x800, 0xC00, 0x1000,
+        0x1800, 0x2000, 0x3000, 0x4000, 0x6000, 0x8000, 0xC000,
+        0x10000, 0x18000, 0x20000, 0x30000, 0x40000, 0x60000,
+        0x80000, 0xC0000, 0x100000, 0x180000, 0x200000,
+        0x300000, 0x400000, 0x600000, 0x800000
+    ]
+
+    function stepZoom(direction, keepMousePosition) {
+        const current = viewportAnimation.running ? targetZoomScale : zoomScale
+        const levels = discreteZoomLevels
+        for (let i = direction > 0 ? 0 : levels.length - 1;
+             i >= 0 && i < levels.length; i += direction > 0 ? 1 : -1) {
+            const scale = levels[i] / 65536
+            if (direction > 0 ? scale > current + 1e-9 : scale < current - 1e-9) {
+                zoomToScale(scale, keepMousePosition)
+                return
+            }
+        }
     }
 
     function imageRectFittedInRect(targetRect) {
@@ -785,6 +817,10 @@ Item {
     }
 
     function onControlReleased() {
+        // Keep a wheel/step zoom's destination when Ctrl is released before
+        // the animation reaches it. Its position targets are already bounded.
+        if (viewportAnimation.running && Math.abs(targetZoomScale - zoomScale) > 1e-9)
+            return
         xAnimation.to = fitViewerImageInViewportBoundsX(viewerImage.x)
         yAnimation.to = fitViewerImageInViewportBoundsY(viewerImage.y)
         zoomAnimation.to = flickableArea.zoomScale

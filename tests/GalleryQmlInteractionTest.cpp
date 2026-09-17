@@ -862,6 +862,30 @@ private slots:
             rootObject->property("viewerImageRect").toRectF();
         QVERIFY(initialImage.width() > 1);
 
+        // Exercise real presses AND releases: releasing a discrete zoom key
+        // must not cancel its pending target via the held-key motion handler.
+        QTest::keyClick(&view, Qt::Key_Asterisk);
+        QTRY_COMPARE(viewport->property("zoomScale").toReal(), 1.0);
+        for (qreal expected : {0.75, 0.5, 0.375}) {
+            QTest::keyClick(&view, Qt::Key_Minus, Qt::AltModifier);
+            QCOMPARE(viewport->property("targetZoomScale").toReal(), expected);
+            QTRY_COMPARE(viewport->property("zoomScale").toReal(), expected);
+        }
+        QTest::keyPress(&view, Qt::Key_Control);
+        QTest::keyPress(&view, Qt::Key_Alt, Qt::ControlModifier);
+        QTest::wheelEvent(&view, QPoint(320, 210), QPoint(0, -120), QPoint(),
+                          Qt::ControlModifier | Qt::AltModifier);
+        QCOMPARE(viewport->property("targetZoomScale").toReal(), 0.25);
+        // Qt on Windows remaps Alt+vertical-wheel to angleDelta.x().
+        QTest::wheelEvent(&view, QPoint(320, 210), QPoint(-120, 0), QPoint(),
+                          Qt::ControlModifier | Qt::AltModifier);
+        QCOMPARE(viewport->property("targetZoomScale").toReal(), 0.1875);
+        QTest::keyRelease(&view, Qt::Key_Alt, Qt::ControlModifier);
+        QTest::keyRelease(&view, Qt::Key_Control);
+        QTRY_COMPARE(viewport->property("zoomScale").toReal(), 0.1875);
+        QVERIFY(QMetaObject::invokeMethod(rootObject, "resetViewer"));
+        QTest::qWait(120);
+
         // Ordinary close animates this same viewport container to the tile;
         // there is no second thumbnail overlay that can cross-fade or blink.
         QVERIFY(QMetaObject::invokeMethod(rootObject, "closeOrdinary"));
@@ -879,6 +903,28 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(
             viewer->property("transitionProgress").toReal(), 1.0, 1000);
         QTRY_VERIFY(viewer->property("viewerContentVisible").toBool());
+        QTest::qWait(120);
+
+        // A small image at 100% must not jump up to Fit before closing.
+        viewer->setProperty("devicePixelRatio", 4.0);
+        viewport->setProperty("originalSize", QSizeF(400, 250));
+        QVERIFY(QMetaObject::invokeMethod(viewport, "zoomToFit", Q_ARG(QVariant, true)));
+        QVERIFY(viewport->property("zoomScale").toReal() > 1.0);
+        QTest::keyClick(&view, Qt::Key_Asterisk);
+        QTRY_COMPARE(viewport->property("zoomScale").toReal(), 1.0);
+        QTest::qWait(120);
+        const QRectF nativeImageRect = rootObject->property("viewerImageRect").toRectF();
+        QTest::keyClick(&view, Qt::Key_Return);
+        const QRectF closeStart = rootObject->property("viewerImageRect").toRectF();
+        QVERIFY2(qAbs(closeStart.width() - nativeImageRect.width()) < 1,
+                 qPrintable(QString("close jumped from %1 to %2").arg(nativeImageRect.width()).arg(closeStart.width())));
+        QTest::qWait(25);
+        QVERIFY(rootObject->property("viewerImageRect").toRectF().width() <= nativeImageRect.width());
+        QTRY_COMPARE_WITH_TIMEOUT(rootObject->property("closeCount").toInt(), 1, 1000);
+        viewer->setProperty("devicePixelRatio", 1.0);
+        viewport->setProperty("originalSize", QSizeF(1600, 1000));
+        QVERIFY(QMetaObject::invokeMethod(rootObject, "reopenViewer"));
+        QTRY_COMPARE(viewer->property("transitionProgress").toReal(), 1.0);
         QTest::qWait(120);
 
         QVERIFY(QMetaObject::invokeMethod(rootObject, "beginPinch",

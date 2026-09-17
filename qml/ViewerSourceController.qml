@@ -92,7 +92,16 @@ Item {
         if (viewport.width > viewport.effectiveOriginalSize.width * scale
                 || viewport.height
                    > viewport.effectiveOriginalSize.height * scale) {
+            // A crop cannot cover the viewport when the scaled image leaves a
+            // margin on either axis. There is no native-quality crop to bridge
+            // the animation delay in that state, so delaying the full texture
+            // exposes the lower-resolution base tier. Start the already decoded
+            // native source immediately; its asynchronous upload still keeps
+            // the UI thread free.
             clearNativeTier()
+            viewport.viewerImage2.fromIndex = fromIndex
+            viewport.viewerImage2.source = imageIdUrl
+            return
         } else {
             const crop = nativeCropGeometry(targetX, targetY, scale,
                                             originalSize)

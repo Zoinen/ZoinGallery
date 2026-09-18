@@ -37,8 +37,12 @@ QtObject {
         if (event.key === Qt.Key_Space || event.key === Qt.Key_Insert)
             return modifiers === Qt.NoModifier
         if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal
-                || event.key === Qt.Key_Minus)
+                || event.key === Qt.Key_Minus) {
+            if (panel.hostCapabilities
+                    && panel.hostCapabilities.galleryOwnsZoomShortcuts === false)
+                return false
             return modifiers === Qt.NoModifier
+        }
         return false
     }
 

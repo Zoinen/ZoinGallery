@@ -15,6 +15,17 @@ QtObject {
     required property Timer viewportUpdateTimer
     required property Timer cursorCommitTimer
 
+    // Start, rather than restart: continuous input must not starve the flush.
+    property Timer liveSelectionTimer: Timer {
+        interval: 16
+        onTriggered: selection.controller.flushSelectionGesture()
+    }
+
+    function scheduleSelectionFlush() {
+        if (panel.liveSelectionUpdates && !liveSelectionTimer.running)
+            liveSelectionTimer.start()
+    }
+
     property int selectionAnchorIndex: -1
     property bool dragCursorActive: false
     property int dragCursorLastIndex: -1
@@ -273,10 +284,12 @@ QtObject {
         if (!ready || index < 0 || index >= layout.count)
             return
         controller.toggleSelectionAt(index)
+        scheduleSelectionFlush()
     }
 
     function applyShiftSelectionRange(first, last) {
         controller.previewSelectionRange(first, last)
+        scheduleSelectionFlush()
         keyboardShiftSelectionFirst = first
         keyboardShiftSelectionLast = last
         cursorCommitTimer.restart()
@@ -289,6 +302,7 @@ QtObject {
     }
 
     function commitPendingKeyboardSelection() {
+        liveSelectionTimer.stop()
         return controller.commitSelectionGesture()
     }
 
@@ -298,6 +312,7 @@ QtObject {
     }
 
     function clearPendingKeyboardSelection() {
+        liveSelectionTimer.stop()
         controller.cancelSelectionGesture()
         keyboardShiftSelectionActive = false
         keyboardShiftSelectionAnchorIndex = -1

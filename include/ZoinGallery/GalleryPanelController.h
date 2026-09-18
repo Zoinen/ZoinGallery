@@ -7,6 +7,7 @@
 
 #include <QObject>
 #include <QHash>
+#include <QSet>
 #include <QPointer>
 #include <QVariantList>
 #include <QStringList>
@@ -138,6 +139,7 @@ public:
     Q_INVOKABLE void beginSelectionGesture(bool add);
     Q_INVOKABLE void previewSelectionRange(int first, int last);
     Q_INVOKABLE void toggleSelectionAt(int index);
+    Q_INVOKABLE bool flushSelectionGesture();
     Q_INVOKABLE bool commitSelectionGesture();
     Q_INVOKABLE void cancelSelectionGesture();
     Q_INVOKABLE void acknowledgeCursor(int index, qulonglong localRevision);
@@ -205,6 +207,9 @@ private:
     bool _selectionGestureActive = false;
     bool _selectionAdds = true;
     QHash<QString, bool> _selectionPreview;
+    QHash<QString, bool> _selectionGestureBase;
+    QHash<QString, bool> _selectionSent;
+    QSet<QString> _selectionDirty;
     QHash<QString, bool> _selectionAwaiting;
     int _selectionRangeFirst = -1;
     int _selectionRangeLast = -1;

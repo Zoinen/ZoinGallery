@@ -78,7 +78,12 @@ Item {
             if (mouse.buttons & (Qt.LeftButton | Qt.RightButton))
                 pointerLayer.primaryDragged(mouse.x, mouse.y)
         }
-        onReleased: pointerLayer.primaryReleased()
+        onReleased: mouse => {
+            // Qt may deliver the final position only with release, after the
+            // buttons mask has cleared. Finish motion before ending the drag.
+            pointerLayer.primaryDragged(mouse.x, mouse.y)
+            pointerLayer.primaryReleased()
+        }
         onCanceled: pointerLayer.primaryReleased()
         onDoubleClicked: mouse => {
             pointerLayer.primaryDoubleClicked(mouse.x, mouse.y,

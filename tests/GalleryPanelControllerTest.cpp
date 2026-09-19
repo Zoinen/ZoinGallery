@@ -292,6 +292,65 @@ private slots:
         QVERIFY(!controller.effectiveSelected(QStringLiteral("two"), false));
     }
 
+    void liveSelectionFlushPreservesGestureBaseline() {
+        TestBackend backend(true);
+        ZoinGallery::GalleryPanelController controller;
+        controller.setBackend(&backend);
+        QSignalSpy intents(&controller,
+            &ZoinGallery::GalleryPanelController::selectionIntentRequested);
+        controller.beginSelectionGesture(true);
+        controller.previewSelectionRange(1, 3);
+        bool flushed = false;
+        QVERIFY(QMetaObject::invokeMethod(&controller, "flushSelectionGesture",
+                                          Q_RETURN_ARG(bool, flushed)));
+        QVERIFY(flushed);
+        QCOMPARE(intents.size(), 1);
+        backend.acknowledgeSelection({"two", "three", "four"}, {});
+        controller.previewSelectionRange(2, 3);
+        QVERIFY(!controller.effectiveSelected("two", true));
+        QVERIFY(QMetaObject::invokeMethod(&controller, "flushSelectionGesture",
+                                          Q_RETURN_ARG(bool, flushed)));
+        QVERIFY(flushed);
+        QCOMPARE(intents.size(), 2);
+        QVERIFY(intents.last().at(0).toStringList().isEmpty());
+        QCOMPARE(intents.last().at(1).toStringList(), QStringList{"two"});
+        backend.acknowledgeSelection({}, {"two"});
+        controller.previewSelectionRange(1, 3);
+        QVERIFY(controller.commitSelectionGesture());
+        QCOMPARE(intents.size(), 3);
+        QCOMPARE(intents.last().at(0).toStringList(), QStringList{"two"});
+    }
+
+    void liveSelectionCoalescesTogglesAndMasksLateAcknowledgement() {
+        TestBackend backend(true);
+        ZoinGallery::GalleryPanelController controller;
+        controller.setBackend(&backend);
+        QSignalSpy intents(&controller,
+            &ZoinGallery::GalleryPanelController::selectionIntentRequested);
+        controller.beginSelectionGesture(true);
+        controller.toggleSelectionAt(1);
+        controller.toggleSelectionAt(1);
+        QVERIFY(!controller.flushSelectionGesture());
+        QVERIFY(intents.isEmpty());
+        controller.toggleSelectionAt(1);
+        QVERIFY(controller.flushSelectionGesture());
+        QVERIFY(!controller.flushSelectionGesture());
+        controller.toggleSelectionAt(1);
+        QVERIFY(controller.flushSelectionGesture());
+        backend.acknowledgeSelection({"two"}, {});
+        QVERIFY(!controller.effectiveSelected("two", true));
+        QVERIFY(!controller.commitSelectionGesture());
+        QVERIFY(!controller.effectiveSelected("two", true));
+        backend.acknowledgeSelection({}, {"two"});
+        QVERIFY(!controller.effectiveSelected("two", false));
+        QCOMPARE(intents.size(), 2);
+        controller.beginSelectionGesture(true);
+        controller.toggleSelectionAt(2);
+        controller.cancelSelectionGesture();
+        QVERIFY(!controller.flushSelectionGesture());
+        QCOMPARE(intents.size(), 2);
+    }
+
     void standaloneCapabilitiesStayTypedAndBounded() {
         TestBackend backend(false, true);
         ZoinGallery::GalleryPanelController controller;

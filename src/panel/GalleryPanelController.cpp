@@ -457,6 +457,9 @@ void GalleryPanelController::beginSelectionGesture(bool add) {
     _selectionGestureActive = true;
     _selectionAdds = add;
     _selectionPreview.clear();
+    _selectionGestureBase.clear();
+    _selectionSent.clear();
+    _selectionDirty.clear();
     _selectionRangeFirst = -1;
     _selectionRangeLast = -1;
     ++_selectionVisualRevision;
@@ -469,10 +472,11 @@ void GalleryPanelController::previewSelectionRange(int first, int last) {
         return;
     }
     if (first < 0 || last < 0) {
-        if (_selectionRangeFirst < 0 && _selectionPreview.isEmpty()) {
-            return;
+        for (auto it = _selectionGestureBase.cbegin();
+             it != _selectionGestureBase.cend(); ++it) {
+            _selectionPreview.insert(it.key(), it.value());
+            _selectionDirty.insert(it.key());
         }
-        _selectionPreview.clear();
         _selectionRangeFirst = -1;
         _selectionRangeLast = -1;
         ++_selectionVisualRevision;
@@ -499,24 +503,32 @@ void GalleryPanelController::previewSelectionRange(int first, int last) {
     };
     if (oldFirst >= 0) {
         for (int row = oldFirst; row <= oldLast; ++row) {
-            if (!rangeContains(first, last, row)) {
-                _selectionPreview.remove(entryIdAt(row));
+            if (rangeContains(first, last, row)) {
+                row = last;
+                continue;
+            }
+            {
+                const QString id = entryIdAt(row);
+                if (_selectionGestureBase.contains(id)) {
+                    _selectionPreview.insert(id, _selectionGestureBase.value(id));
+                    _selectionDirty.insert(id);
+                }
             }
         }
     }
     for (int row = first; row <= last; ++row) {
         if (rangeContains(oldFirst, oldLast, row)) {
+            row = oldLast;
             continue;
         }
         const QString entryId = entryIdAt(row);
         if (!entryId.isEmpty()) {
-            const bool base = effectiveSelected(
-                entryId, _backend->isSelectedAt(row));
-            if (base == _selectionAdds) {
-                _selectionPreview.remove(entryId);
-            } else {
-                _selectionPreview.insert(entryId, _selectionAdds);
+            if (!_selectionGestureBase.contains(entryId)) {
+                _selectionGestureBase.insert(entryId, effectiveSelected(
+                    entryId, _backend->isSelectedAt(row)));
             }
+            _selectionPreview.insert(entryId, _selectionAdds);
+            _selectionDirty.insert(entryId);
         }
     }
     _selectionRangeFirst = first;
@@ -538,41 +550,47 @@ void GalleryPanelController::toggleSelectionAt(int index) {
         return;
     }
     const bool authoritative = _backend->isSelectedAt(index);
+    if (!_selectionGestureBase.contains(entryId)) {
+        _selectionGestureBase.insert(entryId, effectiveSelected(entryId, authoritative));
+    }
     _selectionPreview.insert(
         entryId, !effectiveSelected(entryId, authoritative));
+    _selectionDirty.insert(entryId);
     ++_selectionVisualRevision;
     emit selectionVisualRevisionChanged();
 }
 
-bool GalleryPanelController::commitSelectionGesture() {
-    if (!_selectionGestureActive || _selectionPreview.isEmpty() || !_backend) {
-        cancelSelectionGesture();
+bool GalleryPanelController::flushSelectionGesture() {
+    if (!_selectionGestureActive || !_backend || _selectionDirty.isEmpty()) {
         return false;
     }
-
     QStringList selectedEntryIds;
     QStringList deselectedEntryIds;
-    selectedEntryIds.reserve(_selectionPreview.size());
-    deselectedEntryIds.reserve(_selectionPreview.size());
-    for (auto change = _selectionPreview.cbegin();
-         change != _selectionPreview.cend(); ++change) {
-        (change.value() ? selectedEntryIds : deselectedEntryIds)
-            .append(change.key());
-        _selectionAwaiting.insert(change.key(), change.value());
+    for (const QString &id : std::as_const(_selectionDirty)) {
+        const bool desired = _selectionPreview.value(id);
+        const bool sent = _selectionSent.value(id, _selectionGestureBase.value(id));
+        if (desired == sent) {
+            continue;
+        }
+        (desired ? selectedEntryIds : deselectedEntryIds).append(id);
+        _selectionSent.insert(id, desired);
+        _selectionAwaiting.insert(id, desired);
     }
-    _selectionPreview.clear();
-    _selectionGestureActive = false;
-    _selectionRangeFirst = -1;
-    _selectionRangeLast = -1;
+    _selectionDirty.clear();
+    if (selectedEntryIds.isEmpty() && deselectedEntryIds.isEmpty()) {
+        return false;
+    }
     bumpLocalRevision();
-    ++_selectionVisualRevision;
-    emit selectionVisualRevisionChanged();
-
     _backend->applySelectionIntent(selectedEntryIds, deselectedEntryIds);
     emit selectionIntentRequested(selectedEntryIds, deselectedEntryIds,
-                                  _backend->catalogRevision(),
-                                  _localRevision);
+                                  _backend->catalogRevision(), _localRevision);
     return true;
+}
+
+bool GalleryPanelController::commitSelectionGesture() {
+    const bool sent = flushSelectionGesture();
+    cancelSelectionGesture();
+    return sent;
 }
 
 void GalleryPanelController::cancelSelectionGesture() {
@@ -580,6 +598,9 @@ void GalleryPanelController::cancelSelectionGesture() {
         || !_selectionPreview.isEmpty();
     _selectionGestureActive = false;
     _selectionPreview.clear();
+    _selectionGestureBase.clear();
+    _selectionSent.clear();
+    _selectionDirty.clear();
     _selectionRangeFirst = -1;
     _selectionRangeLast = -1;
     if (changed) {
@@ -613,6 +634,9 @@ void GalleryPanelController::connectBackendCursorSignals() {
                 setVisualCursorIndex(currentIndex());
             }
             _selectionPreview.clear();
+            _selectionGestureBase.clear();
+            _selectionSent.clear();
+            _selectionDirty.clear();
             _selectionAwaiting.clear();
             ++_selectionVisualRevision;
             emit selectionVisualRevisionChanged();
@@ -719,6 +743,9 @@ void GalleryPanelController::disconnectBackend() {
     _backendConnections.clear();
     cancelPendingCursor();
     _selectionPreview.clear();
+    _selectionGestureBase.clear();
+    _selectionSent.clear();
+    _selectionDirty.clear();
     _selectionAwaiting.clear();
     invalidateQuickSearch();
     clearDragPayload();

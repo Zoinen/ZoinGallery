@@ -32,6 +32,7 @@ struct GalleryEntryVisual::SnapshotValues {
     int folderPreviewState = 0;
     quint64 folderPreviewRevision = 0;
     bool isImage = false;
+    bool imageDimensionsKnown = false;
     bool isSelected = false;
     QString iconPath;
     QString iconKey;
@@ -70,6 +71,7 @@ GalleryEntryVisual::SnapshotValues GalleryEntryVisual::parseSnapshot(
         .folderPreviewState = snapshot.value(QStringLiteral("folderPreviewState")).toInt(),
         .folderPreviewRevision = snapshot.value(QStringLiteral("folderPreviewRevision")).toULongLong(),
         .isImage = snapshot.value(QStringLiteral("isImage")).toBool(),
+        .imageDimensionsKnown = snapshot.value(QStringLiteral("imageDimensionsKnown")).toBool(),
         .isSelected = snapshot.value(
             QStringLiteral("isSelected")).toBool(),
         .iconPath = snapshot.value(
@@ -123,6 +125,7 @@ bool GalleryEntryVisual::applyMedia(const SnapshotValues &values) {
     changed |= assignChanged(_folderPreviewState, values.folderPreviewState);
     changed |= assignChanged(_folderPreviewRevision, values.folderPreviewRevision);
     changed |= assignChanged(_isImage, values.isImage);
+    changed |= assignChanged(_imageDimensionsKnown, values.imageDimensionsKnown);
     changed |= assignChanged(_iconPath, values.iconPath);
     changed |= assignChanged(_iconKey, values.iconKey);
     changed |= assignChanged(_imageIdUrl, values.imageIdUrl);

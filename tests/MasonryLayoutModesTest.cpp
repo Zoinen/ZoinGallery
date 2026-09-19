@@ -1071,6 +1071,56 @@ private slots:
         QVERIFY(!cursorSpy.at(1).at(2).toBool());
     }
 
+    void rightDragReleaseUsesFinalPosition_data() {
+        QTest::addColumn<int>("button");
+        QTest::addColumn<bool>("upward");
+        QTest::addColumn<bool>("live");
+        for (int button : {int(Qt::LeftButton), int(Qt::RightButton)})
+            for (bool upward : {false, true})
+                for (bool live : {false, true})
+                    QTest::newRow(qPrintable(QString("%1-up%2-live%3").arg(button).arg(upward).arg(live)))
+                        << button << upward << live;
+    }
+
+    void rightDragReleaseUsesFinalPosition() {
+        QFETCH(int, button);
+        QFETCH(bool, upward);
+        QFETCH(bool, live);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("release-position");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(20), 1));
+        session->setCurrentIndex(0);
+        QObject *panel = createPanel(view, session, "releaseSession", "details");
+        QVERIFY(panel);
+        panel->setProperty("liveSelectionUpdates", live);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QTRY_COMPARE(layout->count(), 20);
+        QSignalSpy transactions(panel, SIGNAL(selectionTransactionRequested(QVariant,QString,int)));
+        const auto point = [&](int row) {
+            const QRectF rect = layout->indexGeometry(row);
+            return layout->mapToScene(QPointF(rect.center().x(), rect.center().y() - layout->contentY()));
+        };
+        const int first = upward ? 3 : 1;
+        const int last = upward ? 1 : 3;
+        QTest::mousePress(&view, Qt::MouseButton(button), Qt::NoModifier, point(first).toPoint());
+        QTest::mouseMove(&view, point(2).toPoint());
+        QTest::qWait(30);
+        // No move event at the final row: release itself must finish the drag.
+        QMouseEvent release(QEvent::MouseButtonRelease, point(last),
+                            view.mapToGlobal(point(last).toPoint()), Qt::MouseButton(button),
+                            Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&view, &release);
+        QCOMPARE(session->currentIndex(), last);
+        if (button == int(Qt::RightButton)) {
+            QVERIFY(!transactions.isEmpty());
+            QCOMPARE(transactions.last().at(1).toString(), session->entryIdAt(last));
+        }
+    }
+
     void svgCursorAvoidsQtCustomColorSpaceCrash() {
         QVERIFY(QGuiApplication::overrideCursor() == nullptr);
         struct CursorReset {
@@ -2277,7 +2327,14 @@ private slots:
         }
     }
 
+    void heldInsertPreviewsEveryVisitedRowAndCommitsOnceInEveryMode_data() {
+        QTest::addColumn<bool>("liveUpdates");
+        QTest::newRow("deferred") << false;
+        QTest::newRow("live") << true;
+    }
+
     void heldInsertPreviewsEveryVisitedRowAndCommitsOnceInEveryMode() {
+        QFETCH(bool, liveUpdates);
         const QStringList modes = {
             QStringLiteral("masonry"), QStringLiteral("grid"),
             QStringLiteral("icons"), QStringLiteral("details"),
@@ -2298,6 +2355,7 @@ private slots:
             QObject *panel = createPanel(
                 view, session, QStringLiteral("heldInsertSession"), mode);
             QVERIFY(panel);
+            QVERIFY(panel->setProperty("liveSelectionUpdates", liveUpdates));
             auto *panelItem = qobject_cast<QQuickItem *>(panel);
             auto *layout = panel->findChild<MasonryLayout *>(
                 QStringLiteral("galleryViewportItem"));
@@ -2340,6 +2398,10 @@ private slots:
             for (const QList<QVariant> &request : std::as_const(cursorSpy))
                 QVERIFY(request.at(2).toBool());
 
+            if (liveUpdates) {
+                QTRY_COMPARE_WITH_TIMEOUT(transactionSpy.size(), 1, 250);
+                QVERIFY(panel->property("keyboardToggleSelectionActive").toBool());
+            }
             QKeyEvent release(QEvent::KeyRelease, Qt::Key_Insert,
                               Qt::NoModifier);
             QCoreApplication::sendEvent(&view, &release);
@@ -4869,6 +4931,9 @@ private slots:
         decodeManager->imageInfoReady(info);
 
         QTRY_COMPARE_WITH_TIMEOUT(image->fullSize(), source.size(), 5000);
+        QVERIFY(external->data(external->index(imageRow, 0),
+            ZoinGallery::ExternalCatalogModel::VisualSnapshotRole).toMap()
+            .value("imageDimensionsKnown").toBool());
         QCOMPARE(layout->contentY(), contentYBefore);
         QCOMPARE(layout->visibleIndexes(), visibleBefore);
         QCOMPARE(layout->overscanIndexes(), overscanBefore);
@@ -5595,6 +5660,45 @@ private slots:
             QVERIFY(surface->property("visualBorderColor").value<QColor>()
                     != QColor(QStringLiteral("#ffd43b")));
         }
+    }
+
+    void pendingThumbnailDoesNotFlashFallbackIcon() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(QStringLiteral("pending-thumbnail-icon"));
+        QVERIFY(session->applyExternalCatalog(plainCatalog(1), 1));
+        auto *panel = createPanel(view, session, QStringLiteral("pendingThumbnailSession"));
+        QVERIFY(panel);
+        QQuickItem *icon = nullptr;
+        QTRY_VERIFY((icon = panel->findChild<QQuickItem *>(QStringLiteral("galleryFallbackIcon-0"))));
+        auto *preview = icon->parentItem();
+        auto *entry = preview->property("entry").value<QObject *>();
+        QVERIFY(entry);
+        QTest::qWait(150);
+        QVERIFY(icon->isVisible());
+        auto snapshot = entry->property("visualRow").toMap();
+        snapshot.insert("isImage", true);
+        snapshot.insert("imageDimensionsKnown", true);
+        snapshot.insert("imageIdUrl", "");
+        QVERIFY(entry->setProperty("visualRow", snapshot));
+        QVERIFY(!icon->isVisible());
+        snapshot.insert("imageIdUrl", "file:///missing-thumbnail-regression.png");
+        QVERIFY(entry->setProperty("masonryGeometryReady", false));
+        QVERIFY(entry->setProperty("visualRow", snapshot));
+        // The cached URL is known before geometry allows the pixel request.
+        QVERIFY(!preview->property("thumbnailHasSource").toBool());
+        QVERIFY(!icon->isVisible());
+        QVERIFY(entry->setProperty("masonryGeometryReady", true));
+        // A failed request must still restore the fallback.
+        QTRY_VERIFY(icon->isVisible());
+        snapshot.insert("imageIdUrl", "");
+        snapshot.insert("isImage", false);
+        snapshot.insert("imageDimensionsKnown", false);
+        QVERIFY(entry->setProperty("visualRow", snapshot));
+        QVERIFY(icon->isVisible());
     }
 
     void columnsAndDetailsUseIdenticalCompactLucideIcons() {

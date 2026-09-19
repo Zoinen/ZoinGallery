@@ -209,7 +209,7 @@ void ExternalCatalogModel::publishImageInfoBatch(
     // Masonry ignores ImageFiles whose fullSize is still invalid.
     if (state.firstChangedRow >= 0) {
         QList<int> roles{FileListModel::ImageFullSizeRole,
-                         KnownImageSizeRole, MetadataSettledRole};
+                         KnownImageSizeRole, MetadataSettledRole, VisualSnapshotRole};
         if (state.allChangedMetadataCached) {
             roles.append(FileListModel::CachedMetadataBatchRole);
         }

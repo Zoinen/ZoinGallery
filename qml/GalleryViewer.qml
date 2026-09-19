@@ -11,6 +11,12 @@ FocusScope {
     property bool managedPresentation: false
     property string previewEntryId: ""
     property var hostKeyHandler: null
+    // Return true when the embedder consumes a viewport double-click.
+    property var hostDoubleClickHandler: null
+    function handleViewportDoubleClick() {
+        if (hostDoubleClickHandler && hostDoubleClickHandler()) return
+        requestClose()
+    }
     signal presentationCloseRequested()
     function applyPreviewEntry() {
         if (!session) return

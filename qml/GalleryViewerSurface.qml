@@ -107,7 +107,7 @@ Item {
                     || Math.abs(root.viewer.viewerNavigationOffsetX) > 0.1
 
                 onZoomScaleChanged: root.viewer.scheduleDecodeRequest()
-                onCloseRequested: root.viewer.requestClose()
+                onCloseRequested: root.viewer.handleViewportDoubleClick()
                 onMiddleClickRequested:
                     root.viewer.fullscreenToggleRequested()
                 onPinchZoomOutToThumbnailsProgressed:
@@ -131,7 +131,7 @@ Item {
                         originalSize: viewportItem.originalSize
                         easingType: Easing.OutSine
 
-                        onCloseRequested: root.viewer.requestClose()
+                        onCloseRequested: root.viewer.handleViewportDoubleClick()
                         onSphereScrollingMouseCursorRequested:
                             (set, idle, rotation) =>
                                 root.viewer.sphereScrollingMouseCursorRequested(

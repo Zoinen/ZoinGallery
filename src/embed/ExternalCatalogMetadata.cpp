@@ -19,6 +19,7 @@ private:
 
     struct RowState {
         bool image = false;
+        QString thumbnailKind;
         QString localPath;
         QString sourceIdentity;
         ImageSourceDescriptor source;
@@ -91,6 +92,7 @@ ExternalCatalogMetadataTransaction::captureState(
     const ExternalCatalogModel::Entry &entry) {
     return {
         .image = entry.image,
+        .thumbnailKind = entry.thumbnailKind,
         .localPath = entry.localPath,
         .sourceIdentity = entry.sourceIdentity,
         .source = entry.source,
@@ -119,6 +121,12 @@ void ExternalCatalogMetadataTransaction::applyBaseFields(
     const QVariantMap &value) const {
     if (value.contains(QStringLiteral("isImage"))) {
         entry.image = value.value(QStringLiteral("isImage")).toBool();
+    }
+    if (value.contains(QStringLiteral("thumbnailKind"))) {
+        entry.thumbnailKind = value.value(QStringLiteral(
+            "thumbnailKind")).toString().trimmed().toLower();
+        entry.image = entry.image
+            || entry.thumbnailKind == QStringLiteral("video");
     }
     if (value.contains(QStringLiteral("localPath"))) {
         entry.localPath = value.value(
@@ -188,6 +196,7 @@ bool ExternalCatalogMetadataTransaction::sourceChanged(
         && previous.source.resourceId != previous.localPath
         && sourceAuthorityMatches(entry.source, previous.source);
     return previous.image != entry.image
+        || previous.thumbnailKind != entry.thumbnailKind
         || (!sameOpaqueRevision && previous.localPath != entry.localPath)
         || previous.sourceIdentity != entry.sourceIdentity
         || previous.contentVersion != entry.contentVersion
@@ -280,6 +289,12 @@ void ExternalCatalogMetadataTransaction::updateImageInfo(
               entry.mtimeNs / 1000000, QTimeZone::UTC)
         : QDateTime{};
     imageInfo.fileSize = entry.size;
+    imageInfo.thumbnailKind = entry.thumbnailKind;
+    if (entry.thumbnailKind == QStringLiteral("video")) {
+        imageInfo.imageSize = QSize(16, 9);
+        entry.originalSize = imageInfo.imageSize;
+        entry.metadataSettled = true;
+    }
     entry.imageInfo = imageInfo;
     _model.restoreCachedMetadata(entry);
     if (!entry.item) {

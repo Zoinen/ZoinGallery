@@ -66,7 +66,9 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
     const QList<ImageFile *> &items, int currentIndex, const QSize &viewerSize,
     int prefetchCount, const RequestTransform &transform) {
     RequestPlan result;
-    if (currentIndex < 0 || currentIndex >= items.size()) {
+    if (currentIndex < 0 || currentIndex >= items.size()
+        || !items[currentIndex]
+        || !items[currentIndex]->isViewerImage()) {
         return result;
     }
 
@@ -93,7 +95,7 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
             hitEnd = true;
         }
         if (index < 0 || index >= items.size() || !items[index]
-            || !items[index]->isImage()) {
+            || !items[index]->isViewerImage()) {
             continue;
         }
 

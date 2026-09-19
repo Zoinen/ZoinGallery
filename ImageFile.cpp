@@ -170,6 +170,14 @@ void ImageFile::setIsImage(bool isImage) {
     }
 }
 
+bool ImageFile::isVideoThumbnail() const {
+    return _info.thumbnailKind == QStringLiteral("video");
+}
+
+bool ImageFile::isViewerImage() const {
+    return _isImage && !isVideoThumbnail();
+}
+
 bool ImageFile::isFolderView() const {
     return _isFolderView;
 }

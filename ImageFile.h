@@ -75,6 +75,9 @@ struct ImageInfo {
     // Optional owner for metadata work running on the shared embedded
     // scheduler. Standalone requests leave this empty.
     QString requestNamespace;
+    // Empty/image denotes a still image. "video" selects the Qt Multimedia
+    // contact-sheet decoder while keeping the still-image viewer separate.
+    QString thumbnailKind;
 };
 
 struct ImageDecodeRequest {
@@ -195,6 +198,10 @@ public:
 
     bool isImage() const;
     void setIsImage(bool isImage);
+    // Video files participate in the thumbnail grid as image-like entries,
+    // but must never be routed to the still-image viewer.
+    bool isVideoThumbnail() const;
+    bool isViewerImage() const;
 
     bool isFolderView() const;
     void setIsFolderView(bool isFolderView);
@@ -326,6 +333,7 @@ struct FileInfo {
     QDateTime lastModified;
     qint64 fileSize = -1;
     bool isDirectory = false;
+    QString thumbnailKind;
 };
 
 struct FolderInfo {

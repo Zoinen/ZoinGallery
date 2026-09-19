@@ -257,6 +257,10 @@ void ExternalDirectoryPreviews::request(const QString &id, const QSharedPointer<
             entry.insert(QStringLiteral("entryId"), id + QChar(0x1f) + name);
             entry.insert(QStringLiteral("index"), entries.size());
             entry.insert(QStringLiteral("isImage"), true);
+            if (isVideoPreviewFormat(name)) {
+                entry.insert(QStringLiteral("thumbnailKind"),
+                             QStringLiteral("video"));
+            }
             entry.insert(QStringLiteral("isDir"), false);
             entries.append(entry);
         }

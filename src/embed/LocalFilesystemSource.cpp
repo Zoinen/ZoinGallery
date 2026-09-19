@@ -169,7 +169,7 @@ QString LocalFilesystemSource::localPathAt(int viewIndex) const {
 
 bool LocalFilesystemSource::isImageAt(int viewIndex) const {
     const ImageFile *item = itemAt(viewIndex);
-    return item && item->isImage();
+    return item && item->isViewerImage();
 }
 
 bool LocalFilesystemSource::isDirectoryAt(int viewIndex) const {

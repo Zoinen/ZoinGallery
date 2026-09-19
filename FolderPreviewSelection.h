@@ -2,12 +2,40 @@
 
 #include "NaturalSort.h"
 #include "ThumbnailLoader.h"
+#include <QFileInfo>
+#include <QSet>
+#include <utility>
+
+inline bool isVideoPreviewFormat(const QString &name) {
+    static const QSet<QString> formats{
+        QStringLiteral("mp4"), QStringLiteral("mkv"),
+        QStringLiteral("webm"), QStringLiteral("avi"),
+        QStringLiteral("mov"), QStringLiteral("m4v"),
+        QStringLiteral("mpg"), QStringLiteral("mpeg"),
+        QStringLiteral("wmv"), QStringLiteral("flv"),
+        QStringLiteral("ts"), QStringLiteral("m2ts"),
+        QStringLiteral("ogv"), QStringLiteral("3gp"),
+        QStringLiteral("vob"), QStringLiteral("mts"),
+        QStringLiteral("mxf"), QStringLiteral("f4v"),
+        QStringLiteral("3g2"), QStringLiteral("ogm"),
+        QStringLiteral("divx"), QStringLiteral("asf"),
+        QStringLiteral("rm"), QStringLiteral("rmvb")};
+    return formats.contains(QFileInfo(name).suffix().toLower());
+}
 
 inline QList<FileInfo> selectFolderPreviewImages(const QList<FileInfo> &entries, int limit = 16) {
     QList<FileInfo> images;
-    for (const auto &entry : entries)
-        if (!entry.isDirectory && ThumbnailLoader::isFormatSupported(entry.name))
-            images.append(entry);
+    for (const auto &entry : entries) {
+        if (entry.isDirectory || (!ThumbnailLoader::isFormatSupported(entry.name)
+                                  && !isVideoPreviewFormat(entry.name))) {
+            continue;
+        }
+        FileInfo selected = entry;
+        if (isVideoPreviewFormat(selected.name)) {
+            selected.thumbnailKind = QStringLiteral("video");
+        }
+        images.append(std::move(selected));
+    }
     sortFileInfosNaturally(images);
     if (limit < 0 || images.size() <= limit) return images;
     QList<FileInfo> sampled;

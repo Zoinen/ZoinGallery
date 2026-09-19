@@ -173,7 +173,8 @@ QVariantList SelectedImagesModel::viewerPrefetchSourceRows(
         if (row >= _items.size()) {
             hitEnd = true;
         }
-        if (row >= 0 && row < _items.size() && _items.at(row)->isImage()) {
+        if (row >= 0 && row < _items.size()
+            && _items.at(row)->isViewerImage()) {
             result.append(row);
         }
     }

@@ -79,7 +79,7 @@ void ExternalDirectoryPreviews::capture(const QSharedPointer<Record> &record) {
     for (const auto &entry : record->model->_entries) {
         snapshot.children.append({entry.name, entry.sourceIdentity, entry.contentVersion,
             entry.size, entry.mtimeNs, entry.originalSize, entry.thumbnailRequestedSize,
-            entry.thumbnailTransformKey});
+            entry.thumbnailTransformKey, entry.thumbnailKind});
     }
     _cache->store(record->source.sourceKey, std::move(snapshot));
 }
@@ -100,6 +100,7 @@ void ExternalDirectoryPreviews::restore(const QString &id, const QSharedPointer<
         entry.loaded = true;
         entry.name = child.name;
         entry.image = true;
+        entry.thumbnailKind = child.thumbnailKind;
         entry.sourceIdentity = child.sourceIdentity;
         entry.contentVersion = child.contentVersion;
         entry.size = child.size;
@@ -110,6 +111,7 @@ void ExternalDirectoryPreviews::restore(const QString &id, const QSharedPointer<
         entry.imageInfo.requestNamespace = model->_sessionId;
         entry.imageInfo.sourceVersionToken = child.contentVersion;
         entry.imageInfo.fileSize = child.size;
+        entry.imageInfo.thumbnailKind = child.thumbnailKind;
         entry.imageInfo.imageSize = child.originalSize;
         entry.thumbnailRequestedSize = child.thumbnailSize;
         entry.thumbnailTransformKey = child.thumbnailTransformKey;

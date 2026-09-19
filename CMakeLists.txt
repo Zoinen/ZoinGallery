@@ -51,7 +51,7 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
 find_package(QT NAMES Qt6)
-find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2 REQUIRED)
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2 Multimedia REQUIRED)
 find_package(Qt6 COMPONENTS ShaderTools REQUIRED)
 if(ZOIN_BUILD_STANDALONE)
     find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Widgets REQUIRED)
@@ -200,6 +200,8 @@ set(ZOIN_CORE_SOURCES
     Runners/ImageInfoReadRunner.cpp
     Runners/ImageReadRunner.h
     Runners/ImageReadRunner.cpp
+    Runners/VideoThumbnailRunner.h
+    Runners/VideoThumbnailRunner.cpp
     Runners/FolderListReadRunner.h
     Runners/FolderListReadRunner.cpp
     Runners/ImageDecodeRunner.h
@@ -998,6 +1000,7 @@ target_link_libraries(ZoinGalleryCore PUBLIC
     Qt${QT_VERSION_MAJOR}::Concurrent 
     Qt${QT_VERSION_MAJOR}::Svg 
     Qt${QT_VERSION_MAJOR}::QuickControls2
+    Qt${QT_VERSION_MAJOR}::Multimedia
     TIFF::TIFF
     tiffxx
     libraw::libraw

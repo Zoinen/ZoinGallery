@@ -256,6 +256,7 @@ QVariantMap ExternalCatalogModel::visualSnapshot(int row) const {
         {QStringLiteral("folderPreviewState"), int(entry->directoryPreviewState)},
         {QStringLiteral("folderPreviewRevision"), entry->directoryPreviewRevision},
         {QStringLiteral("isImage"), entry->image},
+        {QStringLiteral("thumbnailKind"), entry->thumbnailKind},
         {QStringLiteral("imageDimensionsKnown"), entry->image && !entry->originalSize.isEmpty()},
         {QStringLiteral("isSelected"), entry->selected},
         {QStringLiteral("iconPath"), entry->iconPath},
@@ -441,6 +442,9 @@ bool ExternalCatalogModel::catalogMatches(
             ? map.value(QStringLiteral("isImage")).toBool()
             : (!metadataDeferred && !directory
                && FileListModel::isImage(name));
+        const QString thumbnailKind = map.value(
+            QStringLiteral("thumbnailKind")).toString().trimmed().toLower();
+        const bool thumbnailable = image || thumbnailKind == QStringLiteral("video");
         const qint64 mtimeNs = integerValue(
             map, QStringLiteral("mtimeNs"),
             QStringLiteral("mtimeNanos"), 0);
@@ -463,7 +467,8 @@ bool ExternalCatalogModel::catalogMatches(
             current.source.storageClass != source.storageClass ||
             current.source.accessProfile != source.accessProfile ||
             current.source.mimeType != source.mimeType ||
-            current.directory != directory || current.image != image ||
+            current.directory != directory || current.image != thumbnailable ||
+            current.thumbnailKind != thumbnailKind ||
             current.mtimeNs != mtimeNs || current.size != size ||
             current.displayFields != normalizedDisplayFields) {
             return false;
@@ -520,10 +525,14 @@ bool ExternalCatalogModel::parseCatalogEntry(
     if (parsed.directory && parsed.directorySource.isValid())
         parsed.directoryPreviewState = _incomingDirectoryStates.value(
             parsed.directorySource.sourceKey, DirectoryPreviewState::Unknown);
+    const QString thumbnailKind = map.value(
+        QStringLiteral("thumbnailKind")).toString().trimmed().toLower();
+    parsed.thumbnailKind = thumbnailKind;
     parsed.image = map.contains(QStringLiteral("isImage"))
         ? map.value(QStringLiteral("isImage")).toBool()
         : (!metadataDeferred && !parsed.directory
            && FileListModel::isImage(parsed.name));
+    parsed.image = parsed.image || thumbnailKind == QStringLiteral("video");
     parsed.selected = map.value(QStringLiteral("selected")).toBool();
     if (metadataDeferred) {
         parsed.mtimeNs = 0;
@@ -553,6 +562,15 @@ bool ExternalCatalogModel::parseCatalogEntry(
               parsed.mtimeNs / 1000000, QTimeZone::UTC)
         : QDateTime{};
     parsed.imageInfo.fileSize = parsed.size;
+    parsed.imageInfo.thumbnailKind = parsed.thumbnailKind;
+    if (parsed.thumbnailKind == QStringLiteral("video")) {
+        // Video metadata is obtained by the thumbnail decoder. A stable
+        // 16:9 placeholder keeps Masonry geometry and thumbnail admission
+        // independent of a full-file image probe.
+        parsed.imageInfo.imageSize = QSize(16, 9);
+        parsed.originalSize = parsed.imageInfo.imageSize;
+        parsed.metadataSettled = true;
+    }
     restoreCachedMetadata(parsed);
     if (map.contains(QStringLiteral("highlightStyle"))) {
         parsed.highlightStyle = map.value(

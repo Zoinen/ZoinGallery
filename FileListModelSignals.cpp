@@ -1,5 +1,21 @@
 #include "FileListModelPrivate.h"
 
+namespace {
+
+void normalizeVideoImageInfo(ImageInfo &info, const ImageFile *item) {
+    if (!item || !isVideoPreviewFormat(item->fileName())) {
+        return;
+    }
+    // Legacy path/stat metadata caches predate video thumbnails and therefore
+    // cannot carry the decoder kind. Recover it from the stable local name so
+    // a cache hit cannot route a video into ThumbnailLoader as a still image.
+    info.thumbnailKind = QStringLiteral("video");
+    info.imageSize = QSize(16, 9);
+    info.orientation = ExifOrientation::Horizontal;
+}
+
+} // namespace
+
 struct FileListModel::ImageInfoBatchUpdate {
     QList<ImageDecodeRequest> decodeRequests;
     ImageFile *flushItem = nullptr;
@@ -98,14 +114,6 @@ void FileListModel::connectImageInfoSignal() {
                 }
                 return;
             }
-            if (!result.imageSize.isValid()) {
-                rememberFailedImageInfo(result);
-                if (result.isLast && !result.isFromEmbeddedView) {
-                    emitThumbnailInfoFlush();
-                }
-                handleDirectOpenImageInfo(result);
-                return;
-            }
             if (!isCurrentFileVersion(item, result) &&
                 !isActiveDirectOpenInfo(result)) {
                 if (result.isLast && !result.isFromEmbeddedView) {
@@ -118,6 +126,15 @@ void FileListModel::connectImageInfoSignal() {
             _terminalImageInfoFailureRevisions.remove(result.path);
             _failedImageWorkRetryDelayMs = FailedImageWorkRetryInitialMs;
             ImageInfo itemInfo = result;
+            normalizeVideoImageInfo(itemInfo, item);
+            if (!itemInfo.imageSize.isValid()) {
+                rememberFailedImageInfo(result);
+                if (result.isLast && !result.isFromEmbeddedView) {
+                    emitThumbnailInfoFlush();
+                }
+                handleDirectOpenImageInfo(result);
+                return;
+            }
             if (itemInfo.fileSize < 0) {
                 itemInfo.fileSize = item->fileSize();
             }
@@ -218,13 +235,6 @@ void FileListModel::applyImageInfoBatchResult(
             result.isLast && !result.isFromEmbeddedView;
         return;
     }
-    if (!result.imageSize.isValid()) {
-        rememberFailedImageInfo(result);
-        update->flushTopLevelFallback |=
-            result.isLast && !result.isFromEmbeddedView;
-        handleDirectOpenImageInfo(result);
-        return;
-    }
     if (!isCurrentFileVersion(item, result)
         && !isActiveDirectOpenInfo(result)) {
         update->flushTopLevelFallback |=
@@ -238,6 +248,14 @@ void FileListModel::applyImageInfoBatchResult(
     _failedImageWorkRetryDelayMs = FailedImageWorkRetryInitialMs;
     update->foundCurrentItem = true;
     ImageInfo itemInfo = result;
+    normalizeVideoImageInfo(itemInfo, item);
+    if (!itemInfo.imageSize.isValid()) {
+        rememberFailedImageInfo(result);
+        update->flushTopLevelFallback |=
+            result.isLast && !result.isFromEmbeddedView;
+        handleDirectOpenImageInfo(result);
+        return;
+    }
     if (itemInfo.fileSize < 0) {
         itemInfo.fileSize = item->fileSize();
     }
@@ -474,9 +492,14 @@ void FileListModel::buildFolderPreviewRows(FolderPreviewUpdate *update) {
             update->retainedRows.insert(row);
             ImageInfo info = row->info();
             if (info.lastModified != sourceRow.lastModified
-                || info.fileSize != sourceRow.fileSize) {
+                || info.fileSize != sourceRow.fileSize
+                || info.thumbnailKind != sourceRow.thumbnailKind) {
                 info.lastModified = sourceRow.lastModified;
                 info.fileSize = sourceRow.fileSize;
+                info.thumbnailKind = sourceRow.thumbnailKind;
+                if (info.thumbnailKind == QStringLiteral("video")) {
+                    info.imageSize = QSize(16, 9);
+                }
                 update->metadataUpdates.insert(row, info);
                 update->imageInfoPaths.append(rowPath);
                 update->changedPaths.append(rowPath);

@@ -21,6 +21,7 @@ struct DirectoryPreviewSnapshot {
         QSize originalSize;
         QSize thumbnailSize;
         QString thumbnailTransformKey;
+        QString thumbnailKind;
     };
     DirectoryPreviewState state = DirectoryPreviewState::Unknown;
     QList<Child> children;

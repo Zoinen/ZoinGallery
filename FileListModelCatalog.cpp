@@ -161,14 +161,20 @@ ImageFile *FileListModel::createFileItem(const QString &folderPath, const QStrin
     item->setFolderPath(folderPath);
     item->setFileName(fileName);
     item->setIsFolder(false);
+    const bool videoThumbnail = isVideoPreviewFormat(fileName);
     ImageInfo info = {
         .path = item->fullPath(),
         .lastModified = lastModified,
         .fileSize = fileSize,
+        .imageSize = videoThumbnail ? QSize(16, 9) : QSize(),
+        .thumbnailKind = videoThumbnail ? QStringLiteral("video") : QString(),
     };
     item->setInfo(info);
+    if (videoThumbnail) {
+        item->setFullSize(info.imageSize);
+    }
 
-    if (isImage(item->fileName())) {
+    if (isImage(item->fileName()) || videoThumbnail) {
         item->setIsImage(true);
         QString lowerFileName = item->fileName().toLower();
         item->setIconPath("qrc:/ZoinGallery/resources/ImageIcon.svg");
@@ -245,7 +251,9 @@ ImageDecodeRequest FileListModel::imageDecodeRequestFromEmbeddedImageInfo(const 
         .info = info,
         .targetSize = thumbnailSize,
         .viewerRequest = false,
-        .checkCache = info.isCached
+        .checkCache = info.isCached,
+        .thumbnailTransformKey = info.thumbnailKind == QStringLiteral("video")
+            ? QStringLiteral("video-contact-sheet-2x2-v1") : QString()
     };
 }
 

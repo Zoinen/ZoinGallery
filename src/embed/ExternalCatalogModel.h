@@ -195,6 +195,7 @@ private:
         QString localPath;
         bool directory = false;
         bool image = false;
+        QString thumbnailKind;
         bool selected = false;
         qint64 mtimeNs = 0;
         qint64 size = -1;

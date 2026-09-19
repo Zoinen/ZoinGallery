@@ -800,6 +800,17 @@ private slots:
     void directorySelectionAndLifecycle() {
         QCOMPARE(selectFolderPreviewNames({"img10.JPG", "img2.jpg", "note.txt", "img1.png"}),
                  QStringList({"img1.png", "img2.jpg", "img10.JPG"}));
+        const QList<FileInfo> mixedEntries{
+            FileInfo{.name = QStringLiteral("clip.MP4")},
+            FileInfo{.name = QStringLiteral("still.jpg")},
+            FileInfo{.name = QStringLiteral("readme.txt")},
+        };
+        const QList<FileInfo> mixedSelection =
+            selectFolderPreviewImages(mixedEntries);
+        QCOMPARE(mixedSelection.size(), 2);
+        QCOMPARE(mixedSelection.at(0).name, QStringLiteral("clip.MP4"));
+        QCOMPARE(mixedSelection.at(0).thumbnailKind,
+                 QStringLiteral("video"));
         QStringList many;
         for (int i = 0; i < 32; ++i) many.prepend(QStringLiteral("фото%1.png").arg(i));
         const auto selected = selectFolderPreviewNames(many);

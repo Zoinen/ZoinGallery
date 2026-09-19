@@ -8,6 +8,7 @@
 #include "PersistentImageCache.h"
 #include "QmlAsyncImageProvider.h"
 #include "ThumbnailLoader.h"
+#include "FolderPreviewSelection.h"
 
 #include <QClipboard>
 #include <QDir>

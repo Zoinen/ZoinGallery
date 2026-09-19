@@ -33,7 +33,8 @@ void DirectoryPreviewCache::store(const QString &key, DirectoryPreviewSnapshot s
     qint64 bytes = 256 + key.size() * 2;
     for (const auto &child : snapshot.children)
         bytes += 256 + 2 * (child.name.size() + child.sourceIdentity.size()
-            + child.contentVersion.size() + child.thumbnailTransformKey.size());
+            + child.contentVersion.size() + child.thumbnailKind.size()
+            + child.thumbnailTransformKey.size());
     if (bytes > _budget) return;
     auto old = _entries.find(key);
     if (old != _entries.end()) {

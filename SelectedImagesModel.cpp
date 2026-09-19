@@ -345,7 +345,8 @@ void SelectedImagesModel::requestViewer(int index, int width, int height) {
 void SelectedImagesModel::requestViewerInOrder(
     int index, const QVariantList &orderedSourceRows,
     int width, int height) {
-    if (index < 0 || index >= _items.size()) {
+    if (index < 0 || index >= _items.size()
+        || !_items.at(index)->isViewerImage()) {
         return;
     }
 
@@ -366,7 +367,7 @@ void SelectedImagesModel::requestViewerInOrder(
             continue;
         }
         ImageFile *prioritizedItem = _items.at(sourceRow);
-        if (prioritizedItem && prioritizedItem->isImage() &&
+        if (prioritizedItem && prioritizedItem->isViewerImage() &&
             !prioritizedItems.contains(prioritizedItem)) {
             prioritizedItems.append(prioritizedItem);
         }
@@ -393,7 +394,7 @@ void SelectedImagesModel::requestViewerInOrder(
 void SelectedImagesModel::requestViewerAt(
     int index, int width, int height) {
     if (index < 0 || index >= _items.size() ||
-        !_items.at(index)->isImage()) {
+        !_items.at(index)->isViewerImage()) {
         return;
     }
 
@@ -405,7 +406,8 @@ void SelectedImagesModel::requestViewerAt(
 }
 
 QString SelectedImagesModel::bestViewerImageUrlForIndex(int index) const {
-    if (index < 0 || index >= _items.size()) {
+    if (index < 0 || index >= _items.size()
+        || !_items.at(index)->isViewerImage()) {
         return {};
     }
     const QSize viewerSize =

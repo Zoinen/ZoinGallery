@@ -1,4 +1,5 @@
 #include "ImageInfoReadRunner.h"
+#include "FolderPreviewSelection.h"
 #include "PersistentDerivedImageCache.h"
 #include "ThumbnailLoader.h"
 
@@ -49,6 +50,31 @@ void ImageInfoReadRunner::run() {
         .highPriority = _highPriority,
         .requestNamespace = _requestNamespace,
     };
+
+    // Videos have no still-image metadata that ThumbnailLoader can expose.
+    // Publish a stable 16:9 placeholder immediately so folder previews can
+    // schedule the dedicated Qt Multimedia decoder without probing a frame
+    // on the metadata worker.
+    const QString formatHint = _source.isValid() && !_source.displayName.isEmpty()
+        ? _source.displayName : _path;
+    if (isVideoPreviewFormat(formatHint)) {
+        // Keep the catalog identity stable for virtual sources. The video
+        // decoder materializes the bytes later, but metadata must already
+        // refer to the host-provided runtime identity rather than a temporary
+        // local path (or the original display-only name).
+        if (_source.isValid()) {
+            result.path = _source.runtimeIdentity();
+            result.fileSize = _source.size;
+        }
+        result.thumbnailKind = QStringLiteral("video");
+        result.imageSize = QSize(16, 9);
+        result.orientation = ExifOrientation::Horizontal;
+        timingSpan.set(QStringLiteral("outcome"),
+                       QStringLiteral("video-placeholder"));
+        emit imageInfoReady(result);
+        emit finished(this);
+        return;
+    }
 
     QSharedPointer<ZoinGallery::ImageSourceLease> lease;
     if (_source.isValid()) {

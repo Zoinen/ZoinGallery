@@ -265,7 +265,7 @@ void FileListModel::populateFolderAfterDirectOpenFullDecode(bool notifyReady) {
         int targetIndex = -1;
         const QString targetPathKey = fileSystemPathKey(_directOpen.path);
         for (ImageFile *item : std::as_const(_items)) {
-            if (item->isImage() &&
+            if (item->isViewerImage() &&
                 fileSystemPathKey(item->fullPath()) == targetPathKey) {
                 targetIndex = item->index();
                 break;
@@ -332,13 +332,13 @@ QList<int> FileListModel::directOpenNeighborIndexes() const {
     }
 
     for (int i = _directOpen.currentIndex - 1; i >= 0; i--) {
-        if (_items[i]->isImage()) {
+        if (_items[i]->isViewerImage()) {
             result.append(i);
             break;
         }
     }
     for (int i = _directOpen.currentIndex + 1; i < _items.size(); i++) {
-        if (_items[i]->isImage()) {
+        if (_items[i]->isViewerImage()) {
             result.append(i);
             break;
         }
@@ -372,7 +372,7 @@ QList<ImageDecodeRequest> FileListModel::directOpenViewerRequestsForIndexes(cons
                                                                             QSet<QString> *queuedPaths) {
     QList<ImageDecodeRequest> requests;
     for (int index : indexes) {
-        if (index < 0 || index >= _items.size() || !_items[index]->isImage()) {
+        if (index < 0 || index >= _items.size() || !_items[index]->isViewerImage()) {
             continue;
         }
 
@@ -494,7 +494,8 @@ void FileListModel::requestViewer(int index, int width, int height) {
 void FileListModel::requestViewerInOrder(
     int index, const QVariantList &orderedSourceRows,
     int width, int height) {
-    if (index < 0 || index >= _items.size()) {
+    if (index < 0 || index >= _items.size()
+        || !_items.at(index)->isViewerImage()) {
         return;
     }
 
@@ -531,7 +532,7 @@ void FileListModel::requestViewerInOrder(
             continue;
         }
         ImageFile *item = _items.at(sourceRow);
-        if (item && item->isImage() &&
+        if (item && item->isViewerImage() &&
             !prioritizedItems.contains(item)) {
             prioritizedItems.append(item);
         }
@@ -565,7 +566,7 @@ void FileListModel::requestViewerInOrder(
 void FileListModel::requestViewerAt(
     int index, int width, int height) {
     if (index < 0 || index >= _items.size() ||
-        !_items.at(index)->isImage()) {
+        !_items.at(index)->isViewerImage()) {
         return;
     }
 
@@ -626,7 +627,7 @@ QSize FileListModel::viewerImageOriginalSizeForIndex(int index) const {
 
 QString FileListModel::viewerRequestStateForIndex(int index) const {
     if (index < 0 || index >= _items.size() || !_items.at(index)
-        || !_items.at(index)->isImage()) {
+        || !_items.at(index)->isViewerImage()) {
         return QStringLiteral("idle");
     }
     return _viewerRequestStates.value(_items.at(index)->fullPath(),
@@ -672,7 +673,8 @@ void FileListModel::clearViewerRequestStates() {
 
 QList<QPair<QString, int>> FileListModel::viewerImageSourcesForIndex(
     int index, const QSize &viewerSize) const {
-    if (index < 0 || index >= _items.size()) {
+    if (index < 0 || index >= _items.size()
+        || !_items.at(index)->isViewerImage()) {
         return {};
     }
     QSize effectiveViewerSize = viewerSize;

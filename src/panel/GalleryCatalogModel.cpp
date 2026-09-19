@@ -77,6 +77,7 @@ QVariant GalleryCatalogModel::visualSnapshotData(
         {QStringLiteral("text"), image->text()},
         {QStringLiteral("isFolder"), image->isFolder()},
         {QStringLiteral("isImage"), image->isImage()},
+        {QStringLiteral("thumbnailKind"), image->info().thumbnailKind},
         {QStringLiteral("isSelected"), image->isSelected()},
         {QStringLiteral("iconPath"), image->iconPath()},
         {QStringLiteral("iconKey"),

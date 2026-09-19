@@ -549,7 +549,8 @@ QString ExternalCatalogModel::localPathAt(int row) const {
 
 bool ExternalCatalogModel::isImageAt(int row) const {
     const Entry *entry = entryAt(row);
-    return entry && entry->loaded && entry->image;
+    return entry && entry->loaded && entry->image
+        && entry->thumbnailKind != QStringLiteral("video");
 }
 
 bool ExternalCatalogModel::isDirectoryAt(int row) const {

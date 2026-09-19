@@ -9,6 +9,9 @@ QString ExternalCatalogModel::viewerImageUrlAt(int row) const {
         return {};
     }
     const Entry &entry = loadedEntry(row);
+    if (!entry.image || entry.thumbnailKind == QStringLiteral("video")) {
+        return {};
+    }
     if (entry.id == _viewerEntryId) {
         const auto sources = viewerImageSourcesAt(row);
         return sources.isEmpty() ? QString() : sources.constLast().first;
@@ -30,6 +33,9 @@ QList<QPair<QString, int>> ExternalCatalogModel::viewerImageSourcesAt(
 
     QSize viewerSize = _viewerViewportSize;
     const Entry &entry = loadedEntry(row);
+    if (!entry.image || entry.thumbnailKind == QStringLiteral("video")) {
+        return {};
+    }
     const auto plan = _viewerPlans.constFind(entry.id);
     if (plan != _viewerPlans.constEnd()) {
         viewerSize = plan->viewportSize;
@@ -42,7 +48,8 @@ QList<QPair<QString, int>> ExternalCatalogModel::viewerImageSourcesAt(
 }
 
 QString ExternalCatalogModel::viewerRequestStateAt(int row) const {
-    if (!validRow(row) || !loadedEntry(row).image) {
+    if (!validRow(row) || !loadedEntry(row).image
+        || loadedEntry(row).thumbnailKind == QStringLiteral("video")) {
         return QStringLiteral("idle");
     }
     return _viewerRequestStates.value(loadedEntry(row).id,
@@ -86,7 +93,8 @@ void ExternalCatalogModel::clearViewerRequestStates() {
 
 void ExternalCatalogModel::requestViewer(
     int row, const QSize &viewportSize) {
-    if (_shutdown || !validRow(row) || !loadedEntry(row).image ||
+    if (_shutdown || !validRow(row) || !loadedEntry(row).image
+        || loadedEntry(row).thumbnailKind == QStringLiteral("video") ||
         !viewportSize.isValid()) {
         clearViewer();
         return;
@@ -150,7 +158,8 @@ void ExternalCatalogModel::requestViewer(
 
 void ExternalCatalogModel::requestViewerAt(
     int row, const QSize &viewportSize) {
-    if (_shutdown || !validRow(row) || !loadedEntry(row).image ||
+    if (_shutdown || !validRow(row) || !loadedEntry(row).image
+        || loadedEntry(row).thumbnailKind == QStringLiteral("video") ||
         !viewportSize.isValid()) {
         return;
     }
@@ -198,7 +207,8 @@ void ExternalCatalogModel::requestViewerAt(
 }
 
 void ExternalCatalogModel::setViewerIndex(int row) {
-    if (_shutdown || !validRow(row) || !loadedEntry(row).image) {
+    if (_shutdown || !validRow(row) || !loadedEntry(row).image
+        || loadedEntry(row).thumbnailKind == QStringLiteral("video")) {
         clearViewer();
         return;
     }
@@ -339,7 +349,7 @@ void ExternalCatalogModel::requestImageMetadata(
         // sources whose bytes are expensive to obtain.
         _catalogProbeRequested = std::any_of(
             _entries.cbegin(), _entries.cend(), [](const Entry &entry) {
-                return entry.image && entry.source.isValid() &&
+                return entry.image && entry.thumbnailKind != QStringLiteral("video") && entry.source.isValid() &&
                     expensiveSource(entry.source);
             });
     }
@@ -379,7 +389,7 @@ void ExternalCatalogModel::cancelAllDecodeRunners() {
     // retain the historical aggressive cancellation policy.
     const bool hasExpensiveSource = std::any_of(
         _entries.cbegin(), _entries.cend(), [](const Entry &entry) {
-            return entry.image && expensiveSource(entry.source);
+            return entry.image && entry.thumbnailKind != QStringLiteral("video") && expensiveSource(entry.source);
         });
     if (!hasExpensiveSource) {
         _decodeManager->cancelThumbnailRequests(_sessionId);

@@ -160,6 +160,10 @@ void ExternalCatalogResetTransaction::initializeRow(
         ? map.value(QStringLiteral("isImage")).toBool()
         : (!m_metadataDeferred && !entry.directory
            && FileListModel::isImage(entry.name));
+    entry.thumbnailKind = map.value(
+        QStringLiteral("thumbnailKind")).toString().trimmed().toLower();
+    entry.image = entry.image
+        || entry.thumbnailKind == QStringLiteral("video");
     entry.selected = map.value(QStringLiteral("selected")).toBool();
     const auto directorySource = map.value(QStringLiteral("directorySource")).toMap();
     entry.directorySource = {directorySource.value(QStringLiteral("resourceId")).toString(),
@@ -194,6 +198,12 @@ void ExternalCatalogResetTransaction::initializeRow(
               entry.mtimeNs / 1000000, QTimeZone::UTC)
         : QDateTime{};
     entry.imageInfo.fileSize = entry.size;
+    entry.imageInfo.thumbnailKind = entry.thumbnailKind;
+    if (entry.thumbnailKind == QStringLiteral("video")) {
+        entry.imageInfo.imageSize = QSize(16, 9);
+        entry.originalSize = entry.imageInfo.imageSize;
+        entry.metadataSettled = true;
+    }
 }
 
 bool ExternalCatalogResetTransaction::adoptPreviousState(
@@ -232,7 +242,8 @@ bool ExternalCatalogResetTransaction::adoptPreviousState(
          || old.source.storageClass != entry.source.storageClass
          || old.source.mimeType != entry.source.mimeType
          || old.localPath != entry.localPath
-         || old.size != entry.size || old.image != entry.image);
+         || old.size != entry.size || old.image != entry.image
+         || old.thumbnailKind != entry.thumbnailKind);
     if (hadOldEntry && !sourceChanged) {
         entry.imageInfo = old.imageInfo;
         entry.originalSize = old.originalSize;
@@ -282,7 +293,13 @@ void ExternalCatalogResetTransaction::updateMaterializedItem(
               entry.mtimeNs / 1000000, QTimeZone::UTC)
         : QDateTime{};
     info.fileSize = entry.size;
+    if (entry.thumbnailKind == QStringLiteral("video")) {
+        info.imageSize = QSize(16, 9);
+        entry.originalSize = info.imageSize;
+        entry.metadataSettled = true;
+    }
     entry.imageInfo = info;
+    entry.imageInfo.thumbnailKind = entry.thumbnailKind;
     m_model.restoreCachedMetadata(entry);
     if (!entry.item) {
         return;

@@ -7,6 +7,7 @@
 #include "Runners/ImageInfoReadRunner.h"
 #include "Runners/ImageProbeRunner.h"
 #include "Runners/ImageReadRunner.h"
+#include "Runners/VideoThumbnailRunner.h"
 #include "Runners/CacheImageRunners.h"
 #include "Runners/RecursiveFolderScanner.h"
 
@@ -580,16 +581,30 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
         if (request.viewerRequest) {
             // qDebug() << "ZZ read" << request.info.path << request.targetSize << _taskQueue.size();
         }
-        ImageReadRunner *runner = new ImageReadRunner(
-            request, _imageSourceProvider);
-        runner->connections.append(
-            connect(runner, &ImageReadRunner::imageReadReady,
-                    this, &DecodeManager::onImageReadReady)
-        );
-        runner->connections.append(
-            connect(runner, &ImageReadRunner::imageReadFailed,
-                    this, &DecodeManager::onImageReadFailed)
-        );
+        Runner *runner = nullptr;
+        if (request.info.thumbnailKind == QStringLiteral("video")) {
+            auto *videoRunner = new VideoThumbnailRunner(
+                request, _imageSourceProvider);
+            videoRunner->connections.append({
+                connect(videoRunner, &VideoThumbnailRunner::imageReady,
+                        this, &DecodeManager::onImageReady),
+                connect(videoRunner, &VideoThumbnailRunner::imageReadFailed,
+                        this, &DecodeManager::onImageReadFailed),
+                connect(videoRunner, &VideoThumbnailRunner::storeInCache,
+                        this, &DecodeManager::onStoreInCache),
+            });
+            runner = videoRunner;
+        } else {
+            auto *imageRunner = new ImageReadRunner(
+                request, _imageSourceProvider);
+            imageRunner->connections.append({
+                connect(imageRunner, &ImageReadRunner::imageReadReady,
+                        this, &DecodeManager::onImageReadReady),
+                connect(imageRunner, &ImageReadRunner::imageReadFailed,
+                        this, &DecodeManager::onImageReadFailed),
+            });
+            runner = imageRunner;
+        }
         if (runner->isViewerRequest()) {
             insertAheadOfLowerPriority(_taskQueue, runner);
         }
@@ -987,6 +1002,11 @@ QString DecodeManager::runnerToString(Runner *task) {
         return QString("ImageInfoRead %2%3").arg(static_cast<ImageInfoReadRunner *>(task)->_path).arg(static_cast<ImageInfoReadRunner *>(task)->isEmbeddedRequest() ? " E" : "");
         break;
     case RunnerType::ImageRead:
+        if (const auto *video = qobject_cast<const VideoThumbnailRunner *>(task)) {
+            return QString("VideoThumbnail %1%2")
+                .arg(video->request().info.path)
+                .arg(video->isViewerRequest() ? " V" : "");
+        }
         return QString("ImageRead %2%3").arg(static_cast<ImageReadRunner *>(task)->_request.info.path).arg(static_cast<ImageReadRunner *>(task)->isViewerRequest() ? " V" : "");
         break;
     case RunnerType::FolderListRead:
@@ -1294,8 +1314,14 @@ bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType
         }
     }
     if (runner->type() == RunnerType::ImageRead) {
-        const auto *read = static_cast<const ImageReadRunner *>(runner);
-        if (read->_request.info.source.isValid()) {
+        const ImageDecodeRequest *request = nullptr;
+        if (const auto *video = qobject_cast<const VideoThumbnailRunner *>(runner)) {
+            request = &video->request();
+        } else {
+            const auto *read = static_cast<const ImageReadRunner *>(runner);
+            request = &read->_request;
+        }
+        if (request->info.source.isValid()) {
             return threadType == static_cast<int>(SpecialThreads::Read) ||
                 threadType == static_cast<int>(SpecialThreads::Cache) ||
                 threadType == static_cast<int>(SpecialThreads::Probe);
@@ -1431,8 +1457,14 @@ bool DecodeManager::canStartRunner(
         return expectedBytes <= MaxCompressedPayloadBytes - bytes;
     };
 
-    const auto *readRunner = static_cast<const ImageReadRunner *>(runner);
-    const qint64 expectedBytes = readRunner->_request.info.fileSize;
+    const ImageDecodeRequest *request = nullptr;
+    if (const auto *video = qobject_cast<const VideoThumbnailRunner *>(runner)) {
+        request = &video->request();
+    } else {
+        const auto *readRunner = static_cast<const ImageReadRunner *>(runner);
+        request = &readRunner->_request;
+    }
+    const qint64 expectedBytes = request->info.fileSize;
     if (fitsAllowance(compressedPayloadCount,
                       compressedPayloadRunnerLimit(),
                       compressedPayloadByteCount, expectedBytes)) {

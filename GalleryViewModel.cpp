@@ -161,7 +161,7 @@ QVariantList GalleryViewModel::viewerPrefetchSourceRows(
         const QModelIndex viewIndex = index(viewRow, 0);
         const ImageFile *item = viewIndex
             .data(FileListModel::ImageFileRole).value<ImageFile *>();
-        if (!item || !item->isImage()) {
+        if (!item || !item->isViewerImage()) {
             continue;
         }
         const int sourceRow = mapToSourceRow(viewRow);

@@ -62,9 +62,15 @@ QString GalleryPanelBackend::entryNameAt(int index) const {
 
 bool GalleryPanelBackend::isImageAt(int index) const {
     GalleryCatalogModel *catalog = catalogModel();
-    return catalog && index >= 0 && index < catalog->rowCount()
-        && catalog->data(catalog->index(index, 0),
-                         GalleryCatalogModel::IsImageRole).toBool();
+    if (!catalog || index < 0 || index >= catalog->rowCount()) {
+        return false;
+    }
+    const QVariantMap visual = catalog->data(
+        catalog->index(index, 0), GalleryCatalogModel::VisualSnapshotRole)
+        .toMap();
+    return visual.value(QStringLiteral("isImage")).toBool()
+        && visual.value(QStringLiteral("thumbnailKind")).toString()
+               != QStringLiteral("video");
 }
 
 QVariantMap GalleryPanelBackend::highlightStyleAt(int index) const {

@@ -32,7 +32,8 @@ void ExternalCatalogModel::beginCatalogFitPass() {
     _catalogFitStarted = true;
     QSet<int> seen;
     const auto append = [this, &seen](int row) {
-        if (validRow(row) && loadedEntry(row).image &&
+        if (validRow(row) && loadedEntry(row).image
+            && loadedEntry(row).thumbnailKind != QStringLiteral("video") &&
             !seen.contains(row)) {
             seen.insert(row);
             _catalogFitRows.append(row);
@@ -91,7 +92,8 @@ ImageDecodeRequest ExternalCatalogModel::catalogFitRequestForRow(
     const QSize originalSize = entry.originalSize.isValid()
         ? entry.originalSize
         : entry.item ? entry.item->fullSize() : QSize();
-    if (!entry.image || !originalSize.isValid()) {
+    if (!entry.image || entry.thumbnailKind == QStringLiteral("video")
+        || !originalSize.isValid()) {
         return {};
     }
     const ImageInfo info = entry.imageInfo.sourceIdentity().isEmpty()
@@ -164,7 +166,7 @@ void ExternalCatalogModel::pumpCatalogFitRequests() {
             continue;
         }
         const Entry &entry = loadedEntry(row);
-        if (!entry.image ||
+        if (!entry.image || entry.thumbnailKind == QStringLiteral("video") ||
             _catalogFitResolvedSources.contains(entry.sourceIdentity)) {
             continue;
         }
@@ -554,7 +556,8 @@ void ExternalCatalogModel::scheduleViewerDecode() {
 
 void ExternalCatalogModel::scheduleViewerDecodeAt(
     int row, const QSize &viewportSize, int prefetchCount) {
-    if (_shutdown || !validRow(row) || !loadedEntry(row).image ||
+    if (_shutdown || !validRow(row) || !loadedEntry(row).image
+        || loadedEntry(row).thumbnailKind == QStringLiteral("video") ||
         !viewportSize.isValid() || prefetchCount <= 0) {
         return;
     }
@@ -660,7 +663,8 @@ QList<int> ExternalCatalogModel::viewerCandidateRows(
         if (candidate >= logicalRowCount()) {
             hitEnd = true;
         }
-        if (validRow(candidate) && loadedEntry(candidate).image) {
+        if (validRow(candidate) && loadedEntry(candidate).image
+            && loadedEntry(candidate).thumbnailKind != QStringLiteral("video")) {
             result.append(candidate);
         }
     }

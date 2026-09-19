@@ -10,6 +10,19 @@ Item {
 
     required property Item viewer
 
+    function alignedCenter(item) {
+        // Read the complete ancestor chain so host movement and resize both
+        // invalidate the scene-space correction, including fractional DPR.
+        let dependency = 0
+        for (let ancestor = root; ancestor; ancestor = ancestor.parent)
+            dependency += ancestor.x + ancestor.y + ancestor.width + ancestor.height
+        const dpr = Math.max(0.5, root.viewer.devicePixelRatio)
+        const point = root.mapToItem(null, (root.width - item.width) / 2 + dependency * 0,
+                                     (root.height - item.height) / 2)
+        return root.mapFromItem(null, Math.round(point.x * dpr) / dpr,
+                                Math.round(point.y * dpr) / dpr)
+    }
+
     readonly property alias viewport: viewportItem
     readonly property alias transitionFrame: frame
     readonly property alias navigationNeighborImage: neighborImage
@@ -31,6 +44,8 @@ Item {
         objectName: "galleryViewerTransitionFrame"
         visible: !root.viewer.customContent
                  && root.viewer.viewerContentVisible
+                 && !(root.viewer.currentViewerRequestState === "failed"
+                      && root.viewer.currentSourceValue.toString() === "")
         clip: true
         anchors.fill: parent
         opacity: root.viewer.transitionHasGeometry
@@ -92,7 +107,7 @@ Item {
                     || Math.abs(root.viewer.viewerNavigationOffsetX) > 0.1
 
                 onZoomScaleChanged: root.viewer.scheduleDecodeRequest()
-                onCloseRequested: root.viewer.requestClose()
+                onCloseRequested: root.viewer.handleViewportDoubleClick()
                 onMiddleClickRequested:
                     root.viewer.fullscreenToggleRequested()
                 onPinchZoomOutToThumbnailsProgressed:
@@ -116,7 +131,7 @@ Item {
                         originalSize: viewportItem.originalSize
                         easingType: Easing.OutSine
 
-                        onCloseRequested: root.viewer.requestClose()
+                        onCloseRequested: root.viewer.handleViewportDoubleClick()
                         onSphereScrollingMouseCursorRequested:
                             (set, idle, rotation) =>
                                 root.viewer.sphereScrollingMouseCursorRequested(
@@ -209,8 +224,11 @@ Item {
     }
 
     Label {
+        id: loadFailure
         objectName: "galleryViewerLoadFailure"
-        anchors.centerIn: parent
+        readonly property point alignedPosition: root.alignedCenter(loadFailure)
+        x: alignedPosition.x
+        y: alignedPosition.y
         visible: !root.viewer.customContent && root.viewer.session
                  && (root.viewer.presentedIndex < 0
                      || (root.viewer.currentViewerRequestState === "failed"

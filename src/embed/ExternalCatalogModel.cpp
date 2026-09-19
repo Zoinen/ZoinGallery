@@ -256,6 +256,7 @@ QVariantMap ExternalCatalogModel::visualSnapshot(int row) const {
         {QStringLiteral("folderPreviewState"), int(entry->directoryPreviewState)},
         {QStringLiteral("folderPreviewRevision"), entry->directoryPreviewRevision},
         {QStringLiteral("isImage"), entry->image},
+        {QStringLiteral("imageDimensionsKnown"), entry->image && !entry->originalSize.isEmpty()},
         {QStringLiteral("isSelected"), entry->selected},
         {QStringLiteral("iconPath"), entry->iconPath},
         {QStringLiteral("iconKey"), entry->iconKey},

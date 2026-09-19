@@ -15,6 +15,15 @@ Item {
     readonly property bool thumbnailReady:
         thumbnailHasSource && previewContent.item
         && previewContent.item.sourceStatus === Image.Ready
+    // Cached metadata establishes the image's geometry before its pixels (or
+    // even its lazy ImageFile facade) arrive. Suppress icons from that point.
+    readonly property bool thumbnailExpected:
+        (entry.imageIdUrl !== "" || (entry.isImage
+            && (entry.visualModel.imageDimensionsKnown
+                || (entry.model && entry.model.fullSize
+                    && entry.model.fullSize.width > 0 && entry.model.fullSize.height > 0))))
+        && (!thumbnailHasSource || !previewContent.item
+            || previewContent.item.sourceStatus !== Image.Error)
 
     visible: activePresentation && !entry.folderPreviewActive
     opacity: entry.hiddenEntry && !entry.detailsMode ? 0.5 : 1
@@ -95,7 +104,7 @@ Item {
         visible: (lucideSource
                   || (systemFileSource
                       && !preview.thumbnailReady))
-                 && !preview.thumbnailReady
+                 && !preview.thumbnailExpected
                  && fallbackIcon.modelIconSource.toString() !== ""
                  && (!preview.entry.highlightMarker || lucideSource)
                  && !(preview.entry.panelRoot.viewerTransitionActive
@@ -128,6 +137,7 @@ Item {
         active: preview.activePresentation
         readonly property bool sourceColorIconNeeded:
             !fallbackIcon.lucideSource
+            && !preview.thumbnailExpected
             && thumbnail.source.toString() === ""
             && fallbackIcon.modelIconSource.toString() !== ""
         readonly property bool markerNeeded:

@@ -27,6 +27,8 @@ Item {
                 root.viewer.pendingAuthorityEntryId = ""
                 root.motion.authorityTimer.stop()
             }
+            if (!authorityConfirmed && root.viewer.previewEntryId !== "")
+                return
             if (!authorityConfirmed
                     && root.viewer.presentedEntryId !== nextEntryId) {
                 root.viewer.recordPresentedTransition(

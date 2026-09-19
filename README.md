@@ -74,6 +74,21 @@ ZoinGallery targets.
 installs headers, CMake exports, the QML plugin/import tree, compiled shaders,
 assets, and codec dependencies as `zoingallery/0.1.0`.
 
+### Host-managed viewer presentation
+
+An embedding host can keep one `GalleryViewer` and its session mounted while
+changing its rectangle by setting `managedPresentation: true`. This bypasses
+standalone opening/closing resets and emits `presentationCloseRequested` for
+the host to handle. Animate position and dimensions, rather than scaling a
+wrapper containing viewer controls. Fit mode follows the viewport; custom
+zoom keeps its absolute level and bounded image center.
+
+`previewEntryId` temporarily presents a catalog entry without changing the
+session cursor. Clear it to resume cursor-following presentation. Navigation
+still uses the session's normal authority/acknowledgement flow. An optional
+`hostKeyHandler(event)` can consume embedding-specific shortcuts before the
+normal viewer shortcuts run. These options do not change standalone defaults.
+
 ### Viewer resampling
 
 The image viewer reduces images with a scale-aware BC cubic filter

@@ -22,6 +22,7 @@ FocusScope {
     property GalleryThemePalette theme: GalleryThemePalette {}
     // Embedders can replace or suppress the standalone gallery wording while
     // retaining the same authoritative zero-row condition.
+    property bool liveSelectionUpdates: false
     property bool emptyStateEnabled: true
     property string emptyStateText: qsTr("No previewable entries")
     // Stable entry-ID spans repaint quick-search labels without model resets.

@@ -19,6 +19,7 @@ class GalleryEntryVisual final : public QObject {
     Q_PROPERTY(int folderPreviewState READ folderPreviewState NOTIFY mediaChanged)
     Q_PROPERTY(quint64 folderPreviewRevision READ folderPreviewRevision NOTIFY mediaChanged)
     Q_PROPERTY(bool isImage READ isImage NOTIFY mediaChanged)
+    Q_PROPERTY(bool imageDimensionsKnown READ imageDimensionsKnown NOTIFY mediaChanged)
     Q_PROPERTY(bool isSelected READ isSelected NOTIFY stateChanged)
     Q_PROPERTY(QString iconPath READ iconPath NOTIFY mediaChanged)
     Q_PROPERTY(QString iconKey READ iconKey NOTIFY mediaChanged)
@@ -69,6 +70,7 @@ public:
     int folderPreviewState() const { return _folderPreviewState; }
     quint64 folderPreviewRevision() const { return _folderPreviewRevision; }
     bool isImage() const;
+    bool imageDimensionsKnown() const { return _imageDimensionsKnown; }
     bool isSelected() const;
     QString iconPath() const;
     QString iconKey() const;
@@ -112,6 +114,7 @@ private:
     int _folderPreviewState = 0;
     quint64 _folderPreviewRevision = 0;
     bool _isImage = false;
+    bool _imageDimensionsKnown = false;
     bool _isSelected = false;
     QString _iconPath;
     QString _iconKey;

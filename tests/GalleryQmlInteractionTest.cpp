@@ -452,6 +452,58 @@ private slots:
         verifyStopped("session removal did not clear auto-scroll");
     }
 
+    void managedPresentationKeepsSessionAndPreviewIndependent() {
+        QTemporaryDir directory;
+        const auto first = directory.filePath("first.png");
+        const auto second = directory.filePath("second.png");
+        QVERIFY(writeImage(first, QSize(900, 600), Qt::cyan));
+        QVERIFY(writeImage(second, QSize(600, 900), Qt::green));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        auto *session = runtime->createExternalSession("managed-presentation");
+        QVERIFY(session->applyExternalCatalog({imageEntry("first", 0, first), imageEntry("second", 1, second)}, 1));
+        QVERIFY(session->applyExternalState("first", 0, {}, 1));
+        session->setViewerOpen(true);
+        view.engine()->rootContext()->setContextProperty("managedSession", session);
+#ifndef Q_MOC_RUN
+        QObject *viewer = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryViewer {
+                width: 320; height: 400
+                managedPresentation: true
+                autoFocus: false
+                session: managedSession
+                previewEntryId: "second"
+            }
+        )QML", "ManagedPresentation.qml");
+#else
+        QObject *viewer = nullptr;
+#endif
+        QVERIFY(viewer);
+        view.show();
+        QTRY_COMPARE(viewer->property("transitionProgress").toReal(), 1.0);
+        QTRY_COMPARE(viewer->property("presentedEntryId").toString(), QString("second"));
+        QCOMPARE(session->cursorEntryId(), QString("first"));
+        QVERIFY(!viewer->property("transitioning").toBool());
+        QVERIFY(QMetaObject::invokeMethod(viewer, "setPresentedIndex", Q_ARG(QVariant, 1), Q_ARG(QVariant, true)));
+        QVERIFY(session->applyExternalState("second", 1, {}, 1));
+        QTRY_COMPARE(viewer->property("pendingAuthorityEntryId").toString(), QString());
+        QVERIFY(session->applyExternalState("first", 0, {}, 1));
+        QCOMPARE(viewer->property("presentedEntryId").toString(), QString("second"));
+        QSignalSpy closeIntent(viewer, SIGNAL(presentationCloseRequested()));
+        QSignalSpy closed(viewer, SIGNAL(closeCompleted()));
+        QVERIFY(QMetaObject::invokeMethod(viewer, "requestImmediateClose"));
+        QCOMPARE(closeIntent.size(), 1);
+        QCOMPARE(closed.size(), 0);
+        QVERIFY(session->viewerOpen());
+        QCOMPARE(viewer->property("transitionProgress").toReal(), 1.0);
+        viewer->setProperty("previewEntryId", "");
+        QTRY_COMPARE(viewer->property("presentedEntryId").toString(), QString("first"));
+        runtime->shutdown();
+    }
+
     void interruptedViewerTransitionFinalizesExactlyOnce() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

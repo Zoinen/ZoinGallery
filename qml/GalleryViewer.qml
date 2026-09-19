@@ -7,6 +7,20 @@ import ZoinGallery.Native 1.0
 
 FocusScope {
     id: root
+    // Embedders can own presentation geometry without replacing the session.
+    property bool managedPresentation: false
+    property string previewEntryId: ""
+    property var hostKeyHandler: null
+    signal presentationCloseRequested()
+    function applyPreviewEntry() {
+        if (!session) return
+        const index = previewEntryId !== "" ? session.indexForEntryId(previewEntryId) : session.currentIndex
+        if (index >= 0 && (index !== presentedIndex || session.entryIdAt(index) !== presentedEntryId)) {
+            resetViewerNavigation()
+            setPresentedIndex(index, false)
+        }
+    }
+    onPreviewEntryIdChanged: applyPreviewEntry()
 
     readonly property alias flickableArea: viewerSurface.viewport
     readonly property alias transitionFrame: viewerSurface.transitionFrame
@@ -480,18 +494,22 @@ FocusScope {
         transitionState.finishClose()
     }
     function requestClose() {
+        if (managedPresentation) { presentationCloseRequested(); return }
         transitionState.requestClose()
     }
     function requestImmediateClose() {
+        if (managedPresentation) { presentationCloseRequested(); return }
         transitionState.requestImmediateClose()
     }
     function closeViewer() {
+        if (managedPresentation) { presentationCloseRequested(); return }
         transitionState.requestClose()
     }
     function currentViewerImageGeometry() {
         return transitionState.currentViewerImageGeometry()
     }
     function beginPinchClose() {
+        if (managedPresentation) { pinchCloseActive = true; return true }
         return transitionState.beginPinchClose()
     }
     function cancelPinchCloseDuringGesture() {
@@ -504,9 +522,11 @@ FocusScope {
         transitionState.applyPinchCloseProgress()
     }
     function updatePinchClose(progress) {
+        if (managedPresentation) return
         transitionState.updatePinchClose(progress)
     }
     function finishPinchClose(commit) {
+        if (managedPresentation) { pinchCloseActive = false; if (commit) presentationCloseRequested(); return }
         transitionState.finishPinchClose(commit)
     }
     function completePinchCloseCommit() {
@@ -613,8 +633,8 @@ FocusScope {
         viewport: root.flickableArea
     }
 
-    Keys.onPressed: event => inputState.handlePressed(event)
-    Keys.onReleased: event => inputState.handleReleased(event)
+    Keys.onPressed: event => { if (!hostKeyHandler || !hostKeyHandler(event, true)) inputState.handlePressed(event) }
+    Keys.onReleased: event => { if (!hostKeyHandler || !hostKeyHandler(event, false)) inputState.handleReleased(event) }
 
     GalleryViewerMotion {
         id: motionState

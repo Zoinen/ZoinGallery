@@ -52,6 +52,12 @@ QtObject {
         viewer.pinchCloseActive = false
         viewer.pinchCloseFinishingCommit = false
         viewer.pinchCloseProgress = 0
+        if (viewer.managedPresentation) {
+            viewer.applyPreviewEntry()
+            viewer.transitionProgress = 1
+            viewer.transitionHasGeometry = false
+            return
+        }
         captureTransitionTarget()
         if (viewer.currentSourceValue.toString() === ""
                 && viewer.transitionThumbnailSource.toString() !== "") {

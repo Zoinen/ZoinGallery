@@ -253,7 +253,7 @@ ImageDecodeRequest FileListModel::imageDecodeRequestFromEmbeddedImageInfo(const 
         .viewerRequest = false,
         .checkCache = info.isCached,
         .thumbnailTransformKey = info.thumbnailKind == QStringLiteral("video")
-            ? QStringLiteral("video-contact-sheet-2x2-v1") : QString()
+            ? QStringLiteral("video-contact-sheet-2x2-v2") : QString()
     };
 }
 

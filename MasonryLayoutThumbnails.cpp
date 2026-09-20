@@ -166,7 +166,7 @@ void MasonryLayout::planThumbnailForIndex(
     const ImageInfo info = image->info();
     const QString transformKey = image->info().thumbnailKind
         == QStringLiteral("video")
-        ? QStringLiteral("video-contact-sheet-2x2-v1")
+        ? QStringLiteral("video-contact-sheet-2x2-v2")
         : previewTransformKey();
     const bool sameSource =
         brick.lastPlannedSourcePath == info.sourceIdentity() &&
@@ -246,7 +246,12 @@ QSize MasonryLayout::previewDecodeTargetSize(
     // 16 or 24 px), not a native pixel limit. Clamping SVG here used to
     // publish a tiny raster which was then enlarged by QML in every panel
     // mode. Keep the requested physical preview size for scalable vectors.
-    if (!isScalableVectorThumbnail(brick.image->info())) {
+    // Video metadata uses a 16x9 aspect-ratio placeholder because probing a
+    // stream just to lay out a gallery would defeat the fast thumbnail path.
+    // It is not a native pixel limit: treating it like one produces 16x9
+    // thumbnails which the scene graph has to enlarge into the tile.
+    if (!isScalableVectorThumbnail(brick.image->info())
+        && !brick.image->isVideoThumbnail()) {
         scale = qMin<qreal>(scale, 1.0);
     }
     scale = qMax<qreal>(0, scale);

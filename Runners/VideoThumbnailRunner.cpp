@@ -20,7 +20,7 @@
 
 namespace {
 
-constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-v1";
+constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-v2";
 constexpr int VideoFrameCount = 4;
 constexpr int VideoFrameTimeoutMs = 1800;
 constexpr int VideoLoadTimeoutMs = 15000;

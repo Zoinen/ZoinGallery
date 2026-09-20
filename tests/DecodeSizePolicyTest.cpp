@@ -49,6 +49,17 @@ private slots:
                      ZoinGallery::DecodeSizeFamily::ViewerFit, true),
                  QSize(640, 480));
     }
+
+    void videoPlaceholderDoesNotActAsNativePixelLimit()
+    {
+        // Video metadata starts with a 16x9 aspect-ratio placeholder.  The
+        // stream has no known native pixel limit until Qt Multimedia opens
+        // it, so the thumbnail tier must be selected from the requested tile.
+        QCOMPARE(ZoinGallery::stableDecodeTarget(
+                     QSize(320, 180), QSize(), QSize(16, 9),
+                     ZoinGallery::DecodeSizeFamily::Thumbnail, true),
+                 QSize(384, 216));
+    }
 };
 
 QTEST_MAIN(DecodeSizePolicyTest)

@@ -55,11 +55,18 @@ void ExternalCatalogThumbnailPlanner::configureRequest(
     request.expandToCacheResolution = false;
     request.storeInPersistentCache = true;
     request.thumbnailTransformKey = thumbnailTransformKey(request);
+    // Video entries expose a 16x9 placeholder until Qt Multimedia opens the
+    // stream.  Do not pass that placeholder as a native pixel size: the
+    // stable-tier policy would clamp every video request to 16x9.
+    const QSize nativeSourceSize = entry.thumbnailKind
+        == QStringLiteral("video")
+        ? QSize{}
+        : (entry.originalSize.isValid()
+               ? entry.originalSize
+               : entry.item ? entry.item->fullSize() : QSize());
     request.targetSize = stableDecodeTarget(
         request.targetSize,
-        entry.originalSize.isValid()
-            ? entry.originalSize
-            : entry.item ? entry.item->fullSize() : QSize(),
+        nativeSourceSize,
         entry.thumbnailRequestedSize, DecodeSizeFamily::Thumbnail,
         expensiveSource(entry.source));
 }

@@ -75,7 +75,14 @@ public:
         if (position < 0 || (m_source.size >= 0 && position > m_source.size)) {
             return false;
         }
-        return QIODevice::seek(position);
+        if (!QIODevice::seek(position)) {
+            return false;
+        }
+        if (position < m_prefetchOffset
+            || position >= m_prefetchOffset + m_prefetched.size()) {
+            clearPrefetch();
+        }
+        return true;
     }
 
 protected:
@@ -93,29 +100,47 @@ protected:
         if (offset < 0 || (m_source.size >= 0 && offset >= m_source.size)) {
             return 0;
         }
-        const qint64 requested = std::min(
-            {maxlen, RangeSourceReadChunkSize, m_source.size - offset});
-        if (requested <= 0) {
-            return 0;
-        }
-
-        const ZoinGallery::ImageSourceReadResult result = m_provider->readRange(
-            m_source, offset, requested, m_cancellation);
-        if (!result.succeeded()) {
-            setErrorString(result.errorString);
-            return -1;
-        }
-        if (result.data.isEmpty()) {
-            if (result.endOfFile) {
+        const qint64 prefetchEnd = m_prefetchOffset >= 0
+            ? m_prefetchOffset + m_prefetched.size() : -1;
+        if (m_prefetchOffset < 0 || offset < m_prefetchOffset
+            || offset >= prefetchEnd) {
+            if (m_prefetchEndOfFile && offset >= prefetchEnd) {
                 return 0;
             }
-            setErrorString(QStringLiteral("video source returned no data"));
-            return -1;
+            const qint64 requested = std::min(
+                RangeSourceReadChunkSize, m_source.size - offset);
+            if (requested <= 0) {
+                return 0;
+            }
+
+            const ZoinGallery::ImageSourceReadResult result =
+                m_provider->readRange(m_source, offset, requested, m_cancellation);
+            if (!result.succeeded()) {
+                setErrorString(result.errorString);
+                return -1;
+            }
+            if (result.data.isEmpty()) {
+                if (result.endOfFile) {
+                    m_prefetchOffset = offset;
+                    m_prefetched.clear();
+                    m_prefetchEndOfFile = true;
+                    return 0;
+                }
+                setErrorString(QStringLiteral("video source returned no data"));
+                return -1;
+            }
+            m_prefetchOffset = offset;
+            m_prefetched = result.data;
+            m_prefetchEndOfFile = result.endOfFile;
         }
 
+        const qint64 relative = offset - m_prefetchOffset;
         const qint64 available = std::min<qint64>(
-            requested, static_cast<qint64>(result.data.size()));
-        std::memcpy(data, result.data.constData(),
+            maxlen, static_cast<qint64>(m_prefetched.size()) - relative);
+        if (available <= 0) {
+            return 0;
+        }
+        std::memcpy(data, m_prefetched.constData() + relative,
                     static_cast<size_t>(available));
         return available;
     }
@@ -123,9 +148,19 @@ protected:
     qint64 writeData(const char *, qint64) override { return -1; }
 
 private:
+    void clearPrefetch()
+    {
+        m_prefetchOffset = -1;
+        m_prefetched.clear();
+        m_prefetchEndOfFile = false;
+    }
+
     QSharedPointer<ZoinGallery::ImageSourceProvider> m_provider;
     ZoinGallery::ImageSourceDescriptor m_source;
     QSharedPointer<ZoinGallery::ImageSourceCancellation> m_cancellation;
+    QByteArray m_prefetched;
+    qint64 m_prefetchOffset = -1;
+    bool m_prefetchEndOfFile = false;
 };
 
 QImage composeContactSheet(const QList<QImage> &frames, const QSize &target) {

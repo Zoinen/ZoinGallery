@@ -297,10 +297,34 @@ QString metadataCacheFilePath(const MetadataKey &key) {
 
 QString lookupKey(const ImageDecodeRequest &request) {
     const DerivedKey key = keyForRequest(request);
-    if (!key.isValid()) {
+    if (key.isValid()) {
+        return cacheFilePath(key);
+    }
+    // Local files still use the legacy path/stat cache.  Video requests for
+    // those files must join the same cache-before-source gate as derived
+    // external sources; otherwise the legacy cache runner can hit while a
+    // second VideoThumbnailRunner starts QMediaPlayer in parallel.  The
+    // Source validation is deliberately limited to path + mtime + size,
+    // which are the exact fields PersistentImageCache validates on retrieval.
+    // The output shape is part of the gate identity so a panel tile and a
+    // viewer request for the same source cannot consume each other's result.
+    if (request.info.source.isValid() || request.info.path.isEmpty()) {
         return {};
     }
-    return cacheFilePath(key);
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_6_0);
+    stream << QStringLiteral("legacy-video-cache-lookup-v2")
+           << request.info.path << request.info.lastModified
+           << request.info.fileSize << request.info.thumbnailKind
+           << request.targetSize << request.viewerRequest
+           << request.fitToViewerRequest << request.expandToCacheResolution
+           << request.thumbnailTransformKey;
+    if (stream.status() != QDataStream::Ok) {
+        return {};
+    }
+    return QString::fromLatin1(
+        QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
 }
 
 bool keysEqual(const DerivedKey &left, const DerivedKey &right) {
@@ -989,7 +1013,7 @@ void PersistentDerivedImageCache::clearSession() {
 PersistentDerivedImageCache::LookupGate
 PersistentDerivedImageCache::beginLookup(
     const ImageDecodeRequest &request) {
-    if (!isEligible(request) || !request.checkCache) {
+    if (!request.checkCache) {
         return {};
     }
     const QString key = lookupKey(request);
@@ -1009,7 +1033,7 @@ PersistentDerivedImageCache::beginLookup(
 PersistentDerivedImageCache::LookupGate
 PersistentDerivedImageCache::joinLookup(
     const ImageDecodeRequest &request) {
-    if (!isEligible(request) || !request.checkCache) {
+    if (!request.checkCache) {
         return {};
     }
     const QString key = lookupKey(request);

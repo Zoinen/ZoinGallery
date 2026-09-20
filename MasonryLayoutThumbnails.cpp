@@ -210,7 +210,12 @@ void MasonryLayout::planThumbnailForIndex(
         .info = info,
         .targetSize = targetSize,
         .viewerRequest = false,
-        .checkCache = info.isCached,
+        // Video decoding is expensive enough that every request must first
+        // consult the persistent cache, even when the fast metadata pass
+        // bypassed its cache for a visible row.  The cache gate then keeps
+        // QMediaPlayer/FFmpeg from starting on a proven path/stat hit.
+        .checkCache = info.isCached
+            || info.thumbnailKind == QStringLiteral("video"),
         // Opening a video invokes the platform multimedia backend and may
         // seek a very large source before the first frame arrives. Keep those
         // jobs in the background lane even for visible cells so a folder

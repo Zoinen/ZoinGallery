@@ -251,7 +251,8 @@ ImageDecodeRequest FileListModel::imageDecodeRequestFromEmbeddedImageInfo(const 
         .info = info,
         .targetSize = thumbnailSize,
         .viewerRequest = false,
-        .checkCache = info.isCached,
+        .checkCache = info.isCached
+            || info.thumbnailKind == QStringLiteral("video"),
         .thumbnailTransformKey = info.thumbnailKind == QStringLiteral("video")
             ? QStringLiteral("video-contact-sheet-2x2-v2") : QString()
     };

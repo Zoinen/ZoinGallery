@@ -57,7 +57,8 @@ ImageDecodeRequest ViewerImageCache::makeRequest(
         .info = info,
         .targetSize = targetSize,
         .viewerRequest = true,
-        .checkCache = info.isCached,
+        .checkCache = info.isCached
+            || info.thumbnailKind == QStringLiteral("video"),
         .fitToViewerRequest = fitToViewerRequest,
     };
 }

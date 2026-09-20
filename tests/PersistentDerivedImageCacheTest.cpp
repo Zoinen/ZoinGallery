@@ -262,6 +262,46 @@ private slots:
         QCOMPARE(provider->rangeReads.load(), 0);
     }
 
+    void legacyVideoHitCompletesSourceLookupGate() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(
+            QStringLiteral("local-video.mp4"));
+        QFile source(path);
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        QVERIFY(source.write("cached-video-source") > 0);
+        source.close();
+
+        ImageDecodeRequest request;
+        request.info.path = path;
+        request.info.lastModified = QFileInfo(path).lastModified();
+        request.info.fileSize = QFileInfo(path).size();
+        request.info.thumbnailKind = QStringLiteral("video");
+        request.targetSize = QSize(96, 54);
+        request.checkCache = true;
+        request.storeInPersistentCache = true;
+
+        const QByteArray prepared = PersistentImageCache::createImageForCache(
+            request, testImage(request.targetSize));
+        QVERIFY(!prepared.isEmpty());
+        PersistentImageCache::storeImage(request.info, prepared);
+        QVERIFY(PersistentImageCache::hasImage(request));
+
+        // The cache runner and the local video runner are admitted in
+        // parallel by DecodeManager.  A local request has no derived source
+        // descriptor, so the gate must still be registered from the
+        // path/mtime/size cache key; otherwise QMediaPlayer can start before
+        // the legacy cache hit is delivered.
+        CachedImageRetrieveRunner cacheRunner(request, true);
+        const auto gate = PersistentDerivedImageCache::joinLookup(request);
+        QVERIFY(gate);
+        auto cancellation =
+            QSharedPointer<ZoinGallery::ImageSourceCancellation>::create();
+        cacheRunner.run();
+        QVERIFY(PersistentDerivedImageCache::waitForLookup(
+            gate, cancellation));
+    }
+
     void jpegWithoutOrientationRetainsMetadata() {
         QTemporaryDir directory;
         const QString path = directory.filePath("without-orientation.jpg");

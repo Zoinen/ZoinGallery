@@ -39,7 +39,9 @@ void ImageReadRunner::run() {
     }
     if (derivedLookupWon) {
         timingSpan.set(QStringLiteral("outcome"),
-                       QStringLiteral("derived-cache-satisfied"));
+                       _request.info.source.isValid()
+                           ? QStringLiteral("derived-cache-satisfied")
+                           : QStringLiteral("cache-satisfied"));
         emit finished(this);
         return;
     }

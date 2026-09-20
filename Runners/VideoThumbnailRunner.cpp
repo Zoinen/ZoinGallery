@@ -222,7 +222,9 @@ void VideoThumbnailRunner::run() {
     if (PersistentDerivedImageCache::waitForLookup(
             _derivedLookupGate, _cancellation)) {
         span.set(QStringLiteral("outcome"),
-                 QStringLiteral("derived-cache-satisfied"));
+                 _request.info.source.isValid()
+                     ? QStringLiteral("derived-cache-satisfied")
+                     : QStringLiteral("cache-satisfied"));
         emit finished(this);
         return;
     }

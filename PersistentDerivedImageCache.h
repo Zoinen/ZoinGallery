@@ -71,8 +71,10 @@ public:
     static void clearSession();
 
     // DecodeManager currently admits cache and source runners in parallel.
-    // These gates let the source runner wait for the preceding derived-cache
-    // lookup, so a proven cache hit never opens or materializes a VFS source.
+    // These gates let the source runner wait for the preceding cache lookup,
+    // so a proven hit never opens a media decoder. Derived external sources
+    // use their immutable cache key; local video requests use the legacy
+    // path/mtime/size key.
     static LookupGate beginLookup(const ImageDecodeRequest &request);
     static LookupGate joinLookup(const ImageDecodeRequest &request);
     static void completeLookup(const LookupGate &gate, bool cacheHit);

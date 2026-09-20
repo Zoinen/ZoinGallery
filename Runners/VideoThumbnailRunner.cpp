@@ -7,6 +7,7 @@
 
 #include <QEventLoop>
 #include <QFileInfo>
+#include <QIODevice>
 #include <QMediaPlayer>
 #include <QPainter>
 #include <QTimer>
@@ -15,7 +16,9 @@
 #include <QVideoSink>
 
 #include <algorithm>
+#include <cstring>
 #include <functional>
+#include <memory>
 #include <utility>
 
 namespace {
@@ -24,6 +27,106 @@ constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-v2";
 constexpr int VideoFrameCount = 4;
 constexpr int VideoFrameTimeoutMs = 1800;
 constexpr int VideoLoadTimeoutMs = 15000;
+constexpr qint64 RangeSourceReadChunkSize = 1024 * 1024;
+
+bool canStreamSource(const ZoinGallery::ImageSourceDescriptor &source,
+                     const QSharedPointer<ZoinGallery::ImageSourceProvider>
+                         &provider)
+{
+    if (!provider || !source.isValid() || source.size <= 0
+        || source.storageClass == QStringLiteral("local")) {
+        return false;
+    }
+    return source.accessProfile == QStringLiteral("nativeRange")
+        || source.accessProfile == QStringLiteral("hybridRange");
+}
+
+QUrl sourceUrlHint(const ZoinGallery::ImageSourceDescriptor &source)
+{
+    const QString name = source.displayName.trimmed().isEmpty()
+        ? QStringLiteral("f4-video") : source.displayName.trimmed();
+    return QUrl::fromLocalFile(name);
+}
+
+// QMediaPlayer's FFmpeg backend can consume a seekable QIODevice. Keep the
+// broker-backed source seekable while fetching only the requested byte ranges;
+// this avoids turning a large range-capable remote video into a full temp-file
+// download before the first thumbnail frame is decoded.
+class RangeImageSourceDevice final : public QIODevice
+{
+public:
+    RangeImageSourceDevice(
+        QSharedPointer<ZoinGallery::ImageSourceProvider> provider,
+        ZoinGallery::ImageSourceDescriptor source,
+        QSharedPointer<ZoinGallery::ImageSourceCancellation> cancellation)
+        : m_provider(std::move(provider))
+        , m_source(std::move(source))
+        , m_cancellation(std::move(cancellation))
+    {
+        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
+    }
+
+    bool isSequential() const override { return false; }
+
+    qint64 size() const override { return m_source.size; }
+
+    bool seek(qint64 position) override
+    {
+        if (position < 0 || (m_source.size >= 0 && position > m_source.size)) {
+            return false;
+        }
+        return QIODevice::seek(position);
+    }
+
+protected:
+    qint64 readData(char *data, qint64 maxlen) override
+    {
+        if (!m_provider || maxlen <= 0) {
+            return 0;
+        }
+        if (m_cancellation && m_cancellation->isCanceled()) {
+            setErrorString(QStringLiteral("video source read cancelled"));
+            return -1;
+        }
+
+        const qint64 offset = pos();
+        if (offset < 0 || (m_source.size >= 0 && offset >= m_source.size)) {
+            return 0;
+        }
+        const qint64 requested = std::min(
+            {maxlen, RangeSourceReadChunkSize, m_source.size - offset});
+        if (requested <= 0) {
+            return 0;
+        }
+
+        const ZoinGallery::ImageSourceReadResult result = m_provider->readRange(
+            m_source, offset, requested, m_cancellation);
+        if (!result.succeeded()) {
+            setErrorString(result.errorString);
+            return -1;
+        }
+        if (result.data.isEmpty()) {
+            if (result.endOfFile) {
+                return 0;
+            }
+            setErrorString(QStringLiteral("video source returned no data"));
+            return -1;
+        }
+
+        const qint64 available = std::min<qint64>(
+            requested, static_cast<qint64>(result.data.size()));
+        std::memcpy(data, result.data.constData(),
+                    static_cast<size_t>(available));
+        return available;
+    }
+
+    qint64 writeData(const char *, qint64) override { return -1; }
+
+private:
+    QSharedPointer<ZoinGallery::ImageSourceProvider> m_provider;
+    ZoinGallery::ImageSourceDescriptor m_source;
+    QSharedPointer<ZoinGallery::ImageSourceCancellation> m_cancellation;
+};
 
 QImage composeContactSheet(const QList<QImage> &frames, const QSize &target) {
     const QSize canvasSize(qMax(2, target.width()), qMax(2, target.height()));
@@ -90,16 +193,24 @@ void VideoThumbnailRunner::run() {
     }
 
     QSharedPointer<ZoinGallery::ImageSourceLease> lease;
+    std::unique_ptr<RangeImageSourceDevice> rangeDevice;
     QString sourcePath = _request.info.path;
     if (_request.info.source.isValid()) {
-        lease = _provider
-            ? _provider->materialize(_request.info.source, _cancellation)
-            : QSharedPointer<ZoinGallery::ImageSourceLease>();
-        if (lease) {
-            sourcePath = lease->localPath();
+        if (canStreamSource(_request.info.source, _provider)) {
+            rangeDevice = std::make_unique<RangeImageSourceDevice>(
+                _provider, _request.info.source, _cancellation);
+            span.set(QStringLiteral("sourceMode"), QStringLiteral("range"));
+        } else {
+            lease = _provider
+                ? _provider->materialize(_request.info.source, _cancellation)
+                : QSharedPointer<ZoinGallery::ImageSourceLease>();
+            if (lease) {
+                sourcePath = lease->localPath();
+            }
+            span.set(QStringLiteral("sourceMode"), QStringLiteral("materialized"));
         }
     }
-    if (sourcePath.isEmpty() || !QFileInfo::exists(sourcePath)
+    if ((!rangeDevice && (sourcePath.isEmpty() || !QFileInfo::exists(sourcePath)))
         || _cancellation->isCanceled() || isCanceled()) {
         if (!isCanceled() && !_cancellation->isCanceled()) {
             ImageDecodeRequest failed = _request;
@@ -222,7 +333,11 @@ void VideoThumbnailRunner::run() {
     });
 
     loadTimer.start(VideoLoadTimeoutMs);
-    player.setSource(QUrl::fromLocalFile(QFileInfo(sourcePath).absoluteFilePath()));
+    if (rangeDevice) {
+        player.setSourceDevice(rangeDevice.get(), sourceUrlHint(_request.info.source));
+    } else {
+        player.setSource(QUrl::fromLocalFile(QFileInfo(sourcePath).absoluteFilePath()));
+    }
     eventLoop.exec();
 
     if (!completed || isCanceled() || _cancellation->isCanceled()) {

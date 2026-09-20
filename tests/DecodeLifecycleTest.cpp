@@ -11,7 +11,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QEventLoop>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QThread>
 
 #include <algorithm>
@@ -25,6 +27,26 @@ namespace {
 class TestRunner final : public Runner {
 public:
     RunnerType type() override { return RunnerType::ImageDecode; }
+};
+
+class CancellableEventLoopRunner final : public Runner {
+    Q_OBJECT
+
+public:
+    RunnerType type() override { return RunnerType::ImageRead; }
+
+    void run() override {
+        QEventLoop eventLoop;
+        connect(this, &Runner::cancelRequested, &eventLoop,
+                &QEventLoop::quit, Qt::QueuedConnection);
+        QTimer::singleShot(5000, &eventLoop, &QEventLoop::quit);
+        emit enteredEventLoop();
+        eventLoop.exec();
+        emit finished(this);
+    }
+
+signals:
+    void enteredEventLoop();
 };
 
 class PriorityRunner final : public Runner {
@@ -66,6 +88,44 @@ class DecodeLifecycleTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void cancellationWakesNestedRunnerEventLoop() {
+        CancellableEventLoopRunner runner;
+        QThread worker;
+        runner.moveToThread(&worker);
+
+        QEventLoop completionLoop;
+        QSignalSpy enteredSpy(&runner,
+                              &CancellableEventLoopRunner::enteredEventLoop);
+        QElapsedTimer elapsed;
+        bool finished = false;
+        qint64 cancellationToFinishMs = -1;
+        connect(&runner, &Runner::finished, &completionLoop,
+                [&]() {
+                    finished = true;
+                    cancellationToFinishMs = elapsed.elapsed();
+                    completionLoop.quit();
+                });
+
+        worker.start();
+        QVERIFY(QMetaObject::invokeMethod(
+            &runner, &Runner::run, Qt::QueuedConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(enteredSpy.count() > 0, 1000);
+        elapsed.start();
+        runner.cancel();
+
+        QTimer::singleShot(1000, &completionLoop, &QEventLoop::quit);
+        completionLoop.exec();
+
+        QVERIFY(finished);
+        QVERIFY2(cancellationToFinishMs >= 0
+                     && cancellationToFinishMs < 250,
+                 qPrintable(QStringLiteral("cancel-to-finished took %1 ms")
+                                .arg(cancellationToFinishMs)));
+
+        worker.quit();
+        QVERIFY(worker.wait(2000));
+    }
+
     void foregroundImageStagesPreemptQueuedHighPriorityMetadata() {
         PriorityRunner viewer(RunnerType::ImageRead, false, true);
         PriorityRunner metadataA(RunnerType::ImageInfoRead, true);

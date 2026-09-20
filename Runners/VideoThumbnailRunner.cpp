@@ -300,6 +300,24 @@ void VideoThumbnailRunner::run() {
         eventLoop.quit();
     };
 
+    // Runner::cancel() is called by DecodeManager's thread, while this media
+    // player and its nested event loop live on a decode worker.  A queued
+    // cancellation callback both stops FFmpeg promptly and releases the
+    // worker slot instead of waiting for the 1.8 s frame or 15 s load timer.
+    connect(this, &Runner::cancelRequested, &eventLoop,
+            [&, cancelFields = fields]() {
+        if (completed) {
+            return;
+        }
+        ZoinGallery::MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.video_thumbnail.cancel_wake"),
+            ZoinGallery::MediaTimingTrace::mergedFields(
+                cancelFields,
+                {{QStringLiteral("fix"),
+                  QStringLiteral("[FIX:video-cancel-wake]")}}));
+        fail();
+    }, Qt::QueuedConnection);
+
     std::function<void()> captureNext;
     captureNext = [&]() {
         if (completed || isCanceled() || _cancellation->isCanceled()) {
@@ -373,7 +391,11 @@ void VideoThumbnailRunner::run() {
     } else {
         player.setSource(QUrl::fromLocalFile(QFileInfo(sourcePath).absoluteFilePath()));
     }
-    eventLoop.exec();
+    if (isCanceled() || _cancellation->isCanceled()) {
+        fail();
+    } else {
+        eventLoop.exec();
+    }
 
     if (!completed || isCanceled() || _cancellation->isCanceled()) {
         span.set(QStringLiteral("outcome"), QStringLiteral("cancelled"));

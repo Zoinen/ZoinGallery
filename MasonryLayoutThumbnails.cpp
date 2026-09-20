@@ -211,7 +211,13 @@ void MasonryLayout::planThumbnailForIndex(
         .targetSize = targetSize,
         .viewerRequest = false,
         .checkCache = info.isCached,
-        .highPriority = highPriority,
+        // Opening a video invokes the platform multimedia backend and may
+        // seek a very large source before the first frame arrives. Keep those
+        // jobs in the background lane even for visible cells so a folder
+        // transition can finish its metadata/layout work without competing
+        // with FFmpeg for the urgent decode workers.
+        .highPriority = highPriority
+            && info.thumbnailKind != QStringLiteral("video"),
         .thumbnailTransformKey = transformKey,
     });
     rememberPlan(targetSize);

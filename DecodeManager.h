@@ -53,6 +53,10 @@ public:
     QList<QMetaObject::Connection> connections;
 
 signals:
+    // Cancellation is requested from the DecodeManager thread while a runner
+    // may be blocked in a nested event loop on its worker thread.  Consumers
+    // can connect this signal with a queued connection to wake that loop.
+    void cancelRequested();
     void finished(Runner *runner);
 
 private:

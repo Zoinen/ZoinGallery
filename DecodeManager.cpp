@@ -1508,6 +1508,11 @@ void Runner::cancel() {
     if (const auto cancellation = sourceCancellation()) {
         cancellation->cancel();
     }
+    // The runner may be waiting in a nested event loop (for example while
+    // QMediaPlayer is seeking a video frame).  Notify the runner's own thread
+    // after publishing the atomic cancellation state so a queued wake-up can
+    // terminate that wait without waiting for a media timeout.
+    emit cancelRequested();
     for (auto connection : connections) {
         disconnect(connection);
     }

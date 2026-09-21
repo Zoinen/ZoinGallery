@@ -42,8 +42,8 @@ class ZoinGalleryConan(ConanFile):
     generators = "CMakeToolchain", "CMakeDeps"
 
     default_options = {
-        "with_video_thumbnails": True,
-        "with_ffmpeg_backend": True,
+        "with_video_thumbnails": False,
+        "with_ffmpeg_backend": False,
         "with_qt": True,
         "with_exiv2": False,
         # Preserve the repository's historical/default product: consuming or

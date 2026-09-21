@@ -38,10 +38,10 @@ endif()
 option(USE_QWK "Use QWindowKit" ON)
 option(USE_EXIV2 "Use Exiv2 for metadata extraction" OFF)
 option(ZOIN_ENABLE_VIDEO_THUMBNAILS
-    "Enable video thumbnails through Qt Multimedia" ON)
+    "Enable video thumbnails through Qt Multimedia" OFF)
 option(ZOIN_ENABLE_FFMPEG_BACKEND
     "Use the Qt Multimedia FFmpeg backend for video thumbnails"
-    ${ZOIN_ENABLE_VIDEO_THUMBNAILS})
+    OFF)
 if(NOT ZOIN_ENABLE_VIDEO_THUMBNAILS AND ZOIN_ENABLE_FFMPEG_BACKEND)
     message(STATUS
         "ZOIN_ENABLE_VIDEO_THUMBNAILS=OFF disables the FFmpeg backend as well")

@@ -23,7 +23,7 @@
 
 namespace {
 
-constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-v2";
+constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-v3";
 constexpr int VideoFrameCount = 4;
 constexpr int VideoFrameTimeoutMs = 1800;
 constexpr int VideoLoadTimeoutMs = 15000;
@@ -205,6 +205,14 @@ QVariantMap videoTraceFields(const ImageDecodeRequest &request) {
 
 } // namespace
 
+QVector<qint64> VideoThumbnailRunner::thumbnailPositions(qint64 duration) {
+    if (duration <= 0) {
+        return {};
+    }
+    return {duration * 20 / 100, duration * 40 / 100,
+            duration * 60 / 100, duration * 80 / 100};
+}
+
 VideoThumbnailRunner::VideoThumbnailRunner(
     const ImageDecodeRequest &request,
     QSharedPointer<ZoinGallery::ImageSourceProvider> provider)
@@ -376,8 +384,7 @@ void VideoThumbnailRunner::run() {
         }
         duration = value;
         captureStarted = true;
-        positions = {duration * 10 / 100, duration * 35 / 100,
-                     duration * 60 / 100, duration * 85 / 100};
+        positions = thumbnailPositions(duration);
         captureNext();
     });
     connect(&player, &QMediaPlayer::mediaStatusChanged, &eventLoop,

@@ -5,6 +5,7 @@
 #include "PersistentDerivedImageCache.h"
 
 #include <QSharedPointer>
+#include <QVector>
 
 class VideoThumbnailRunner final : public Runner {
     Q_OBJECT
@@ -13,6 +14,11 @@ public:
     VideoThumbnailRunner(
         const ImageDecodeRequest &request,
         QSharedPointer<ZoinGallery::ImageSourceProvider> provider = {});
+
+    // Keep the four storyboard samples away from both endpoints.  The
+    // helper is exposed so the temporal policy remains unit-testable without
+    // opening a media backend.
+    static QVector<qint64> thumbnailPositions(qint64 duration);
 
     RunnerType type() override { return RunnerType::ImageRead; }
     void run() override;

@@ -4,6 +4,7 @@
 #include "Decoders/ImageDecoderInterface.h"
 #include "FileListModel.h"
 #include "ProviderImageStore.h"
+#include "Runners/VideoThumbnailRunner.h"
 #include "SelectedImagesModel.h"
 
 #include <QtTest>
@@ -88,6 +89,13 @@ class DecodeLifecycleTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void videoThumbnailPositionsUseInteriorQuintiles() {
+        QCOMPARE(VideoThumbnailRunner::thumbnailPositions(10000),
+                 QVector<qint64>({2000, 4000, 6000, 8000}));
+        QVERIFY(VideoThumbnailRunner::thumbnailPositions(0).isEmpty());
+        QVERIFY(VideoThumbnailRunner::thumbnailPositions(-1).isEmpty());
+    }
+
     void cancellationWakesNestedRunnerEventLoop() {
         CancellableEventLoopRunner runner;
         QThread worker;

@@ -166,7 +166,7 @@ void MasonryLayout::planThumbnailForIndex(
     const ImageInfo info = image->info();
     const QString transformKey = image->info().thumbnailKind
         == QStringLiteral("video")
-        ? QStringLiteral("video-contact-sheet-2x2-v2")
+        ? QStringLiteral("video-contact-sheet-2x2-v3")
         : previewTransformKey();
     const bool sameSource =
         brick.lastPlannedSourcePath == info.sourceIdentity() &&

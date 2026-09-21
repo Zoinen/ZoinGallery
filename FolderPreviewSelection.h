@@ -6,7 +6,19 @@
 #include <QSet>
 #include <utility>
 
+inline constexpr bool zoinVideoThumbnailsEnabled() {
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    return true;
+#else
+    return false;
+#endif
+}
+
 inline bool isVideoPreviewFormat(const QString &name) {
+#if !defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    Q_UNUSED(name);
+    return false;
+#else
     static const QSet<QString> formats{
         QStringLiteral("mp4"), QStringLiteral("mkv"),
         QStringLiteral("webm"), QStringLiteral("avi"),
@@ -21,6 +33,7 @@ inline bool isVideoPreviewFormat(const QString &name) {
         QStringLiteral("divx"), QStringLiteral("asf"),
         QStringLiteral("rm"), QStringLiteral("rmvb")};
     return formats.contains(QFileInfo(name).suffix().toLower());
+#endif
 }
 
 inline QList<FileInfo> selectFolderPreviewImages(const QList<FileInfo> &entries, int limit = 16) {

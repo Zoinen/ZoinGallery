@@ -35,11 +35,15 @@ class ZoinGalleryConan(ConanFile):
         "with_qt": [True, False],
         "with_exiv2": [True, False],
         "build_standalone": [True, False],
+        "with_video_thumbnails": [True, False],
+        "with_ffmpeg_backend": [True, False],
     }
 
     generators = "CMakeToolchain", "CMakeDeps"
 
     default_options = {
+        "with_video_thumbnails": True,
+        "with_ffmpeg_backend": True,
         "with_qt": True,
         "with_exiv2": False,
         # Preserve the repository's historical/default product: consuming or
@@ -49,6 +53,7 @@ class ZoinGalleryConan(ConanFile):
         "qt/*:shared": True,
         "qt/*:qtdeclarative": True,
         "qt/*:qtsvg": True,
+        "qt/*:qtmultimedia": True,
         "qt/*:qtshadertools": True,
         "qt/*:with_pq": False,
         "qt/*:with_odbc": False,
@@ -58,6 +63,15 @@ class ZoinGalleryConan(ConanFile):
         "libwebp/*:shared": False,
         "jasper/*:with_libjpeg": "libjpeg-turbo"
     }
+
+    def configure(self):
+        if self.options.with_video_thumbnails and not self.options.with_qt:
+            raise ConanInvalidConfiguration(
+                "with_video_thumbnails requires with_qt=True")
+        video_thumbnails = bool(self.options.with_video_thumbnails)
+        if not video_thumbnails:
+            self.options.with_ffmpeg_backend = False
+        self.options["qt/*"].qtmultimedia = video_thumbnails
 
     def requirements(self):
         # ZoinGalleryCore is a static archive inside a package that also ships a
@@ -70,6 +84,9 @@ class ZoinGalleryConan(ConanFile):
         self.requires("libheif/1.20.1", transitive_libs=True)
         if self.options.with_qt:
             self.requires("qt/6.11.1", transitive_libs=True)
+        if (self.options.with_video_thumbnails and
+                self.options.with_ffmpeg_backend):
+            self.requires("ffmpeg/7.1.5", transitive_libs=True)
         if self.options.with_exiv2:
             self.requires("exiv2/0.28.3", transitive_libs=True)
 
@@ -118,6 +135,10 @@ class ZoinGalleryConan(ConanFile):
             "BUILD_TESTING": False,
             "USE_QWK": False,
             "USE_EXIV2": bool(self.options.with_exiv2),
+            "ZOIN_ENABLE_VIDEO_THUMBNAILS": bool(
+                self.options.with_video_thumbnails),
+            "ZOIN_ENABLE_FFMPEG_BACKEND": bool(
+                self.options.with_ffmpeg_backend),
         }
         if str(self.settings.os) == "Macos" and not bool(self.options.build_standalone):
             variables["CMAKE_OSX_DEPLOYMENT_TARGET"] = "13.0"
@@ -160,6 +181,17 @@ class ZoinGalleryConan(ConanFile):
             "libwebp::webp",
             "libwebp::webpdemux",
         ]
+        if self.options.with_video_thumbnails:
+            core.requires.append("qt::qtMultimedia")
+        if (self.options.with_video_thumbnails and
+                self.options.with_ffmpeg_backend):
+            core.requires.extend([
+                "ffmpeg::avcodec",
+                "ffmpeg::avformat",
+                "ffmpeg::avutil",
+                "ffmpeg::swresample",
+                "ffmpeg::swscale",
+            ])
         if self.options.with_exiv2:
             core.requires.append("exiv2::exiv2lib")
 

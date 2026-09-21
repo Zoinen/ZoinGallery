@@ -807,10 +807,15 @@ private slots:
         };
         const QList<FileInfo> mixedSelection =
             selectFolderPreviewImages(mixedEntries);
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
         QCOMPARE(mixedSelection.size(), 2);
         QCOMPARE(mixedSelection.at(0).name, QStringLiteral("clip.MP4"));
         QCOMPARE(mixedSelection.at(0).thumbnailKind,
                  QStringLiteral("video"));
+#else
+        QCOMPARE(mixedSelection.size(), 1);
+        QCOMPARE(mixedSelection.at(0).name, QStringLiteral("still.jpg"));
+#endif
         QStringList many;
         for (int i = 0; i < 32; ++i) many.prepend(QStringLiteral("фото%1.png").arg(i));
         const auto selected = selectFolderPreviewNames(many);

@@ -4,7 +4,9 @@
 #include "Decoders/ImageDecoderInterface.h"
 #include "FileListModel.h"
 #include "ProviderImageStore.h"
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
 #include "Runners/VideoThumbnailRunner.h"
+#endif
 #include "SelectedImagesModel.h"
 
 #include <QtTest>
@@ -89,12 +91,14 @@ class DecodeLifecycleTest : public QObject {
     Q_OBJECT
 
 private slots:
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     void videoThumbnailPositionsUseInteriorQuintiles() {
         QCOMPARE(VideoThumbnailRunner::thumbnailPositions(10000),
                  QVector<qint64>({2000, 4000, 6000, 8000}));
         QVERIFY(VideoThumbnailRunner::thumbnailPositions(0).isEmpty());
         QVERIFY(VideoThumbnailRunner::thumbnailPositions(-1).isEmpty());
     }
+#endif
 
     void cancellationWakesNestedRunnerEventLoop() {
         CancellableEventLoopRunner runner;

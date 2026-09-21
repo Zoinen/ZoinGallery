@@ -7,7 +7,9 @@
 #include "Runners/ImageInfoReadRunner.h"
 #include "Runners/ImageProbeRunner.h"
 #include "Runners/ImageReadRunner.h"
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
 #include "Runners/VideoThumbnailRunner.h"
+#endif
 #include "Runners/CacheImageRunners.h"
 #include "Runners/RecursiveFolderScanner.h"
 
@@ -582,6 +584,7 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
             // qDebug() << "ZZ read" << request.info.path << request.targetSize << _taskQueue.size();
         }
         Runner *runner = nullptr;
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
         if (request.info.thumbnailKind == QStringLiteral("video")) {
             auto *videoRunner = new VideoThumbnailRunner(
                 request, _imageSourceProvider);
@@ -594,7 +597,9 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
                         this, &DecodeManager::onStoreInCache),
             });
             runner = videoRunner;
-        } else {
+        } else
+#endif
+        {
             auto *imageRunner = new ImageReadRunner(
                 request, _imageSourceProvider);
             imageRunner->connections.append({
@@ -1002,11 +1007,13 @@ QString DecodeManager::runnerToString(Runner *task) {
         return QString("ImageInfoRead %2%3").arg(static_cast<ImageInfoReadRunner *>(task)->_path).arg(static_cast<ImageInfoReadRunner *>(task)->isEmbeddedRequest() ? " E" : "");
         break;
     case RunnerType::ImageRead:
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
         if (const auto *video = qobject_cast<const VideoThumbnailRunner *>(task)) {
             return QString("VideoThumbnail %1%2")
                 .arg(video->request().info.path)
                 .arg(video->isViewerRequest() ? " V" : "");
         }
+#endif
         return QString("ImageRead %2%3").arg(static_cast<ImageReadRunner *>(task)->_request.info.path).arg(static_cast<ImageReadRunner *>(task)->isViewerRequest() ? " V" : "");
         break;
     case RunnerType::FolderListRead:
@@ -1315,12 +1322,17 @@ bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType
     }
     if (runner->type() == RunnerType::ImageRead) {
         const ImageDecodeRequest *request = nullptr;
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
         if (const auto *video = qobject_cast<const VideoThumbnailRunner *>(runner)) {
             request = &video->request();
         } else {
             const auto *read = static_cast<const ImageReadRunner *>(runner);
             request = &read->_request;
         }
+#else
+        const auto *read = static_cast<const ImageReadRunner *>(runner);
+        request = &read->_request;
+#endif
         if (request->info.source.isValid()) {
             return threadType == static_cast<int>(SpecialThreads::Read) ||
                 threadType == static_cast<int>(SpecialThreads::Cache) ||
@@ -1458,12 +1470,17 @@ bool DecodeManager::canStartRunner(
     };
 
     const ImageDecodeRequest *request = nullptr;
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     if (const auto *video = qobject_cast<const VideoThumbnailRunner *>(runner)) {
         request = &video->request();
     } else {
         const auto *readRunner = static_cast<const ImageReadRunner *>(runner);
         request = &readRunner->_request;
     }
+#else
+    const auto *readRunner = static_cast<const ImageReadRunner *>(runner);
+    request = &readRunner->_request;
+#endif
     const qint64 expectedBytes = request->info.fileSize;
     if (fitsAllowance(compressedPayloadCount,
                       compressedPayloadRunnerLimit(),

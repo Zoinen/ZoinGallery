@@ -37,6 +37,17 @@ endif()
 
 option(USE_QWK "Use QWindowKit" ON)
 option(USE_EXIV2 "Use Exiv2 for metadata extraction" OFF)
+option(ZOIN_ENABLE_VIDEO_THUMBNAILS
+    "Enable video thumbnails through Qt Multimedia" ON)
+option(ZOIN_ENABLE_FFMPEG_BACKEND
+    "Use the Qt Multimedia FFmpeg backend for video thumbnails"
+    ${ZOIN_ENABLE_VIDEO_THUMBNAILS})
+if(NOT ZOIN_ENABLE_VIDEO_THUMBNAILS AND ZOIN_ENABLE_FFMPEG_BACKEND)
+    message(STATUS
+        "ZOIN_ENABLE_VIDEO_THUMBNAILS=OFF disables the FFmpeg backend as well")
+    set(ZOIN_ENABLE_FFMPEG_BACKEND OFF CACHE BOOL
+        "Use the Qt Multimedia FFmpeg backend for video thumbnails" FORCE)
+endif()
 option(ZOIN_BUILD_BENCHMARKS
     "Build standalone decode/performance audit tools" OFF)
 
@@ -51,7 +62,11 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
 find_package(QT NAMES Qt6)
-find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2 Multimedia REQUIRED)
+set(ZOIN_QT_COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2)
+if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    list(APPEND ZOIN_QT_COMPONENTS Multimedia)
+endif()
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS ${ZOIN_QT_COMPONENTS} REQUIRED)
 find_package(Qt6 COMPONENTS ShaderTools REQUIRED)
 if(ZOIN_BUILD_STANDALONE)
     find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Widgets REQUIRED)
@@ -200,8 +215,6 @@ set(ZOIN_CORE_SOURCES
     Runners/ImageInfoReadRunner.cpp
     Runners/ImageReadRunner.h
     Runners/ImageReadRunner.cpp
-    Runners/VideoThumbnailRunner.h
-    Runners/VideoThumbnailRunner.cpp
     Runners/FolderListReadRunner.h
     Runners/FolderListReadRunner.cpp
     Runners/ImageDecodeRunner.h
@@ -297,6 +310,12 @@ set(ZOIN_CORE_SOURCES
     src/panel/GalleryIconResolver.cpp
 )
 
+if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    list(APPEND ZOIN_CORE_SOURCES
+        Runners/VideoThumbnailRunner.h
+        Runners/VideoThumbnailRunner.cpp)
+endif()
+
 set(ZOIN_STANDALONE_SOURCES
     main.cpp
     LaunchOptions.h
@@ -359,6 +378,10 @@ target_compile_definitions(ZoinGalleryCore PRIVATE
     _CRT_SECURE_NO_WARNINGS
     _LIBCPP_ENABLE_CXX17_REMOVED_FEATURES
     _LIBCPP_ENABLE_CXX14_REMOVED_FEATURES)
+if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    target_compile_definitions(ZoinGalleryCore PUBLIC
+        ZOIN_ENABLE_VIDEO_THUMBNAILS=1)
+endif()
 if(BUILD_TESTING)
     target_compile_definitions(ZoinGalleryCore PRIVATE
         ZOIN_ENABLE_SELECTION_CACHE_TESTS=1)
@@ -994,13 +1017,28 @@ if (WIN32 AND ZOIN_BUILD_STANDALONE)
 endif()
 
 # Link with Conan 2 packages
+set(ZOIN_FFMPEG_TARGETS)
+if(ZOIN_ENABLE_VIDEO_THUMBNAILS AND ZOIN_ENABLE_FFMPEG_BACKEND)
+    find_package(ffmpeg CONFIG REQUIRED)
+    foreach(ffmpeg_component IN ITEMS avcodec avformat avutil swresample swscale)
+        if(TARGET ffmpeg::${ffmpeg_component})
+            list(APPEND ZOIN_FFMPEG_TARGETS ffmpeg::${ffmpeg_component})
+        elseif(TARGET FFmpeg::${ffmpeg_component})
+            list(APPEND ZOIN_FFMPEG_TARGETS FFmpeg::${ffmpeg_component})
+        endif()
+    endforeach()
+    if(NOT ZOIN_FFMPEG_TARGETS)
+        message(FATAL_ERROR
+            "FFmpeg was found, but no avcodec/avformat component targets were exported")
+    endif()
+endif()
+
 target_link_libraries(ZoinGalleryCore PUBLIC
     Qt${QT_VERSION_MAJOR}::Core 
     Qt${QT_VERSION_MAJOR}::Quick
     Qt${QT_VERSION_MAJOR}::Concurrent 
     Qt${QT_VERSION_MAJOR}::Svg 
     Qt${QT_VERSION_MAJOR}::QuickControls2
-    Qt${QT_VERSION_MAJOR}::Multimedia
     TIFF::TIFF
     tiffxx
     libraw::libraw
@@ -1011,6 +1049,13 @@ target_link_libraries(ZoinGalleryCore PUBLIC
     WebP::webp
     WebP::webpdemux
 )
+if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    target_link_libraries(ZoinGalleryCore PUBLIC
+        Qt${QT_VERSION_MAJOR}::Multimedia)
+endif()
+if(ZOIN_FFMPEG_TARGETS)
+    target_link_libraries(ZoinGalleryCore PUBLIC ${ZOIN_FFMPEG_TARGETS})
+endif()
 target_link_libraries(ZoinGalleryQml PRIVATE
     Qt${QT_VERSION_MAJOR}::Qml
     Qt${QT_VERSION_MAJOR}::Quick

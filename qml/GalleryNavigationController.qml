@@ -36,6 +36,18 @@ QtObject {
     function openRequested(entryId, index, isImage, autoRepeat) {
         panel.openRequested(entryId, index, isImage, autoRepeat)
     }
+    function cancelPendingCursorCommit(reason, entryId) {
+        const wasPending = cursorCommitPending
+        cursorCommitPending = false
+        cursorCommitAfterScroll = false
+        cursorCommitTimer.stop()
+        cursorCommitAfterScrollTimer.stop()
+        if (wasPending) {
+            console.debug("[FIX:double-click-open] canceled deferred cursor",
+                          "reason=" + String(reason || ""),
+                          "entryId=" + String(entryId || ""))
+        }
+    }
     function coordinateVisualCursor(targetIndex, previousIndex) {
         panel.coordinateVisualCursor(targetIndex, previousIndex)
     }
@@ -101,6 +113,15 @@ QtObject {
                 || viewIndex >= galleryLayout.count)
             return
         if (openItem) {
+            // The second press of a native double-click runs through the
+            // ordinary pointer-selection path before Qt emits doubleClicked.
+            // That path arms a deferred cursor commit; if it survives until
+            // release, it is emitted after panel.open and can race the
+            // destination catalog (notably when opening ".."). The stable
+            // open intent already carries the row identity, so the deferred
+            // cursor is neither needed nor safe here.
+            cancelPendingCursorCommit(
+                        "open", controller.entryIdAt(viewIndex))
             controller.activateIndex(viewIndex)
             openRequested(controller.entryIdAt(viewIndex),
                           sourceIndex(viewIndex),

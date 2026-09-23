@@ -70,6 +70,18 @@ void main()
             || abs(dot(directionX, directionY)) > 0.5)
         return;
 
+    // On fractional-scale Wayland, QWaylandScreen's integer output scale can
+    // differ from the concrete window/render target DPR in Qt's matrix. In
+    // that case replacing the matrix projection with the screen-derived
+    // viewportSize would scale and offset the image when motion ends.
+    // Keep Qt's projection (and continuous filtering) for such render targets;
+    // the regular path below is only safe when both pixel grids coincide.
+    vec2 projectedScale = vec2(length(axisX) / ubuf.itemSize.x,
+                               length(axisY) / ubuf.itemSize.y);
+    vec2 screenScale = ubuf.viewportSize / ubuf.itemSize;
+    if (any(greaterThan(abs(projectedScale - screenScale), vec2(0.01))))
+        return;
+
     // The actual framebuffer can differ from rounded logical window size *
     // DPR. Snap the final projected rectangle, using the intended pixel count,
     // so a half-size pyramid is not bilinearly stretched a second time.

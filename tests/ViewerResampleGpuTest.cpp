@@ -14,6 +14,7 @@ private slots:
     void magnificationFiltersTransparentEdges();
     void settledViewerMatchesCpuThroughRoundedFramebuffer_data();
     void settledViewerMatchesCpuThroughRoundedFramebuffer();
+    void fractionalWaylandBackingScalePreservesSettledGeometry();
     void viewerMotionInterpolatesAndRestoresExactPresentation_data();
     void viewerMotionInterpolatesAndRestoresExactPresentation();
     void blackWhiteHalfScaleUsesLinearLight();
@@ -33,6 +34,7 @@ private slots:
 #include <QQuickRenderControl>
 #include <QQuickRenderTarget>
 #include <QQuickWindow>
+#include <QSurfaceFormat>
 #include <QTest>
 #include <QTransform>
 #include <rhi/qrhi.h>
@@ -84,14 +86,19 @@ public:
     }
 
     bool initializeViewer(const QImage &image, QSize outputSize, qreal dpr,
-                          qreal scale, int rotation = 0) {
+                          qreal scale, int rotation = 0,
+                          qreal renderTargetDpr = 0) {
         return initializeScene(image, outputSize, dpr, {}, {}, true, scale,
-                               rotation);
+                               rotation, renderTargetDpr > 0 ? renderTargetDpr
+                                                            : dpr);
     }
 
     bool initializeScene(const QImage &image, QSize outputSize, qreal dpr,
                          QSize effectPhysicalSize, QPointF effectPhysicalOffset,
-                         bool viewer, qreal viewerScale, int rotation) {
+                         bool viewer, qreal viewerScale, int rotation,
+                         qreal renderTargetDpr = 0) {
+        if (renderTargetDpr <= 0)
+            renderTargetDpr = dpr;
         engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
         engine.addImageProvider(QStringLiteral("gpu-fixture"),
                                 new FixtureImageProvider(image));
@@ -173,7 +180,7 @@ public:
         root->setProperty("testDpr", dpr);
         root->setProperty("testEffectPhysicalSize", effectPhysicalSize);
         root->setProperty("testEffectPhysicalOffset", effectPhysicalOffset);
-        const QSizeF exactLogicalSize = QSizeF(outputSize) / dpr;
+        const QSizeF exactLogicalSize = QSizeF(outputSize) / renderTargetDpr;
         // A real QQuickWindow has integer logical dimensions. Its framebuffer
         // may cover half a physical pixel more than logicalSize * DPR.
         const QSizeF logicalSize = viewer
@@ -219,7 +226,7 @@ public:
             return false;
         }
         auto renderTarget = QQuickRenderTarget::fromRhiRenderTarget(target.get());
-        renderTarget.setDevicePixelRatio(dpr);
+        renderTarget.setDevicePixelRatio(renderTargetDpr);
         window.setRenderTarget(renderTarget);
         return true;
     }
@@ -707,6 +714,48 @@ void ViewerResampleGpuTest::settledViewerMatchesCpuThroughRoundedFramebuffer() {
     }
 }
 
+void ViewerResampleGpuTest::fractionalWaylandBackingScalePreservesSettledGeometry() {
+    // QWaylandScreen exposes the integer wl_output scale while QQuickWindow
+    // renders at the compositor's fractional DPR. The regular scene graph
+    // matrix contains the window DPR. A settled-only vertex correction must
+    // not replace it with the screen DPR supplied by the viewer host.
+    constexpr qreal screenDpr = 2.0;
+    constexpr qreal windowDpr = 1.5;
+    const QImage input = periodicImage({300, 160});
+    GpuFixture fixture;
+    QVERIFY2(fixture.initializeViewer(input, {225, 150}, screenDpr, 1, 0,
+                                      windowDpr),
+             qPrintable(fixture.error));
+    QVERIFY(fixture.setViewerMoving(true));
+    QCoreApplication::processEvents();
+
+    const QRectF sceneBounds = fixture.sceneBounds();
+    const QRect presentationRect(
+        QPoint(qRound(sceneBounds.x() * windowDpr),
+               qRound(sceneBounds.y() * windowDpr)),
+        QSize(qRound(sceneBounds.width() * windowDpr),
+              qRound(sceneBounds.height() * windowDpr)));
+    QCOMPARE(presentationRect, QRect(0, 15, 225, 120));
+    const QImage expected = ZoinGallery::ViewerResampler::downsample(
+        input, presentationRect.size());
+    const QImage movingFrame = fixture.render();
+    QVERIFY2(!movingFrame.isNull(), qPrintable(fixture.error));
+    comparePixels(movingFrame.copy(presentationRect), expected, 2);
+
+    QVERIFY(fixture.setViewerMoving(false));
+    const QImage settledFrame = fixture.render();
+    QVERIFY2(!settledFrame.isNull(), qPrintable(fixture.error));
+    qInfo().noquote() << QStringLiteral(
+        "[FIX:wayland-backing-scale] screenDpr=%1 windowDpr=%2 "
+        "scene=(%3,%4 %5x%6) framebufferRect=(%7,%8 %9x%10)")
+        .arg(screenDpr).arg(windowDpr)
+        .arg(sceneBounds.x()).arg(sceneBounds.y())
+        .arg(sceneBounds.width()).arg(sceneBounds.height())
+        .arg(presentationRect.x()).arg(presentationRect.y())
+        .arg(presentationRect.width()).arg(presentationRect.height());
+    comparePixels(settledFrame.copy(presentationRect), expected, 2);
+}
+
 void ViewerResampleGpuTest::viewerMotionInterpolatesAndRestoresExactPresentation_data() {
     QTest::addColumn<QSize>("sourceSize");
     QTest::addColumn<qreal>("scale");
@@ -844,6 +893,10 @@ int main(int argc, char **argv) {
 #elif defined(Q_OS_MACOS)
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
 #else
+    QSurfaceFormat format;
+    format.setVersion(3, 2);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    QSurfaceFormat::setDefaultFormat(format);
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
 #endif
     QGuiApplication application(argc, argv);

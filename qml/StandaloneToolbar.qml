@@ -459,7 +459,7 @@ Item {
             value: toolbar.galleryLayout.view.density
             to: toolbar.galleryLayout.view.presentationMode === GalleryViewportItem.Columns
                 || toolbar.galleryLayout.view.presentationMode === GalleryViewportItem.Details
-                ? 72
+                ? 216
                 : toolbar.galleryLayout.view.presentationMode === GalleryViewportItem.Grid
                   ? 320
                   : toolbar.galleryLayout.view.presentationMode === GalleryViewportItem.Icons

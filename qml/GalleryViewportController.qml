@@ -112,7 +112,7 @@ QtObject {
 
     function maximumDensity() {
         if (presentationMode === "columns" || presentationMode === "details")
-            return 72
+            return 216
         if (presentationMode === "grid")
             return 320
         if (presentationMode === "icons")

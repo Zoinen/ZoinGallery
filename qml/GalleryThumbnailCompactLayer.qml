@@ -14,7 +14,11 @@ Item {
         id: sourceImage
         objectName: layer.activePresentation
                     ? "galleryThumbnailImage-" + layer.entry.viewIndex : ""
-        anchors.fill: parent
+        x: Math.round((parent.width - width) * layer.entry.renderDpr / 2)
+           / layer.entry.renderDpr
+        y: 0
+        width: layer.entry.compactImageContentWidth
+        height: parent.height
         source: layer.imageSource
         sourceSize: Qt.size(
             Math.max(1, Math.round(width * layer.entry.renderDpr)),

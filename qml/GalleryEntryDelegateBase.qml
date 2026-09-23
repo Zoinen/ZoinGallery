@@ -145,12 +145,17 @@ BrickItem {
          ? visualModel.cursorBackground : visualModel.normalBackground)
         || panelRoot.labelBackgroundColor
     readonly property rect effectivePreviewRect: {
-        if (detailsMode) {
-            return Qt.rect(panelRoot.detailsRowInset,
-                           Math.max(0, (height
-                                        - panelRoot.detailsIconSlotSize) / 2),
-                           panelRoot.detailsIconSlotSize,
-                           panelRoot.detailsIconSlotSize)
+        if (detailsMode || columnsMode) {
+            // Keep the compact slot's padding as the row grows. Both the
+            // shared preview and Details text layout consume this rectangle.
+            const extent = Math.max(0, Math.round((height - 4) * renderDpr)
+                                      / renderDpr)
+            const origin = iconSceneOrigin
+            const left = panelRoot.detailsRowInset
+            const top = Math.max(0, (height - extent) / 2)
+            return Qt.rect(Math.round((origin.x + left) * renderDpr) / renderDpr - origin.x,
+                           Math.round((origin.y + top) * renderDpr) / renderDpr - origin.y,
+                           extent, extent)
         }
         const rect = previewRect
         if (rect && rect.width > 0 && rect.height > 0)
@@ -159,6 +164,23 @@ BrickItem {
         return Qt.rect(inset, inset,
                        Math.max(0, width - inset * 2),
                        Math.max(0, height - inset * 2))
+    }
+
+    readonly property real compactImageContentWidth: {
+        const extent = effectivePreviewRect.width
+        if (!(detailsMode || columnsMode) || !isImage)
+            return extent
+        // Position a portrait inside the shared square slot rather than
+        // shrinking that slot: every row's filename must retain one x-origin.
+        const size = model && model.fullSize ? model.fullSize : null
+        const imageWidth = Number(visualModel.imageWidth
+                                  || (size && size.width) || 0)
+        const imageHeight = Number(visualModel.imageHeight
+                                   || (size && size.height) || 0)
+        if (imageWidth <= 0 || imageHeight <= imageWidth)
+            return extent
+        return Math.max(0, Math.round(extent * imageWidth / imageHeight
+                                       * renderDpr) / renderDpr)
     }
 
     function isLucideIconSource(source) {

@@ -179,7 +179,7 @@ void MasonryLayout::updateMaterializedBrickState(const ModelDelta &delta)
             || (!delta.semanticRolesChanged && !delta.sizeRoleChanged)) {
             continue;
         }
-        if (_metadataSettledRole >= 0 && brick.modelIsImage
+        if (thumbnailsEnabled() && _metadataSettledRole >= 0 && brick.modelIsImage
             && (brick.modelKnownSize.isEmpty()
                 || QSizeF(brick.modelKnownSize) != brick.originalSize)) {
             brick.masonryGeometryReady = false;
@@ -194,7 +194,8 @@ void MasonryLayout::updateMaterializedBrickState(const ModelDelta &delta)
                     && !delta.roles.contains(FileListModel::CachedMetadataBatchRole)))) {
             continue;
         }
-        QSize layoutSize = brick.modelKnownSize;
+        QSize layoutSize = thumbnailsEnabled()
+            ? brick.modelKnownSize : QSize();
         bool lineBreakAfter = false;
         if (layoutSize.isEmpty()) {
             if (brick.modelIsFolder && _listView) {
@@ -207,7 +208,8 @@ void MasonryLayout::updateMaterializedBrickState(const ModelDelta &delta)
         brick.originalSize = layoutSize;
         brick.lineBreakAfter = lineBreakAfter;
         if (_presentationMode != Masonry)
-            brick.masonryGeometryReady = !brick.modelIsImage
+            brick.masonryGeometryReady = !thumbnailsEnabled()
+                || !brick.modelIsImage
                 || !brick.modelKnownSize.isEmpty() || brick.modelMetadataSettled;
     }
     if (delta.semanticRolesChanged) {
@@ -296,7 +298,8 @@ bool MasonryLayout::handleFixedLayoutDelta(const ModelDelta &delta)
     if (_presentationMode == Masonry) {
         return false;
     }
-    if (delta.roleChanged(FileListModel::ImageFullSizeRole)) {
+    if (thumbnailsEnabled()
+        && delta.roleChanged(FileListModel::ImageFullSizeRole)) {
         for (int row = delta.first; row <= delta.last; ++row) {
             if (_bricks[row].image
                 && _bricks[row].image->fullSize().isValid()) {
@@ -325,6 +328,9 @@ void MasonryLayout::applyMaterializedModelDelta(const ModelDelta &delta)
 
 void MasonryLayout::applyMasonryImageSizeDelta(const ModelDelta &delta)
 {
+    if (!thumbnailsEnabled()) {
+        return;
+    }
     const bool cachedMetadataBatch = delta.roles.contains(
         FileListModel::CachedMetadataBatchRole);
     bool animateLayoutChange = !cachedMetadataBatch;
@@ -392,7 +398,8 @@ void MasonryLayout::handleMasonryDelta(const ModelDelta &delta)
                    || !_bricks[delta.first].image->info().isCached);
         }
     }
-    if (delta.roles.contains(FileListModel::TimeToFlushRole)) {
+    if (thumbnailsEnabled()
+        && delta.roles.contains(FileListModel::TimeToFlushRole)) {
         const bool animateLayoutChange =
             !delta.roles.contains(FileListModel::CachedMetadataBatchRole)
             && (!_bricks[delta.first].image
@@ -425,8 +432,10 @@ void MasonryLayout::pushToCurrentRow(int index, bool animate) {
         }
     }
     if (!flushMode) {
+        const QSize itemSize = thumbnailsEnabled()
+            ? _bricks[index].image->fullSize() : GridView_Folder.toSize();
         _currentLoadingRow.append(MasonryBrick {
-            .originalSize = _bricks[index].image->fullSize(),
+            .originalSize = itemSize,
             .image = _bricks[index].image,
         });
                                   // (_bricks[index].image->fullSize().width(), _bricks[index].image->fullSize().height()));
@@ -448,7 +457,8 @@ void MasonryLayout::pushToCurrentRow(int index, bool animate) {
             // qDebug() << "i" << i << _currentLoadingRow[i].globalIndex << _currentLoadingRow[i].row << _currentLoadingRow.last().row;
             if (_currentLoadingRow[i].row != _currentLoadingRow.last().row || flushMode) {
                 int updIndex = _currentLoadingRow[i].globalIndex;
-                if (_bricks[updIndex].image && _bricks[updIndex].image->fullSize().isValid()) {
+                if (thumbnailsEnabled() && _bricks[updIndex].image
+                    && _bricks[updIndex].image->fullSize().isValid()) {
                     // qDebug() << "Full size is valid, updating" << updIndex;
                     _bricks[updIndex].originalSize = _bricks[updIndex].image->fullSize();
                     if (_bricks[updIndex].image->isImage()) {
@@ -506,6 +516,11 @@ void MasonryLayout::pushToCurrentRow(int index, bool animate) {
 }
 
 void MasonryLayout::onThumbnailReadFinished(bool animate) {
+    if (!thumbnailsEnabled()) {
+        _currentLoadingRow.clear();
+        _skipThumbnailBackfillUntilFlush = false;
+        return;
+    }
     if (_bricks.count() && _currentLoadingRow.size()) {
         pushToCurrentRow(_bricks.count(), animate);
     }
@@ -514,7 +529,8 @@ void MasonryLayout::onThumbnailReadFinished(bool animate) {
 
 MasonryLayout::MasonryBrick MasonryLayout::brickForImage(
     ImageFile *imageFile) const {
-    QSize imageSize = imageFile ? imageFile->fullSize() : QSize();
+    QSize imageSize = imageFile && thumbnailsEnabled()
+        ? imageFile->fullSize() : QSize();
     bool lineBreakAfter = false;
     if (imageFile && imageSize.isEmpty()) {
         if (imageFile->isFolder() && _listView) {

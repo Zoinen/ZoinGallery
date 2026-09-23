@@ -404,6 +404,207 @@ private slots:
         decodeManager.prepareToClose();
     }
 
+    void catalogReorderRetainsPublishedThumbnails() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString firstPath = directory.filePath(
+            QStringLiteral("first.png"));
+        QImage firstImage(320, 240, QImage::Format_RGBA8888);
+        firstImage.fill(QColor(QStringLiteral("#4c8bf5")));
+        QVERIFY(firstImage.save(firstPath, "PNG"));
+        const QString secondPath = directory.filePath(
+            QStringLiteral("second.png"));
+        QImage secondImage(320, 240, QImage::Format_RGBA8888);
+        secondImage.fill(QColor(QStringLiteral("#f58b4c")));
+        QVERIFY(secondImage.save(secondPath, "PNG"));
+        const QFileInfo firstInfo(firstPath);
+        const QFileInfo secondInfo(secondPath);
+        const qint64 firstVersion =
+            firstInfo.lastModified().toMSecsSinceEpoch() * 1'000'000;
+        const qint64 secondVersion =
+            secondInfo.lastModified().toMSecsSinceEpoch() * 1'000'000;
+
+        ThumbnailLoader::init();
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        const auto cache =
+            QSharedPointer<ZoinGallery::ThumbnailMemoryCache>::create(
+                store, 1024 * 1024);
+        DecodeManager decodeManager(nullptr, 2);
+        ZoinGallery::ExternalCatalogModel model(
+            QStringLiteral("catalog-reorder"),
+            QStringLiteral("catalog-reorder-thumbnails"),
+            QStringLiteral("catalog-reorder-async"), store, cache,
+            &decodeManager, 1024 * 1024, 1024 * 1024);
+
+        const auto catalogEntry = [](const QString &id, int index,
+                                     const QString &name,
+                                     const QString &path, qint64 version,
+                                     qint64 size) {
+            return QVariantMap{
+                {QStringLiteral("entryId"), id},
+                {QStringLiteral("index"), index},
+                {QStringLiteral("name"), name},
+                {QStringLiteral("localPath"), path},
+                {QStringLiteral("isDir"), false},
+                {QStringLiteral("isImage"), true},
+                {QStringLiteral("mtimeNs"), version},
+                {QStringLiteral("size"), size},
+            };
+        };
+        const QVariantMap first = catalogEntry(
+            QStringLiteral("first"), 0, firstInfo.fileName(), firstPath,
+            firstVersion, firstInfo.size());
+        const QVariantMap second = catalogEntry(
+            QStringLiteral("second"), 1, secondInfo.fileName(), secondPath,
+            secondVersion, secondInfo.size());
+        QVERIFY(model.applyCatalog({first, second}));
+
+        const int imageFileRole = model.roleNames().key(
+            QByteArrayLiteral("imageFileRole"), -1);
+        QVERIFY(imageFileRole >= 0);
+        auto *firstFile = model.data(model.index(0, 0), imageFileRole)
+                              .value<ImageFile *>();
+        auto *secondFile = model.data(model.index(1, 0), imageFileRole)
+                               .value<ImageFile *>();
+        QVERIFY(firstFile);
+        QVERIFY(secondFile);
+
+        QList<ImageDecodeRequest> requests{
+            {.info = firstFile->info(),
+             .targetSize = QSize(80, 60),
+             .thumbnailTransformKey = QStringLiteral("thumbnail-aspect-v1")},
+            {.info = secondFile->info(),
+             .targetSize = QSize(80, 60),
+             .thumbnailTransformKey = QStringLiteral("thumbnail-aspect-v1")},
+        };
+        model.decodeImages(requests);
+        QTRY_VERIFY_WITH_TIMEOUT(!firstFile->imageIdUrl().isEmpty(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!secondFile->imageIdUrl().isEmpty(), 5000);
+        const QString firstUrl = firstFile->imageIdUrl();
+        const QString secondUrl = secondFile->imageIdUrl();
+
+        QVariantMap reorderedFirst = second;
+        reorderedFirst[QStringLiteral("index")] = 0;
+        QVariantMap reorderedSecond = first;
+        reorderedSecond[QStringLiteral("index")] = 1;
+        QVERIFY(model.applyCatalog({reorderedFirst, reorderedSecond},
+                                   false, true));
+
+        QCOMPARE(model.data(model.index(0, 0), imageFileRole)
+                     .value<ImageFile *>(),
+                 secondFile);
+        QCOMPARE(model.data(model.index(1, 0), imageFileRole)
+                     .value<ImageFile *>(),
+                 firstFile);
+        QCOMPARE(firstFile->imageIdUrl(), firstUrl);
+        QCOMPARE(secondFile->imageIdUrl(), secondUrl);
+        QCOMPARE(cache->missCount(), quint64(2));
+
+        model.shutdown();
+        decodeManager.prepareToClose();
+    }
+
+    void sparseCatalogReorderRetainsPublishedThumbnails() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString firstPath = directory.filePath(
+            QStringLiteral("first.png"));
+        QImage firstImage(320, 240, QImage::Format_RGBA8888);
+        firstImage.fill(QColor(QStringLiteral("#4c8bf5")));
+        QVERIFY(firstImage.save(firstPath, "PNG"));
+        const QString secondPath = directory.filePath(
+            QStringLiteral("second.png"));
+        QImage secondImage(320, 240, QImage::Format_RGBA8888);
+        secondImage.fill(QColor(QStringLiteral("#f58b4c")));
+        QVERIFY(secondImage.save(secondPath, "PNG"));
+        const QFileInfo firstInfo(firstPath);
+        const QFileInfo secondInfo(secondPath);
+        const qint64 firstVersion =
+            firstInfo.lastModified().toMSecsSinceEpoch() * 1'000'000;
+        const qint64 secondVersion =
+            secondInfo.lastModified().toMSecsSinceEpoch() * 1'000'000;
+
+        ThumbnailLoader::init();
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        const auto cache =
+            QSharedPointer<ZoinGallery::ThumbnailMemoryCache>::create(
+                store, 1024 * 1024);
+        DecodeManager decodeManager(nullptr, 2);
+        ZoinGallery::ExternalCatalogModel model(
+            QStringLiteral("sparse-catalog-reorder"),
+            QStringLiteral("sparse-catalog-reorder-thumbnails"),
+            QStringLiteral("sparse-catalog-reorder-async"), store, cache,
+            &decodeManager, 1024 * 1024, 1024 * 1024);
+
+        const auto catalogEntry = [](const QString &id, int index,
+                                     const QString &name,
+                                     const QString &path, qint64 version,
+                                     qint64 size) {
+            return QVariantMap{
+                {QStringLiteral("entryId"), id},
+                {QStringLiteral("index"), index},
+                {QStringLiteral("name"), name},
+                {QStringLiteral("localPath"), path},
+                {QStringLiteral("isDir"), false},
+                {QStringLiteral("isImage"), true},
+                {QStringLiteral("mtimeNs"), version},
+                {QStringLiteral("size"), size},
+            };
+        };
+        const QVariantMap first = catalogEntry(
+            QStringLiteral("first"), 0, firstInfo.fileName(), firstPath,
+            firstVersion, firstInfo.size());
+        const QVariantMap second = catalogEntry(
+            QStringLiteral("second"), 1, secondInfo.fileName(), secondPath,
+            secondVersion, secondInfo.size());
+        constexpr int totalCount = 4;
+        QVERIFY(model.applyCatalog({first, second}, false, true, totalCount));
+
+        const int imageFileRole = model.roleNames().key(
+            QByteArrayLiteral("imageFileRole"), -1);
+        QVERIFY(imageFileRole >= 0);
+        auto *firstFile = model.data(model.index(0, 0), imageFileRole)
+                              .value<ImageFile *>();
+        auto *secondFile = model.data(model.index(1, 0), imageFileRole)
+                               .value<ImageFile *>();
+        QVERIFY(firstFile);
+        QVERIFY(secondFile);
+
+        QList<ImageDecodeRequest> requests{
+            {.info = firstFile->info(),
+             .targetSize = QSize(80, 60),
+             .thumbnailTransformKey = QStringLiteral("thumbnail-aspect-v1")},
+            {.info = secondFile->info(),
+             .targetSize = QSize(80, 60),
+             .thumbnailTransformKey = QStringLiteral("thumbnail-aspect-v1")},
+        };
+        model.decodeImages(requests);
+        QTRY_VERIFY_WITH_TIMEOUT(!firstFile->imageIdUrl().isEmpty(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!secondFile->imageIdUrl().isEmpty(), 5000);
+        const QString firstUrl = firstFile->imageIdUrl();
+        const QString secondUrl = secondFile->imageIdUrl();
+
+        QVariantMap reorderedFirst = second;
+        reorderedFirst[QStringLiteral("index")] = 0;
+        QVariantMap reorderedSecond = first;
+        reorderedSecond[QStringLiteral("index")] = 1;
+        QVERIFY(model.applyCatalog({reorderedFirst, reorderedSecond}, false,
+                                   true, totalCount));
+
+        QCOMPARE(model.data(model.index(0, 0), imageFileRole)
+                     .value<ImageFile *>(),
+                 secondFile);
+        QCOMPARE(model.data(model.index(1, 0), imageFileRole)
+                     .value<ImageFile *>(),
+                 firstFile);
+        QCOMPARE(firstFile->imageIdUrl(), firstUrl);
+        QCOMPARE(secondFile->imageIdUrl(), secondUrl);
+        QCOMPARE(cache->missCount(), quint64(2));
+
+        model.shutdown();
+        decodeManager.prepareToClose();
+    }
+
     void equalTargetHeicCompletionPublishesToBothCoalescedSessions() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

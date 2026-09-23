@@ -36,12 +36,34 @@ void ExternalCatalogModel::applyImageInfoResult(
             });
         return;
     }
+    if (info.panelThumbnailRequest && !_thumbnailsEnabled) {
+        const QString sourceIdentity = info.sourceIdentity();
+        const auto panelPending =
+            _panelMetadataPendingIdentities.constFind(sourceIdentity);
+        if (panelPending != _panelMetadataPendingIdentities.cend()
+            && panelPending.value() == info.sourceVersionToken) {
+            _panelMetadataPendingIdentities.remove(sourceIdentity);
+            const auto pending =
+                _metadataPendingVersions.constFind(sourceIdentity);
+            if (pending != _metadataPendingVersions.cend()
+                && pending.value() == info.sourceVersionToken) {
+                _metadataPendingVersions.remove(sourceIdentity);
+            }
+        }
+        return;
+    }
     state.acceptedNamespace = true;
     const QString sourceIdentity = info.sourceIdentity();
     const auto pending = _metadataPendingVersions.constFind(sourceIdentity);
     if (pending != _metadataPendingVersions.cend()
         && pending.value() == info.sourceVersionToken) {
         _metadataPendingVersions.remove(sourceIdentity);
+    }
+    const auto panelPending =
+        _panelMetadataPendingIdentities.constFind(sourceIdentity);
+    if (panelPending != _panelMetadataPendingIdentities.cend()
+        && panelPending.value() == info.sourceVersionToken) {
+        _panelMetadataPendingIdentities.remove(sourceIdentity);
     }
     const QList<int> rows = sourceRows(sourceIdentity);
     if (rows.isEmpty()) {
@@ -86,7 +108,8 @@ void ExternalCatalogModel::applyImageInfoResult(
         const Entry &entry = loadedEntry(authorityRows.constFirst());
         if (!scheduleMetadataRetry(sourceIdentity, entry.contentVersion,
                                    entry.source.resourceId,
-                                   !info.highPriority)) {
+                                   !info.highPriority,
+                                   info.panelThumbnailRequest)) {
             QList<int> pendingRows;
             for (const int row : std::as_const(authorityRows)) {
                 loadedEntry(row).metadataSettled = true;
@@ -241,6 +264,10 @@ void ExternalCatalogModel::handleImageReady(
     const ImageDecodeRequest &request, const QImage &image,
     const DecodedImageInfo &decodedInfo) {
     if (request.requestNamespace != _sessionId) {
+        return;
+    }
+    if (request.panelThumbnailRequest && !_thumbnailsEnabled) {
+        clearCompletedDecodeRequest(request, false);
         return;
     }
     MediaTimingTrace::event(
@@ -485,6 +512,10 @@ void ExternalCatalogModel::handleImageReadFailed(
     if (_shutdown || request.requestNamespace != _sessionId) {
         return;
     }
+    if (request.panelThumbnailRequest && !_thumbnailsEnabled) {
+        clearCompletedDecodeRequest(request, false);
+        return;
+    }
     MediaTimingTrace::event(
         QStringLiteral("qt.gallery.image_read.failed"),
         decodeRequestTimingFields(request));
@@ -553,6 +584,9 @@ void ExternalCatalogModel::releaseFailedThumbnailRequest(
 
 bool ExternalCatalogModel::scheduleSourceDecodeRetry(
     const ImageDecodeRequest &request) {
+    if (request.panelThumbnailRequest && !_thumbnailsEnabled) {
+        return false;
+    }
     const QString retryKey =
         (request.viewerRequest ? QStringLiteral("viewer:")
                                : QStringLiteral("thumbnail:")) +
@@ -585,12 +619,14 @@ bool ExternalCatalogModel::scheduleSourceDecodeRetry(
     const QString resourceId = request.info.source.resourceId;
     const bool viewerRequest = request.viewerRequest;
     const bool backgroundViewerRequest = request.backgroundViewerRequest;
+    const bool panelThumbnailRequest = request.panelThumbnailRequest;
     QTimer::singleShot(
         delayMs, this,
         [this, retryKey, sourceIdentity, contentVersion, resourceId,
-         viewerRequest, backgroundViewerRequest]() {
+         viewerRequest, backgroundViewerRequest,
+         panelThumbnailRequest]() {
         _sourceDecodeRetryScheduled.remove(retryKey);
-        if (_shutdown) {
+        if (_shutdown || (panelThumbnailRequest && !_thumbnailsEnabled)) {
             return;
         }
         const int row = _sourceToRow.value(sourceIdentity, -1);
@@ -980,9 +1016,9 @@ void ExternalCatalogModel::pumpProbeRequests() {
         return;
     }
 
-    drainProbeRows(batch, _probeUrgentRows, true);
-    drainProbeRows(batch, _probeVisibleRows, true);
-    drainProbeRows(batch, _probeOverscanRows, false);
+    drainProbeRows(batch, _probeUrgentRows, true, false);
+    drainProbeRows(batch, _probeVisibleRows, true, true);
+    drainProbeRows(batch, _probeOverscanRows, false, true);
     collectCatalogProbeRows(batch);
     submitProbeBatch(batch.highRequests, true);
     submitProbeBatch(batch.backgroundRequests, false);
@@ -992,8 +1028,10 @@ void ExternalCatalogModel::pumpProbeRequests() {
 }
 
 void ExternalCatalogModel::appendProbeRow(
-    ProbeBatch &batch, int row, bool highPriority) {
-    if (batch.available <= 0 || !validRow(row)) {
+    ProbeBatch &batch, int row, bool highPriority,
+    bool panelThumbnailRequest) {
+    if (batch.available <= 0 || !validRow(row)
+        || (panelThumbnailRequest && !_thumbnailsEnabled)) {
         return;
     }
     const Entry &entry = loadedEntry(row);
@@ -1002,20 +1040,26 @@ void ExternalCatalogModel::appendProbeRow(
         return;
     }
     _probePendingVersions.insert(entry.sourceIdentity, entry.contentVersion);
+    if (panelThumbnailRequest) {
+        _panelProbePendingIdentities.insert(entry.sourceIdentity);
+    }
     QList<ImageProbeRequest> &requests = highPriority
         ? batch.highRequests : batch.backgroundRequests;
     requests.append(ImageProbeRequest{
         .source = entry.source,
         .requestNamespace = _sessionId,
+        .panelThumbnailRequest = panelThumbnailRequest,
         .highPriority = highPriority,
     });
     --batch.available;
 }
 
 void ExternalCatalogModel::drainProbeRows(
-    ProbeBatch &batch, QList<int> &rows, bool highPriority) {
+    ProbeBatch &batch, QList<int> &rows, bool highPriority,
+    bool panelThumbnailRequest) {
     while (batch.available > 0 && !rows.isEmpty()) {
-        appendProbeRow(batch, rows.takeFirst(), highPriority);
+        appendProbeRow(batch, rows.takeFirst(), highPriority,
+                       panelThumbnailRequest);
     }
 }
 
@@ -1025,7 +1069,7 @@ void ExternalCatalogModel::collectCatalogProbeRows(ProbeBatch &batch) {
     }
     while (batch.available > 0 && _catalogProbeCursor < _entries.size()) {
         const int row = _entries.at(_catalogProbeCursor++).sourceIndex;
-        appendProbeRow(batch, row, false);
+        appendProbeRow(batch, row, false, true);
     }
 }
 
@@ -1048,6 +1092,9 @@ void ExternalCatalogModel::submitProbeBatch(
 
 void ExternalCatalogModel::handleImageProbe(
     const ImageProbeResult &result) {
+    if (result.request.panelThumbnailRequest && !_thumbnailsEnabled) {
+        return;
+    }
     QString sourceIdentity;
     QString version;
     if (!acceptImageProbe(result, sourceIdentity, version)) {
@@ -1063,7 +1110,8 @@ void ExternalCatalogModel::handleImageProbe(
 bool ExternalCatalogModel::acceptImageProbe(
     const ImageProbeResult &result, QString &sourceIdentity,
     QString &version) {
-    if (_shutdown || result.request.requestNamespace != _sessionId) {
+    if (_shutdown || result.request.requestNamespace != _sessionId
+        || (result.request.panelThumbnailRequest && !_thumbnailsEnabled)) {
         return false;
     }
     sourceIdentity = result.request.source.runtimeIdentity();
@@ -1079,6 +1127,7 @@ bool ExternalCatalogModel::acceptImageProbe(
         return false;
     }
     _probePendingVersions.remove(sourceIdentity);
+    _panelProbePendingIdentities.remove(sourceIdentity);
     _probeResolvedVersions.insert(sourceIdentity, version);
     return true;
 }

@@ -48,6 +48,8 @@ void ExternalCatalogThumbnailPlanner::configureRequest(
     ImageDecodeRequest &request, const Entry &entry) const {
     request.requestNamespace = m_model._sessionId;
     request.info.requestNamespace = m_model._sessionId;
+    request.panelThumbnailRequest = true;
+    request.info.panelThumbnailRequest = true;
     request.info.source = entry.source;
     request.info.path = entry.sourceIdentity;
     request.info.sourceVersionToken = entry.contentVersion;
@@ -136,6 +138,7 @@ void ExternalCatalogThumbnailPlanner::admitRequest(
         key, ExternalCatalogModel::PendingThumbnailRequest{
             .owner = cached.state
                 == ThumbnailMemoryCache::AcquireState::Owner,
+            .panelThumbnailRequest = true,
             .admittedTargetSize = cached.pendingTargetSize.isValid()
                 ? cached.pendingTargetSize : request.targetSize,
             .admittedTransformKey = cached.pendingTransformKey.isEmpty()

@@ -105,12 +105,15 @@ public:
     explicit CompactIconProvider(bool checker = false)
         : QQuickImageProvider(QQuickImageProvider::Image), m_checker(checker) {}
     QSize lastRequestedSize;
+    QSize chevronRequestedSize;
 
-    QImage requestImage(const QString &,
+    QImage requestImage(const QString &id,
                         QSize *size,
                         const QSize &requestedSize) override {
         const QSize imageSize = requestedSize.isValid()
             ? requestedSize : QSize(16, 16);
+        if (id.contains("chevron-"))
+            chevronRequestedSize = requestedSize;
         if (size) {
             *size = imageSize;
         }
@@ -260,6 +263,436 @@ class MasonryLayoutModesTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void groupHeaderPixelGridAndSpacing_data() {
+        QTest::addColumn<bool>("checkSpacing");
+        QTest::addColumn<bool>("checkRaster");
+        QTest::addColumn<QString>("title");
+        QTest::addColumn<bool>("collapsed");
+        QTest::newRow("spacing-input") << true << false << QString("Folders") << false;
+        QTest::newRow("ancestor-pixel-grid") << false << false << QString("Folders") << false;
+        QTest::newRow("physical-raster") << false << true << QString("Folders") << false;
+        QTest::newRow("descender-center") << false << false << QString("Alpha") << false;
+        QTest::newRow("collapsed-center") << false << false << QString("No data") << true;
+    }
+
+    void groupHeaderPixelGridAndSpacing() {
+        QFETCH(bool, checkSpacing);
+        QFETCH(bool, checkRaster);
+        QFETCH(QString, title);
+        QFETCH(bool, collapsed);
+        QQuickView view;
+        auto *rasterProvider = new CompactIconProvider(true);
+        view.engine()->addImageProvider("header-raster", rasterProvider);
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("header-pixel-input");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(4), 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "headerPixelSession"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        // Use a real SVG so the rendered check includes raster icon pixels,
+        // unlike the deliberately unresolved icon URLs in generic fixtures.
+        QTemporaryDir iconDirectory;
+        QVERIFY(iconDirectory.isValid());
+        for (const QString &name : {QStringLiteral("chevron-down"), QStringLiteral("chevron-right")}) {
+            QFile svg(iconDirectory.filePath(name + ".svg"));
+            QVERIFY(svg.open(QIODevice::WriteOnly));
+            const QByteArray points = name.endsWith("down") ? "6 9 12 15 18 9" : "9 6 15 12 9 18";
+            QVERIFY(svg.write("<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><polyline points='"
+                + points + "' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>") > 0);
+        }
+        auto *resolver = panel->property("iconResolver").value<QObject *>();
+        QVERIFY(resolver);
+        resolver->setProperty("compactPrefix", checkRaster
+            ? QStringLiteral("image://header-raster")
+            : QUrl::fromLocalFile(iconDirectory.path()).toString());
+        panel->setProperty("groupDescriptors", QVariantList{QVariantMap{
+            {"key", "alpha"}, {"title", title}, {"startIndex", 1}, {"count", 3}}});
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        if (collapsed)
+            QVERIFY(layout->setGroupCollapsed("alpha", true));
+        QQuickItem *header = nullptr;
+        QTRY_VERIFY((header = findVisualItem(panel, "galleryGroupHeader-gallery-alpha")));
+        auto *chevron = findVisualItem(panel, "galleryGroupHeader-gallery-alpha-chevron");
+        QVERIFY(chevron);
+        QTRY_COMPARE(chevron->property("status").toInt(), 1);
+        if (checkRaster) {
+            const int physicalExtent = qRound(chevron->width() * view.devicePixelRatio());
+            QCOMPARE(rasterProvider->chevronRequestedSize, QSize(physicalExtent, physicalExtent));
+        }
+        if (checkSpacing) {
+            const QPoint gap = header->mapToScene(QPointF(40, 3)).toPoint();
+            QTest::mouseMove(&view, QPoint(1, 1));
+            QTest::mouseMove(&view, gap);
+            QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, gap);
+            QVERIFY2(!layout->isGroupCollapsed("alpha"), "top spacing toggled the group");
+            QVERIFY(!header->property("pointerHovered").toBool());
+            QCOMPARE(header->property("backgroundColor"),
+                     panel->property("headerColor"));
+            const QPoint body = header->mapToScene(QPointF(40, 20)).toPoint();
+            QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, body);
+            QTRY_VERIFY(layout->isGroupCollapsed("alpha"));
+            return;
+        }
+        // Move an ancestor after construction without changing local header
+        // geometry. mapToItem alone does not subscribe to that translation.
+        panel->setX(0.2);
+        panel->setY(0.3);
+        QTest::qWait(30);
+        const qreal dpr = view.devicePixelRatio();
+        for (const auto &suffix : {"title", "chevron", "count", "separator"}) {
+            auto *leaf = findVisualItem(panel, QString("galleryGroupHeader-gallery-alpha-%1").arg(suffix));
+            QVERIFY(leaf);
+            const auto origin = leaf->mapToItem(view.contentItem(), QPointF());
+            for (qreal coordinate : {origin.x() * dpr, origin.y() * dpr})
+                QVERIFY2(qAbs(coordinate - qRound(coordinate)) < 0.01,
+                    qPrintable(QString("%1 physical coordinate %2").arg(suffix).arg(coordinate, 0, 'f', 6)));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - origin, QPointF(0, 1));
+        }
+        const auto capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        if (!checkRaster) {
+            const auto inkCenter = [&](QQuickItem *item) {
+                const QPointF origin = item->mapToItem(view.contentItem(), QPointF()) * dpr;
+                int top = capture.height(), bottom = -1;
+                for (int y = 0; y < qRound(item->height() * dpr); ++y) {
+                    for (int x = 0; x < qRound(item->width() * dpr); ++x) {
+                        const int py = qRound(origin.y()) + y;
+                        const QColor pixel = capture.pixelColor(qRound(origin.x()) + x, py);
+                        if (qGray(pixel.rgb()) > 100) {
+                            top = std::min(top, py);
+                            bottom = std::max(bottom, py);
+                        }
+                    }
+                }
+                return (top + bottom) / 2.0;
+            };
+            const qreal iconCenter = inkCenter(chevron);
+            for (const auto &suffix : {"title", "count"}) {
+                auto *text = findVisualItem(panel, QString("galleryGroupHeader-gallery-alpha-%1").arg(suffix));
+                const qreal textCenter = inkCenter(text);
+                QVERIFY2(qAbs(textCenter - iconCenter) <= 1.0,
+                    qPrintable(QString("%1 ink center %2, chevron %3 (physical pixels)")
+                        .arg(suffix).arg(textCenter).arg(iconCenter)));
+            }
+        }
+        if (checkRaster) {
+            const QPointF origin = chevron->mapToItem(view.contentItem(), QPointF()) * dpr;
+            const int extent = qRound(chevron->width() * dpr);
+            const QColor background = panel->property("headerColor").value<QColor>();
+            // A physical one-pixel checker must reach the framebuffer intact:
+            // aligned wrappers alone cannot detect an oversized, resampled texture.
+            for (int y = 0; y < extent; ++y) {
+                for (int x = 0; x < extent; ++x) {
+                    const QColor expected = (x + y) % 2 ? background : QColor(Qt::white);
+                    QCOMPARE(capture.pixelColor(qRound(origin.x()) + x,
+                                                qRound(origin.y()) + y), expected);
+                }
+            }
+        }
+        if (qEnvironmentVariableIsSet("F4_HEADER_PIXEL_CAPTURE"))
+            QVERIFY(capture.save(qEnvironmentVariable("F4_HEADER_PIXEL_CAPTURE")));
+    }
+
+    void stickyGroupHeaderPinsSeparatorAtViewportTop() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("sticky-header-top-edge");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(50), 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(
+            view, session, "stickyHeaderSession"));
+        QVERIFY(panel);
+        view.resize(640, 360);
+        panel->setSize({640, 360});
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("animateLayoutChanges", false);
+        // The host's default gallery panel color is transparent. Keep that
+        // case in this visual regression: a lighter transparent QColor is
+        // still transparent, even though isolated Gallery tests use an
+        // opaque theme by default.
+        QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
+            {QStringLiteral("panelBackground"),
+             QColor(0, 0, 0, 0)},
+            {QStringLiteral("controlHover"),
+             QStringLiteral("#2a3745")},
+        }));
+        panel->setProperty("groupHeaderBackdropColor",
+                           QColor(QStringLiteral("#191d23")));
+        panel->setProperty("groupDescriptors", QVariantList{
+            QVariantMap{{"key", "alpha"}, {"title", "Alpha"},
+                        {"startIndex", 1}, {"count", 24}},
+            QVariantMap{{"key", "beta"}, {"title", "Beta"},
+                        {"startIndex", 25}, {"count", 25}},
+        });
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QTRY_VERIFY_WITH_TIMEOUT(layout->contentHeight() > layout->height(), 3000);
+        QVariantMap alpha;
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            for (const QVariant &value : layout->visibleGroupHeaders()) {
+                const QVariantMap header = value.toMap();
+                if (header.value("key").toString() == QStringLiteral("alpha")) {
+                    alpha = header;
+                    return true;
+                }
+            }
+            return false;
+        }(), 3000);
+        // Let the panel's initial viewport-placement transaction settle before
+        // moving to the separator boundary under test.
+        QTest::qWait(100);
+
+        const qreal dpr = view.devicePixelRatio();
+        const qreal physicalPixel = 1 / dpr;
+        const qreal topSpacing = qRound(8 * dpr) / dpr;
+        const qreal sectionOffset = alpha.value("offset").toReal();
+        const qreal beforeSeparatorCrosses = sectionOffset + topSpacing
+                                               - physicalPixel;
+        layout->setContentY(beforeSeparatorCrosses);
+        QTRY_VERIFY_WITH_TIMEOUT(qAbs(layout->contentY()
+                                      - beforeSeparatorCrosses)
+                                     < physicalPixel / 4,
+                                 3000);
+
+        const QString headerName = QStringLiteral(
+            "galleryGroupHeader-gallery-alpha");
+        auto *header = findVisualItem(panel, headerName);
+        QTRY_VERIFY_WITH_TIMEOUT(header && header->isVisible(), 3000);
+        QCOMPARE(header->property("backgroundColor").value<QColor>(),
+                 panel->property("headerColor").value<QColor>());
+        auto *separator = findVisualItem(
+            panel, headerName + QStringLiteral("-separator"));
+        QVERIFY(separator);
+        QVERIFY2(!header->property("currentSticky").toBool(),
+                 qPrintable(QStringLiteral(
+                     "header pinned before its separator crossed the top edge: contentY=%1, section=%2")
+                     .arg(layout->contentY(), 0, 'f', 3)
+                     .arg(sectionOffset, 0, 'f', 3)));
+
+        const qreal viewportTop = layout->mapToItem(
+            view.contentItem(), QPointF()).y();
+        const qreal lineBefore = separator->mapToItem(
+            view.contentItem(), QPointF()).y();
+        QVERIFY2(qAbs((lineBefore - viewportTop) * dpr - 1) < 0.01,
+                 qPrintable(QStringLiteral("pre-sticky separator is at %1 physical px")
+                     .arg((lineBefore - viewportTop) * dpr, 0, 'f', 3)));
+
+        // The panel's startup restore can run after a queued layout commit.
+        // Seed the session with the same target so that restore preserves the
+        // boundary being inspected instead of snapping back to zero.
+        session->setPanelScrollOffset(sectionOffset + topSpacing);
+        layout->setContentY(sectionOffset + topSpacing);
+        QTRY_VERIFY_WITH_TIMEOUT(qAbs(layout->contentY()
+                                      - (sectionOffset + topSpacing))
+                                     < physicalPixel / 4,
+                                 3000);
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            header = findVisualItem(panel, headerName);
+            separator = findVisualItem(
+                panel, headerName + QStringLiteral("-separator"));
+            return header && separator
+                && header->property("currentSticky").toBool();
+        }(), 3000);
+        const qreal pinnedTop = header->y();
+        QVERIFY2(qAbs((pinnedTop + topSpacing) * dpr) < 0.01,
+                 qPrintable(QStringLiteral("sticky header y=%1, separator offset=%2")
+                     .arg(pinnedTop, 0, 'f', 3)
+                     .arg(topSpacing, 0, 'f', 3)));
+        QTRY_VERIFY_WITH_TIMEOUT(!separator->isVisible(), 3000);
+
+        auto *background = header->findChild<QQuickItem *>(
+            headerName + QStringLiteral("-background"));
+        auto *hoverBackground = header->findChild<QQuickItem *>(
+            headerName + QStringLiteral("-hover"));
+        QVERIFY(background);
+        QVERIFY2(!header->findChild<QObject *>(
+                     headerName + QStringLiteral("-gradient-start")),
+                 "sticky group header base background should be a solid fill, not a gradient");
+        QVERIFY2(!header->findChild<QObject *>(
+                     headerName + QStringLiteral("-gradient-end")),
+                 "sticky group header base background should not fade to transparent");
+        QVERIFY2(!header->findChild<QObject *>(
+                     headerName + QStringLiteral("-hover-gradient-start")),
+                 "sticky group header hover background should be a solid fill, not a gradient");
+        QVERIFY2(!header->findChild<QObject *>(
+                     headerName + QStringLiteral("-hover-gradient-end")),
+                 "sticky group header hover background should not fade to transparent");
+        QVERIFY(hoverBackground);
+        const QColor backdropColor = QColor(QStringLiteral("#191d23"));
+        const QColor baseBackgroundColor = backdropColor.lighter(120);
+        const QColor headerHoverColor =
+            panel->property("headerHoverColor").value<QColor>();
+        QCOMPARE(header->property("backgroundColor").value<QColor>(),
+                 baseBackgroundColor);
+        QCOMPARE(header->property("backgroundColor")
+                     .value<QColor>().alpha(), 255);
+        QCOMPARE(background->property("color").value<QColor>(),
+                 baseBackgroundColor);
+        QCOMPARE(hoverBackground->property("color").value<QColor>(),
+                 headerHoverColor);
+        QCOMPARE(hoverBackground->y(), topSpacing);
+        auto *title = findVisualItem(panel, headerName + QStringLiteral("-title"));
+        auto *chevron = findVisualItem(panel, headerName + QStringLiteral("-chevron"));
+        auto *count = findVisualItem(panel, headerName + QStringLiteral("-count"));
+        QVERIFY(title);
+        QVERIFY(chevron);
+        QVERIFY(count);
+        const qreal textBandBottom = std::max({
+            title->mapToItem(header, QPointF(0, title->height())).y(),
+            chevron->mapToItem(header, QPointF(0, chevron->height())).y(),
+            count->mapToItem(header, QPointF(0, count->height())).y(),
+        });
+        QVERIFY2(header->height() >= textBandBottom,
+                 "sticky header background must cover all header text");
+        header->setVisible(false);
+        view.requestUpdate();
+        QTest::qWait(50);
+        const QImage underlay = view.grabWindow();
+        QVERIFY(!underlay.isNull());
+        header->setVisible(true);
+        panel->setProperty("hoverPointerInside", false);
+        QTest::mouseMove(&view, QPoint(view.width() - 2, view.height() - 2));
+        QVERIFY(!header->property("pointerHovered").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(!hoverBackground->isVisible(), 3000);
+        view.requestUpdate();
+        QTest::qWait(50);
+        QVERIFY(header->property("currentSticky").toBool());
+        QVERIFY2(qAbs(layout->contentY() - (sectionOffset + topSpacing))
+                     < physicalPixel / 4,
+                 qPrintable(QStringLiteral(
+                     "scroll reset before capture: contentY=%1 expected=%2")
+                     .arg(layout->contentY(), 0, 'f', 3)
+                     .arg(sectionOffset + topSpacing, 0, 'f', 3)));
+        const QPointF headerOrigin = header->mapToItem(
+            view.contentItem(), QPointF());
+        const qreal clearSampleX = header->width() / 2;
+        const qreal titleBandSampleY = title->mapToItem(
+            header, QPointF(0, title->height() / 2)).y();
+        const QImage baseCapture = view.grabWindow();
+        QVERIFY(!baseCapture.isNull());
+        if (qEnvironmentVariableIsSet(
+                "F4_GROUP_HEADER_BASE_SOLID_CAPTURE"))
+            QVERIFY(baseCapture.save(qEnvironmentVariable(
+                "F4_GROUP_HEADER_BASE_SOLID_CAPTURE")));
+        const auto sampleWindowPixelAt = [&](const QImage &image,
+                                             qreal localX, qreal localY) {
+            return image.pixelColor(
+                qRound((headerOrigin.x() + localX) * dpr),
+                qRound((headerOrigin.y() + localY) * dpr));
+        };
+        const auto colorDistance = [](const QColor &left,
+                                      const QColor &right) {
+            return qAbs(left.red() - right.red())
+                + qAbs(left.green() - right.green())
+                + qAbs(left.blue() - right.blue());
+        };
+        const auto renderedTextInkPixels = [&](QQuickItem *textItem) {
+            const QRectF sceneInk = textItem->mapRectToItem(
+                view.contentItem(),
+                QRectF(0, 0, textItem->width(), textItem->height()));
+            const int left = qMax(0, qFloor(sceneInk.left() * dpr));
+            const int top = qMax(0, qFloor(sceneInk.top() * dpr));
+            const int right = qMin(baseCapture.width(),
+                                   qCeil(sceneInk.right() * dpr));
+            const int bottom = qMin(baseCapture.height(),
+                                    qCeil(sceneInk.bottom() * dpr));
+            int pixels = 0;
+            for (int y = top; y < bottom; ++y) {
+                for (int x = left; x < right; ++x) {
+                    if (colorDistance(baseCapture.pixelColor(x, y),
+                                      baseBackgroundColor) > 80)
+                        ++pixels;
+                }
+            }
+            return pixels;
+        };
+        const auto renderedTargetColorPixels = [&](QQuickItem *textItem) {
+            const QColor target = textItem->property("color").value<QColor>();
+            const QRectF sceneBounds = textItem->mapRectToItem(
+                view.contentItem(),
+                QRectF(0, 0, textItem->width(), textItem->height()));
+            const int left = qMax(0, qFloor(sceneBounds.left() * dpr));
+            const int top = qMax(0, qFloor(sceneBounds.top() * dpr));
+            const int right = qMin(baseCapture.width(),
+                                   qCeil(sceneBounds.right() * dpr));
+            const int bottom = qMin(baseCapture.height(),
+                                    qCeil(sceneBounds.bottom() * dpr));
+            int pixels = 0;
+            for (int y = top; y < bottom; ++y) {
+                for (int x = left; x < right; ++x) {
+                    if (colorDistance(baseCapture.pixelColor(x, y), target) < 80)
+                        ++pixels;
+                }
+            }
+            return pixels;
+        };
+        const int titleInkPixels = renderedTextInkPixels(title);
+        QVERIFY2(titleInkPixels > 0,
+                 qPrintable(QStringLiteral(
+                     "sticky group title is missing from the no-hover render: visible=%1 text=%2 bounds=%3x%4 color=%5")
+                     .arg(title->isVisible())
+                     .arg(title->property("text").toString())
+                     .arg(title->width()).arg(title->height())
+                     .arg(title->property("color").value<QColor>().name())));
+        QVERIFY2(renderedTargetColorPixels(title) > 0,
+                 "sticky group title color is missing from the no-hover render");
+        QVERIFY2(renderedTextInkPixels(count) > 0,
+                 "sticky group count is missing from the no-hover render");
+        const QColor baseTextBand = sampleWindowPixelAt(
+            baseCapture, clearSampleX, titleBandSampleY);
+        QVERIFY2(colorDistance(baseTextBand, baseBackgroundColor) < 12,
+                 qPrintable(QStringLiteral(
+                     "sticky background does not cover content behind its text band: %1 vs %2")
+                     .arg(baseTextBand.name(), baseBackgroundColor.name())));
+        for (const qreal sampleY : {
+                 topSpacing + 2 / dpr,
+                 titleBandSampleY,
+                 header->height() / 2,
+                 header->height() - 2 / dpr,
+             }) {
+            const QColor rendered = sampleWindowPixelAt(
+                baseCapture, clearSampleX, sampleY);
+            const QColor obscured = sampleWindowPixelAt(
+                underlay, clearSampleX, sampleY);
+            QVERIFY2(colorDistance(rendered, baseBackgroundColor) < 12,
+                     qPrintable(QStringLiteral(
+                         "sticky background is not solid at y=%1: %2 vs %3")
+                         .arg(sampleY, 0, 'f', 3)
+                         .arg(rendered.name(), baseBackgroundColor.name())));
+            QVERIFY2(colorDistance(rendered, obscured) >= 12,
+                     qPrintable(QStringLiteral(
+                         "sticky background lets underlying content show at y=%1: %2 vs %3")
+                         .arg(sampleY, 0, 'f', 3)
+                         .arg(rendered.name(), obscured.name())));
+        }
+        QTest::mouseMove(&view, header->mapToItem(
+            view.contentItem(), QPointF(clearSampleX, header->height() / 2))
+                                     .toPoint());
+        QTRY_VERIFY_WITH_TIMEOUT(hoverBackground->isVisible(), 3000);
+        view.requestUpdate();
+        QTest::qWait(50);
+        const QImage hoverCapture = view.grabWindow();
+        QVERIFY(!hoverCapture.isNull());
+        for (const qreal sampleY : {
+                 topSpacing + 2 / dpr,
+                 header->height() / 2,
+                 header->height() - 2 / dpr,
+             }) {
+            const QColor rendered = sampleWindowPixelAt(
+                hoverCapture, clearSampleX, sampleY);
+            QVERIFY2(colorDistance(rendered, headerHoverColor) < 12,
+                     qPrintable(QStringLiteral(
+                         "sticky hover fill is not solid at y=%1: %2 vs %3")
+                         .arg(sampleY, 0, 'f', 3)
+                         .arg(rendered.name(), headerHoverColor.name())));
+        }
+    }
+
     void destroyedPreviewModelDetachesLayout() {
         MasonryLayout layout;
         layout.setContainedPreview(true);
@@ -452,6 +885,160 @@ private slots:
         QTest::qWait(50);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QCOMPARE(provider->leases.load(), 0);
+    }
+
+    void folderPreviewsSurviveGroupingChangeWithoutRegeneration() {
+        QQuickView view;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"photo.jpg"};
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("folder-grouping-change"));
+        QVERIFY(session);
+
+        QVariantList catalog;
+        catalog.append(QVariantMap{
+            {QStringLiteral("entryId"), QStringLiteral("parent")},
+            {QStringLiteral("index"), 0},
+            {QStringLiteral("name"), QStringLiteral("..")},
+            {QStringLiteral("isDir"), true},
+            {QStringLiteral("isImage"), false},
+        });
+        for (int index = 0; index < 12; ++index) {
+            auto folder = previewFolder(index);
+            folder[QStringLiteral("index")] = index + 1;
+            catalog.append(folder);
+        }
+        QVERIFY(session->applyExternalCatalog(
+            catalog, 1, {{QStringLiteral("currentPath"),
+                          QStringLiteral("/year")}}));
+
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(model);
+        model->setDirectoryCacheMode(1);
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(
+            view, session, QStringLiteral("folderGroupingSession")));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        panel->setSize({1400, 1200});
+        view.resize(1400, 1200);
+        panel->setProperty("listView", false);
+
+        const auto appearanceCount = [&] {
+            int count = 0;
+            for (int row = 1; row <= 12; ++row) {
+                auto *preview = findVisualItem(
+                    panel, QStringLiteral("galleryFolderPreview-%1").arg(row));
+                if (preview && preview->isVisible()
+                    && preview->property("hasUsablePreview").toBool()) {
+                    ++count;
+                }
+            }
+            return count;
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(appearanceCount(), 12, 10000);
+        const int enumerations = provider->enumerations.load();
+        QVERIFY(enumerations > 0);
+
+        QCOMPARE(provider->enumerations.load(), enumerations);
+
+        const QVariantList groups{
+            QVariantMap{
+                {QStringLiteral("key"), QStringLiteral("no-data")},
+                {QStringLiteral("title"), QStringLiteral("No data")},
+                {QStringLiteral("startIndex"), 1},
+                {QStringLiteral("count"), 12},
+            },
+        };
+        QVariantList reordered;
+        reordered.append(catalog.first());
+        for (int index = 11; index >= 0; --index) {
+            auto folder = catalog.at(index + 1).toMap();
+            folder[QStringLiteral("index")] = 12 - index;
+            reordered.append(folder);
+        }
+        QVERIFY(session->applyExternalCatalog(
+            reordered, 2, {{QStringLiteral("currentPath"),
+                            QStringLiteral("/year")}}));
+        QVERIFY(panel->setProperty("groupDescriptors", groups));
+        QVERIFY(panel->setProperty(
+            "groupStateKey", QStringLiteral(
+                "side=0|path=/year|mode=Modified")));
+        QTRY_COMPARE_WITH_TIMEOUT(appearanceCount(), 12, 10000);
+        QCOMPARE(provider->enumerations.load(), enumerations);
+    }
+
+    void folderPreviewsSurviveLayoutRewrapWithoutRegeneration() {
+        QQuickView view;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"photo.jpg"};
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("folder-layout-rewrap"));
+        QVERIFY(session);
+        QVariantList catalog;
+        for (int index = 0; index < 12; ++index) {
+            auto folder = previewFolder(index);
+            folder[QStringLiteral("index")] = index;
+            catalog.append(folder);
+        }
+        QVERIFY(session->applyExternalCatalog(
+            catalog, 1, {{QStringLiteral("currentPath"),
+                          QStringLiteral("/year")}}));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(model);
+        // This is the configuration in which a transient empty demand would
+        // retire the folder models instead of merely preserving them across
+        // a parent-layout rewrap.
+        model->setDirectoryCacheMode(0);
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(
+            view, session, QStringLiteral("folderLayoutRewrapSession")));
+        QVERIFY(panel);
+        panel->setSize({1400, 1200});
+        view.resize(1400, 1200);
+        panel->setProperty("listView", false);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+
+        const auto appearanceCount = [&] {
+            int count = 0;
+            for (int row = 0; row < 12; ++row) {
+                auto *preview = findVisualItem(
+                    panel, QStringLiteral("galleryFolderPreview-%1").arg(row));
+                if (preview && preview->isVisible()
+                    && preview->property("hasUsablePreview").toBool()) {
+                    ++count;
+                }
+            }
+            return count;
+        };
+        QTRY_COMPARE_WITH_TIMEOUT(appearanceCount(), 12, 10000);
+        const int enumerations = provider->enumerations.load();
+
+        // A hidden intermediate layout is equivalent to the disposable
+        // geometry pass used while the host applies a presentation update.
+        // It must not be interpreted as an explicit preview cancellation.
+        layout->setVisible(false);
+        layout->setWidth(layout->width() + 1);
+        layout->setWidth(layout->width() - 1);
+        layout->setVisible(true);
+        QTRY_COMPARE_WITH_TIMEOUT(appearanceCount(), 12, 10000);
+        QCOMPARE(provider->enumerations.load(), enumerations);
     }
 
     void folderPreviewIconsToGrid_data() {
@@ -1442,6 +2029,499 @@ private slots:
         QCOMPARE(navigation.value(QStringLiteral("targetIndex")).toInt(), 13);
     }
 
+    void groupedOverflowAndDisabling_data() {
+        QTest::addColumn<bool>("disableGroups");
+        QTest::newRow("grouped-overflow") << false;
+        QTest::newRow("disable-groups") << true;
+    }
+
+    void groupedOverflowAndDisabling() {
+        QFETCH(bool, disableGroups);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("grouped-scroll-transition");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(6), 1));
+        QObject *panel = createPanel(view, session, "groupedScrollSession", "masonry");
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        auto *scrollBar = panel->findChild<QQuickItem *>("galleryPanelScrollBar");
+        QVERIFY(layout && scrollBar);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        QVariantList groups;
+        for (int i = 0; i < 6; ++i)
+            groups.append(QVariantMap{{"key", QString::number(i)}, {"title", "Group"},
+                                      {"startIndex", i}, {"count", 1}});
+        QVERIFY(panel->setProperty("groupDescriptors", groups));
+        QTRY_VERIFY(layout->contentHeight() > layout->height());
+        QTRY_VERIFY(!layout->visibleGroupHeaders().isEmpty());
+        auto *layer = panel->findChild<QQuickItem *>("galleryGroupHeaderLayer");
+        QVERIFY(layer);
+        auto headerCount = [&]() {
+            int count = 0;
+            for (auto *item : layer->childItems())
+                if (item->objectName().startsWith("galleryGroupHeader-") && item->isVisible()) ++count;
+            return count;
+        };
+        QTRY_VERIFY(headerCount() > 0);
+        if (disableGroups) {
+            QVERIFY(panel->setProperty("groupDescriptors", QVariantList{}));
+            QTRY_VERIFY(layout->visibleGroupHeaders().isEmpty());
+            QTRY_COMPARE(headerCount(), 0);
+        } else {
+            QTRY_VERIFY(layout->needScroll());
+            QTRY_VERIFY(scrollBar->isVisible());
+            view.show();
+            QVERIFY(QTest::qWaitForWindowExposed(&view));
+            QTest::qWait(100);
+            const qreal barStart = scrollBar->mapToScene(QPointF()).x();
+            for (auto *header : layer->childItems()) {
+                if (!header->objectName().startsWith("galleryGroupHeader-") || !header->isVisible()) continue;
+                auto *count = header->findChild<QQuickItem *>(header->objectName() + "-count");
+                QVERIFY(count);
+                QVERIFY(count->mapToScene(QPointF(count->width(), 0)).x() <= barStart - 7.9);
+                auto *separator = findVisualItem(qobject_cast<QQuickItem *>(panel), header->objectName() + "-separator");
+                QVERIFY(separator);
+                QVERIFY(separator->mapToScene(QPointF(separator->width(), 0)).x() <= barStart - 3.9);
+                const QPointF origin = count->mapToScene(QPointF());
+                const qreal dpr = view.devicePixelRatio();
+                QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.01);
+                QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.01);
+                QCOMPARE(count->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+                QCOMPARE(count->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+            }
+            if (qEnvironmentVariableIsSet("F4_GROUP_GUTTER_CAPTURE"))
+                QVERIFY(view.grabWindow().save(qEnvironmentVariable("F4_GROUP_GUTTER_CAPTURE")));
+            auto *header = findVisualItem(qobject_cast<QQuickItem *>(panel), "galleryGroupHeader-gallery-0");
+            QVERIFY(header);
+            const QPoint excluded = QPointF(barStart - 2,
+                header->mapToScene(QPointF(0, header->height() / 2)).y()).toPoint();
+            QTest::mouseMove(&view, excluded);
+            QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, excluded);
+            QVERIFY2(!layout->isGroupCollapsed("0"), "Header accepted a click in its scrollbar clearance");
+            auto *hover = findVisualItem(qobject_cast<QQuickItem *>(panel), header->objectName() + "-hover");
+            QVERIFY(hover);
+            QVERIFY(!hover->isVisible());
+            QVERIFY(hover->mapToScene(QPointF(hover->width(), 0)).x() <= barStart - 3.9);
+            const QPoint inside = header->mapToScene(QPointF(20, header->height() / 2)).toPoint();
+            QTest::mouseMove(&view, inside);
+            QTRY_VERIFY(hover->isVisible());
+            QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, inside);
+            QTRY_VERIFY(layout->isGroupCollapsed("0"));
+        }
+        runtime->shutdown();
+    }
+
+    void groupedLayoutsRenderHeadersAndSkipCollapsedRows() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("grouped-layouts"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(9), 1,
+                                              {{"currentPath", "/grouped"}}));
+        session->setCurrentIndex(2);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("groupedLayoutsSession"),
+            QStringLiteral("masonry"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        QObject *iconResolver = panel->property("iconResolver")
+                                    .value<QObject *>();
+        QVERIFY(iconResolver);
+        iconResolver->setProperty(
+            "compactPrefix", QStringLiteral("qrc:/test/lucide"));
+
+        const QVariantList descriptors{
+            QVariantMap{{QStringLiteral("key"), QStringLiteral("alpha")},
+                        {QStringLiteral("title"), QStringLiteral("Alpha")},
+                        {QStringLiteral("startIndex"), 1},
+                        {QStringLiteral("count"), 3}},
+            QVariantMap{{QStringLiteral("key"), QStringLiteral("beta")},
+                        {QStringLiteral("title"), QStringLiteral("Beta")},
+                        {QStringLiteral("startIndex"), 4},
+                        {QStringLiteral("count"), 5}},
+        };
+        QVERIFY(panel->setProperty("groupDescriptors", descriptors));
+        QVERIFY(panel->setProperty(
+            "groupStateKey", QStringLiteral("side=0|path=/grouped|mode=Name")));
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        QTRY_COMPARE_WITH_TIMEOUT(layout->groupForIndex(2), 0, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!layout->visibleGroupHeaders().isEmpty(),
+                                 3000);
+        const QRectF leadingGeometry = layout->indexGeometry(0);
+        const QRectF firstGroupGeometry = layout->indexGeometry(1);
+        QVERIFY(leadingGeometry.isValid() && !leadingGeometry.isEmpty());
+        QVERIFY(firstGroupGeometry.isValid() && !firstGroupGeometry.isEmpty());
+        qreal firstHeaderHeight = 0;
+        for (const QVariant &value : layout->visibleGroupHeaders()) {
+            const QVariantMap header = value.toMap();
+            if (header.value(QStringLiteral("key")).toString()
+                == QStringLiteral("alpha")) {
+                firstHeaderHeight = header.value(
+                    QStringLiteral("height")).toReal();
+                break;
+            }
+        }
+        QVERIFY(firstHeaderHeight > 0);
+        QVERIFY2(firstGroupGeometry.top()
+                     >= leadingGeometry.bottom() + firstHeaderHeight - 0.01,
+                 qPrintable(QStringLiteral(
+                     "leadingTop=%1 leadingBottom=%2 firstGroupTop=%3 "
+                     "header=%4")
+                     .arg(leadingGeometry.top(), 0, 'f', 2)
+                     .arg(leadingGeometry.bottom(), 0, 'f', 2)
+                     .arg(firstGroupGeometry.top(), 0, 'f', 2)
+                     .arg(firstHeaderHeight)));
+        const qreal dpr = view.devicePixelRatio();
+        const auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        QVERIFY(panelItem);
+        for (const QString &key : {QStringLiteral("alpha"),
+                                    QStringLiteral("beta")}) {
+            auto *header = findVisualItem(
+                qobject_cast<QQuickItem *>(panel),
+                QStringLiteral("galleryGroupHeader-gallery-%1").arg(key));
+            QVERIFY(header);
+            auto *toggleIcon = findVisualItem(
+                qobject_cast<QQuickItem *>(panel),
+                header->objectName() + QStringLiteral("-chevron"));
+            QVERIFY(toggleIcon);
+            QVERIFY2(toggleIcon->property("source").isValid(),
+                     "group toggle must use an image, not a text glyph");
+            auto *separator = findVisualItem(
+                qobject_cast<QQuickItem *>(panel),
+                header->objectName() + QStringLiteral("-separator"));
+            QVERIFY(separator);
+            auto *title = findVisualItem(
+                qobject_cast<QQuickItem *>(panel),
+                header->objectName() + QStringLiteral("-title"));
+            QVERIFY(title);
+            QVERIFY2(title->x() < toggleIcon->x(),
+                     "group title must precede the expand/collapse icon");
+            QVERIFY2(toggleIcon->x() <= title->x()
+                         + title->property("implicitWidth").toReal() + 7,
+                     "group chevron must follow the text, not the panel edge");
+            const QPointF separatorInHeader = separator->mapToItem(header, QPointF());
+            QVERIFY2(separatorInHeader.y() >= 7.5,
+                     "group separator needs space above it");
+            const auto *layoutItem = qobject_cast<QQuickItem *>(layout);
+            QVERIFY(layoutItem);
+            const QPointF panelOrigin = panelItem->mapToItem(
+                view.contentItem(), QPointF());
+            const QPointF separatorOrigin = separator->mapToItem(
+                view.contentItem(), QPointF());
+            QVERIFY2(qAbs(separatorOrigin.x() - panelOrigin.x()) < 0.01,
+                     "group separator must start at the panel edge");
+            const qreal scrollInset = panel->property("groupHeaderRightInset").toReal();
+            const qreal lineEnd = panelOrigin.x() + panelItem->width()
+                - (scrollInset > 0 ? scrollInset + 4 : 0);
+            QVERIFY2(qAbs(separatorOrigin.x() + separator->width()
+                         - qRound(lineEnd * dpr) / dpr) < 0.01,
+                     "group separator must stop before the scrollbar, or at the panel edge without one");
+            for (const QString &leafSuffix : {QStringLiteral("-chevron"),
+                                               QStringLiteral("-title"),
+                                               QStringLiteral("-count")}) {
+                auto *leaf = findVisualItem(
+                    qobject_cast<QQuickItem *>(panel),
+                    header->objectName() + leafSuffix);
+                QVERIFY(leaf);
+                const QPointF origin = leaf->mapToItem(
+                    view.contentItem(), QPointF());
+                QVERIFY2(qAbs(origin.x() * dpr
+                              - qRound(origin.x() * dpr)) < 0.01,
+                         qPrintable(QStringLiteral("%1 x=%2")
+                             .arg(leaf->objectName())
+                             .arg(origin.x() * dpr, 0, 'f', 6)));
+                QVERIFY2(qAbs(origin.y() * dpr
+                              - qRound(origin.y() * dpr)) < 0.01,
+                         qPrintable(QStringLiteral("%1 y=%2")
+                             .arg(leaf->objectName())
+                             .arg(origin.y() * dpr, 0, 'f', 6)));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0))
+                             - origin, QPointF(1, 0));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1))
+                             - origin, QPointF(0, 1));
+            }
+        }
+        const QImage groupHeaderCapture = view.grabWindow();
+        QVERIFY(!groupHeaderCapture.isNull());
+        if (qEnvironmentVariableIsSet("F4_GROUP_HEADER_CAPTURE"))
+            QVERIFY(groupHeaderCapture.save(qEnvironmentVariable("F4_GROUP_HEADER_CAPTURE")));
+        const QStringList modes{
+            QStringLiteral("masonry"), QStringLiteral("details"),
+            QStringLiteral("grid"), QStringLiteral("icons"),
+            QStringLiteral("columns"),
+        };
+        for (const QString &mode : modes) {
+            panel->setProperty("presentationMode", mode);
+            QTRY_COMPARE_WITH_TIMEOUT(
+                layout->presentationMode(),
+                mode == QStringLiteral("masonry") ? MasonryLayout::Masonry
+                : mode == QStringLiteral("details") ? MasonryLayout::Details
+                : mode == QStringLiteral("grid") ? MasonryLayout::Grid
+                : mode == QStringLiteral("icons") ? MasonryLayout::Icons
+                : MasonryLayout::Columns,
+                3000);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                layout->groupForIndex(5) == 1
+                    && !layout->visibleGroupHeaders().isEmpty(), 3000);
+
+            const QRectF beforeCollapse = layout->indexGeometry(1);
+            const qreal contentBefore = layout->contentHeight();
+            QVERIFY(beforeCollapse.isValid() && !beforeCollapse.isEmpty());
+            QVERIFY(layout->setGroupCollapsed(QStringLiteral("alpha"), true));
+            QTRY_VERIFY_WITH_TIMEOUT(layout->indexGeometry(1).isEmpty(),
+                                     3000);
+            QVERIFY(layout->indexGeometry(4).isValid());
+            if (mode == QStringLiteral("columns")) {
+                QVERIFY(layout->contentHeight() <= contentBefore);
+            } else {
+                QVERIFY(layout->contentHeight() < contentBefore);
+            }
+            QCOMPARE(layout->nearestVisibleIndex(1, true), 4);
+
+            const auto navigation = layout->navigationTarget(
+                0, mode == QStringLiteral("columns")
+                       ? MasonryLayout::NavigateRight
+                       : MasonryLayout::NavigateDown);
+            const int navigationTarget = navigation.value(
+                QStringLiteral("targetIndex")).toInt();
+            QVERIFY(navigationTarget >= 4 && navigationTarget < 9);
+            QVERIFY(!layout->indexGeometry(navigationTarget).isEmpty());
+
+            QVERIFY(layout->setGroupCollapsed(QStringLiteral("alpha"), false));
+            QTRY_VERIFY_WITH_TIMEOUT(!layout->indexGeometry(1).isEmpty(),
+                                     3000);
+            QCOMPARE(layout->nearestVisibleIndex(1, true), 2);
+        }
+
+        panel->setProperty("presentationMode", QStringLiteral("details"));
+        QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
+                                  MasonryLayout::Details, 3000);
+        session->setCurrentIndex(2);
+        QVariant moved;
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "toggleGalleryGroup", Qt::DirectConnection,
+            Q_RETURN_ARG(QVariant, moved),
+            Q_ARG(QVariant, QVariant(QStringLiteral("alpha")))));
+        QVERIFY(moved.toBool());
+        QTRY_COMPARE_WITH_TIMEOUT(session->currentIndex(), 4, 3000);
+        QVERIFY(layout->isGroupCollapsed(QStringLiteral("alpha")));
+        QVERIFY(layout->indexGeometry(2).isEmpty());
+        QCOMPARE(session->collapsedGroupKeys(
+                     QStringLiteral("side=0|path=/grouped|mode=Name")),
+                 QStringList{QStringLiteral("alpha")});
+
+        layout->setGroupStateKey(QStringLiteral("side=0|path=/other|mode=Name"));
+        layout->setGroupStateKey(
+            QStringLiteral("side=0|path=/grouped|mode=Name"));
+        QVERIFY(layout->isGroupCollapsed(QStringLiteral("alpha")));
+
+        QVERIFY(layout->setGroupCollapsed(QStringLiteral("alpha"), false));
+        QTRY_VERIFY_WITH_TIMEOUT(!layout->indexGeometry(2).isEmpty(), 3000);
+        QVERIFY(session->collapsedGroupKeys(
+            QStringLiteral("side=0|path=/grouped|mode=Name")).isEmpty());
+    }
+
+    void groupedMasonryKeyboardNavigationSkipsSectionHeaders() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("grouped-masonry-keyboard-navigation"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(9), 1,
+                                              {{"currentPath", "/grouped"}}));
+
+        const QVariantList descriptors{
+            QVariantMap{{QStringLiteral("key"), QStringLiteral("alpha")},
+                        {QStringLiteral("title"), QStringLiteral("Alpha")},
+                        {QStringLiteral("startIndex"), 1},
+                        {QStringLiteral("count"), 3}},
+            QVariantMap{{QStringLiteral("key"), QStringLiteral("beta")},
+                        {QStringLiteral("title"), QStringLiteral("Beta")},
+                        {QStringLiteral("startIndex"), 4},
+                        {QStringLiteral("count"), 5}},
+        };
+        session->setCurrentIndex(3);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("groupedMasonryKeyboardSession"),
+            QStringLiteral("masonry"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        QVERIFY(panel->setProperty("groupDescriptors", descriptors));
+        QVERIFY(panel->setProperty(
+            "groupStateKey", QStringLiteral(
+                "side=0|path=/grouped|mode=Name")));
+        QTRY_COMPARE_WITH_TIMEOUT(layout->currentIndex(), 3, 3000);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->groupForIndex(3), 0, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!layout->visibleGroupHeaders().isEmpty(),
+                                 3000);
+
+        const QRectF current = layout->indexGeometry(3);
+        QVERIFY(current.isValid() && !current.isEmpty());
+        QCOMPARE(layout->indexAt(current.center().x(), current.bottom() + 2),
+                 -1);
+
+        QVariant navigationResult;
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "navigationTargetForKey", Qt::DirectConnection,
+            Q_RETURN_ARG(QVariant, navigationResult),
+            Q_ARG(QVariant, QVariant(Qt::Key_Down)),
+            Q_ARG(QVariant, QVariant(false))));
+        const int firstDown = navigationResult.toInt();
+        const QRectF firstDownGeometry = layout->indexGeometry(firstDown);
+        QVERIFY2(layout->groupForIndex(firstDown) == 1,
+                 qPrintable(QStringLiteral(
+                     "Down crossed header to source index %1 in group %2")
+                     .arg(firstDown)
+                     .arg(layout->groupForIndex(firstDown))));
+        QVERIFY(firstDownGeometry.left() <= current.center().x()
+                && firstDownGeometry.right() >= current.center().x());
+
+        session->setCurrentIndex(4);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->currentIndex(), 4, 3000);
+        const QRectF upwardCurrent = layout->indexGeometry(4);
+        navigationResult.clear();
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "navigationTargetForKey", Qt::DirectConnection,
+            Q_RETURN_ARG(QVariant, navigationResult),
+            Q_ARG(QVariant, QVariant(Qt::Key_Up)),
+            Q_ARG(QVariant, QVariant(false))));
+        const int firstUp = navigationResult.toInt();
+        QVERIFY2(layout->groupForIndex(firstUp) == 0,
+                 qPrintable(QStringLiteral(
+                     "Up crossed header to source index %1 in group %2")
+                     .arg(firstUp)
+                     .arg(layout->groupForIndex(firstUp))));
+        const QRectF firstUpGeometry = layout->indexGeometry(firstUp);
+        QVERIFY(firstUpGeometry.left() <= upwardCurrent.center().x()
+                && firstUpGeometry.right() >= upwardCurrent.center().x());
+
+        // The item before the last alpha source row is intentionally not the
+        // last source index. When the preserved X lands in the section header,
+        // Down must enter beta at that X instead of walking alpha source order.
+        session->setCurrentIndex(2);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->currentIndex(), 2, 3000);
+        const QRectF boundaryCurrent = layout->indexGeometry(2);
+        QVERIFY(boundaryCurrent.isValid() && !boundaryCurrent.isEmpty());
+        QCOMPARE(layout->indexAt(boundaryCurrent.center().x(),
+                                 boundaryCurrent.bottom() + 2), -1);
+        navigationResult.clear();
+        QVERIFY(QMetaObject::invokeMethod(
+            panel, "navigationTargetForKey", Qt::DirectConnection,
+            Q_RETURN_ARG(QVariant, navigationResult),
+            Q_ARG(QVariant, QVariant(Qt::Key_Down)),
+            Q_ARG(QVariant, QVariant(false))));
+        const int boundaryDown = navigationResult.toInt();
+        QVERIFY2(layout->groupForIndex(boundaryDown) == 1,
+                 qPrintable(QStringLiteral(
+                     "Down crossed header to source index %1 in group %2")
+                     .arg(boundaryDown)
+                     .arg(layout->groupForIndex(boundaryDown))));
+    }
+
+    void groupedItemsRemainMouseInteractive() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("grouped-mouse-interaction"));
+        QVERIFY(session);
+
+        QVariantList catalog = plainCatalog(9);
+        QVariantMap parent = catalog.at(0).toMap();
+        parent[QStringLiteral("name")] = QStringLiteral("..");
+        parent[QStringLiteral("isDir")] = true;
+        parent[QStringLiteral("isImage")] = false;
+        catalog[0] = parent;
+        QVERIFY(session->applyExternalCatalog(
+            catalog, 1, {{QStringLiteral("currentPath"),
+                          QStringLiteral("/grouped-mouse")}}));
+        session->setCurrentIndex(0);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("groupedMouseSession"),
+            QStringLiteral("masonry"));
+        QVERIFY(panel);
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        QVERIFY(panelItem);
+        QVERIFY(layout);
+
+        const QVariantList descriptors{
+            QVariantMap{{QStringLiteral("key"), QStringLiteral("alpha")},
+                        {QStringLiteral("title"), QStringLiteral("Alpha")},
+                        {QStringLiteral("startIndex"), 1},
+                        {QStringLiteral("count"), 3}},
+            QVariantMap{{QStringLiteral("key"), QStringLiteral("beta")},
+                        {QStringLiteral("title"), QStringLiteral("Beta")},
+                        {QStringLiteral("startIndex"), 4},
+                        {QStringLiteral("count"), 5}},
+        };
+        QVERIFY(panel->setProperty("groupDescriptors", descriptors));
+        QVERIFY(panel->setProperty(
+            "groupStateKey", QStringLiteral(
+                "side=0|path=/grouped-mouse|mode=Name")));
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 9, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(layout->groupForIndex(1) == 0
+                                     && layout->groupForIndex(5) == 1,
+                                 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(!layout->visibleGroupHeaders().isEmpty(),
+                                 3000);
+
+        const auto scenePointForIndex = [&](int index, QPointF *scenePoint) {
+            const QRectF geometry = layout->indexGeometry(index);
+            if (!geometry.isValid() || geometry.isEmpty())
+                return false;
+            *scenePoint = layout->mapToScene(QPointF(
+                geometry.center().x(),
+                geometry.center().y() - layout->contentY()));
+            return true;
+        };
+        const auto verifyMouseTarget = [&](int index) {
+            const QRectF geometry = layout->indexGeometry(index);
+            QVERIFY(geometry.isValid() && !geometry.isEmpty());
+            const qreal targetContentY = qBound<qreal>(
+                0, geometry.center().y() - layout->height() / 2,
+                qMax<qreal>(0, layout->contentHeight() - layout->height()));
+            layout->setContentY(targetContentY);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                layout->contentY() == targetContentY, 1000);
+            QPointF scenePoint;
+            QVERIFY(scenePointForIndex(index, &scenePoint));
+            const QPoint point = scenePoint.toPoint();
+            QTest::mouseMove(&view, QPoint(1, 1));
+            QTest::mouseMove(&view, point);
+            QTRY_COMPARE_WITH_TIMEOUT(
+                panel->property("hoveredIndex").toInt(), index, 1000);
+            QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, point);
+            QTRY_COMPARE_WITH_TIMEOUT(session->currentIndex(), index, 1000);
+        };
+
+        verifyMouseTarget(0);
+        verifyMouseTarget(1);
+        verifyMouseTarget(5);
+    }
+
     void keyboardRevealKeepsCompactLeadingEdgesAligned() {
         QQuickView view;
         ZoinGallery::RuntimeOptions options;
@@ -2219,7 +3299,7 @@ private slots:
         }
     }
 
-    void shiftRangeNavigationStaysAdditiveWhenAnchorIsSelectedInEveryMode() {
+    void shiftRangeNavigationRemovesWhenAnchorIsSelectedInEveryMode() {
         const QStringList modes = {
             QStringLiteral("masonry"), QStringLiteral("grid"),
             QStringLiteral("icons"), QStringLiteral("details"),
@@ -2259,9 +3339,8 @@ private slots:
             const QString anchorId = session->entryIdAt(40);
             QVERIFY(!anchorId.isEmpty());
             for (Qt::Key key : keys) {
-                // Original MasonryMode always starts an additive range
-                // preview. A selected anchor therefore remains selected while
-                // unselected rows traversed by the cursor are added.
+                // A selected anchor fixes this gesture to removal, including
+                // when the cursor crosses rows that are not selected.
                 QVERIFY(session->applyExternalState(
                     anchorId, 40, QStringList{anchorId},
                     ++selectionRevision));
@@ -2284,7 +3363,7 @@ private slots:
                 QCOMPARE(transactionSpy.size(), 0);
                 QVERIFY(panel->property(
                     "keyboardShiftSelectionActive").toBool());
-                QVERIFY(panel->property(
+                QVERIFY(!panel->property(
                     "keyboardShiftSelectionAdds").toBool());
 
                 QVariant anchorSelected;
@@ -2293,7 +3372,12 @@ private slots:
                     Q_RETURN_ARG(QVariant, anchorSelected),
                     Q_ARG(QVariant, anchorId),
                     Q_ARG(QVariant, true)));
-                QVERIFY2(anchorSelected.toBool(), qPrintable(mode));
+                QVERIFY2(!anchorSelected.toBool(), qPrintable(mode));
+                // Moving onto an unselected target must not change the mode
+                // while Shift is still held.
+                QCoreApplication::sendEvent(&view, &keyPress);
+                QVERIFY(!panel->property("keyboardShiftSelectionAdds").toBool());
+
 
                 QKeyEvent keyRelease(QEvent::KeyRelease, key,
                                      Qt::ShiftModifier);
@@ -2304,25 +3388,20 @@ private slots:
                 QCoreApplication::sendEvent(&view, &shiftRelease);
                 QVERIFY(!panel->property(
                     "keyboardShiftSelectionActive").toBool());
-                QStringList acknowledged{anchorId};
-                if (!transactionSpy.isEmpty()) {
-                    QCOMPARE(transactionSpy.size(), 1);
-                    const QVariantList changes =
-                        transactionSpy.constFirst().at(0).toList();
-                    for (const QVariant &value : changes) {
-                        const QVariantMap change = value.toMap();
-                        QVERIFY(change.value(
-                            QStringLiteral("selected")).toBool());
-                        const QString id = change.value(
-                            QStringLiteral("entryId")).toString();
-                        QVERIFY(id != anchorId);
-                        acknowledged.push_back(id);
-                    }
-                }
+                QCOMPARE(transactionSpy.size(), 1);
+                const QVariantList changes = transactionSpy.constFirst().at(0).toList();
+                QCOMPARE(changes.size(), 1);
+                QCOMPARE(changes.first().toMap().value("entryId").toString(), anchorId);
+                QVERIFY(!changes.first().toMap().value("selected").toBool());
+                const QStringList acknowledged;
                 QVERIFY(session->applyExternalState(
                     session->cursorEntryId(), session->currentIndex(),
                     acknowledged,
                     ++selectionRevision));
+                // A new physical Shift press starts a fresh gesture.
+                QCoreApplication::sendEvent(&view, &shiftPress);
+                QVERIFY(panel->property("keyboardShiftSelectionAdds").toBool());
+                QCoreApplication::sendEvent(&view, &shiftRelease);
             }
         }
     }
@@ -5873,6 +6952,123 @@ private slots:
         }
     }
 
+    void thumbnailsDisabledIgnoreLateImageDimensions_data() {
+        QTest::addColumn<QString>("mode");
+        for (const auto &mode : {"grid", "icons", "details", "columns"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void thumbnailsDisabledIgnoreLateImageDimensions() {
+        QFETCH(QString, mode);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("late-size.png"));
+        QImage fixtureImage(160, 80, QImage::Format_ARGB32_Premultiplied);
+        fixtureImage.fill(QColor(QStringLiteral("#2478b9")));
+        QVERIFY(fixtureImage.save(path));
+
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("thumbnail-off-%1").arg(mode));
+        QVERIFY(session);
+        session->setThumbnailsEnabled(false);
+        QVERIFY(!session->thumbnailsEnabled());
+        QVERIFY(session->applyExternalCatalog({catalogEntry(0, path)}, 1, {
+            {QStringLiteral("metadataDeferred"), true}}));
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("thumbnailOffSession"), mode);
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 1, 3000);
+        auto *file = session->model()->index(0, 0)
+            .data(FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(file);
+        auto *thumbnail = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryThumbnail-0"));
+        auto *fallback = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryFallbackIcon-0"));
+        QTRY_VERIFY(thumbnail && fallback);
+        QTRY_VERIFY(fallback->isVisible());
+        QVERIFY(thumbnail->property("source").toUrl().isEmpty());
+        const QRectF fixedGeometry = layout->indexGeometry(0);
+        panel->setProperty("presentationMode", QStringLiteral("masonry"));
+        QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
+                                  MasonryLayout::Masonry, 3000);
+        const QRectF expectedDisabledGeometry = layout->indexGeometry(0);
+        panel->setProperty("presentationMode", mode);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            layout->presentationMode() != MasonryLayout::Masonry, 3000);
+        QCOMPARE(layout->indexGeometry(0), fixedGeometry);
+
+        ImageInfo info;
+        info.path = QFileInfo(path).absoluteFilePath();
+        info.requestNamespace = session->sessionId();
+        info.imageSize = QSize(160, 80);
+        info.fileSize = QFileInfo(path).size();
+        info.lastModified = QFileInfo(path).lastModified();
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        decoder->imagesInfoReady({info});
+        QTRY_VERIFY_WITH_TIMEOUT(file->fullSize().isValid(), 3000);
+        QCOMPARE(thumbnail->property("source").toUrl(), QUrl());
+        QCOMPARE(layout->indexGeometry(0), fixedGeometry);
+
+        panel->setProperty("presentationMode", QStringLiteral("masonry"));
+        QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
+                                  MasonryLayout::Masonry, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(layout->indexGeometry(0).isValid(), 3000);
+        const QRectF disabledGeometry = layout->indexGeometry(0);
+        QCOMPARE(disabledGeometry, expectedDisabledGeometry);
+        QVERIFY(thumbnail->property("source").toUrl().isEmpty());
+
+        const qreal dpr = view.devicePixelRatio();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        const QPointF fallbackOrigin = fallback->mapToScene(QPointF());
+        for (const qreal coordinate : {fallbackOrigin.x() * dpr,
+                                       fallbackOrigin.y() * dpr}) {
+            QVERIFY2(qAbs(coordinate - qRound(coordinate)) < 0.01,
+                     qPrintable(QStringLiteral("%1 at %2 physical px")
+                         .arg(fallback->objectName()).arg(coordinate)));
+        }
+        QCOMPARE(fallback->mapToScene(QPointF(1, 0)) - fallbackOrigin,
+                 QPointF(1, 0));
+        QCOMPARE(fallback->mapToScene(QPointF(0, 1)) - fallbackOrigin,
+                 QPointF(0, 1));
+        const QImage frame = view.grabWindow();
+        QVERIFY(!frame.isNull());
+        const QRect iconRect(
+            qRound(fallbackOrigin.x() * dpr),
+            qRound(fallbackOrigin.y() * dpr),
+            qRound(fallback->width() * dpr),
+            qRound(fallback->height() * dpr));
+        QVERIFY(frame.rect().contains(iconRect));
+        const QImage iconCapture = frame.copy(iconRect);
+        if (!qEnvironmentVariable("F4_THUMBNAIL_POLICY_CAPTURE").isEmpty())
+            QVERIFY(iconCapture.save(qEnvironmentVariable(
+                "F4_THUMBNAIL_POLICY_CAPTURE")));
+        QSet<QRgb> renderedColors;
+        for (int y = 0; y < iconCapture.height(); ++y) {
+            for (int x = 0; x < iconCapture.width(); ++x)
+                renderedColors.insert(iconCapture.pixel(x, y));
+        }
+        QVERIFY(renderedColors.size() > 1);
+
+        session->setThumbnailsEnabled(true);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            layout->indexGeometry(0).size()
+                != expectedDisabledGeometry.size(),
+            3000);
+        runtime->shutdown();
+    }
+
     void columnsTextUsesPhysicalPixelGrid() {
         QQuickView view;
         ZoinGallery::RuntimeOptions options;
@@ -7699,6 +8895,22 @@ private slots:
         QVERIFY(layout && model);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), logicalCount, 3000);
         QTRY_VERIFY_WITH_TIMEOUT(!layout->visibleIndexes().isEmpty(), 3000);
+        const QVariantList groups{
+            QVariantMap{{QStringLiteral("key"), QStringLiteral("first")},
+                        {QStringLiteral("title"), QStringLiteral("First")},
+                        {QStringLiteral("startIndex"), 1},
+                        {QStringLiteral("count"), 14999}},
+            QVariantMap{{QStringLiteral("key"), QStringLiteral("second")},
+                        {QStringLiteral("title"), QStringLiteral("Second")},
+                        {QStringLiteral("startIndex"), 15000},
+                        {QStringLiteral("count"), 15000}},
+        };
+        QVERIFY(panel->setProperty("groupDescriptors", groups));
+        QVERIFY(panel->setProperty(
+            "groupStateKey", QStringLiteral("sparse-presentation-groups")));
+        QTRY_VERIFY_WITH_TIMEOUT(layout->groupForIndex(1) == 0
+                                     && !layout->visibleGroupHeaders().isEmpty(),
+                                 3000);
 
         const QList<QPair<QString, MasonryLayout::PresentationMode>> modes{
             {QStringLiteral("masonry"), MasonryLayout::Masonry},
@@ -7749,6 +8961,11 @@ private slots:
                     session->entryNameAt(row), 3000);
             }
         }
+
+        QVERIFY(layout->setGroupCollapsed(QStringLiteral("first"), true));
+        QTRY_VERIFY_WITH_TIMEOUT(layout->indexGeometry(1).isEmpty(), 3000);
+        QCOMPARE(layout->nearestVisibleIndex(1, true), 15000);
+        QVERIFY(layout->setGroupCollapsed(QStringLiteral("first"), false));
 
         // The logical catalog is large, but only the page supplied by the
         // host and the bounded active/overscan window may be materialized.
@@ -7813,6 +9030,11 @@ private slots:
             3000);
 
         // A provisional streaming count must not expose a transient thumb.
+        auto *handle = scrollBar->findChild<QQuickItem *>(
+            QStringLiteral("galleryScrollBarHandle"));
+        QVERIFY(handle);
+        qInfo() << "large catalog thumb height" << handle->height();
+        QVERIFY2(handle->height() >= 16, "Scrollbar thumb disappears in large directories");
         panel->setProperty("scrollBarsReady", false);
         QTRY_VERIFY_WITH_TIMEOUT(!scrollBar->isVisible(), 3000);
         panel->setProperty("scrollBarsReady", true);
@@ -7889,9 +9111,15 @@ private slots:
         const qreal leftInset = layout->x();
         const qreal rightInset = panelItem->width()
             - layout->x() - layout->width();
-        QCOMPARE(leftInset, 6.0);
+        QCOMPARE(leftInset, 0.0);
         QCOMPARE(rightInset, leftInset);
+        QCOMPARE(layout->paddingLeft(), 6.0);
+        QCOMPARE(layout->paddingRight(), 6.0);
+        QCOMPARE(widthWithoutScrollBar, panelItem->width());
 
+        // The embedded host adds eight pixels of internal panel padding.
+        QVERIFY(panel->setProperty("contentHorizontalInset", 8.0));
+        QTRY_COMPARE(layout->paddingRight(), 14.0);
         QVERIFY(session->applyExternalCatalog(plainCatalog(200), 2));
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 200, 3000);
         QTRY_VERIFY_WITH_TIMEOUT(scrollBar->isVisible(), 3000);
@@ -7899,8 +9127,36 @@ private slots:
         QCOMPARE(layout->width(), widthWithoutScrollBar);
         QCOMPARE(panelItem->width() - layout->x() - layout->width(),
                  rightInset);
-        QCOMPARE(scrollBar->x() + scrollBar->width(),
-                 panelItem->width() + 8.0);
+        const qreal tileEdge = panelItem->width() - layout->paddingRight()
+            - layout->spacing() / 2.0;
+        const qreal gapCenter = (tileEdge + panelItem->width()) / 2;
+        QVERIFY(qAbs(scrollBar->x() + scrollBar->width() / 2 - gapCenter)
+                <= 0.5 / view.devicePixelRatio());
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QTest::qWait(100);
+        const qreal dpr = view.devicePixelRatio();
+        for (const auto &name : {"galleryScrollBarHandle", "galleryScrollBarTrack"}) {
+            auto *leaf = scrollBar->findChild<QQuickItem *>(QString::fromLatin1(name));
+            QVERIFY(leaf);
+            const QPointF origin = leaf->mapToScene(QPointF());
+            qInfo() << name << "DPR" << dpr << "physical origin" << origin * dpr;
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.01);
+            QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        }
+        QVERIFY(!view.grabWindow().isNull());
+        if (qEnvironmentVariableIsSet("F4_SCROLLBAR_CAPTURE"))
+            QVERIFY(view.grabWindow().save(qEnvironmentVariable("F4_SCROLLBAR_CAPTURE")));
+        const QPoint grab = scrollBar->mapToScene(QPointF(scrollBar->width() / 2, 10)).toPoint();
+        QTest::mouseMove(&view, grab);
+        QTRY_VERIFY(scrollBar->property("hovered").toBool());
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, grab);
+        QTRY_VERIFY(scrollBar->property("pressed").toBool());
+        QTest::mouseMove(&view, grab + QPoint(0, 80));
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, grab + QPoint(0, 80));
+        QTRY_VERIFY(layout->contentY() > 0);
 
         runtime->shutdown();
     }
@@ -7941,8 +9197,8 @@ private slots:
                      - panelItem->height()) < 0.01,
                 3000);
 
-            // The viewport still owns its six-pixel tile inset; the scrollbar
-            // is deliberately outside that inset and flush with the panel.
+        // The viewport still owns its six-pixel tile inset; the scrollbar
+        // is deliberately outside that inset and flush with the panel.
             QVERIFY(qAbs(panelItem->height()
                          - (layout->y() + layout->height()) - 6.0) < 0.01);
         }

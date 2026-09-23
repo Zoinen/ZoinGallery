@@ -341,6 +341,7 @@ void DecodeManager::readVersionedImagesInfo(
         info.isLast = index == requests.size() - 1;
         info.isFromEmbeddedView = isFromEmbeddedView;
         info.highPriority = highPriority || request.highPriority;
+        info.panelThumbnailRequest = request.panelThumbnailRequest;
         highPriorityCount += info.highPriority ? 1 : 0;
         info.requestNamespace = requestNamespace;
         candidates.append(std::move(info));
@@ -453,7 +454,8 @@ void DecodeManager::queueVersionedImageInfoSourceReads(
             request.requestNamespace, request.sourceVersionToken,
             request.source, _imageSourceProvider,
             false,
-            cacheWritesEnabled(_imageCacheMode));
+            cacheWritesEnabled(_imageCacheMode),
+            request.panelThumbnailRequest);
         runner->connections.append(
             connect(runner, &ImageInfoReadRunner::imageInfoReady,
                     this, &DecodeManager::onImageInfoReady));
@@ -786,6 +788,33 @@ void DecodeManager::cancelAllDecodeViewerRunners() {
 void DecodeManager::cancelThumbnailRequests(
     const QString &requestNamespace) {
     cancelDecodeRequests(requestNamespace, false);
+}
+
+void DecodeManager::cancelPanelThumbnailRequests(
+    const QString &requestNamespace) {
+    if (requestNamespace.isEmpty()) {
+        return;
+    }
+    const auto cancelIfOwned = [&requestNamespace](Runner *runner) {
+        return runner
+            && runner->requestNamespace() == requestNamespace
+            && runner->isPanelThumbnailRequest();
+    };
+    for (WorkerInfo &worker : _workers) {
+        if (cancelIfOwned(worker.runner)) {
+            worker.runner->cancel();
+        }
+    }
+    for (int index = _taskQueue.size() - 1; index >= 0; --index) {
+        Runner *runner = _taskQueue.at(index);
+        if (!cancelIfOwned(runner)) {
+            continue;
+        }
+        _taskQueue.removeAt(index);
+        runner->cancel();
+        runner->deleteLater();
+    }
+    processQueue();
 }
 
 void DecodeManager::cancelViewerRequests(

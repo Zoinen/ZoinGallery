@@ -15,6 +15,7 @@ Item {
     required property string presentationMode
     required property real detailsScrollBarWidth
     required property real devicePixelRatio
+    readonly property real verticalScrollBarInset: panelChrome.verticalScrollBarInset
 
     signal seekRequested(real contentOffset)
 
@@ -36,6 +37,7 @@ Item {
     }
 
     GalleryPanelChrome {
+        id: panelChrome
         anchors.fill: parent
         layout: overlays.layout
         theme: overlays.theme

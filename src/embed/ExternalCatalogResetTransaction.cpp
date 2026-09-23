@@ -162,8 +162,8 @@ void ExternalCatalogResetTransaction::initializeRow(
            && FileListModel::isImage(entry.name));
     entry.thumbnailKind = map.value(
         QStringLiteral("thumbnailKind")).toString().trimmed().toLower();
-    entry.image = entry.image
-        || entry.thumbnailKind == QStringLiteral("video");
+    if (entry.thumbnailKind == QStringLiteral("video"))
+        entry.image = zoinVideoThumbnailsEnabled();
     entry.selected = map.value(QStringLiteral("selected")).toBool();
     const auto directorySource = map.value(QStringLiteral("directorySource")).toMap();
     entry.directorySource = {directorySource.value(QStringLiteral("resourceId")).toString(),
@@ -199,7 +199,7 @@ void ExternalCatalogResetTransaction::initializeRow(
         : QDateTime{};
     entry.imageInfo.fileSize = entry.size;
     entry.imageInfo.thumbnailKind = entry.thumbnailKind;
-    if (entry.thumbnailKind == QStringLiteral("video")) {
+    if (entry.image && entry.thumbnailKind == QStringLiteral("video")) {
         entry.imageInfo.imageSize = QSize(16, 9);
         entry.originalSize = entry.imageInfo.imageSize;
         entry.metadataSettled = true;
@@ -293,7 +293,7 @@ void ExternalCatalogResetTransaction::updateMaterializedItem(
               entry.mtimeNs / 1000000, QTimeZone::UTC)
         : QDateTime{};
     info.fileSize = entry.size;
-    if (entry.thumbnailKind == QStringLiteral("video")) {
+    if (entry.image && entry.thumbnailKind == QStringLiteral("video")) {
         info.imageSize = QSize(16, 9);
         entry.originalSize = info.imageSize;
         entry.metadataSettled = true;
@@ -503,6 +503,12 @@ void ExternalCatalogResetTransaction::pruneVersionedPipelineState() {
          it != m_model._metadataPendingVersions.end();) {
         it = retainedVersion(it.key(), it.value())
             ? std::next(it) : m_model._metadataPendingVersions.erase(it);
+    }
+    for (auto it = m_model._panelMetadataPendingIdentities.begin();
+         it != m_model._panelMetadataPendingIdentities.end();) {
+        it = retainedVersion(it.key(), it.value())
+            ? std::next(it)
+            : m_model._panelMetadataPendingIdentities.erase(it);
     }
     for (auto it = m_model._metadataResolvedPaths.begin();
          it != m_model._metadataResolvedPaths.end();) {

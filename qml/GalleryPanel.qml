@@ -19,6 +19,9 @@ FocusScope {
     readonly property bool controllerReady:
         controller !== null && controller.backend !== null
     property GalleryIconResolver iconResolver: GalleryIconResolver {}
+    // Optional host provider used when the embedding application needs a
+    // rasterized Lucide icon whose stroke follows the rendered icon size.
+    property var iconProvider: null
     property GalleryThemePalette theme: GalleryThemePalette {}
     // Embedders can replace or suppress the standalone gallery wording while
     // retaining the same authoritative zero-row condition.
@@ -36,6 +39,14 @@ FocusScope {
     property GalleryPresentationMetrics metrics: GalleryPresentationMetrics {}
     property var hostCapabilities: ({})
     property real devicePixelRatio: 1.0
+    // Insets supplied by an embedding panel belong to this surface rather
+    // than to the Loader that hosts it. This lets the viewport own the gap
+    // for separators, hit testing, and future panel-local overlays.
+    property real contentHorizontalInset: 0
+    // A panel theme may deliberately use a transparent surface. Sticky group
+    // headers still need an opaque fill so file content cannot show through.
+    property color groupHeaderBackdropColor: "#17191d"
+    readonly property real groupHeaderRightInset: panelOverlays.verticalScrollBarInset
     readonly property font iconLabelFont: galleryViewport.iconLabelFont
     property alias galleryLayout: galleryViewport.layout
     property alias detailsHeader: galleryViewport.detailsHeader
@@ -74,6 +85,15 @@ FocusScope {
     }
     property string presentationMode: "masonry"
     property bool applyingPresentationMode: false
+    // Group descriptors are supplied by the semantic host. They remain
+    // source-index ranges, so the reusable renderer never reclassifies files.
+    property var groupDescriptors: []
+    property string groupStateKey: ""
+    property string groupingMode: "None"
+    property bool groupingReverse: false
+    property bool groupingFoldersSeparately: false
+    property string groupHeaderObjectSuffix: "gallery"
+    property int pendingLocalGroupCursor: -1
     // Saved zoom is bounded by the five presentation modes.
     property var presentationDensities: ({})
     // All five presentations expose the same zoom paths. Compact text modes
@@ -348,6 +368,67 @@ FocusScope {
     signal consoleMouseButtonRequested(real x, real y, int button, bool down,
                                        int modifiers)
 
+    function groupDescriptorForKey(key) {
+        for (var i = 0; i < groupDescriptors.length; ++i) {
+            if (String(groupDescriptors[i].key || "") === String(key))
+                return groupDescriptors[i]
+        }
+        return null
+    }
+
+    function toggleGalleryGroup(key) {
+        if (!galleryLayout || !galleryLayout.isGroupCollapsed)
+            return false
+        const descriptor = groupDescriptorForKey(key)
+        if (!descriptor)
+            return false
+        const collapsed = galleryLayout.isGroupCollapsed(String(key))
+        if (!collapsed) {
+            const current = Number(controller.currentIndex)
+            const currentGroup = galleryLayout.groupForIndex(current)
+            if (currentGroup >= 0
+                    && String(groupDescriptors[currentGroup].key || "")
+                       === String(key)) {
+                finishKeyboardSelectionGesture()
+                let target = galleryLayout.nearestVisibleIndexOutsideGroup(
+                            current, String(key), true)
+                if (target < 0)
+                    target = galleryLayout.nearestVisibleIndexOutsideGroup(
+                                current, String(key), false)
+                if (target < 0)
+                    return false
+                pendingLocalGroupCursor = target
+                moveCursor(target, false, false, false, false, 0)
+            }
+        }
+        return galleryLayout.setGroupCollapsed(String(key), !collapsed)
+    }
+
+    function expandGroupForIndex(index) {
+        if (pendingLocalGroupCursor === Number(index)) {
+            pendingLocalGroupCursor = -1
+            return
+        }
+        const group = galleryLayout.groupForIndex(Number(index))
+        if (group < 0 || group >= groupDescriptors.length)
+            return
+        const key = String(groupDescriptors[group].key || "")
+        if (galleryLayout.isGroupCollapsed(key))
+            galleryLayout.setGroupCollapsed(key, false)
+    }
+
+    // Convert an arithmetic navigation result into a source row that is
+    // currently visible. The inclusive form lets Home/End and page probes
+    // recover from a target landing inside a collapsed section without
+    // scanning the catalog in QML.
+    function visibleNavigationIndex(index, forward) {
+        if (!galleryLayout || !galleryLayout.nearestVisibleIndex)
+            return index
+        const base = Number(index) - (forward ? 1 : -1)
+        const visible = galleryLayout.nearestVisibleIndex(base, forward)
+        return visible >= 0 ? visible : index
+    }
+
     readonly property color backgroundColor: theme.panelBackground
     readonly property color foregroundColor: theme.text
     property color quickSearchMatchColor: theme.quickSearchMatch
@@ -373,7 +454,16 @@ FocusScope {
     readonly property color overlayBackgroundColor: theme.dialogBackground
     readonly property color separatorColor: theme.separator
     readonly property color headerTextColor: theme.headerText
+    readonly property color headerColor: theme.panelBackground
     readonly property color headerHoverColor: theme.controlHover
+    readonly property color opaqueHeaderBackgroundColor: Qt.rgba(
+        headerColor.r * headerColor.a
+            + groupHeaderBackdropColor.r * (1 - headerColor.a),
+        headerColor.g * headerColor.a
+            + groupHeaderBackdropColor.g * (1 - headerColor.a),
+        headerColor.b * headerColor.a
+            + groupHeaderBackdropColor.b * (1 - headerColor.a),
+        1)
 
     readonly property GalleryQuickSearchFormatter quickSearchFormatter:
         quickSearchTextFormatter
@@ -763,9 +853,25 @@ FocusScope {
         anchors.fill: parent
         panelRoot: root
         controller: root.controller
+        contentHorizontalInset: root.contentHorizontalInset
     }
 
+    Connections {
+        target: root.controller
+        function onCurrentIndexChanged() {
+            root.expandGroupForIndex(root.controller.currentIndex)
+        }
+    }
+
+    // A deferred group snapshot can arrive after the authoritative cursor.
+    // Apply the same reveal rule when the visibility index becomes available;
+    // otherwise a cursor restored into a collapsed group would remain hidden
+    // until the next user navigation.
+    onGroupDescriptorsChanged: root.expandGroupForIndex(
+                                   root.controller.currentIndex)
+
     GalleryPanelOverlays {
+        id: panelOverlays
         anchors.fill: parent
         controller: root.controller
         theme: root.theme

@@ -213,6 +213,151 @@ void MasonryLayout::applyVirtualGridGeometry(
     }
 }
 
+void MasonryLayout::rebuildGroupSections(
+    const ZoinGallery::GalleryFixedLayoutPlan &plan)
+{
+    _groupSections.clear();
+    if (!groupingActive()
+        || (_presentationMode == Masonry && !_sparseCatalogRows)
+        || _groupIndex.groupCount() == 0) {
+        _groupIndex.setSectionGeometry({}, {}, 0);
+        return;
+    }
+
+    const int groupCount = _groupIndex.groupCount();
+    _groupSections.resize(groupCount);
+    QVector<qreal> offsets;
+    QVector<qreal> extents;
+    offsets.reserve(groupCount);
+    extents.reserve(groupCount);
+
+    const qreal headerExtent = groupHeaderHeight();
+    if (_presentationMode == Columns) {
+        const int prefixCount = _groupIndex.descriptor(0)->startIndex;
+        const int prefixColumns = prefixCount > 0
+            ? (prefixCount + qMax(1, plan.rowsPerColumn) - 1)
+                / qMax(1, plan.rowsPerColumn)
+            : 0;
+        const qreal availableHeight = qMax<qreal>(
+            1, height() - _paddingTop - _paddingBottom);
+        const int rowsPerGroupColumn = qMax(1, static_cast<int>(std::floor(
+            qMax<qreal>(1, availableHeight - headerExtent)
+            / qMax<qreal>(1, plan.extent))));
+        qreal offset = prefixColumns * plan.cellWidth;
+        for (int group = 0; group < groupCount; ++group) {
+            const auto *descriptor = _groupIndex.descriptor(group);
+            const int columns = qMax(1, (descriptor->count
+                + rowsPerGroupColumn - 1) / rowsPerGroupColumn);
+            GroupSection &section = _groupSections[group];
+            section.offset = offset;
+            section.columns = columns;
+            section.rowsPerColumn = rowsPerGroupColumn;
+            section.extent = columns * plan.cellWidth;
+            if (_groupIndex.isCollapsed(group)) {
+                section.extent = plan.cellWidth;
+            }
+            offsets.append(section.offset);
+            extents.append(section.extent);
+            offset += section.extent;
+        }
+    }
+    else {
+        const bool virtualRows = _presentationMode == Icons
+            || (_presentationMode == Masonry && _sparseCatalogRows);
+        const int columns = virtualRows ? virtualGridColumnCount()
+                                  : qMax(1, plan.columns);
+        const qreal rowExtent = virtualRows ? virtualGridRowHeight()
+                                     : qMax<qreal>(1, plan.extent);
+        const qreal virtualCanvasWidth = qMax<qreal>(
+            0, width() - _paddingLeft - _paddingRight);
+        const qreal cellWidth = virtualRows
+            ? qMax<qreal>(1, virtualCanvasWidth / qMax(1, columns))
+            : qMax<qreal>(1, plan.cellWidth);
+        const int prefixCount = _groupIndex.descriptor(0)->startIndex;
+        const int prefixRows = prefixCount > 0
+            ? (prefixCount + columns - 1) / columns : 0;
+        qreal offset = _paddingTop + prefixRows * rowExtent;
+        for (int group = 0; group < groupCount; ++group) {
+            const auto *descriptor = _groupIndex.descriptor(group);
+            const int rows = qMax(1, (descriptor->count + columns - 1)
+                / columns);
+            GroupSection &section = _groupSections[group];
+            section.offset = offset;
+            section.columns = columns;
+            section.rowsPerColumn = rows;
+            section.extent = headerExtent + rows * rowExtent;
+            if (_groupIndex.isCollapsed(group)) {
+                section.extent = headerExtent;
+            }
+            offsets.append(section.offset);
+            extents.append(section.extent);
+            offset += section.extent;
+        }
+    }
+    _groupIndex.setSectionGeometry(offsets, extents, headerExtent);
+}
+
+QRectF MasonryLayout::groupedFixedGeometry(int index) const
+{
+    if (!groupingActive()
+        || (_presentationMode == Masonry && !_sparseCatalogRows)) {
+        return {};
+    }
+    const int group = _groupIndex.groupForSourceIndex(index);
+    if (group < 0 || _groupIndex.isCollapsed(group)
+        || group >= _groupSections.size()) {
+        return {};
+    }
+    const auto *descriptor = _groupIndex.descriptor(group);
+    const GroupSection &section = _groupSections.at(group);
+    const int local = index - descriptor->startIndex;
+    const auto plan = fixedLayoutPlan();
+    if (_presentationMode == Columns) {
+        const int rows = qMax(1, section.rowsPerColumn);
+        const int column = local / rows;
+        const int row = local % rows;
+        return QRectF(
+            section.offset + column * plan.cellWidth,
+            _paddingTop + groupHeaderHeight() + row * plan.extent,
+            plan.cellWidth, plan.extent);
+    }
+
+    const bool virtualRows = _presentationMode == Icons
+        || (_presentationMode == Masonry && _sparseCatalogRows);
+    const int columns = qMax(1, section.columns);
+    const qreal rowExtent = virtualRows ? virtualGridRowHeight()
+                                 : qMax<qreal>(1, plan.extent);
+    const qreal virtualCanvasWidth = qMax<qreal>(
+        0, width() - _paddingLeft - _paddingRight);
+    const qreal cellWidth = virtualRows
+        ? qMax<qreal>(1, virtualCanvasWidth / columns)
+        : qMax<qreal>(1, plan.cellWidth);
+    const int row = local / columns;
+    const int column = local % columns;
+    const qreal width = _presentationMode == Details ? plan.canvasWidth
+                                                      : cellWidth;
+    return QRectF(
+        column * cellWidth,
+        section.offset + groupHeaderHeight() + row * rowExtent,
+        width, rowExtent);
+}
+
+QRectF MasonryLayout::groupedFixedPreviewGeometry(int index) const
+{
+    const QRectF geometry = groupedFixedGeometry(index);
+    if (!geometry.isValid() || geometry.isEmpty()) {
+        return {};
+    }
+    if (_presentationMode == Icons) {
+        const qreal lineHeight =
+            ZoinGallery::GalleryIconTextMeasurer(_iconLabelFont).lineHeight();
+        return QRectF(geometry.x(), geometry.y(), geometry.width(),
+                      qMax<qreal>(1, geometry.width() - 3 - lineHeight - 3));
+    }
+    return geometry.adjusted(_spacing / 2.0, _spacing / 2.0,
+                             -_spacing / 2.0, -_spacing / 2.0);
+}
+
 int MasonryLayout::logicalBrickCount() const {
     return _sparseCatalogRows && _model
         ? _model->rowCount() : _bricks.size();
@@ -279,6 +424,13 @@ QRectF MasonryLayout::analyticFixedGeometry(int index) const {
     if (index < 0 || index >= logicalBrickCount()) {
         return {};
     }
+    if (groupingActive()
+        && (_presentationMode != Masonry || _sparseCatalogRows)) {
+        const int group = _groupIndex.groupForSourceIndex(index);
+        if (group >= 0) {
+            return groupedFixedGeometry(index);
+        }
+    }
     if (sparseVirtualLayout() || _presentationMode == Icons) {
         return virtualGridGeometry(index);
     }
@@ -292,6 +444,34 @@ QRectF MasonryLayout::analyticFixedGeometry(int index) const {
 
 void MasonryLayout::applyAnalyticFixedGeometry(
     MasonryBrick &brick, int index) const {
+    if (groupingActive()) {
+        const QRectF geometry = groupedFixedGeometry(index);
+        const int group = _groupIndex.groupForSourceIndex(index);
+        if (group >= 0 && (!geometry.isValid() || geometry.isEmpty())) {
+            brick.normalizedSize = {};
+            brick.previewGeometry = {};
+            return;
+        }
+        if (geometry.isValid() && !geometry.isEmpty()) {
+            const int local = group >= 0
+                ? index - _groupIndex.descriptor(group)->startIndex : index;
+            if (_presentationMode == Columns) {
+                const int rows = qMax(1, _groupSections.at(group).rowsPerColumn);
+                brick.row = local % rows;
+                brick.column = local / rows;
+            }
+            else {
+                const int columns = qMax(1, _groupSections.at(group).columns);
+                brick.row = local / columns;
+                brick.column = local % columns;
+            }
+            brick.x = geometry.x();
+            brick.y = geometry.y();
+            brick.normalizedSize = geometry.size();
+            brick.previewGeometry = groupedFixedPreviewGeometry(index);
+            return;
+        }
+    }
     if (sparseVirtualLayout() || _presentationMode == Icons) {
         applyVirtualGridGeometry(brick, index);
         return;
@@ -324,6 +504,53 @@ QList<int> MasonryLayout::indexesForHorizontalRange(
     qreal left, qreal right) const {
     if (_presentationMode != Columns) {
         return {};
+    }
+    if (groupingActive()) {
+        if (right < left) {
+            std::swap(left, right);
+        }
+        QList<int> result;
+        const auto plan = fixedLayoutPlan();
+        const int count = logicalBrickCount();
+        const int prefixCount = _groupIndex.groupCount() > 0
+            ? _groupIndex.descriptor(0)->startIndex : 0;
+        const QList<int> prefix = plan.indexesIntersecting(left, right).toList();
+        for (const int index : prefix) {
+            if (index < prefixCount) {
+                result.append(index);
+            }
+        }
+        for (int group = 0; group < _groupSections.size(); ++group) {
+            const GroupSection &section = _groupSections.at(group);
+            if (section.offset + section.extent < left
+                || section.offset > right) {
+                continue;
+            }
+            const int firstColumn = qMax(0, static_cast<int>(std::floor(
+                (left - section.offset) / qMax<qreal>(1, plan.cellWidth))));
+            const int lastColumn = qMax(0, static_cast<int>(std::floor(
+                (right - section.offset) / qMax<qreal>(1, plan.cellWidth))));
+            const int beginColumn = qMin(firstColumn, section.columns - 1);
+            const int endColumn = qMin(lastColumn, section.columns - 1);
+            if (endColumn < 0 || beginColumn > endColumn
+                || _groupIndex.isCollapsed(group)) {
+                continue;
+            }
+            const auto *descriptor = _groupIndex.descriptor(group);
+            for (int column = beginColumn; column <= endColumn; ++column) {
+                const int first = descriptor->startIndex
+                    + column * section.rowsPerColumn;
+                const int last = qMin(descriptor->startIndex + descriptor->count,
+                                      first + section.rowsPerColumn);
+                for (int index = first; index < last && index < count; ++index) {
+                    if (indexGeometry(index).intersects(
+                            QRectF(left, 0, right - left, height()))) {
+                        result.append(index);
+                    }
+                }
+            }
+        }
+        return result;
     }
     return fixedLayoutPlan().indexesIntersecting(left, right).toList();
 }
@@ -359,6 +586,12 @@ void MasonryLayout::rebuildLayoutBands() {
     QVector<ZoinGallery::GalleryGeometryRecord> records;
     records.reserve(_bricks.size());
     for (int index = 0; index < _bricks.size(); ++index) {
+        if (groupingActive()) {
+            const int group = _groupIndex.groupForSourceIndex(index);
+            if (group >= 0 && _groupIndex.isCollapsed(group)) {
+                continue;
+            }
+        }
         const MasonryBrick &brick = _bricks.at(index);
         records.append({
             .index = index,
@@ -382,6 +615,61 @@ QList<int> MasonryLayout::indexesForVerticalRange(
     QList<int> indexes;
     if (bottom < top) {
         std::swap(top, bottom);
+    }
+    if (groupingActive() && _presentationMode != Columns
+        && (_presentationMode != Masonry || _sparseCatalogRows)) {
+        QList<int> result;
+        const auto plan = fixedLayoutPlan();
+        const int prefixCount = _groupIndex.groupCount() > 0
+            ? _groupIndex.descriptor(0)->startIndex : 0;
+        const bool virtualRows = _presentationMode == Icons
+            || (_presentationMode == Masonry && _sparseCatalogRows);
+        if (virtualRows) {
+            const QRectF range(0, top, width(), bottom - top);
+            for (int index = 0; index < prefixCount; ++index) {
+                if (virtualGridGeometry(index).intersects(range)) {
+                    result.append(index);
+                }
+            }
+        }
+        else {
+            for (const int index : plan.indexesIntersecting(top, bottom)) {
+                if (index < prefixCount) {
+                    result.append(index);
+                }
+            }
+        }
+        const QRectF range(0, top, width(), bottom - top);
+        for (int group = 0; group < _groupSections.size(); ++group) {
+            const GroupSection &section = _groupSections.at(group);
+            if (_groupIndex.isCollapsed(group)
+                || section.offset + section.extent < top
+                || section.offset > bottom) {
+                continue;
+            }
+            const auto *descriptor = _groupIndex.descriptor(group);
+            const bool virtualRows = _presentationMode == Icons
+                || (_presentationMode == Masonry && _sparseCatalogRows);
+            const qreal rowExtent = virtualRows ? virtualGridRowHeight()
+                                         : qMax<qreal>(1, plan.extent);
+            const int columns = virtualRows
+                ? virtualGridColumnCount() : qMax(1, section.columns);
+            const int firstRow = qMax(0, static_cast<int>(std::floor(
+                (top - section.offset - groupHeaderHeight()) / rowExtent)));
+            const int lastRow = qMax(0, static_cast<int>(std::floor(
+                (bottom - section.offset - groupHeaderHeight()) / rowExtent)));
+            for (int row = firstRow; row <= lastRow; ++row) {
+                const int first = descriptor->startIndex + row * columns;
+                const int last = qMin(descriptor->startIndex + descriptor->count,
+                                      first + columns);
+                for (int index = first; index < last; ++index) {
+                    if (indexGeometry(index).intersects(range)) {
+                        result.append(index);
+                    }
+                }
+            }
+        }
+        return result;
     }
     if (_presentationMode == Details || _presentationMode == Grid
         || _presentationMode == Icons || sparseVirtualLayout()) {
@@ -424,5 +712,18 @@ QList<int> MasonryLayout::indexesForVerticalRange(
         }
         return indexes;
     }
-    return _geometryIndex.indexesIntersecting(top, bottom).toList();
+    const QVector<int> candidates = _geometryIndex.indexesIntersecting(
+        top, bottom);
+    if (!groupingActive()) {
+        return candidates.toList();
+    }
+    QList<int> result;
+    result.reserve(candidates.size());
+    for (const int index : candidates) {
+        const int group = _groupIndex.groupForSourceIndex(index);
+        if (group < 0 || !_groupIndex.isCollapsed(group)) {
+            result.append(index);
+        }
+    }
+    return result;
 }

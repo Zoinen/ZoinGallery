@@ -17,7 +17,8 @@ ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool 
                                          ZoinGallery::ImageSourceDescriptor source,
                                          QSharedPointer<ZoinGallery::ImageSourceProvider> provider,
                                          bool readDerivedMetadataCache,
-                                         bool writeDerivedMetadataCache)
+                                         bool writeDerivedMetadataCache,
+                                         bool panelThumbnailRequest)
     : _path(path), _isLast(isLast), _isFromEmbeddedView(isFromEmbeddedView), _isFromScanner(isFromScanner),
       _directOpenGeneration(directOpenGeneration),
       _highPriority(highPriority),
@@ -27,7 +28,8 @@ ImageInfoReadRunner::ImageInfoReadRunner(const QString &path, bool isLast, bool 
       _provider(std::move(provider)),
       _cancellation(QSharedPointer<ZoinGallery::ImageSourceCancellation>::create()),
       _readDerivedMetadataCache(readDerivedMetadataCache),
-      _writeDerivedMetadataCache(writeDerivedMetadataCache) {
+      _writeDerivedMetadataCache(writeDerivedMetadataCache),
+      _panelThumbnailRequest(panelThumbnailRequest) {
 }
 
 void ImageInfoReadRunner::run() {
@@ -49,6 +51,7 @@ void ImageInfoReadRunner::run() {
         .directOpenGeneration = _directOpenGeneration,
         .highPriority = _highPriority,
         .requestNamespace = _requestNamespace,
+        .panelThumbnailRequest = _panelThumbnailRequest,
     };
 
     // Videos have no still-image metadata that ThumbnailLoader can expose.

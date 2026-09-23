@@ -31,6 +31,7 @@ BrickItem {
            ? panelRoot.controller.entryNameAt(sourceIndex) : "")
     readonly property bool folderPreviewRequested:
         visualGeometryReady && (masonryMode || gridMode || iconsMode) && panelRoot.controllerReady
+        && panelRoot.controller.thumbnailsEnabled
         && panelRoot.controller.directoryPreviewEnabled
         && (visualModel.folderPreviewState === 2 || Boolean(model && model.folderView))
     readonly property bool folderPreviewActive:

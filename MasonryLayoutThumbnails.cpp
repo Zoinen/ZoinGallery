@@ -73,7 +73,27 @@ void MasonryLayout::updateViewportIndexSets() {
     if (auto *source = dynamic_cast<ZoinGallery::GalleryCatalogSource *>(_model)) {
         const bool previewMode = _presentationMode == Masonry
             || _presentationMode == Grid || _presentationMode == Icons;
-        source->requestDirectoryPreviews(isVisible() && previewMode ? visible : QList<int>{});
+        if (previewMode && thumbnailsEnabled()
+            && isVisible() && !visible.isEmpty()) {
+            source->requestDirectoryPreviews(visible);
+        }
+        else if (!previewMode || !thumbnailsEnabled()) {
+            // Leaving a preview presentation is an explicit cancellation.
+            // An empty/hidden viewport while the same presentation is being
+            // rewrapped is not: the host can hide the disposable geometry
+            // pass and publish the final visible rows on the next update.
+            source->requestDirectoryPreviews({});
+        }
+        else if (ZoinGallery::MediaTimingTrace::enabled()) {
+            ZoinGallery::MediaTimingTrace::event(
+                QStringLiteral("qt.gallery.directory_demand_retained"), {
+                    {QStringLiteral("fix"),
+                     QStringLiteral("[FIX:folder-preview-layout-demand]")},
+                    {QStringLiteral("visible"), isVisible()},
+                    {QStringLiteral("rows"), visible.size()},
+                    {QStringLiteral("mode"), int(_presentationMode)},
+                });
+        }
     }
 
     if (_visibleIndexSet.isEmpty()) {
@@ -100,7 +120,8 @@ void MasonryLayout::updateViewportIndexSets() {
 void MasonryLayout::planThumbnailForIndex(
     int index, bool highPriority, QList<ImageDecodeRequest> &requests,
     bool force) {
-    if (!_model || index < 0 || index >= logicalBrickCount()) {
+    if (!thumbnailsEnabled() || !_model || index < 0
+        || index >= logicalBrickCount()) {
         return;
     }
     MasonryBrick &brick = ensureBrickAt(index);
@@ -286,6 +307,9 @@ QString MasonryLayout::previewTransformKey() const {
 
 void MasonryLayout::planViewportThumbnails(
     const QSet<int> &candidateIndexes, bool force) {
+    if (!thumbnailsEnabled()) {
+        return;
+    }
     auto *requestModel =
         dynamic_cast<ZoinGallery::GalleryCatalogSource *>(_model);
     if (!requestModel || candidateIndexes.isEmpty()

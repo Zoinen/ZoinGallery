@@ -82,14 +82,22 @@ QtObject {
         hoveredIndex = -1
     }
 
-    function selectionIds(firstIndex, lastIndex) {
+    function selectionIds(firstIndex, lastIndex, visibleOnly) {
         const ids = []
         if (!ready)
             return ids
         const first = Math.max(0, Math.min(firstIndex, lastIndex))
         const last = Math.min(layout.count - 1,
                               Math.max(firstIndex, lastIndex))
-        for (let index = first; index <= last; ++index) {
+        const indexes = visibleOnly !== false && layout.visibleIndexesInRange
+                ? layout.visibleIndexesInRange(first, last)
+                : (() => {
+                    const result = []
+                    for (let index = first; index <= last; ++index)
+                        result.push(index)
+                    return result
+                })()
+        for (const index of indexes) {
             const entryId = controller.entryIdAt(index)
             // f4 deliberately excludes its synthetic parent entry from mouse
             // selection, so embedded Gallery mirrors that contract.
@@ -173,7 +181,7 @@ QtObject {
     function invertPanelSelection() {
         if (!ready || layout.count <= 0)
             return
-        const ids = selectionIds(0, layout.count - 1)
+        const ids = selectionIds(0, layout.count - 1, false)
         if (ids.length > 0)
             panel.selectionRequested("toggle", ids)
     }
@@ -225,7 +233,7 @@ QtObject {
         const previousIndex = controller.currentIndex
         const bounded = Math.max(0, Math.min(layout.count - 1, index))
         if (togglePrevious)
-            beginKeyboardShiftSelection(previousIndex, true)
+            beginKeyboardShiftSelection(previousIndex)
         if (bounded === previousIndex) {
             if (togglePrevious)
                 updateKeyboardShiftSelection(bounded)
@@ -250,7 +258,9 @@ QtObject {
         keyboardShiftSelectionActive = true
         keyboardShiftSelectionAnchorIndex = anchorIndex
         keyboardShiftSelectionAdds = selectionAdds === undefined
-                ? !controller.isSelectedAt(anchorIndex) : Boolean(selectionAdds)
+                ? !controller.effectiveSelected(controller.entryIdAt(anchorIndex),
+                                                controller.isSelectedAt(anchorIndex))
+                : Boolean(selectionAdds)
         keyboardShiftSelectionFirst = -1
         keyboardShiftSelectionLast = -1
         controller.beginSelectionGesture(keyboardShiftSelectionAdds)
@@ -288,7 +298,13 @@ QtObject {
     }
 
     function applyShiftSelectionRange(first, last) {
-        controller.previewSelectionRange(first, last)
+        if (layout.visibleIndexesInRange) {
+            const indexes = first < 0 || last < 0
+                    ? [] : layout.visibleIndexesInRange(first, last)
+            controller.previewSelectionIndexes(indexes)
+        } else {
+            controller.previewSelectionRange(first, last)
+        }
         scheduleSelectionFlush()
         keyboardShiftSelectionFirst = first
         keyboardShiftSelectionLast = last

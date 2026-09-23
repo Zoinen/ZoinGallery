@@ -194,8 +194,49 @@ QtObject {
                 ? current.y - 2
                 : current.y + current.height + 2
         let adjacent = galleryLayout.indexAt(currentItemCenterX, adjacentY)
+        if (adjacent < 0) {
+            const currentIndex = galleryLayout.currentIndex
+            const forward = direction > 0
+            if (galleryLayout.groupBoundaryIndex) {
+                const boundary = galleryLayout.groupBoundaryIndex(
+                    currentIndex, currentItemCenterX, forward)
+                if (boundary >= 0) {
+                    adjacent = boundary
+                    panel.traceBenchmarkStage(
+                        "navigation.group-header-skip", {
+                            "fix": "[FIX:group-header-navigation]",
+                            "fromIndex": currentIndex,
+                            "toIndex": boundary,
+                            "direction": direction
+                        })
+                }
+            }
+        }
         if (adjacent < 0 && galleryLayout.listView)
             adjacent = galleryLayout.indexAt(0, adjacentY)
+        if (adjacent < 0) {
+            // A group separator is layout space, not a file row.  The hit
+            // test can still return -1 for a hole in a masonry row. Preserve
+            // the established source-order fallback for that non-boundary
+            // case, but never use it to cross a section header.
+            const currentIndex = galleryLayout.currentIndex
+            const forward = direction > 0
+            const fallback = galleryLayout.nearestVisibleIndex(
+                currentIndex, forward)
+            adjacent = fallback >= 0 ? fallback : currentIndex
+            if (fallback >= 0
+                && galleryLayout.groupForIndex
+                && galleryLayout.groupForIndex(currentIndex)
+                   !== galleryLayout.groupForIndex(fallback)) {
+                panel.traceBenchmarkStage(
+                    "navigation.group-header-skip", {
+                        "fix": "[FIX:group-header-navigation]",
+                        "fromIndex": currentIndex,
+                        "toIndex": fallback,
+                        "direction": direction
+                    })
+            }
+        }
         return adjacent
     }
 
@@ -237,7 +278,8 @@ QtObject {
                 && nextTop >= 0
                 && nextTop !== galleryLayout.windowTopIndex)
             galleryLayout.windowTopIndex = nextTop
-        return Number(result.targetIndex)
+        const forward = key === Qt.Key_Right || key === Qt.Key_Down
+        return panel.visibleNavigationIndex(Number(result.targetIndex), forward)
     }
 
     function moveCursor(index, preserveSelectionAnchor,
@@ -431,6 +473,7 @@ QtObject {
         if (targetIndex < 0) {
             targetIndex = direction < 0 ? 0 : galleryLayout.count - 1
         }
+        targetIndex = panel.visibleNavigationIndex(targetIndex, direction > 0)
 
         const hitEdge = atStart || atEnd
         // Do not run a second minimal ensure-visible animation: the exact
@@ -529,7 +572,8 @@ QtObject {
                 storeMasonryPageNode(nextOrdinal, targetNode)
         }
 
-        const targetIndex = Number(targetNode.targetIndex)
+        const targetIndex = panel.visibleNavigationIndex(
+                    Number(targetNode.targetIndex), direction > 0)
         const destination = Number(targetNode.contentY)
         const hitEdge = Boolean(targetNode.hitEdge)
         panel.traceBenchmarkStage("navigation.page.planned", {
@@ -633,6 +677,7 @@ QtObject {
             }
         }
 
+        targetIndex = panel.visibleNavigationIndex(targetIndex, direction > 0)
         moveCursorWithSelection(targetIndex, togglePrevious,
                                 !hitEdge, deferCursorCommit, !hitEdge)
         scrollBy(direction * deltaY, false, true, direction)

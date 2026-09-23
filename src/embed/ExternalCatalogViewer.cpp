@@ -284,7 +284,7 @@ quint64 ExternalCatalogModel::metadataSubmittedBatchCount() const {
 
 void ExternalCatalogModel::decodeImages(
     const QList<ImageDecodeRequest> &requests) {
-    if (_shutdown) return;
+    if (_shutdown || !_thumbnailsEnabled) return;
     if (_previewReadsSuspended) {
         // Geometry-ready visible cells may use existing RAM pixels while a
         // retained snapshot has no read authority. Never enqueue a miss.
@@ -299,7 +299,7 @@ void ExternalCatalogModel::decodeImages(
 
 void ExternalCatalogModel::requestImageMetadata(
     const QList<int> &rows, bool highPriority, bool catalogWide) {
-    if (_shutdown || _previewReadsSuspended) {
+    if (_shutdown || _previewReadsSuspended || !_thumbnailsEnabled) {
         return;
     }
 

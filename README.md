@@ -162,6 +162,14 @@ All strategies expose the same cursor, selection, hit-testing, scroll and
 viewer-transition API and reuse source-aspect thumbnail tiers from the same
 runtime cache.
 
+`GallerySession.thumbnailsEnabled` controls panel-preview work independently
+per session (default `true`). Disabling it hides cached image/video/folder
+previews, rejects or cancels panel-owned metadata, probes, decodes and folder
+preview demand, and makes image dimensions irrelevant to panel geometry.
+Caches and folder snapshots are retained for reuse when re-enabled. Requests
+owned by a viewer or another session are not canceled by this policy; full
+image viewing is unaffected.
+
 Delegates are created only for visible rows plus bounded overscan. Pixel
 decoding follows that same window (metadata remains catalog-wide for justified
 masonry aspect ratios), and the shared runtime LRU defaults to 256 MiB. Build

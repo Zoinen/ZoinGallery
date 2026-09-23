@@ -437,6 +437,131 @@ private slots:
         QVERIFY(ZoinGallery::StorageLocations::configureCacheRoot(_cacheDirectory.path()));
     }
 
+    void thumbnailsCanBeDisabledWithoutDroppingSession() {
+        QQmlEngine engine;
+        auto provider =
+            QSharedPointer<BlockingCatalogProbeProvider>::create();
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            &engine, options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("thumbnail-policy-test"));
+        QVERIFY(session);
+        const int propertyIndex = session->metaObject()->indexOfProperty(
+            "thumbnailsEnabled");
+        QVERIFY2(propertyIndex >= 0,
+                 "GallerySession must expose the native thumbnail policy");
+        QCOMPARE(session->property("thumbnailsEnabled").toBool(), true);
+
+        QVariantMap image = entry(QStringLiteral("image"), 0,
+                                  QStringLiteral("still.png"), true);
+        image.insert(QStringLiteral("resourceId"),
+                     QStringLiteral("network/still.png"));
+        image.insert(QStringLiteral("sourceKey"),
+                     QStringLiteral("network/unchanged"));
+        image.insert(QStringLiteral("contentVersion"),
+                     QStringLiteral("v1"));
+        image.insert(QStringLiteral("versionStrength"),
+                     QStringLiteral("strong"));
+        image.insert(QStringLiteral("storageClass"),
+                     QStringLiteral("network"));
+        image.insert(QStringLiteral("accessProfile"),
+                     QStringLiteral("thumbnail-policy-test"));
+        image.insert(QStringLiteral("mimeType"),
+                     QStringLiteral("image/png"));
+        QVERIFY(session->applyExternalCatalog({image}, 1));
+        auto *catalog = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(catalog);
+
+        catalog->requestImageMetadata({0}, true);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            provider->unchangedProbeEntered.load(std::memory_order_acquire),
+            5000);
+        QVERIFY(session->setProperty("thumbnailsEnabled", false));
+        QCOMPARE(session->property("thumbnailsEnabled").toBool(), false);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            provider->unchangedProbeCanceled.load(std::memory_order_acquire),
+            3000);
+        QTRY_COMPARE_WITH_TIMEOUT(catalog->metadataPendingRequestCount(), 0,
+                                  3000);
+
+        const int canceledProbeCalls = provider->unchangedProbeCalls.load(
+            std::memory_order_acquire);
+        const quint64 canceledMetadataBatches =
+            catalog->metadataSubmittedBatchCount();
+        catalog->requestImageMetadata({0}, true);
+        session->ensurePreviews();
+        QTest::qWait(80);
+        QCOMPARE(provider->unchangedProbeCalls.load(
+                     std::memory_order_acquire), canceledProbeCalls);
+        QCOMPARE(catalog->metadataSubmittedBatchCount(),
+                 canceledMetadataBatches);
+        QVERIFY(!catalog->hasPublishedThumbnails());
+        QCOMPARE(runtime->thumbnailCachePendingRequestCount(), qsizetype(0));
+
+        provider->releaseUnchangedProbe.store(true,
+                                              std::memory_order_release);
+
+        // Viewer decoding is independent from the panel-preview provider and
+        // must remain available while panel thumbnails are disabled.
+        QTemporaryDir viewerDirectory;
+        QVERIFY(viewerDirectory.isValid());
+        const QString viewerPath = viewerDirectory.filePath(
+            QStringLiteral("viewer-still.png"));
+        QImage viewerImage(96, 64, QImage::Format_RGBA8888);
+        viewerImage.fill(Qt::darkGreen);
+        QVERIFY(viewerImage.save(viewerPath, "PNG"));
+        auto *viewerSession = runtime->createSession(
+            QStringLiteral("thumbnail-policy-viewer"));
+        QVERIFY(viewerSession);
+        QVERIFY(viewerSession->setProperty("thumbnailsEnabled", false));
+        QVERIFY(viewerSession->cd(viewerDirectory.path()) >= 0);
+        QTRY_COMPARE_WITH_TIMEOUT(viewerSession->model()->rowCount(), 1,
+                                  5000);
+        viewerSession->activateIndex(0);
+        viewerSession->setViewerOpen(true);
+        viewerSession->requestViewer(64, 64);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !viewerSession->viewerSourceAt(0).isEmpty(), 10000);
+
+        auto *otherSession = runtime->createExternalSession(
+            QStringLiteral("thumbnail-policy-peer"));
+        QVERIFY(otherSession);
+        QVariantMap otherImage = image;
+        otherImage.insert(QStringLiteral("entryId"),
+                          QStringLiteral("peer-image"));
+        otherImage.insert(QStringLiteral("resourceId"),
+                          QStringLiteral("network/peer.png"));
+        otherImage.insert(QStringLiteral("sourceKey"),
+                          QStringLiteral("network/peer"));
+        otherImage.insert(QStringLiteral("accessProfile"),
+                          QStringLiteral("thumbnail-policy-peer"));
+        QVERIFY(otherSession->applyExternalCatalog({otherImage}, 1));
+        auto *otherCatalog = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            otherSession->model());
+        QVERIFY(otherCatalog);
+        otherCatalog->requestImageMetadata({0}, true);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            provider->otherProbeCalls.load(std::memory_order_acquire) > 0,
+            5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            otherCatalog->metadataSubmittedBatchCount() > 0, 5000);
+
+        QVERIFY(session->setProperty("thumbnailsEnabled", true));
+        catalog->requestImageMetadata({0}, true);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            provider->unchangedProbeCalls.load(std::memory_order_acquire)
+                > canceledProbeCalls,
+            5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            catalog->metadataSubmittedBatchCount() > 0, 5000);
+        runtime->shutdown();
+    }
+
     void galleryPreferencesDefaultsAndDecoderInventory() {
         QTemporaryDir dir;
         const auto oldFormat = QSettings::defaultFormat();
@@ -590,6 +715,48 @@ private slots:
         QVERIFY(otherModel->directoryPreviewAvailable(0));
         otherModel->clearDirectoryPreviews();
         QVERIFY(!otherModel->directoryPreviewAvailable(0));
+    }
+
+    void directoryPreviewDemandFollowsFolderIdentityAcrossReorder() {
+        QQmlEngine engine;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"photo.jpg"};
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("directory-reorder-demand"));
+        QVERIFY(session->applyExternalCatalog(
+            {previewFolder(0), previewFolder(1)}, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(
+            session->model());
+        QVERIFY(model);
+        // This is the no-snapshot configuration used by the fast path. A
+        // row-only demand must still survive a catalog reorder without
+        // retiring the folder model and its already decoded children.
+        model->setDirectoryCacheMode(0);
+        model->requestDirectoryPreviews({0});
+        QTRY_VERIFY(model->directoryPreviewAvailable(0));
+        QPointer<QAbstractItemModel> children =
+            model->directoryPreviewModel(0);
+        QVERIFY(children);
+        const int enumerations = provider->enumerations.load();
+
+        auto movedFirst = previewFolder(1);
+        movedFirst[QStringLiteral("index")] = 0;
+        auto movedSecond = previewFolder(0);
+        movedSecond[QStringLiteral("index")] = 1;
+        QVERIFY(session->applyExternalCatalog(
+            {movedFirst, movedSecond}, 2));
+        QTest::qWait(20);
+        model->requestDirectoryPreviews({1});
+
+        QVERIFY(children);
+        QCOMPARE(model->directoryPreviewModel(1), children.data());
+        QVERIFY(model->directoryPreviewAvailable(1));
+        QCOMPARE(provider->enumerations.load(), enumerations);
+        session->shutdown();
     }
 
     void directorySnapshotRestoresGeometryAndPixelsAfterEviction() {
@@ -795,6 +962,33 @@ private slots:
         QVERIFY(session->applyExternalCatalog({}, 3, {{"currentPath", "/other"}}));
         QTRY_COMPARE(provider->leases.load(), 0);
         QVERIFY(!model->directoryPreviewModel(40));
+    }
+
+    void externalVideoGeometryRequiresDecoder() {
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("video-capability");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        auto video = entry("video", 0, "clip.mp4", true);
+        video["thumbnailKind"] = "video";
+        for (bool sparse : {false, true}) {
+            QVERIFY(model->applyCatalog(sparse ? QVariantList{} : QVariantList{video},
+                                        false, false, sparse ? 10 : -1));
+            if (sparse) QVERIFY(model->applyCatalogRows({video}));
+            auto *item = model->index(0, 0).data(FileListModel::ImageFileRole).value<ImageFile *>();
+            QVERIFY(item);
+            QCOMPARE(item->isImage(), zoinVideoThumbnailsEnabled());
+            QVERIFY(!model->isImageAt(0)); // Videos are never still-image viewer targets.
+            QCOMPARE(model->imageOriginalSizeAt(0).isValid(), zoinVideoThumbnailsEnabled());
+            QVERIFY(model->applyMetadata({video}));
+            QCOMPARE(item->isImage(), zoinVideoThumbnailsEnabled());
+            QVERIFY(!model->isImageAt(0));
+            QCOMPARE(model->imageOriginalSizeAt(0).isValid(), zoinVideoThumbnailsEnabled());
+        }
+        runtime->shutdown();
     }
 
     void directorySelectionAndLifecycle() {

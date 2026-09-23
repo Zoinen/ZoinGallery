@@ -98,6 +98,8 @@ public:
     int rowForEntryId(const QString &entryId) const;
     int cursorRow() const;
     void ensurePreviews();
+    bool thumbnailsEnabled() const { return _thumbnailsEnabled; }
+    void setThumbnailsEnabled(bool enabled);
     void resetExternalSource();
     QString viewerImageUrlAt(int row) const;
     QString bestViewerImageUrlAt(int row) const;
@@ -181,6 +183,7 @@ private:
     QHash<QString, DirectoryPreviewState> _incomingDirectoryStates;
     void prepareDirectoryPreviewStates(const QVariantList &values);
     bool _previewReadsSuspended = false;
+    bool _thumbnailsEnabled = true;
 
     struct Entry {
         QString id;
@@ -225,6 +228,7 @@ private:
 
     struct PendingThumbnailRequest {
         bool owner = false;
+        bool panelThumbnailRequest = false;
         QSize admittedTargetSize;
         QString admittedTransformKey;
     };
@@ -234,6 +238,7 @@ private:
         QString contentVersion;
         QString resourceId;
         qint64 notBeforeMs = 0;
+        bool panelThumbnailRequest = false;
     };
 
     struct BackgroundDecodeRetry {
@@ -330,7 +335,8 @@ private:
     bool tryExtendSparseCatalog(const QVariantList &entries,
                                 bool metadataDeferred, int totalCount);
     bool applySparseCatalog(const QVariantList &entries,
-                            bool metadataDeferred, int totalCount);
+                            bool metadataDeferred, int totalCount,
+                            bool preserveEquivalent);
     bool parseCatalogEntry(const QVariantMap &value, int row,
                            bool metadataDeferred, Entry *entry) const;
     ImageFile *ensureItem(int row) const;
@@ -342,9 +348,10 @@ private:
     void enqueueProbeRows(const QList<int> &rows, bool highPriority);
     void scheduleProbePump();
     void pumpProbeRequests();
-    void appendProbeRow(ProbeBatch &batch, int row, bool highPriority);
+    void appendProbeRow(ProbeBatch &batch, int row, bool highPriority,
+                        bool panelThumbnailRequest);
     void drainProbeRows(ProbeBatch &batch, QList<int> &rows,
-                        bool highPriority);
+                        bool highPriority, bool panelThumbnailRequest);
     void collectCatalogProbeRows(ProbeBatch &batch);
     void submitProbeBatch(const QList<ImageProbeRequest> &requests,
                           bool highPriority);
@@ -367,7 +374,8 @@ private:
     bool scheduleMetadataRetry(const QString &sourceIdentity,
                                const QString &contentVersion,
                                const QString &resourceId,
-                               bool background);
+                               bool background,
+                               bool panelThumbnailRequest);
     void scheduleBackgroundRetryWake();
     void processBackgroundRetries();
     void resetMetadataPlanner();
@@ -411,6 +419,7 @@ private:
     QMultiHash<QString, QString> _sourceEntryIds;
     QMultiHash<QString, QString> _providerEntryIds;
     QHash<QString, QString> _metadataPendingVersions;
+    QHash<QString, QString> _panelMetadataPendingIdentities;
     QSet<QString> _metadataResolvedPaths;
     QList<int> _metadataVisibleRows;
     QSet<int> _metadataLastVisibleRows;
@@ -426,6 +435,7 @@ private:
     QSet<QString> _metadataRetryScheduled;
     QHash<QString, BackgroundMetadataRetry> _backgroundMetadataRetries;
     QHash<QString, QString> _probePendingVersions;
+    QSet<QString> _panelProbePendingIdentities;
     QHash<QString, QString> _probeResolvedVersions;
     QSet<QString> _probeRetryableSources;
     QHash<QString, int> _probeRetryAttempts;

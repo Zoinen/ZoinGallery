@@ -46,6 +46,13 @@ QRectF MasonryLayout::indexGeometry(int index) const {
     if (index < 0 || index >= logicalBrickCount()) {
         return QRectF();
     }
+    if (groupingActive() && _presentationMode == Masonry
+        && !_sparseCatalogRows) {
+        const int group = _groupIndex.groupForSourceIndex(index);
+        if (group >= 0 && _groupIndex.isCollapsed(group)) {
+            return QRectF();
+        }
+    }
     if (_presentationMode != Masonry || sparseVirtualLayout()) {
         return analyticFixedGeometry(index);
     }
@@ -123,7 +130,7 @@ QString MasonryLayout::indexFullPath(int index) const {
 QSize MasonryLayout::indexOriginalSize(int index) const {
     if (index >= 0 && index < logicalBrickCount()) {
         const MasonryBrick *brick = brickAt(index);
-        if (brick && brick->modelKnownSize.isValid()) {
+        if (thumbnailsEnabled() && brick && brick->modelKnownSize.isValid()) {
             return brick->modelKnownSize;
         }
         return brick ? brick->originalSize.toSize() : QSize();
@@ -142,6 +149,21 @@ QVariantMap MasonryLayout::indexExif(int index) const {
 
 int MasonryLayout::nextImageIndex(bool forward, bool moveToEnd) {
     int nextIndex = _currentIndex;
+    if (groupingActive()) {
+        for (int i = _currentIndex;;) {
+            i = _groupIndex.nearestVisibleSourceIndex(i, forward);
+            if (i < 0 || i >= logicalBrickCount()) {
+                break;
+            }
+            if (brickIsImage(i)) {
+                nextIndex = i;
+                if (!moveToEnd) {
+                    break;
+                }
+            }
+        }
+        return nextIndex;
+    }
     for (int i = _currentIndex + (forward ? 1 : -1);
          i >= 0 && i < logicalBrickCount();
          i += (forward ? 1 : -1)) {
@@ -206,7 +228,87 @@ int MasonryLayout::masonryNavigationIndex(
     const qreal probeY = direction == NavigateUp
         ? current.top() - 2 : current.bottom() + 2;
     const int adjacent = indexAt(current.center().x(), probeY);
-    return adjacent >= 0 ? adjacent : index;
+    if (adjacent >= 0 && adjacent != index) {
+        return adjacent;
+    }
+    if (groupingActive()) {
+        const int visible = nearestVisibleIndex(
+            index, direction == NavigateDown);
+        if (visible >= 0) {
+            return visible;
+        }
+    }
+    return index;
+}
+
+int MasonryLayout::groupBoundaryIndex(
+    int index, qreal anchorX, bool forward) const {
+    if (!groupingActive() || _presentationMode != Masonry
+        || index < 0 || index >= logicalBrickCount()) {
+        return -1;
+    }
+    const int group = _groupIndex.groupForSourceIndex(index);
+    if (group < 0 || group >= _groupSections.size()) {
+        return -1;
+    }
+    const QRectF current = indexGeometry(index);
+    if (!current.isValid() || current.isEmpty()) {
+        return -1;
+    }
+
+    const GroupSection &section = _groupSections.at(group);
+    const qreal headerBoundary = section.offset + groupHeaderHeight();
+    const qreal sectionBoundary = section.offset + section.extent;
+    const bool atBoundary = forward
+        ? current.bottom() + 2 >= sectionBoundary - 0.01
+        : current.top() - 2 <= headerBoundary + 0.01;
+    if (!atBoundary) {
+        return -1;
+    }
+
+    int targetGroup = group + (forward ? 1 : -1);
+    while (targetGroup >= 0 && targetGroup < _groupIndex.groupCount()
+           && _groupIndex.isCollapsed(targetGroup)) {
+        targetGroup += forward ? 1 : -1;
+    }
+
+    int targetSource = -1;
+    if (targetGroup >= 0 && targetGroup < _groupIndex.groupCount()) {
+        const auto *descriptor = _groupIndex.descriptor(targetGroup);
+        targetSource = forward
+            ? descriptor->startIndex
+            : descriptor->startIndex + descriptor->count - 1;
+    }
+    else if (!forward && group == 0) {
+        const auto *first = _groupIndex.descriptor(0);
+        targetSource = first ? first->startIndex - 1 : -1;
+    }
+    else if (forward && group == _groupIndex.groupCount() - 1) {
+        const auto *last = _groupIndex.descriptor(group);
+        targetSource = last ? last->startIndex + last->count : -1;
+    }
+    if (targetSource < 0 || targetSource >= logicalBrickCount()) {
+        return -1;
+    }
+
+    const QRectF targetGeometry = indexGeometry(targetSource);
+    if (!targetGeometry.isValid() || targetGeometry.isEmpty()) {
+        return -1;
+    }
+    const qreal targetY = targetGeometry.center().y();
+    const int target = indexAt(anchorX, targetY);
+    if (target >= 0) {
+        const int targetIndexGroup = _groupIndex.groupForSourceIndex(target);
+        if (targetIndexGroup == targetGroup
+            || (targetGroup < 0
+                && targetIndexGroup < 0)) {
+            return target;
+        }
+    }
+    // A trailing partial row may not cover the preserved X coordinate. Keep
+    // the move in the adjacent section rather than falling back to source
+    // order, which would walk the remainder of the current group.
+    return targetSource;
 }
 
 int MasonryLayout::fixedNavigationIndex(
@@ -269,6 +371,22 @@ QVariantMap MasonryLayout::navigationTarget(
         : fixedNavigationIndex(index, direction, page, lastIndex);
     result[QStringLiteral("targetIndex")] =
         qBound(0, target, lastIndex);
+    int visibleTarget = qBound(0, target, lastIndex);
+    if (groupingActive()
+        && _groupIndex.visibleOrdinalForSourceIndex(visibleTarget) < 0) {
+        const bool forward = direction == NavigateRight
+            || direction == NavigateDown;
+        int candidate = _groupIndex.nearestVisibleSourceIndex(
+            visibleTarget, forward);
+        if (candidate < 0) {
+            candidate = _groupIndex.nearestVisibleSourceIndex(
+                visibleTarget, !forward);
+        }
+        if (candidate >= 0 && candidate <= lastIndex) {
+            visibleTarget = candidate;
+        }
+    }
+    result[QStringLiteral("targetIndex")] = visibleTarget;
     return result;
 }
 

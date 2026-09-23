@@ -16,6 +16,7 @@ namespace ZoinGallery {
 struct ImageProbeRequest {
     ImageSourceDescriptor source;
     QString requestNamespace;
+    bool panelThumbnailRequest = false;
     bool highPriority = false;
 };
 

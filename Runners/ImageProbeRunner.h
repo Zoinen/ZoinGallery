@@ -20,6 +20,9 @@ public:
     bool isHighPriority() const override {
         return _request.highPriority;
     }
+    bool isPanelThumbnailRequest() const override {
+        return _request.panelThumbnailRequest;
+    }
     QString requestNamespace() const override {
         return _request.requestNamespace;
     }

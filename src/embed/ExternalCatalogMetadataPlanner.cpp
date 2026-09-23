@@ -51,22 +51,32 @@ bool ExternalCatalogMetadataPlanner::prepareCapacity() {
 }
 
 void ExternalCatalogMetadataPlanner::appendRow(
-    int row, QList<Request> &requests) {
+    int row, QList<Request> &requests, bool panelThumbnailRequest) {
     if (m_available <= 0 || !rowNeedsMetadata(row)) {
         return;
     }
     const ExternalCatalogModel::Entry &entry = m_model.loadedEntry(row);
+    panelThumbnailRequest = panelThumbnailRequest
+        || (entry.id != m_model._viewerEntryId
+            && (m_model._metadataLastVisibleRows.contains(row)
+                || m_model._catalogFitWaitingMetadata.contains(
+                    entry.sourceIdentity)));
     m_model._metadataPendingVersions.insert(
         entry.sourceIdentity, entry.contentVersion);
+    if (panelThumbnailRequest) {
+        m_model._panelMetadataPendingIdentities.insert(
+            entry.sourceIdentity, entry.contentVersion);
+    }
     requests.append({entry.sourceIdentity, entry.contentVersion,
-                     entry.source});
+                     entry.source, false, panelThumbnailRequest});
     --m_available;
 }
 
 void ExternalCatalogMetadataPlanner::drainRows(
-    QList<int> &rows, QList<Request> &requests) {
+    QList<int> &rows, QList<Request> &requests,
+    bool panelThumbnailRequest) {
     while (m_available > 0 && !rows.isEmpty()) {
-        appendRow(rows.takeFirst(), requests);
+        appendRow(rows.takeFirst(), requests, panelThumbnailRequest);
     }
 }
 
@@ -81,7 +91,7 @@ void ExternalCatalogMetadataPlanner::drainCurrentViewer(
             rows.append(row);
             continue;
         }
-        appendRow(row, requests);
+        appendRow(row, requests, false);
     }
 }
 
@@ -106,7 +116,7 @@ void ExternalCatalogMetadataPlanner::collectCatalogRows() {
            && m_model._catalogMetadataCursor < m_model._entries.size()) {
         const int row = m_model._entries.at(
             m_model._catalogMetadataCursor++).sourceIndex;
-        appendRow(row, m_backgroundRequests);
+        appendRow(row, m_backgroundRequests, true);
     }
 }
 
@@ -117,23 +127,38 @@ void ExternalCatalogMetadataPlanner::submitRequests() {
     if (m_highRequests.isEmpty() && m_backgroundRequests.isEmpty()) {
         return;
     }
+    QList<Request> panelRequests;
+    QList<Request> viewerRequests;
+    panelRequests.reserve(m_highRequests.size()
+                          + m_backgroundRequests.size());
+    viewerRequests.reserve(m_highRequests.size());
     for (Request &request : m_highRequests) {
         request.highPriority = true;
+        (request.panelThumbnailRequest ? panelRequests : viewerRequests)
+            .append(std::move(request));
     }
-    m_highRequests.append(std::move(m_backgroundRequests));
-    ++m_model._metadataSubmittedBatches;
-    m_model._decodeManager->readVersionedImagesInfo(
-        m_highRequests, false, false, m_model._sessionId);
+    for (Request &request : m_backgroundRequests) {
+        (request.panelThumbnailRequest ? panelRequests : viewerRequests)
+            .append(std::move(request));
+    }
+    for (const QList<Request> *batch : {&panelRequests, &viewerRequests}) {
+        if (batch->isEmpty()) {
+            continue;
+        }
+        ++m_model._metadataSubmittedBatches;
+        m_model._decodeManager->readVersionedImagesInfo(
+            *batch, false, false, m_model._sessionId);
+    }
 }
 
 void ExternalCatalogMetadataPlanner::run() {
     if (!prepareCapacity() || serviceProbeBarrier()) {
         return;
     }
-    drainRows(m_model._metadataUrgentRows, m_highRequests);
-    drainRows(m_model._metadataVisibleRows, m_highRequests);
-    drainRows(m_model._metadataAdHocRows, m_backgroundRequests);
-    drainRows(m_model._metadataOverscanRows, m_backgroundRequests);
+    drainRows(m_model._metadataUrgentRows, m_highRequests, false);
+    drainRows(m_model._metadataVisibleRows, m_highRequests, true);
+    drainRows(m_model._metadataAdHocRows, m_backgroundRequests, false);
+    drainRows(m_model._metadataOverscanRows, m_backgroundRequests, true);
     collectCatalogRows();
     submitRequests();
 }

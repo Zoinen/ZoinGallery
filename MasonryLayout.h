@@ -16,12 +16,14 @@
 #include "GalleryDelegateItem.h"
 #include "GalleryDelegatePool.h"
 #include "GalleryGeometryIndex.h"
+#include "GalleryGroupIndex.h"
 #include "GalleryLayoutEngine.h"
 #include "GalleryViewportMaterializer.h"
 #include "GalleryThumbnailPlanner.h"
 #include "MasonryLayoutQuickSearch.h"
 #include "ImageFile.h"
 
+#include <ZoinGallery/GallerySession.h>
 
 class MasonryLayout : public QQuickItem {
     Q_OBJECT
@@ -33,6 +35,16 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(QVariantList visibleIndexes READ visibleIndexes NOTIFY visibleIndexesChanged)
     Q_PROPERTY(QVariantList overscanIndexes READ overscanIndexes NOTIFY overscanIndexesChanged)
     Q_PROPERTY(QVariantList layoutBands READ layoutBands NOTIFY layoutBandsChanged)
+    Q_PROPERTY(QVariantList groups READ groups WRITE setGroups NOTIFY groupsChanged)
+    Q_PROPERTY(QString groupStateKey READ groupStateKey WRITE setGroupStateKey
+               NOTIFY groupStateKeyChanged)
+    Q_PROPERTY(ZoinGallery::GallerySession *groupSession
+               READ groupSession WRITE setGroupSession
+               NOTIFY groupSessionChanged)
+    Q_PROPERTY(bool thumbnailsEnabled READ thumbnailsEnabled
+               WRITE setThumbnailsEnabled NOTIFY thumbnailsEnabledChanged)
+    Q_PROPERTY(QVariantList visibleGroupHeaders READ visibleGroupHeaders
+               NOTIFY groupHeadersChanged)
     Q_PROPERTY(quint64 layoutRevision READ layoutRevision NOTIFY layoutRevisionChanged)
     // A lightweight diagnostic counter also gives tests a deterministic way
     // to reject presentation changes which populate a disposable viewport
@@ -117,6 +129,16 @@ public:
     Q_INVOKABLE QVariantMap indexExif(int index) const;
     Q_INVOKABLE int nextImageIndex(bool forward, bool moveToEnd);
     Q_INVOKABLE int neighborIndex(int index, NavigationDirection direction) const;
+    Q_INVOKABLE int groupBoundaryIndex(
+        int index, qreal anchorX, bool forward) const;
+    Q_INVOKABLE bool toggleGroup(const QString &key);
+    Q_INVOKABLE bool setGroupCollapsed(const QString &key, bool collapsed);
+    Q_INVOKABLE bool isGroupCollapsed(const QString &key) const;
+    Q_INVOKABLE int groupForIndex(int index) const;
+    Q_INVOKABLE int nearestVisibleIndexOutsideGroup(
+        int index, const QString &key, bool forward) const;
+    Q_INVOKABLE int nearestVisibleIndex(int index, bool forward) const;
+    Q_INVOKABLE QVariantList visibleIndexesInRange(int first, int last) const;
     Q_INVOKABLE int pageIndex(int index, NavigationDirection direction) const;
     Q_INVOKABLE QVariantMap navigationTarget(
         int index, NavigationDirection direction, bool page = false) const;
@@ -165,6 +187,15 @@ public:
     QVariantList visibleIndexes() const;
     QVariantList overscanIndexes() const;
     QVariantList layoutBands() const;
+    QVariantList groups() const;
+    void setGroups(const QVariantList &groups);
+    QString groupStateKey() const;
+    void setGroupStateKey(const QString &key);
+    ZoinGallery::GallerySession *groupSession() const;
+    void setGroupSession(ZoinGallery::GallerySession *session);
+    bool thumbnailsEnabled() const;
+    void setThumbnailsEnabled(bool enabled);
+    QVariantList visibleGroupHeaders() const;
     quint64 layoutRevision() const;
     quint64 delegateCommitRevision() const;
 
@@ -242,6 +273,11 @@ signals:
     void visibleIndexesChanged();
     void overscanIndexesChanged();
     void layoutBandsChanged();
+    void groupsChanged();
+    void groupStateKeyChanged();
+    void groupSessionChanged();
+    void thumbnailsEnabledChanged();
+    void groupHeadersChanged();
     void layoutRevisionChanged();
     void targetHeightChanged();
     void contentYChanged();
@@ -361,6 +397,7 @@ private:
     void rewrapFixed(bool animate, RewrapTrace *trace);
     void rewrapSparseMasonry(bool animate, qreal currentIndexOffset);
     void rewrapMasonry(bool animate, qreal currentIndexOffset);
+    void rewrapGroupedMasonry(bool animate, qreal currentIndexOffset);
     ViewportAnchor fixedViewportAnchor(bool preserve) const;
     int updateFixedContentExtent(
         const ZoinGallery::GalleryFixedLayoutPlan &plan);
@@ -382,6 +419,14 @@ private:
     qreal virtualGridRowHeight() const;
     QRectF virtualGridGeometry(int index) const;
     void applyVirtualGridGeometry(MasonryBrick &brick, int index) const;
+    bool groupingActive() const;
+    void rebuildGroupSections(
+        const ZoinGallery::GalleryFixedLayoutPlan &plan);
+    QRectF groupedFixedGeometry(int index) const;
+    QRectF groupedFixedPreviewGeometry(int index) const;
+    qreal groupHeaderHeight() const;
+    void saveGroupState();
+    void restoreGroupState();
     int logicalBrickCount() const;
     MasonryBrick *brickAt(int index);
     const MasonryBrick *brickAt(int index) const;
@@ -599,6 +644,22 @@ private:
     QHash<int, MasonryBrick> _sparseBricks;
     QList<MasonryBrick> _currentLoadingRow;
     ZoinGallery::GalleryGeometryIndex _geometryIndex;
+    ZoinGallery::GalleryGroupIndex _groupIndex;
+    struct GroupSection {
+        qreal offset = 0;
+        qreal extent = 0;
+        int columns = 1;
+        int rowsPerColumn = 1;
+    };
+    QVector<GroupSection> _groupSections;
+    QVariantList _groupDescriptors;
+    QString _groupStateKey;
+    QHash<QString, QSet<QString>> _groupCollapsedState;
+    QPointer<ZoinGallery::GallerySession> _groupSession;
+    QMetaObject::Connection _groupSessionThumbnailsConnection;
+    bool _thumbnailsEnabled = true;
+    // Eight pixels above the separator plus the 28-pixel header content.
+    qreal _groupHeaderExtent = 36;
     const QVector<LayoutBand> &_layoutBands;
     quint64 _layoutRevision = 0;
     quint64 _delegateCommitRevision = 0;

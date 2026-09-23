@@ -102,7 +102,7 @@ MasonryLayout::MasonryBrick MasonryLayout::lightweightBrickForModelRow(
     int row) const {
     MasonryBrick brick;
     populateBrickModelState(brick, row);
-    QSize imageSize = brick.modelKnownSize;
+    QSize imageSize = thumbnailsEnabled() ? brick.modelKnownSize : QSize();
     if (_presentationMode == Masonry && _metadataSettledRole >= 0 && brick.modelIsImage
         && diagnosticMasonryDelayMs() > 0)
         imageSize = {};
@@ -116,7 +116,8 @@ MasonryLayout::MasonryBrick MasonryLayout::lightweightBrickForModelRow(
         }
     }
     brick.originalSize = imageSize;
-    brick.masonryGeometryReady = _metadataSettledRole < 0 || !brick.modelIsImage
+    brick.masonryGeometryReady = !thumbnailsEnabled()
+        || _metadataSettledRole < 0 || !brick.modelIsImage
         || _sparseCatalogRows || (_presentationMode != Masonry
             && (!brick.modelKnownSize.isEmpty() || brick.modelMetadataSettled));
     return brick;
@@ -898,8 +899,12 @@ bool MasonryLayout::commitReadyMasonryRows() {
     if (_containedPreview) {
         bool changed = false;
         for (auto &brick : _bricks) {
-            if (brick.modelIsImage && (!brick.modelKnownSize.isEmpty() || brick.modelMetadataSettled)) {
-                const QSizeF size = brick.modelKnownSize.isEmpty() ? GridView_Folder : QSizeF(brick.modelKnownSize);
+            if (brick.modelIsImage
+                && (!thumbnailsEnabled() || !brick.modelKnownSize.isEmpty()
+                    || brick.modelMetadataSettled)) {
+                const QSizeF size = !thumbnailsEnabled()
+                    || brick.modelKnownSize.isEmpty()
+                    ? GridView_Folder : QSizeF(brick.modelKnownSize);
                 changed |= brick.originalSize != size || !brick.masonryGeometryReady;
                 brick.originalSize = size;
                 brick.masonryGeometryReady = true;
@@ -915,8 +920,8 @@ bool MasonryLayout::commitReadyMasonryRows() {
     bool pending = false;
     for (const MasonryBrick &brick : std::as_const(_bricks)) {
         const QSizeF size = brick.modelIsImage
-            ? (brick.modelKnownSize.isEmpty() ? GridView_Folder
-                                              : QSizeF(brick.modelKnownSize))
+            ? (!thumbnailsEnabled() || brick.modelKnownSize.isEmpty()
+               ? GridView_Folder : QSizeF(brick.modelKnownSize))
             : brick.originalSize;
         pending = pending || size != brick.originalSize || !brick.masonryGeometryReady;
         entries.append({.originalSize = size,
@@ -947,7 +952,8 @@ bool MasonryLayout::commitReadyMasonryRows() {
             ? last + 1 : last;
         for (int index = first; index < barrierEnd; ++index) {
             const MasonryBrick &brick = _bricks[index];
-            if (brick.modelIsImage && brick.modelKnownSize.isEmpty()
+            if (thumbnailsEnabled() && brick.modelIsImage
+                && brick.modelKnownSize.isEmpty()
                 && !brick.modelMetadataSettled) {
                 ready = false;
                 break;
@@ -957,7 +963,8 @@ bool MasonryLayout::commitReadyMasonryRows() {
         if (ready) {
             for (int index = first; index < last; ++index) {
                 MasonryBrick &brick = _bricks[index];
-                const QSize size = brick.modelKnownSize.isEmpty()
+                const QSize size = !thumbnailsEnabled()
+                    || brick.modelKnownSize.isEmpty()
                     ? GridView_Folder.toSize() : brick.modelKnownSize;
                 if (brick.modelIsImage
                     && (brick.originalSize != size || !brick.masonryGeometryReady)) {

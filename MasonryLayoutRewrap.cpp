@@ -39,6 +39,8 @@ void MasonryLayout::rewrap(bool animate)
 
     if (_presentationMode != Masonry) {
         rewrapFixed(animate, &trace);
+    } else if (groupingActive() && !_sparseCatalogRows) {
+        rewrapGroupedMasonry(animate, currentIndexOffset);
     } else if (sparseVirtualLayout()) {
         rewrapSparseMasonry(animate, currentIndexOffset);
     } else {
@@ -65,6 +67,29 @@ MasonryLayout::ViewportAnchor MasonryLayout::fixedViewportAnchor(
 int MasonryLayout::updateFixedContentExtent(
     const ZoinGallery::GalleryFixedLayoutPlan &plan)
 {
+    if (groupingActive()) {
+        rebuildGroupSections(plan);
+        if (!_groupSections.isEmpty()) {
+            const GroupSection &last = _groupSections.constLast();
+            if (_presentationMode == Columns) {
+                setContentHeight(last.offset + last.extent);
+            }
+            else {
+                setContentHeight(last.offset + last.extent + _paddingBottom);
+            }
+        }
+        else {
+            setContentHeight(0);
+        }
+        if (_presentationMode == Columns) {
+            _contentY = qBound<qreal>(0, _contentY, maximumContentOffset());
+        }
+        else {
+            _contentY = qBound<qreal>(
+                0, _contentY, qMax<qreal>(0, _contentHeight - height()));
+        }
+        return 0;
+    }
     const int columns = effectiveColumnCount();
     int virtualRows = 0;
     if (_presentationMode == Details) {
@@ -182,7 +207,7 @@ void MasonryLayout::rewrapFixed(bool animate, RewrapTrace *trace)
     calcFixedLayout();
     trace->layoutCompletedNs = trace->enabled
         ? trace->timer.nsecsElapsed() : 0;
-    if (_presentationMode == Icons) {
+    if (_presentationMode == Icons && !groupingActive()) {
         const qreal iconContentHeight = _paddingTop
             + virtualRows * virtualGridRowHeight() + _paddingBottom;
         setContentHeight(iconContentHeight);
@@ -190,6 +215,9 @@ void MasonryLayout::rewrapFixed(bool animate, RewrapTrace *trace)
             0, _contentY, qMax<qreal>(0, _contentHeight - height()));
     }
     rebuildLayoutBands();
+    if (groupingActive()) {
+        emit groupHeadersChanged();
+    }
     trace->bandsCompletedNs = trace->enabled
         ? trace->timer.nsecsElapsed() : 0;
     restoreFixedViewportAnchor(anchor);
@@ -204,8 +232,22 @@ void MasonryLayout::rewrapSparseMasonry(bool animate,
     const int count = logicalBrickCount();
     const int columns = virtualGridColumnCount();
     const int rows = columns > 0 ? (count + columns - 1) / columns : 0;
-    setContentHeight(_paddingTop + rows * virtualGridRowHeight()
-                     + _paddingBottom);
+    if (groupingActive()) {
+        rebuildGroupSections(fixedLayoutPlan());
+        if (!_groupSections.isEmpty()) {
+            const GroupSection &last = _groupSections.constLast();
+            setContentHeight(last.offset + last.extent + _paddingBottom);
+        }
+        else {
+            setContentHeight(_paddingTop + rows * virtualGridRowHeight()
+                             + _paddingBottom);
+        }
+        emit groupHeadersChanged();
+    }
+    else {
+        setContentHeight(_paddingTop + rows * virtualGridRowHeight()
+                         + _paddingBottom);
+    }
     _contentY = qBound<qreal>(
         0, _contentY, qMax<qreal>(0, _contentHeight - height()));
     rebuildLayoutBands();
@@ -240,6 +282,10 @@ void MasonryLayout::rewrapSparseMasonry(bool animate,
 
 void MasonryLayout::rewrapMasonry(bool animate, qreal currentIndexOffset)
 {
+    if (groupingActive() && !_containedPreview) {
+        rewrapGroupedMasonry(animate, currentIndexOffset);
+        return;
+    }
     calcLayout(_bricks, width() - _paddingLeft - _paddingRight,
                _targetHeight, _spacing, !_listView, _paddingTop,
                layoutMode());
@@ -331,5 +377,146 @@ void MasonryLayout::rewrapMasonry(bool animate, qreal currentIndexOffset)
         setContentYInternal(nextContentY);
     } else if (!_deferDelegateWindowCommit) {
         updateProperties(animate);
+    }
+}
+
+void MasonryLayout::rewrapGroupedMasonry(
+    bool animate, qreal currentIndexOffset)
+{
+    const qreal oldContentY = _contentY;
+    const int count = logicalBrickCount();
+    if (count <= 0 || _groupIndex.groupCount() == 0) {
+        _groupSections.clear();
+        _groupIndex.setSectionGeometry({}, {}, 0);
+        setContentHeight(0);
+        rebuildLayoutBands();
+        if (!_deferDelegateWindowCommit) {
+            updateProperties(animate);
+        }
+        return;
+    }
+
+    const int canvasWidth = qMax(0, static_cast<int>(
+        width() - _paddingLeft - _paddingRight));
+    const int targetHeight = qMax(1, static_cast<int>(_targetHeight));
+    const int spacing = qMax(0, static_cast<int>(_spacing));
+    const bool matchTrailingRow = !_listView;
+    const CalcLayoutMode mode = layoutMode();
+    int globalRowBase = 0;
+    auto layoutRange = [&](int first, int rangeCount, qreal origin,
+                           qreal header, qreal padding) -> qreal {
+        QList<MasonryBrick> local;
+        local.reserve(rangeCount);
+        for (int i = 0; i < rangeCount; ++i) {
+            local.append(_bricks.at(first + i));
+        }
+        calcLayout(local, canvasWidth, targetHeight, spacing,
+                   matchTrailingRow, padding, mode);
+        qreal extent = padding;
+        int localRows = 0;
+        for (int i = 0; i < local.size(); ++i) {
+            const MasonryBrick &source = local.at(i);
+            MasonryBrick &target = _bricks[first + i];
+            target.x = source.x;
+            target.y = origin + header + source.y;
+            target.normalizedSize = source.normalizedSize;
+            target.row = globalRowBase + qMax(0, source.row);
+            target.column = source.column;
+            target.temporaryLineBreakAfter = false;
+            target.previewGeometry = target.normalizedSize.isValid()
+                && !target.normalizedSize.isEmpty()
+                ? QRectF(target.x, target.y, target.normalizedSize.width(),
+                         target.normalizedSize.height()).adjusted(
+                             _spacing / 2.0, _spacing / 2.0,
+                             -_spacing / 2.0, -_spacing / 2.0)
+                : QRectF();
+            extent = qMax(extent,
+                          source.y + source.normalizedSize.height());
+            localRows = qMax(localRows, source.row + 1);
+        }
+        globalRowBase += localRows;
+        return extent;
+    };
+
+    const int groupCount = _groupIndex.groupCount();
+    _groupSections.resize(groupCount);
+    QVector<qreal> offsets;
+    QVector<qreal> extents;
+    offsets.reserve(groupCount);
+    extents.reserve(groupCount);
+
+    const int prefixCount = _groupIndex.descriptor(0)->startIndex;
+    qreal cursor = _paddingTop;
+    if (prefixCount > 0) {
+        cursor = layoutRange(0, qMin(prefixCount, count), 0, 0,
+                             _paddingTop);
+    }
+
+    const qreal headerExtent = groupHeaderHeight();
+    for (int group = 0; group < groupCount; ++group) {
+        const auto *descriptor = _groupIndex.descriptor(group);
+        GroupSection &section = _groupSections[group];
+        section.offset = cursor;
+        section.columns = 1;
+        section.rowsPerColumn = 1;
+        offsets.append(cursor);
+        if (_groupIndex.isCollapsed(group)) {
+            // Keep the group's cached file geometry intact. The visibility
+            // index and indexGeometry() hide it without walking every file;
+            // this is important when one large group is collapsed.
+            section.extent = headerExtent;
+        }
+        else {
+            const qreal localExtent = layoutRange(
+                descriptor->startIndex, descriptor->count, cursor,
+                headerExtent, 0);
+            section.extent = headerExtent + localExtent;
+        }
+        extents.append(section.extent);
+        cursor += section.extent;
+    }
+
+    const int trailingStart = groupCount > 0
+        ? _groupIndex.descriptor(groupCount - 1)->startIndex
+          + _groupIndex.descriptor(groupCount - 1)->count : prefixCount;
+    if (trailingStart < count) {
+        cursor += layoutRange(trailingStart, count - trailingStart,
+                              cursor, 0, 0);
+    }
+    _groupIndex.setSectionGeometry(offsets, extents, headerExtent);
+    setContentHeight(cursor + _paddingBottom);
+    _contentY = qBound<qreal>(
+        0, _contentY, qMax<qreal>(0, _contentHeight - height()));
+    rebuildLayoutBands();
+    emit groupHeadersChanged();
+
+    if (applyPreparedResetViewport()) {
+        positionViewport();
+    }
+    else {
+        qreal nextContentY = _contentY;
+        if (currentIndexOffset != -1 && _currentIndex >= 0
+            && _currentIndex < count) {
+            nextContentY = qBound<qreal>(
+                0, indexGeometry(_currentIndex).top() + currentIndexOffset,
+                qMax<qreal>(0, _contentHeight - height()));
+        }
+        else if (_topItem >= 0 && _topItem < count) {
+            nextContentY = qBound<qreal>(
+                0, indexGeometry(_topItem).top() - _topItemOffset,
+                qMax<qreal>(0, _contentHeight - height()));
+        }
+        if (!qFuzzyCompare(nextContentY + 1, _contentY + 1)) {
+            setContentYInternal(nextContentY);
+        }
+        positionViewport();
+    }
+    if (!_deferDelegateWindowCommit) {
+        updateProperties(animate);
+    }
+    updateNeedScroll();
+    if (!_deferDelegateWindowCommit
+        && !qFuzzyCompare(oldContentY + 1, _contentY + 1)) {
+        emit contentYChanged();
     }
 }

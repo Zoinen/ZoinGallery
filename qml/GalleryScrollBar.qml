@@ -18,6 +18,10 @@ T.ScrollBar {
     readonly property color trackHoveredColor: theme.scrollBarTrackHovered
 
     policy: T.ScrollBar.AlwaysOn
+    // Keep a usable thumb when the proportional size is only a few pixels.
+    // minimumSize affects visualSize/visualPosition, not the logical range.
+    minimumSize: Math.min(1, 24 / Math.max(1, orientation === Qt.Vertical
+                                          ? availableHeight : availableWidth))
     implicitWidth: 15
     implicitHeight: 15
     hoverEnabled: true
@@ -34,6 +38,7 @@ T.ScrollBar {
         acceptedButtons: Qt.NoButton
 
         Rectangle {
+            objectName: "galleryScrollBarHandle"
             anchors.fill: parent
             anchors.margins: 4
             radius: 4
@@ -47,6 +52,7 @@ T.ScrollBar {
     }
 
     background: Rectangle {
+        objectName: "galleryScrollBarTrack"
         color: (scroll.hovered || scroll.pressed)
                ? scroll.trackHoveredColor : "transparent"
         radius: 15

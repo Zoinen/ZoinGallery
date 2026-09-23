@@ -40,6 +40,10 @@ void GalleryPanelController::setSession(GallerySession *session) {
         return;
     }
 
+    if (_sessionThumbnailConnection) {
+        disconnect(_sessionThumbnailConnection);
+        _sessionThumbnailConnection = {};
+    }
     _session = session;
     if (_ownedBackend) {
         disconnectBackend();
@@ -48,6 +52,9 @@ void GalleryPanelController::setSession(GallerySession *session) {
         _backend = nullptr;
     }
     if (session) {
+        _sessionThumbnailConnection = connect(
+            session, &GallerySession::thumbnailsEnabledChanged,
+            this, &GalleryPanelController::thumbnailsEnabledChanged);
         _ownedBackend = new GallerySessionPanelBackend(session, this);
         _backend = _ownedBackend;
         connectBackend();
@@ -74,6 +81,10 @@ void GalleryPanelController::setBackend(GalleryPanelBackend *backend) {
         _ownedBackend = nullptr;
     }
     const bool hadSession = !_session.isNull();
+    if (_sessionThumbnailConnection) {
+        disconnect(_sessionThumbnailConnection);
+        _sessionThumbnailConnection = {};
+    }
     _session = nullptr;
     _backend = backend;
     connectBackend();
@@ -184,6 +195,10 @@ bool GalleryPanelController::directoryDropEnabled() const {
 
 bool GalleryPanelController::directoryPreviewEnabled() const {
     return _backend && _backend->canPreviewDirectories();
+}
+
+bool GalleryPanelController::thumbnailsEnabled() const {
+    return _session ? _session->thumbnailsEnabled() : true;
 }
 
 QVariantList GalleryPanelController::dragUrls() const {
@@ -462,6 +477,7 @@ void GalleryPanelController::beginSelectionGesture(bool add) {
     _selectionDirty.clear();
     _selectionRangeFirst = -1;
     _selectionRangeLast = -1;
+    _selectionRangeIds.clear();
     ++_selectionVisualRevision;
     emit selectionVisualRevisionChanged();
 }
@@ -472,13 +488,15 @@ void GalleryPanelController::previewSelectionRange(int first, int last) {
         return;
     }
     if (first < 0 || last < 0) {
-        for (auto it = _selectionGestureBase.cbegin();
-             it != _selectionGestureBase.cend(); ++it) {
-            _selectionPreview.insert(it.key(), it.value());
-            _selectionDirty.insert(it.key());
+        for (const QString &id : std::as_const(_selectionRangeIds)) {
+            if (_selectionGestureBase.contains(id)) {
+                _selectionPreview.insert(id, _selectionGestureBase.value(id));
+                _selectionDirty.insert(id);
+            }
         }
         _selectionRangeFirst = -1;
         _selectionRangeLast = -1;
+        _selectionRangeIds.clear();
         ++_selectionVisualRevision;
         emit selectionVisualRevisionChanged();
         return;
@@ -531,8 +549,65 @@ void GalleryPanelController::previewSelectionRange(int first, int last) {
             _selectionDirty.insert(entryId);
         }
     }
+    _selectionRangeIds.clear();
+    for (int row = first; row <= last; ++row) {
+        const QString entryId = entryIdAt(row);
+        if (!entryId.isEmpty()) {
+            _selectionRangeIds.insert(entryId);
+        }
+    }
     _selectionRangeFirst = first;
     _selectionRangeLast = last;
+    ++_selectionVisualRevision;
+    emit selectionVisualRevisionChanged();
+}
+
+void GalleryPanelController::previewSelectionIndexes(
+    const QVariantList &indexes)
+{
+    GalleryCatalogModel *catalog = catalogModel();
+    if (!_selectionGestureActive || !_backend || !catalog
+        || catalog->rowCount() <= 0) {
+        return;
+    }
+
+    QSet<QString> nextIds;
+    QHash<QString, bool> authoritative;
+    nextIds.reserve(indexes.size());
+    authoritative.reserve(indexes.size());
+    for (const QVariant &value : indexes) {
+        bool ok = false;
+        const int row = value.toInt(&ok);
+        if (!ok || row < 0 || row >= catalog->rowCount()) {
+            continue;
+        }
+        const QString entryId = _backend->entryIdAt(row);
+        const QString name = catalog->data(
+            catalog->index(row, 0), GalleryCatalogModel::NameRole).toString();
+        if (!entryId.isEmpty() && name != QStringLiteral("..")) {
+            nextIds.insert(entryId);
+            authoritative.insert(entryId, _backend->isSelectedAt(row));
+        }
+    }
+
+    for (const QString &id : std::as_const(_selectionRangeIds)) {
+        if (!nextIds.contains(id) && _selectionGestureBase.contains(id)) {
+            _selectionPreview.insert(id, _selectionGestureBase.value(id));
+            _selectionDirty.insert(id);
+        }
+    }
+    for (const QString &id : std::as_const(nextIds)) {
+        if (!_selectionGestureBase.contains(id)) {
+            _selectionGestureBase.insert(id,
+                                         effectiveSelected(
+                                             id, authoritative.value(id)));
+        }
+        _selectionPreview.insert(id, _selectionAdds);
+        _selectionDirty.insert(id);
+    }
+    _selectionRangeIds = std::move(nextIds);
+    _selectionRangeFirst = -1;
+    _selectionRangeLast = -1;
     ++_selectionVisualRevision;
     emit selectionVisualRevisionChanged();
 }
@@ -603,6 +678,7 @@ void GalleryPanelController::cancelSelectionGesture() {
     _selectionDirty.clear();
     _selectionRangeFirst = -1;
     _selectionRangeLast = -1;
+    _selectionRangeIds.clear();
     if (changed) {
         ++_selectionVisualRevision;
         emit selectionVisualRevisionChanged();

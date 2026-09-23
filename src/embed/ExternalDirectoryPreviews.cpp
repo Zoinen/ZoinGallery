@@ -34,7 +34,7 @@ ExternalDirectoryPreviews::~ExternalDirectoryPreviews() {
 }
 void ExternalDirectoryPreviews::clear() {
     _clearing = true;
-    _demand.clear();
+    _demandIds.clear();
     for (const auto &id : _records.keys()) retire(id);
     for (auto &entry : _catalog->_entries) {
         entry.directoryPreviewState = DirectoryPreviewState::Unknown;
@@ -58,7 +58,21 @@ ExternalCatalogModel *ExternalDirectoryPreviews::model(const QString &id) const 
     return record && entry && entry->directorySource.isValid()
         && record->source.sourceKey == entry->directorySource.sourceKey ? record->model : nullptr;
 }
-void ExternalDirectoryPreviews::demand(const QList<int> &rows) { _demand = rows; synchronize(); }
+void ExternalDirectoryPreviews::demand(const QList<int> &rows) {
+    _demandIds.clear();
+    _demandIds.reserve(rows.size());
+    QSet<QString> seen;
+    for (const int row : rows) {
+        const auto *entry = _catalog->entryAt(row);
+        if (!entry || !entry->loaded || entry->id.isEmpty()
+            || seen.contains(entry->id)) {
+            continue;
+        }
+        seen.insert(entry->id);
+        _demandIds.append(entry->id);
+    }
+    synchronize();
+}
 void ExternalDirectoryPreviews::setCacheMode(int mode) {
     if (_cacheMode == mode) return;
     _cacheMode = mode;
@@ -112,9 +126,11 @@ void ExternalDirectoryPreviews::synchronize() {
     if (_catalog->_shutdown || _clearing) return;
     QSet<QString> visible;
     QStringList ordered;
-    for (int row : _demand) {
+    for (const QString &id : _demandIds) {
+        const int row = _catalog->rowForEntryId(id);
         const auto *entry = _catalog->entryAt(row);
-        if (entry && entry->directory && entry->directorySource.isValid() && !visible.contains(entry->id)) {
+        if (entry && entry->directory && entry->directorySource.isValid()
+            && !visible.contains(entry->id)) {
             visible.insert(entry->id);
             ordered.append(entry->id);
         }

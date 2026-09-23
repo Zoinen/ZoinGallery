@@ -8,6 +8,7 @@
 #include "ThumbnailLoader.h"
 #include "ViewerImageCache.h"
 #include "DecodeSizePolicy.h"
+#include "FolderPreviewSelection.h"
 
 #include <ZoinGallery/MediaTimingTrace.h>
 

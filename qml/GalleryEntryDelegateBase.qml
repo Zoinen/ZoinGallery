@@ -202,12 +202,28 @@ BrickItem {
 
     function sourceColorIconAtSize(source, logicalSize, tint) {
         const value = source ? source.toString() : ""
+        const lucide = isLucideIconSource(value)
+        const iconName = iconKey !== ""
+                ? iconKey : panelRoot.iconResolver.keyFromSource(value)
+        const provider = panelRoot.iconProvider
+        if (lucide && iconName !== "" && provider
+                && typeof provider.rasterizedLucideSource === "function"
+                && typeof provider.lucideStrokeWidth === "function") {
+            const requestedSize = Math.max(1, Math.round(Number(logicalSize) || 1))
+            const strokeWidth = provider.lucideStrokeWidth(
+                        Math.max(1, Number(logicalSize) || 1))
+            return provider.rasterizedLucideSource(
+                        iconName, requestedSize,
+                        Math.max(0.5, Number(renderDpr) || 1),
+                        tint === undefined || tint === null ? "" : String(tint),
+                        strokeWidth)
+        }
         return panelRoot.iconResolver.retargetProviderSource(
                     value,
                     Math.max(1, Math.round(Number(logicalSize) || 1)),
                     Math.max(0.5, Number(renderDpr) || 1),
                     tint === undefined || tint === null ? "" : String(tint),
-                    isLucideIconSource(value))
+                    lucide)
     }
 
     GalleryEntrySelectionSurface {

@@ -137,6 +137,8 @@ ImageSourceDescriptor sourceDescriptor(
     source.displayName = name;
     source.mimeType = map.value(QStringLiteral("mimeType")).toString();
     source.size = size;
+    source.catalogGeneration = map.value(
+        QStringLiteral("generation")).toULongLong();
     return source;
 }
 

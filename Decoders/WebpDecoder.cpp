@@ -78,6 +78,7 @@ bool WebpDecoder::readMetadata(ImageInfo &result) {
             && exifInfo.Orientation <= ExifOrientation::Rotate270CW) {
             result.orientation = static_cast<ExifOrientation>(exifInfo.Orientation);
         }
+        result.typedFileFields = readTypedFileFields(exifInfo);
         const QVariantMap parsedExif = readExifToMap(exifInfo);
         for (auto it = parsedExif.cbegin(); it != parsedExif.cend(); ++it) {
             result.exif.insert(it.key(), it.value());

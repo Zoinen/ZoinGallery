@@ -60,6 +60,9 @@ struct ImageInfo {
     QSize imageSize;
     ExifOrientation orientation = ExifOrientation::Horizontal;
     QVariantMap exif;
+    // Machine-readable EXIF values stay separate from the presentation map.
+    QVariantMap typedFileFields;
+    bool fileFieldsRead = false;
 
     bool isLast = false;
     bool isFromEmbeddedView = false;

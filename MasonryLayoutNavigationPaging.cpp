@@ -1,5 +1,6 @@
 #include "MasonryLayout.h"
 #include "FileListModel.h"
+#include "GalleryPixelGrid.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,6 +16,10 @@ ImageFile *imageFileFromNavigationIndex(const QModelIndex &index) {
 } // namespace
 
 int MasonryLayout::indexAtViewport(qreal x, qreal y) const {
+    if (_viewport) {
+        const QPointF point = _viewport->mapFromItem(this, QPointF(x, y));
+        return indexAt(point.x(), point.y());
+    }
     return _presentationMode == Columns
         ? indexAt(x - _paddingLeft + _contentY, y)
         : indexAt(x - _paddingLeft, y + _contentY);
@@ -29,13 +34,17 @@ QVariantList MasonryLayout::indexesInViewportRect(qreal x, qreal y, qreal width,
         : QRectF(viewportRect.x() - _paddingLeft,
                  viewportRect.y() + _contentY,
                  viewportRect.width(), viewportRect.height());
+    if (_viewport)
+        contentRect = _viewport->mapRectFromItem(this, viewportRect);
 
     QVariantList result;
+    const qreal margin = 1 / devicePixelRatio();
     const QList<int> candidates = _presentationMode == Columns
-        ? indexesForHorizontalRange(contentRect.left(), contentRect.right())
-        : indexesForVerticalRange(contentRect.top(), contentRect.bottom());
+        ? indexesForHorizontalRange(contentRect.left() - margin, contentRect.right() + margin)
+        : indexesForVerticalRange(contentRect.top() - margin, contentRect.bottom() + margin);
     for (const int index : candidates) {
-        if (indexGeometry(index).intersects(contentRect)) {
+        if (ZoinGallery::PixelGrid::snapDeviceRect(indexGeometry(index),
+                                                  devicePixelRatio()).intersects(contentRect)) {
             result.append(index);
         }
     }
@@ -170,6 +179,88 @@ int MasonryLayout::pageIndex(
 int MasonryLayout::columnsNavigationIndex(
     int index, NavigationDirection direction, bool page,
     int lastIndex) const {
+    if (!_groupRanges.isEmpty()) {
+        const ZoinGallery::GalleryFixedLayoutPlan plan = fixedLayoutPlan();
+        const int sectionIndex = plan.sectionIndexFor(index);
+        if (sectionIndex >= 0) {
+            const ZoinGallery::GalleryLayoutSection &section =
+                plan.sections.at(sectionIndex);
+            const int row = plan.rowFor(index);
+            const int column = plan.columnFor(index);
+            const bool backwards = direction == NavigateLeft;
+            if (page) {
+                const QRectF current = indexGeometry(index);
+                const qreal currentCenter = current.center().x();
+                const qreal target = currentCenter
+                    + (direction == NavigateLeft || direction == NavigateUp
+                           ? -1 : 1) * qMax<qreal>(1, width());
+                const qreal reach = qMax<qreal>(
+                    columnStride(), width() / 2);
+                const QVector<int> candidates = plan.indexesIntersecting(
+                    target - reach, target + reach);
+                int best = index;
+                qreal bestScore = std::numeric_limits<qreal>::max();
+                for (const int candidate : candidates) {
+                    if (candidate == index) {
+                        continue;
+                    }
+                    const QRectF geometry = indexGeometry(candidate);
+                    const qreal center = geometry.center().x();
+                    if ((target < currentCenter && center >= currentCenter)
+                        || (target > currentCenter
+                            && center <= currentCenter)) {
+                        continue;
+                    }
+                    const qreal score = qAbs(center - target)
+                        + qAbs(geometry.center().y()
+                               - current.center().y()) * 0.01;
+                    if (score < bestScore) {
+                        best = candidate;
+                        bestScore = score;
+                    }
+                }
+                if (best != index) {
+                    return best;
+                }
+            }
+            else {
+                if (direction == NavigateUp || direction == NavigateDown) {
+                    return qBound(0, index
+                        + (direction == NavigateUp ? -1 : 1), lastIndex);
+                }
+                const int nextColumn = column + (backwards ? -1 : 1);
+                if (nextColumn >= 0 && nextColumn < section.primaryCells) {
+                    const int candidate = section.start
+                        + nextColumn * plan.rowsPerColumn + row;
+                    if (candidate < section.start + section.count) {
+                        return candidate;
+                    }
+                }
+                const int step = backwards ? -1 : 1;
+                for (int nextSection = sectionIndex + step;
+                     nextSection >= 0 && nextSection < plan.sections.size();
+                     nextSection += step) {
+                    const auto &adjacent = plan.sections.at(nextSection);
+                    if (adjacent.count <= 0 || adjacent.primaryCells <= 0) {
+                        continue;
+                    }
+                    const int edgeColumn = backwards
+                        ? adjacent.primaryCells - 1 : 0;
+                    const int rowCount = qMin(
+                        plan.rowsPerColumn,
+                        adjacent.count - edgeColumn * plan.rowsPerColumn);
+                    const int candidate = adjacent.start
+                        + edgeColumn * plan.rowsPerColumn
+                        + qMin(row, qMax(0, rowCount - 1));
+                    if (candidate >= adjacent.start
+                        && candidate < adjacent.start + adjacent.count) {
+                        return candidate;
+                    }
+                }
+                return index;
+            }
+        }
+    }
     const int rows = rowsPerColumn();
     if (page) {
         const bool backwards =
@@ -212,6 +303,102 @@ int MasonryLayout::masonryNavigationIndex(
 int MasonryLayout::fixedNavigationIndex(
     int index, NavigationDirection direction, bool page,
     int lastIndex) const {
+    const bool usesFixedGeometry = _presentationMode != Masonry
+        || sparseVirtualLayout();
+    if (usesFixedGeometry && !_groupRanges.isEmpty()) {
+        const ZoinGallery::GalleryFixedLayoutPlan plan = fixedLayoutPlan();
+        if (page) {
+            const QRectF current = indexGeometry(index);
+            if (current.isValid() && !current.isEmpty()) {
+                const bool backwards = direction == NavigateLeft
+                    || direction == NavigateUp;
+                const qreal currentCenter = current.center().y();
+                const qreal target = currentCenter
+                    + (backwards ? -1 : 1) * qMax<qreal>(
+                        1, height());
+                const qreal reach = qMax<qreal>(
+                    effectiveTargetExtent(), height() / 2);
+                const QVector<int> candidates = plan.indexesIntersecting(
+                    target - reach, target + reach);
+                int best = index;
+                qreal bestScore = std::numeric_limits<qreal>::max();
+                for (const int candidate : candidates) {
+                    if (candidate == index) {
+                        continue;
+                    }
+                    const QRectF geometry = indexGeometry(candidate);
+                    const qreal center = geometry.center().y();
+                    if ((backwards && center >= currentCenter)
+                        || (!backwards && center <= currentCenter)) {
+                        continue;
+                    }
+                    const qreal score = qAbs(center - target)
+                        + qAbs(geometry.center().x()
+                               - current.center().x()) * 0.01;
+                    if (score < bestScore) {
+                        best = candidate;
+                        bestScore = score;
+                    }
+                }
+                if (best != index) {
+                    return best;
+                }
+            }
+        } else if (_presentationMode == Grid || _presentationMode == Icons
+                   || sparseVirtualLayout()) {
+            const int sectionIndex = plan.sectionIndexFor(index);
+            if (sectionIndex >= 0) {
+                const auto &section = plan.sections.at(sectionIndex);
+                const int row = plan.rowFor(index);
+                const int column = plan.columnFor(index);
+                const int columns = qMax(1, plan.columns);
+                if (direction == NavigateLeft
+                    || direction == NavigateRight) {
+                    const int targetColumn = column
+                        + (direction == NavigateLeft ? -1 : 1);
+                    const int rowBegin = section.start + row * columns;
+                    const int rowEnd = qMin(section.start + section.count,
+                                            rowBegin + columns);
+                    const int candidate = rowBegin + targetColumn;
+                    return targetColumn >= 0 && candidate < rowEnd
+                        ? candidate : index;
+                }
+                const int targetRow = row
+                    + (direction == NavigateUp ? -1 : 1);
+                if (targetRow >= 0 && targetRow < section.primaryCells) {
+                    const int rowBegin = section.start + targetRow * columns;
+                    const int rowEnd = qMin(section.start + section.count,
+                                            rowBegin + columns);
+                    const int candidate = rowBegin + qMin(column,
+                                                          rowEnd - rowBegin - 1);
+                    if (candidate >= rowBegin && candidate < rowEnd) {
+                        return candidate;
+                    }
+                }
+                const int step = direction == NavigateUp ? -1 : 1;
+                for (int nextSection = sectionIndex + step;
+                     nextSection >= 0
+                         && nextSection < plan.sections.size();
+                     nextSection += step) {
+                    const auto &adjacent = plan.sections.at(nextSection);
+                    if (adjacent.count <= 0 || adjacent.primaryCells <= 0) {
+                        continue;
+                    }
+                    const int edgeRow = direction == NavigateUp
+                        ? adjacent.primaryCells - 1 : 0;
+                    const int rowBegin = adjacent.start + edgeRow * columns;
+                    const int rowEnd = qMin(
+                        adjacent.start + adjacent.count, rowBegin + columns);
+                    const int candidate = rowBegin
+                        + qMin(column, rowEnd - rowBegin - 1);
+                    if (candidate >= rowBegin && candidate < rowEnd) {
+                        return candidate;
+                    }
+                }
+                return index;
+            }
+        }
+    }
     const qreal extent = (_presentationMode == Icons
                           || sparseVirtualLayout())
         ? virtualGridRowHeight()

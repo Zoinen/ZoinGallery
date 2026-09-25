@@ -322,29 +322,24 @@ void MasonryLayout::applyDelegateRowLayout(
 {
     row->item->setRowColumn(row->brick->row, row->brick->column);
     row->item->setIconLabelText(row->brick->iconLabelText);
-    row->item->setPreviewRect(row->brick->previewGeometry.translated(
-        -row->brick->x, -row->brick->y));
+    const QRectF geometry = ZoinGallery::PixelGrid::snapDeviceRect(
+        row->brick->geometry(), devicePixelRatio());
+    row->item->setPreviewRect(ZoinGallery::PixelGrid::snapDeviceRect(
+        row->brick->previewGeometry, devicePixelRatio()).translated(
+            -geometry.topLeft()));
     if (context->trace) {
         const qint64 now = context->timer.nsecsElapsed();
         context->delegateLayoutMetaNs += now - row->phaseStartedNs;
         row->phaseStartedNs = now;
     }
 
-    const bool preserveFractional = _containedPreview || _presentationMode == Details
-        || _presentationMode == Columns;
-    const bool geometryDiffers = preserveFractional
-        ? row->item->geometry() != row->brick->geometry()
-        : ZoinGallery::PixelGrid::snapLogicalRect(row->item->geometry())
-            != ZoinGallery::PixelGrid::snapLogicalRect(
-                row->brick->geometry());
+    const bool geometryDiffers = row->item->geometry() != geometry;
     if (!_animateResizing && geometryDiffers) {
-        row->item->setGeometry(row->brick->geometry(), false,
-                               !preserveFractional);
+        row->item->setGeometry(geometry, false, false);
     } else if (_animateResizing && (row->itemPopped || geometryDiffers)) {
         const bool animateGeometry = row->item->isVisible() && animate
             && row->item->geometry().isValid();
-        row->item->setGeometry(row->brick->geometry(), animateGeometry,
-                               !preserveFractional);
+        row->item->setGeometry(geometry, animateGeometry, false);
     }
     if (context->trace) {
         const qint64 now = context->timer.nsecsElapsed();

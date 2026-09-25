@@ -33,6 +33,10 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(QVariantList visibleIndexes READ visibleIndexes NOTIFY visibleIndexesChanged)
     Q_PROPERTY(QVariantList overscanIndexes READ overscanIndexes NOTIFY overscanIndexesChanged)
     Q_PROPERTY(QVariantList layoutBands READ layoutBands NOTIFY layoutBandsChanged)
+    Q_PROPERTY(QVariantList groupRanges READ groupRanges WRITE setGroupRanges NOTIFY groupRangesChanged)
+    Q_PROPERTY(QVariantList groupHeaderGeometries READ groupHeaderGeometries NOTIFY groupHeaderGeometriesChanged)
+    Q_PROPERTY(QVariantList visibleGroupHeaderGeometries READ visibleGroupHeaderGeometries NOTIFY groupHeaderGeometriesChanged)
+    Q_PROPERTY(qreal groupHeaderHeight READ groupHeaderHeight WRITE setGroupHeaderHeight NOTIFY groupHeaderHeightChanged)
     Q_PROPERTY(quint64 layoutRevision READ layoutRevision NOTIFY layoutRevisionChanged)
     // A lightweight diagnostic counter also gives tests a deterministic way
     // to reject presentation changes which populate a disposable viewport
@@ -62,6 +66,8 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(int listRowHeight READ listRowHeight NOTIFY listRowHeightChanged)
     Q_PROPERTY(QVariantList currentImageExif READ currentImageExif NOTIFY currentIndexChanged)
     Q_PROPERTY(QQuickItem *viewport READ viewport NOTIFY viewportChanged)
+    Q_PROPERTY(QPointF parentPixelGridOffset READ parentPixelGridOffset NOTIFY parentPixelGridOffsetChanged)
+    Q_PROPERTY(QPointF viewportSceneOrigin READ viewportSceneOrigin NOTIFY viewportSceneOriginChanged)
     Q_PROPERTY(bool persistSettings MEMBER _persistSettings)
     Q_PROPERTY(bool containedPreview READ containedPreview WRITE setContainedPreview NOTIFY containedPreviewChanged)
     Q_PROPERTY(qreal devicePixelRatio READ devicePixelRatio WRITE setDevicePixelRatio NOTIFY devicePixelRatioChanged)
@@ -100,6 +106,9 @@ public:
 
     explicit MasonryLayout(QQuickItem *parent = nullptr);
     void componentComplete() override;
+    void itemChange(ItemChange change, const ItemChangeData &data) override;
+    QPointF parentPixelGridOffset() const { return _parentPixelGridOffset; }
+    QPointF viewportSceneOrigin() const { return _viewportSceneOrigin; }
     bool containedPreview() const { return _containedPreview; }
     void setContainedPreview(bool value);
 
@@ -165,6 +174,12 @@ public:
     QVariantList visibleIndexes() const;
     QVariantList overscanIndexes() const;
     QVariantList layoutBands() const;
+    QVariantList groupRanges() const;
+    void setGroupRanges(const QVariantList &ranges);
+    QVariantList groupHeaderGeometries() const;
+    QVariantList visibleGroupHeaderGeometries() const;
+    qreal groupHeaderHeight() const;
+    void setGroupHeaderHeight(qreal height);
     quint64 layoutRevision() const;
     quint64 delegateCommitRevision() const;
 
@@ -242,6 +257,9 @@ signals:
     void visibleIndexesChanged();
     void overscanIndexesChanged();
     void layoutBandsChanged();
+    void groupRangesChanged();
+    void groupHeaderGeometriesChanged();
+    void groupHeaderHeightChanged();
     void layoutRevisionChanged();
     void targetHeightChanged();
     void contentYChanged();
@@ -282,6 +300,8 @@ signals:
 
     void viewportChanged();
     void devicePixelRatioChanged();
+    void parentPixelGridOffsetChanged();
+    void viewportSceneOriginChanged();
     void iconLabelFontChanged();
     void deferDelegateRefreshOnResetChanged();
 
@@ -362,7 +382,7 @@ private:
     void rewrapSparseMasonry(bool animate, qreal currentIndexOffset);
     void rewrapMasonry(bool animate, qreal currentIndexOffset);
     ViewportAnchor fixedViewportAnchor(bool preserve) const;
-    int updateFixedContentExtent(
+    void updateFixedContentExtent(
         const ZoinGallery::GalleryFixedLayoutPlan &plan);
     void restoreFixedViewportAnchor(const ViewportAnchor &anchor);
     void commitFixedViewport(qreal oldContentY, bool animate,
@@ -378,6 +398,7 @@ private:
     // every logical row, so these helpers provide a bounded, placeholder
     // geometry without allocating a brick for the whole catalog.
     bool sparseVirtualLayout() const;
+    QVector<ZoinGallery::GalleryGroupHeader> groupHeaderGeometryVector() const;
     int virtualGridColumnCount() const;
     qreal virtualGridRowHeight() const;
     QRectF virtualGridGeometry(int index) const;
@@ -394,6 +415,7 @@ private:
     void rebuildLayoutBands();
     QList<int> indexesForVerticalRange(qreal top, qreal bottom) const;
     void positionViewport();
+    void observePixelGridAncestors();
     qreal maximumContentOffset() const;
     qreal viewportExtent() const;
     int bandIndexAt(qreal y) const;
@@ -440,6 +462,9 @@ private:
         CalcLayoutGrid
     };
     CalcLayoutMode layoutMode() const;
+    void calcGroupedMasonryLayout(qreal canvasWidth, int targetHeight,
+                                  int spacing, qreal paddingTop,
+                                  CalcLayoutMode layoutMode);
     static void calcGridLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing,
                            bool lastRowMatchesPrevious, qreal paddingTop);
     static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth,
@@ -590,6 +615,11 @@ private:
     bool _lightweightRewrapPending = false;
     quint64 _lightweightRewrapGeneration = 0;
     bool _sparseCatalogRows = false;
+    QVector<ZoinGallery::GalleryLayoutGroup> _groupRanges;
+    QVector<ZoinGallery::GalleryGroupHeader> _masonryGroupHeaders;
+    qreal _groupHeaderHeight = 26;
+    mutable bool _fixedLayoutPlanCached = false;
+    mutable ZoinGallery::GalleryFixedLayoutPlan _cachedFixedLayoutPlan;
 
     QList<MasonryBrick> _bricks;
     // A paged external catalog has a large logical row count but only a
@@ -612,6 +642,9 @@ private:
     qreal _topItemOffset;
     qreal _currentIndexOffsetOverride;
     QQuickItem *_viewport;
+    QPointF _parentPixelGridOffset;
+    QPointF _viewportSceneOrigin;
+    QVector<QMetaObject::Connection> _pixelGridConnections;
 
     const QSizeF GridView_Folder = QSizeF(1, 1);
 

@@ -95,6 +95,10 @@ GallerySession::GallerySession(
         connect(d->external,
                 &ExternalCatalogModel::viewerRequestStateAtChanged,
                 this, &GallerySession::viewerRequestStateAtChanged);
+        connect(d->external, &ExternalCatalogModel::fileFieldsRead,
+                this, &GallerySession::fileFieldsRead);
+        connect(d->external, &ExternalCatalogModel::fileFieldsReadBatch,
+                this, &GallerySession::fileFieldsReadBatch);
         return;
     }
 

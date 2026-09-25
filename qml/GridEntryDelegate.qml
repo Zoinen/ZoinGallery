@@ -13,12 +13,18 @@ Item {
         readonly property var quickSearchMatch:
             content.entry.panelRoot.quickSearchFormatter.matchForEntry(
                 content.entry.entryId)
+        readonly property point pixelCorrection:
+            content.entry.iconPixelOffset(label)
         objectName: "galleryGridLabel-" + content.entry.viewIndex
         x: 4
         y: content.entry.effectivePreviewRect.y
            + content.entry.effectivePreviewRect.height + 3
-        width: Math.max(0, parent.width - 8)
-        height: Math.max(0, parent.height - y - 3)
+        width: Math.max(0, Math.round((parent.width - 8)
+                                      * content.entry.renderDpr)
+                              / content.entry.renderDpr)
+        height: Math.max(0, Math.ceil((parent.height - y - 3)
+                                      * content.entry.renderDpr)
+                               / content.entry.renderDpr)
         text: quickSearchMatch
               ? content.entry.panelRoot.quickSearchFormatter.styledTextForMatch(
                     content.entry.effectiveDisplayName,
@@ -38,5 +44,9 @@ Item {
         clip: true
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignTop
+        transform: Translate {
+            x: label.pixelCorrection.x
+            y: label.pixelCorrection.y
+        }
     }
 }

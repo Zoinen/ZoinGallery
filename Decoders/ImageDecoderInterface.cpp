@@ -3,6 +3,7 @@
 #include "TinyEXIF.h"
 
 #include <QDateTime>
+#include <cmath>
 
 bool ImageDecoderInterface::isFormatSupported(const QString &path) {
     return isExtensionMatch(path, supportedFormats());
@@ -86,4 +87,46 @@ QVariantMap ImageDecoderInterface::readExifToMap(const TinyEXIF::EXIFInfo &exifI
         out["Panorama"] = "True";
     }
     return out;
+}
+
+QVariantMap ImageDecoderInterface::readTypedFileFields(
+    const TinyEXIF::EXIFInfo &exifInfo) {
+    QVariantMap fields;
+    auto valid = [](double value) {
+        return std::isfinite(value) && value > 0.0;
+    };
+    if (valid(exifInfo.ExposureTime)) {
+        fields.insert(QStringLiteral("exif.exposure_time"),
+                      exifInfo.ExposureTime);
+    }
+    if (exifInfo.ISOSpeedRatings > 0) {
+        fields.insert(QStringLiteral("exif.iso"),
+                      static_cast<quint32>(exifInfo.ISOSpeedRatings));
+    }
+    if (valid(exifInfo.FNumber)) {
+        fields.insert(QStringLiteral("exif.f_number"), exifInfo.FNumber);
+    }
+    if (valid(exifInfo.LensInfo.FocalLengthIn35mm)) {
+        fields.insert(QStringLiteral("exif.focal_length_35mm"),
+                      exifInfo.LensInfo.FocalLengthIn35mm);
+    }
+    const double minimum = exifInfo.LensInfo.FocalLengthMin;
+    const double maximum = exifInfo.LensInfo.FocalLengthMax;
+    if (valid(minimum) && valid(maximum) && maximum >= minimum) {
+        fields.insert(QStringLiteral("exif.lens_focal_range"),
+                      QVariantMap{{QStringLiteral("min"), minimum},
+                                  {QStringLiteral("max"), maximum}});
+    }
+    const QString camera = (QString::fromStdString(exifInfo.Make) + QLatin1Char(' ')
+                            + QString::fromStdString(exifInfo.Model)).simplified();
+    if (!camera.isEmpty()) {
+        fields.insert(QStringLiteral("exif.camera_model"), camera);
+    }
+    const QString lens = (QString::fromStdString(exifInfo.LensInfo.Make)
+                          + QLatin1Char(' ')
+                          + QString::fromStdString(exifInfo.LensInfo.Model)).simplified();
+    if (!lens.isEmpty()) {
+        fields.insert(QStringLiteral("exif.lens_model"), lens);
+    }
+    return fields;
 }

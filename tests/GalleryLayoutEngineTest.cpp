@@ -15,6 +15,10 @@ private slots:
     void columnMajorUsesOnePhysicalPixelStride();
     void detailsPlanIncludesBottomAlignmentSlack();
     void analyticalRangeIsBoundedByViewport();
+    void groupedDetailsReserveHeaderRows();
+    void groupedGridStartsEachBlockOnANewRow();
+    void groupedColumnsReserveAHeaderAcrossTheirBlock();
+    void groupedIconsUseTheirVirtualRowHeight();
     void iconsGrowOnlyRowsThatNeedWrappedLabels();
     void masonryJustifiesCompletedRows();
     void densityPolicyIsPresentationSpecific();
@@ -82,6 +86,101 @@ void GalleryLayoutEngineTest::analyticalRangeIsBoundedByViewport() {
     QVERIFY(indexes.size() <= 38);
     QCOMPARE(indexes.first(), 400);
     QCOMPARE(indexes.last(), 436);
+}
+
+void GalleryLayoutEngineTest::groupedDetailsReserveHeaderRows() {
+    GalleryLayoutRequest request;
+    request.mode = GalleryPresentationMode::Details;
+    request.viewportSize = QSizeF(100, 100);
+    request.insets = {.top = 5, .bottom = 5};
+    request.density = 10;
+    request.groupHeaderHeight = 20;
+    request.groups = {
+        {.start = 1, .count = 2, .key = "a", .title = "A"},
+        {.start = 4, .count = 2, .key = "b", .title = "B"},
+    };
+
+    const GalleryFixedLayoutPlan plan =
+        GalleryLayoutEngine::fixedPlan(request, 6);
+    QCOMPARE(plan.groupHeaders.size(), 2);
+    QCOMPARE(plan.geometryFor(0).top(), 5.0);
+    QCOMPARE(plan.groupHeaders.at(0).geometry,
+             QRectF(0, 15, 100, 20));
+    QCOMPARE(plan.geometryFor(1).top(), 35.0);
+    QCOMPARE(plan.geometryFor(2).top(), 45.0);
+    QCOMPARE(plan.geometryFor(3).top(), 55.0);
+    QCOMPARE(plan.groupHeaders.at(1).geometry,
+             QRectF(0, 65, 100, 20));
+    QCOMPARE(plan.geometryFor(4).top(), 85.0);
+    QCOMPARE(plan.geometryFor(5).top(), 95.0);
+    QCOMPARE(plan.contentExtent, 110.0);
+    QVERIFY(plan.indexesIntersecting(16, 34).isEmpty());
+}
+
+void GalleryLayoutEngineTest::groupedGridStartsEachBlockOnANewRow() {
+    GalleryLayoutRequest request;
+    request.mode = GalleryPresentationMode::Grid;
+    request.viewportSize = QSizeF(400, 400);
+    request.density = 100;
+    request.groupHeaderHeight = 20;
+    request.groups = {
+        {.start = 3, .count = 3, .key = "second", .title = "Second"},
+    };
+
+    const GalleryFixedLayoutPlan plan =
+        GalleryLayoutEngine::fixedPlan(request, 6);
+    QCOMPARE(plan.groupHeaders.size(), 1);
+    QCOMPARE(plan.geometryFor(2).top(), 0.0);
+    QCOMPARE(plan.groupHeaders.first().geometry, QRectF(0, 100, 400, 20));
+    QCOMPARE(plan.geometryFor(3).top(), 120.0);
+    QCOMPARE(plan.geometryFor(5).top(), 120.0);
+    QVERIFY(plan.indexesIntersecting(101, 119).isEmpty());
+    QCOMPARE(plan.contentExtent, 220.0);
+}
+
+void GalleryLayoutEngineTest::groupedColumnsReserveAHeaderAcrossTheirBlock() {
+    GalleryLayoutRequest request;
+    request.mode = GalleryPresentationMode::Columns;
+    request.viewportSize = QSizeF(600, 500);
+    request.insets = {.top = 3, .bottom = 3};
+    request.density = 100;
+    request.columnCount = 2;
+    request.groupHeaderHeight = 20;
+    request.groups = {
+        {.start = 3, .count = 5, .key = "second", .title = "Second"},
+    };
+
+    const GalleryFixedLayoutPlan plan =
+        GalleryLayoutEngine::fixedPlan(request, 8);
+    QCOMPARE(plan.rowsPerColumn, 4);
+    QCOMPARE(plan.groupHeaders.size(), 1);
+    const qreal x = plan.cellWidth;
+    QCOMPARE(plan.groupHeaders.first().geometry,
+             QRectF(x, 3, 2 * plan.cellWidth, 20));
+    QCOMPARE(plan.geometryFor(3), QRectF(x, 23, plan.cellWidth, 100));
+    QCOMPARE(plan.geometryFor(7), QRectF(2 * x, 23,
+                                         plan.cellWidth, 100));
+    QCOMPARE(plan.contentExtent, 3 * plan.cellWidth);
+}
+
+void GalleryLayoutEngineTest::groupedIconsUseTheirVirtualRowHeight() {
+    GalleryLayoutRequest request;
+    request.mode = GalleryPresentationMode::Icons;
+    request.viewportSize = QSizeF(400, 400);
+    request.density = 100;
+    request.iconRowHeight = 140;
+    request.groupHeaderHeight = 20;
+    request.groups = {
+        {.start = 4, .count = 2, .key = "second", .title = "Second"},
+    };
+
+    const GalleryFixedLayoutPlan plan =
+        GalleryLayoutEngine::fixedPlan(request, 6);
+    QCOMPARE(plan.geometryFor(3).top(), 0.0);
+    QCOMPARE(plan.groupHeaders.first().geometry.top(), 140.0);
+    QCOMPARE(plan.geometryFor(4).top(), 160.0);
+    QCOMPARE(plan.geometryFor(5).top(), 160.0);
+    QCOMPARE(plan.contentExtent, 300.0);
 }
 
 void GalleryLayoutEngineTest::iconsGrowOnlyRowsThatNeedWrappedLabels() {

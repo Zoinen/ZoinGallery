@@ -17,6 +17,9 @@ public:
     bool supportsNativeDecode() const override { return false; }
     QImage decode(const QString& mimeType, const QByteArray& data, QSize targetSize) override { return QImage(); }
 
+protected:
+    QVariantMap readTypedFileFields(LibRaw &rawProcessor);
+
 private:
     ExifOrientation readOrientationFromExif(LibRaw &rawProcessor);
     QVariantMap readExifToMap(LibRaw &rawProcessor);

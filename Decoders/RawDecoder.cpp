@@ -7,9 +7,10 @@
 #include <libraw/libraw.h>
 
 #include <QDebug>
-#include <QFile>
 
 #include <memory>
+#include <cmath>
+#include <string>
 
 REGISTER_DECODER_DEFINITION(RawDecoder)
 
@@ -123,8 +124,58 @@ QVariantMap RawDecoder::readExifToMap(LibRaw &rawProcessor) {
                                          gps.longitude[0], gps.longitude[1], gps.longitude[2], gps.longref);
     }
 
-    // Note: LibRaw doesn't provide direct access to XMP data for panorama info
     return out;
+}
+
+QVariantMap RawDecoder::readTypedFileFields(LibRaw &rawProcessor) {
+    QVariantMap fields;
+    auto valid = [](double value) {
+        return std::isfinite(value) && value > 0.0;
+    };
+    const auto &other = rawProcessor.imgdata.other;
+    const auto &make = rawProcessor.imgdata.idata.make;
+    const auto &model = rawProcessor.imgdata.idata.model;
+    if (valid(other.shutter)) {
+        fields["exif.exposure_time"] = other.shutter;
+    }
+    if (valid(other.iso_speed)) {
+        fields["exif.iso"] = static_cast<quint32>(std::lround(other.iso_speed));
+    }
+    if (valid(other.aperture)) {
+        fields["exif.f_number"] = other.aperture;
+    }
+    // LibRaw stores the standard EXIF FocalLengthIn35mmFilm tag on lensinfo;
+    // the similarly named makernotes member is only for vendor metadata.
+    if (valid(rawProcessor.imgdata.lens.FocalLengthIn35mmFormat)) {
+        fields["exif.focal_length_35mm"] =
+            rawProcessor.imgdata.lens.FocalLengthIn35mmFormat;
+    } else if (valid(rawProcessor.imgdata.lens.makernotes.FocalLengthIn35mmFormat)) {
+        fields["exif.focal_length_35mm"] =
+            rawProcessor.imgdata.lens.makernotes.FocalLengthIn35mmFormat;
+    }
+    const double minFocal = rawProcessor.imgdata.lens.makernotes.MinFocal;
+    const double maxFocal = rawProcessor.imgdata.lens.makernotes.MaxFocal;
+    if (valid(minFocal) && valid(maxFocal) && maxFocal >= minFocal) {
+        fields["exif.lens_focal_range"] =
+            QVariantMap{{QStringLiteral("min"), minFocal},
+                        {QStringLiteral("max"), maxFocal}};
+    }
+    const QString camera = (QString(make) + QLatin1Char(' ')
+                            + QString(model)).simplified();
+    if (!camera.isEmpty()) {
+        fields["exif.camera_model"] = camera;
+    }
+    QString lensModel;
+    if (rawProcessor.imgdata.lens.Lens[0]) {
+        lensModel = QString(rawProcessor.imgdata.lens.Lens).trimmed();
+    } else if (rawProcessor.imgdata.lens.makernotes.Lens[0]) {
+        lensModel = QString(rawProcessor.imgdata.lens.makernotes.Lens).trimmed();
+    }
+    if (!lensModel.isEmpty()) {
+        fields["exif.lens_model"] = lensModel;
+    }
+
+    return fields;
 }
 
 QStringList RawDecoder::supportedFormats() {
@@ -158,6 +209,7 @@ bool RawDecoder::readMetadata(ImageInfo &result) {
 
     result.orientation = readOrientationFromExif(*rawProcessor);
     result.exif = readExifToMap(*rawProcessor);
+    result.typedFileFields = readTypedFileFields(*rawProcessor);
 
     return true;
 }

@@ -192,6 +192,8 @@ signals:
     void viewerSourceChanged();
     void viewerSourceAtChanged(int index);
     void viewerRequestStateAtChanged(int index);
+    void fileFieldsRead(const QVariantMap &update);
+    void fileFieldsReadBatch(const QVariantList &updates);
     void viewerPreviousStateChanged();
     void shutdownCompleteChanged();
     void actionRequested(const QString &action, const QVariantMap &payload);

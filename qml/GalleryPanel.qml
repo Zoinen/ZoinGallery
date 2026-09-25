@@ -88,6 +88,9 @@ FocusScope {
     property alias scrollingMode: galleryViewport.scrollingMode
     property int columnCount: 2
     property var columnSchema: []
+    property var fileFieldDescriptors: []
+    property var groupRanges: []
+    readonly property var fileFieldPresentationHelper: fileFieldPresentation
     // A host may keep its own column header outside the reusable viewport.
     // Standalone users retain the module-local header by default.
     property bool showDetailsHeader: true
@@ -341,12 +344,18 @@ FocusScope {
     signal densityChangeRequested(string mode, real density, bool finalChange)
 
     signal sortRequested(string sortMode, bool contextMenu)
+    signal columnResizeRequested(var columns)
     signal benchmarkStage(string stage, var metadata)
     signal metadataVisibleRangeChanged(int firstRow, int lastRow)
     signal consoleWheelRequested(real x, real y, int angleDeltaY,
                                  int modifiers)
     signal consoleMouseButtonRequested(real x, real y, int button, bool down,
                                        int modifiers)
+
+    function previewColumnSchema(columns) {
+        if (Array.isArray(columns))
+            columnSchema = columns
+    }
 
     readonly property color backgroundColor: theme.panelBackground
     readonly property color foregroundColor: theme.text
@@ -445,30 +454,30 @@ FocusScope {
     readonly property real detailsSizeColumnWidth:
         metrics.detailsSizeColumnWidth
     readonly property real detailsHeaderHeight:
-        metrics.detailsHeaderHeight > 0
-            ? metrics.detailsHeaderHeight : Math.max(30, density + 8)
+        fileFieldPresentation.detailsPixelExtent(metrics.detailsHeaderHeight > 0
+            ? metrics.detailsHeaderHeight : Math.max(30, density + 8))
+    readonly property real groupHeaderHeight:
+        fileFieldPresentation.detailsPixelExtent(
+            metrics.detailsHeaderHeight > 0
+                ? metrics.detailsHeaderHeight
+                : (presentationMode === "details"
+                   || presentationMode === "columns"
+                    ? Math.max(30, density + 8)
+                    : Math.max(30, detailsHeaderFontPixelSize + 18)))
     readonly property real detailsHeaderCellInset:
-        metrics.detailsHeaderCellInset
+        fileFieldPresentation.detailsPixelExtent(metrics.detailsHeaderCellInset)
     readonly property real detailsHeaderFontPixelSize:
         metrics.detailsHeaderFontPixelSize
     readonly property real detailsSeparatorVerticalMargin:
-        metrics.detailsSeparatorVerticalMargin
-    readonly property real detailsSeparatorWidth: metrics.detailsSeparatorWidth
-    readonly property real detailsScrollBarWidth: metrics.detailsScrollBarWidth
+        fileFieldPresentation.detailsPixelExtent(metrics.detailsSeparatorVerticalMargin)
+    readonly property real detailsSeparatorWidth:
+        Math.max(1 / Math.max(0.01, devicePixelRatio),
+                 fileFieldPresentation.detailsPixelExtent(metrics.detailsSeparatorWidth))
+    readonly property real detailsScrollBarWidth:
+        fileFieldPresentation.detailsPixelExtent(metrics.detailsScrollBarWidth)
 
-    function nativePresentationMode() {
-        return viewportState.nativePresentationMode()
-    }
     function noteDensityChanged(finalChange) {
         viewportState.noteDensityChanged(finalChange)
-    }
-
-    function detailsColumn(role, fallbackTitle) {
-        return detailsSchemaState.column(role, fallbackTitle)
-    }
-
-    function detailsColumns() {
-        return detailsSchemaState.columns()
     }
 
     function sourceIndex(viewIndex) {
@@ -764,6 +773,16 @@ FocusScope {
         panelRoot: root
         controller: root.controller
     }
+
+    GalleryFileFieldPresentation {
+        id: fileFieldPresentation
+        panelRoot: root
+        fileFieldDescriptors: root.fileFieldDescriptors
+        columnSchema: detailsSchemaState.columns()
+        devicePixelRatio: root.devicePixelRatio
+    }
+
+    GalleryGroupHeaders { panelRoot: root }
 
     GalleryPanelOverlays {
         anchors.fill: parent

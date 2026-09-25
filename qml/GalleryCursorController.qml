@@ -83,28 +83,10 @@ QtObject {
     readonly property rect cursorChromeTargetRect:
         Qt.rect(cursorChromeTargetX, cursorChromeTargetY,
                 cursorChromeTargetWidth, cursorChromeTargetHeight)
-    // A settled cursor is snapped in scene coordinates, not merely inside its
-    // delegate: at fractional DPRs an integer delegate coordinate can still
-    // land between physical pixels once the panel and viewport offsets are
-    // included. Keep the live viewport origin observable so recycled
-    // delegates update their correction after scrolling or panel relayout.
-    readonly property point cursorPixelGridViewportOrigin: {
-        // mapToItem() itself is not a bindable property. Read the relevant
-        // item coordinates explicitly so moving this panel re-evaluates the
-        // scene-space origin as well.
-        const dependencyX = panel.x + panel.width
-                + galleryLayout.x + galleryLayout.width
-        const dependencyY = panel.y + panel.height
-                + galleryLayout.y + galleryLayout.height
-        const sceneOrigin = galleryLayout.mapToItem(
-            null, dependencyX * 0, dependencyY * 0)
-        return Qt.point(
-            sceneOrigin.x + galleryLayout.paddingLeft
-                - (presentationMode === "columns"
-                   ? galleryLayout.contentY : 0),
-            sceneOrigin.y - (presentationMode === "columns"
-                             ? 0 : galleryLayout.contentY))
-    }
+    // C++ publishes the actual snapped viewport translation. Reconstructing
+    // it from contentY would put the cursor back on the analytical fraction.
+    readonly property point cursorPixelGridViewportOrigin:
+        galleryLayout.viewportSceneOrigin
     readonly property bool cursorPixelAlignmentSuspended:
         cursorChromeTransitionActive || panelScrollAnimation.running
 

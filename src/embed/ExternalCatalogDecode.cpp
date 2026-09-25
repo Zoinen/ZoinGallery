@@ -113,6 +113,21 @@ void ExternalCatalogModel::applyImageInfoResult(
         return;
     }
 
+    if (info.fileFieldsRead && info.source.isValid()) {
+        const QString updateKey = info.source.sourceKey + QChar(0x1f)
+            + info.sourceVersionToken + QChar(0x1f)
+            + QString::number(info.source.catalogGeneration);
+        if (!state.fileFieldUpdateKeys.contains(updateKey)) {
+            state.fileFieldUpdateKeys.insert(updateKey);
+            state.fileFieldUpdates.append(QVariantMap{
+                {QStringLiteral("sourceKey"), info.source.sourceKey},
+                {QStringLiteral("sourceVersion"), info.sourceVersionToken},
+                {QStringLiteral("generation"), info.source.catalogGeneration},
+                {QStringLiteral("complete"), true},
+                {QStringLiteral("values"), info.typedFileFields},
+            });
+        }
+    }
     _metadataResolvedPaths.insert(sourceIdentity);
     const QString retryKey = sourceIdentity + QChar(0x1f)
         + info.sourceVersionToken;
@@ -231,6 +246,16 @@ void ExternalCatalogModel::publishImageInfoBatch(
                                        plan->prefetchCount);
             }
         }
+    }
+    if (state.fileFieldUpdates.size() == 1) {
+        emit fileFieldsRead(state.fileFieldUpdates.constFirst());
+    } else if (!state.fileFieldUpdates.isEmpty()) {
+        QVariantList updates;
+        updates.reserve(state.fileFieldUpdates.size());
+        for (const QVariantMap &update : state.fileFieldUpdates) {
+            updates.append(update);
+        }
+        emit fileFieldsReadBatch(updates);
     }
     if (state.acceptedNamespace) {
         scheduleMetadataPump();

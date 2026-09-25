@@ -28,6 +28,7 @@ class GalleryEntryVisual final : public QObject {
     Q_PROPERTY(QString displayExtension READ displayExtension
                NOTIFY identityChanged)
     Q_PROPERTY(QString sizeText READ sizeText NOTIFY stateChanged)
+    Q_PROPERTY(QVariantMap displayFields READ displayFields NOTIFY stateChanged)
     Q_PROPERTY(bool isHidden READ isHidden NOTIFY stateChanged)
     Q_PROPERTY(QString highlightMarker READ highlightMarker
                NOTIFY styleChanged)
@@ -77,6 +78,7 @@ public:
     QString displayBaseName() const;
     QString displayExtension() const;
     QString sizeText() const;
+    QVariantMap displayFields() const;
     bool isHidden() const;
     QString highlightMarker() const;
     QString normalForeground() const;
@@ -121,6 +123,7 @@ private:
     QString _displayBaseName;
     QString _displayExtension;
     QString _sizeText;
+    QVariantMap _displayFields;
     bool _isHidden = false;
     QString _highlightMarker;
     QString _normalForeground;

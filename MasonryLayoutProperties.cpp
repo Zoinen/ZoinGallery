@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace {
 
@@ -213,7 +214,7 @@ qreal MasonryLayout::dpValue() {
 
 qreal MasonryLayout::devicePixelRatio() const {
     return _devicePixelRatioOverride > 0
-        ? _devicePixelRatioOverride : _dp;
+        ? _devicePixelRatioOverride : window() ? window()->devicePixelRatio() : _dp;
 }
 
 void MasonryLayout::setDevicePixelRatio(qreal value) {
@@ -223,11 +224,9 @@ void MasonryLayout::setDevicePixelRatio(qreal value) {
     }
     _devicePixelRatioOverride = normalized;
     emit devicePixelRatioChanged();
-    if (_presentationMode == Columns) {
-        // Columns geometry is expressed on the device-pixel lattice. Moving
-        // the window between screens therefore changes its logical stride.
-        rewrap(false);
-    }
+    // Every painted brick and the common viewport use the actual pixel grid.
+    positionViewport();
+    rewrap(false);
     reReadAndDecodeThumbnails();
 }
 
@@ -263,6 +262,7 @@ MasonryLayout::PresentationMode MasonryLayout::presentationMode() const {
 }
 
 void MasonryLayout::requestRewrap(bool animate) {
+    _fixedLayoutPlanCached = false;
     if (_layoutUpdateDepth > 0) {
         _layoutUpdateNeedsRewrap = true;
         // One non-animated participant makes the whole atomic commit
@@ -644,6 +644,161 @@ QVariantList MasonryLayout::layoutBands() const {
     return result;
 }
 
+QVariantList MasonryLayout::groupRanges() const {
+    QVariantList result;
+    result.reserve(_groupRanges.size());
+    for (const auto &group : _groupRanges) {
+        result.append(QVariantMap{
+            {QStringLiteral("key"), group.key},
+            {QStringLiteral("title"), group.title},
+            {QStringLiteral("startIndex"), group.start},
+            {QStringLiteral("count"), group.count},
+        });
+    }
+    return result;
+}
+
+void MasonryLayout::setGroupRanges(const QVariantList &ranges) {
+    QVector<ZoinGallery::GalleryLayoutGroup> next;
+    next.reserve(ranges.size());
+    for (const QVariant &value : ranges) {
+        const QVariantMap map = value.toMap();
+        bool startOk = false;
+        bool countOk = false;
+        int start = map.value(QStringLiteral("startIndex"))
+                        .toInt(&startOk);
+        if (!startOk) {
+            start = map.value(QStringLiteral("start")).toInt(&startOk);
+        }
+        const int count = map.value(QStringLiteral("count")).toInt(&countOk);
+        const QString key = map.value(QStringLiteral("key")).toString();
+        QString title = map.value(QStringLiteral("title")).toString();
+        if (title.isEmpty()) {
+            title = key;
+        }
+        if (!startOk || !countOk || start < 0 || count <= 0
+            || title.isEmpty()) {
+            continue;
+        }
+        next.append({.start = start, .count = count,
+                     .key = key, .title = title});
+    }
+    std::sort(next.begin(), next.end(), [](const auto &left,
+                                            const auto &right) {
+        if (left.start != right.start) {
+            return left.start < right.start;
+        }
+        return left.count < right.count;
+    });
+    bool same = next.size() == _groupRanges.size();
+    for (qsizetype index = 0; same && index < next.size(); ++index) {
+        const auto &left = next.at(index);
+        const auto &right = _groupRanges.at(index);
+        same = left.start == right.start && left.count == right.count
+            && left.key == right.key && left.title == right.title;
+    }
+    if (same) {
+        return;
+    }
+    if (_currentIndex >= _visibleStart && _currentIndex <= _visibleEnd
+        && _currentIndex >= 0 && _currentIndex < logicalBrickCount()) {
+        _currentIndexOffsetOverride =
+            _contentY - indexGeometry(_currentIndex).y();
+    } else {
+        _preserveViewportAnchorForNextRewrap = true;
+    }
+    _groupRanges = std::move(next);
+    _fixedLayoutPlanCached = false;
+    emit groupRangesChanged();
+    requestRewrap(false);
+}
+
+QVector<ZoinGallery::GalleryGroupHeader>
+MasonryLayout::groupHeaderGeometryVector() const {
+    if (_presentationMode == Masonry && !sparseVirtualLayout()) {
+        return _masonryGroupHeaders;
+    }
+    return fixedLayoutPlan().groupHeaders;
+}
+
+QVariantList MasonryLayout::groupHeaderGeometries() const {
+    const QVector<ZoinGallery::GalleryGroupHeader> headers =
+        groupHeaderGeometryVector();
+    QVariantList result;
+    result.reserve(headers.size());
+    for (const auto &header : headers) {
+        result.append(QVariantMap{
+            {QStringLiteral("key"), header.key},
+            {QStringLiteral("title"), header.title},
+            {QStringLiteral("x"), header.geometry.x()},
+            {QStringLiteral("y"), header.geometry.y()},
+            {QStringLiteral("width"), header.geometry.width()},
+            {QStringLiteral("height"), header.geometry.height()},
+        });
+    }
+    return result;
+}
+
+QVariantList MasonryLayout::visibleGroupHeaderGeometries() const {
+    const QVector<ZoinGallery::GalleryGroupHeader> headers =
+        groupHeaderGeometryVector();
+    const bool horizontal = _presentationMode == Columns;
+    const qreal start = _contentY;
+    const qreal end = start + viewportExtent();
+    const auto first = std::lower_bound(
+        headers.cbegin(), headers.cend(), start,
+        [horizontal](const ZoinGallery::GalleryGroupHeader &header,
+                     qreal position) {
+            const qreal trailing = horizontal ? header.geometry.right()
+                                              : header.geometry.bottom();
+            return trailing < position;
+        });
+    QVariantList result;
+    for (auto current = first; current != headers.cend(); ++current) {
+        const qreal leading = horizontal ? current->geometry.left()
+                                         : current->geometry.top();
+        if (leading > end) {
+            break;
+        }
+        const QRectF geometry = ZoinGallery::PixelGrid::snapDeviceRect(
+            current->geometry, devicePixelRatio());
+        result.append(QVariantMap{
+            {QStringLiteral("key"), current->key},
+            {QStringLiteral("title"), current->title},
+            {QStringLiteral("x"), geometry.x()},
+            {QStringLiteral("y"), geometry.y()},
+            {QStringLiteral("width"), geometry.width()},
+            {QStringLiteral("height"), geometry.height()},
+        });
+    }
+    return result;
+}
+
+qreal MasonryLayout::groupHeaderHeight() const {
+    return _groupHeaderHeight;
+}
+
+void MasonryLayout::setGroupHeaderHeight(qreal height) {
+    if (!qIsFinite(height)) {
+        return;
+    }
+    height = qMax<qreal>(0, height);
+    if (qAbs(_groupHeaderHeight - height) < 0.0001) {
+        return;
+    }
+    if (_currentIndex >= _visibleStart && _currentIndex <= _visibleEnd
+        && _currentIndex >= 0 && _currentIndex < logicalBrickCount()) {
+        _currentIndexOffsetOverride =
+            _contentY - indexGeometry(_currentIndex).y();
+    } else {
+        _preserveViewportAnchorForNextRewrap = true;
+    }
+    _groupHeaderHeight = height;
+    _fixedLayoutPlanCached = false;
+    emit groupHeaderHeightChanged();
+    requestRewrap(false);
+}
+
 quint64 MasonryLayout::layoutRevision() const {
     return _layoutRevision;
 }
@@ -701,6 +856,7 @@ void MasonryLayout::setContentYInternal(qreal newContentY) {
     if (!_deferDelegateWindowCommit) {
         updateProperties();
         emit contentYChanged();
+        emit groupHeaderGeometriesChanged();
     }
     depth--;
 }

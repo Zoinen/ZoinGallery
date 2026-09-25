@@ -23,6 +23,29 @@ struct GalleryInsets {
     qreal bottom = 0;
 };
 
+struct GalleryLayoutGroup {
+    int start = 0;
+    int count = 0;
+    QString key;
+    QString title;
+};
+
+struct GalleryLayoutSection {
+    int start = 0;
+    int count = 0;
+    QString key;
+    QString title;
+    qreal primaryOffset = 0;
+    qreal contentOffset = 0;
+    int primaryCells = 0;
+};
+
+struct GalleryGroupHeader {
+    QString key;
+    QString title;
+    QRectF geometry;
+};
+
 struct GalleryLayoutRequest {
     GalleryPresentationMode mode = GalleryPresentationMode::Masonry;
     QSizeF viewportSize;
@@ -31,6 +54,9 @@ struct GalleryLayoutRequest {
     qreal spacing = 0;
     int columnCount = 2;
     qreal devicePixelRatio = 1;
+    qreal groupHeaderHeight = 0;
+    qreal iconRowHeight = 0;
+    QVector<GalleryLayoutGroup> groups;
     bool lastRowMatchesPrevious = false;
     bool singleRow = false;
 };
@@ -75,13 +101,19 @@ struct GalleryFixedLayoutPlan {
     qreal canvasWidth = 0;
     qreal extent = 1;
     qreal cellWidth = 0;
+    qreal groupHeaderHeight = 0;
     qreal contentExtent = 0;
     GalleryInsets insets;
     qreal spacing = 0;
+    QVector<GalleryLayoutSection> sections;
+    QVector<GalleryGroupHeader> groupHeaders;
 
     [[nodiscard]] bool horizontal() const;
     [[nodiscard]] QRectF geometryFor(int index) const;
     [[nodiscard]] QRectF previewGeometryFor(int index) const;
+    [[nodiscard]] int rowFor(int index) const;
+    [[nodiscard]] int columnFor(int index) const;
+    [[nodiscard]] int sectionIndexFor(int index) const;
     [[nodiscard]] QVector<int> indexesIntersecting(qreal start,
                                                    qreal end) const;
 };

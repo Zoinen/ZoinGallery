@@ -2,6 +2,7 @@
 #include "DecodeManager.h"
 #include "PersistentDerivedImageCache.h"
 #include "MasonryLayout.h"
+#include "GalleryPixelGrid.h"
 #include "SvgCursor.h"
 #include "tests/DirectoryPreviewFixture.h"
 
@@ -15,6 +16,7 @@
 #include <QColor>
 #include <QColorSpace>
 #include <QCursor>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
@@ -26,6 +28,7 @@
 #include <QEvent>
 #include <QParallelAnimationGroup>
 #include <QPointer>
+#include <QMap>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -214,6 +217,19 @@ QQuickItem *findVisualItem(QQuickItem *root, const QString &objectName) {
         pending.append(item->childItems());
     }
     return hiddenMatch;
+}
+
+QString visualCapturePath(const QString &fileName,
+                          const QString &fallbackPath) {
+    const QString captureDirectory = qEnvironmentVariable(
+        "F4_QT_PIXEL_CAPTURE_DIR").trimmed();
+    if (captureDirectory.isEmpty()) {
+        return fallbackPath;
+    }
+    if (!QDir().mkpath(captureDirectory)) {
+        return fallbackPath;
+    }
+    return QDir(captureDirectory).filePath(fileName);
 }
 
 bool invokeEnsureCurrentVisible(
@@ -1672,7 +1688,7 @@ private slots:
         QQuickItem *firstRow = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT(
             (firstRow = detailsDelegateForIndex(0)) != nullptr, 3000);
-        const qreal firstRowY = firstRow->y() - detailsLayout->contentY();
+        const qreal firstRowY = firstRow->mapToItem(detailsLayout, QPointF()).y();
 
         int firstOffscreenRow = 1;
         while (firstOffscreenRow < entryCount
@@ -1688,12 +1704,12 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(
             (newTopRow = detailsDelegateForIndex(1)) != nullptr, 3000);
         QVERIFY2(
-            qAbs(newTopRow->y() - detailsLayout->contentY() - firstRowY)
+            qAbs(newTopRow->mapToItem(detailsLayout, QPointF()).y() - firstRowY)
                 < 0.01,
             qPrintable(QStringLiteral(
                 "details: top row drifted: first=%1 new=%2 contentY=%3")
                 .arg(firstRowY)
-                .arg(newTopRow->y() - detailsLayout->contentY())
+                .arg(newTopRow->mapToItem(detailsLayout, QPointF()).y())
                 .arg(detailsLayout->contentY())));
 
         for (int step = 0; step < firstOffscreenRow; ++step)
@@ -1702,7 +1718,7 @@ private slots:
         QQuickItem *returnedFirstRow = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT(
             (returnedFirstRow = detailsDelegateForIndex(0)) != nullptr, 3000);
-        QVERIFY(qAbs(returnedFirstRow->y() - detailsLayout->contentY()
+        QVERIFY(qAbs(returnedFirstRow->mapToItem(detailsLayout, QPointF()).y()
                      - firstRowY) < 0.01);
 
         // The terminal clamp must land on the row lattice as well.  A
@@ -1735,12 +1751,12 @@ private slots:
                 .arg(terminalTopIndex * detailsLayout->density())
                 .arg(trailingRowRemainder)));
         QVERIFY2(
-            qAbs(terminalTopRow->y() - detailsLayout->contentY()
+            qAbs(terminalTopRow->mapToItem(detailsLayout, QPointF()).y()
                  - firstRowY) < 0.0001,
             qPrintable(QStringLiteral(
                 "details: terminal top row drifted: first=%1 terminal=%2")
                 .arg(firstRowY)
-                .arg(terminalTopRow->y() - detailsLayout->contentY())));
+                .arg(terminalTopRow->mapToItem(detailsLayout, QPointF()).y())));
 
         sendDetailsKey(Qt::Key_Home);
         QCOMPARE(detailsSession->currentIndex(), 0);
@@ -1841,12 +1857,10 @@ private slots:
         QVERIFY(longLabel);
         QVERIFY(shortLabel);
         QTRY_VERIFY_WITH_TIMEOUT(longLabel->isVisible(), 3000);
-        QTRY_VERIFY_WITH_TIMEOUT(
-            qAbs(shortLabel->parentItem()->width()
-                 - secondShort.width()) <= 0.51
-                && qAbs(shortLabel->parentItem()->height()
-                        - secondShort.height()) <= 0.51,
-            3000);
+        const QRectF paintedSecondShort = ZoinGallery::PixelGrid::snapDeviceRect(
+            secondShort, layout->devicePixelRatio());
+        QTRY_COMPARE_WITH_TIMEOUT(shortLabel->parentItem()->size(),
+                                  paintedSecondShort.size(), 3000);
         const QString displayed = longLabel->property("text").toString();
         QVERIFY(displayed != longName);
         QVERIFY(displayed.contains(QChar(0x2026)));
@@ -5311,6 +5325,740 @@ private slots:
                      .arg(extension0->parentItem()->objectName())));
     }
 
+    void detailsScrollCpuProfile() {
+        if (!qEnvironmentVariableIsSet("F4_DETAILS_SCROLL_PROFILE"))
+            QSKIP("Opt-in Details scrolling CPU experiment");
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(QStringLiteral("scroll-profile"));
+        QVERIFY(session);
+        const QVariantMap fields{
+            {"exif.exposure_time", 1.0 / 125}, {"exif.iso", 800},
+            {"exif.f_number", 2.8}, {"exif.focal_length_35mm", 42},
+            {"exif.lens_focal_range", QVariantMap{{"min", 24}, {"max", 70}}},
+            {"exif.camera_model", "Sony ILCE"}, {"exif.lens_model", "24-70mm"},
+        };
+        QVariantList catalog = plainCatalog(96);
+        for (int index = 0; index < catalog.size(); ++index) {
+            QVariantMap row = catalog[index].toMap();
+            row["displayFields"] = fields;
+            row["displayBaseName"] = QStringLiteral("IMG_20260919_%1").arg(index);
+            row["displayExtension"] = "dng";
+            catalog[index] = row;
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1, {{"metadataDeferred", true}}));
+        QObject *panel = createPanel(view, session, "scrollProfileSession", "details");
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("width", 1100);
+        panel->setProperty("height", 1050);
+        QVariantList columns{
+            QVariantMap{{"id", "name"}, {"role", "name"}, {"width", 42}},
+            QVariantMap{{"id", "size"}, {"role", "size"}, {"width", 12}},
+        };
+        QVariantList descriptors;
+        for (auto field = fields.cbegin(); field != fields.cend(); ++field) {
+            columns.append(QVariantMap{{"id", field.key()}, {"role", field.key()}, {"width", 10}});
+            descriptors.append(QVariantMap{{"id", field.key()}, {"kind", "text"}});
+        }
+        panel->setProperty("fileFieldDescriptors", descriptors);
+        panel->setProperty("columnSchema", columns);
+        view.resize(1100, 1050);
+        view.show();
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        layout->setDensity(22);
+        QTest::qWait(500);
+        QVERIFY(layout->visibleIndexes().size() > 35);
+        QVector<double> times;
+        for (int pass = 0; pass < 4; ++pass) {
+            for (int step = 0; step < 120; ++step) {
+                QElapsedTimer timer;
+                timer.start();
+                layout->setContentY(200 + (pass % 2 ? 119 - step : step) * 2.4);
+                times.append(timer.nsecsElapsed() / 1000000.0);
+                QCoreApplication::processEvents();
+            }
+        }
+        std::sort(times.begin(), times.end());
+        double sum = 0;
+        for (double milliseconds : times)
+            sum += milliseconds;
+        qInfo().nospace() << "SCROLL_PROFILE dpr=" << view.devicePixelRatio()
+            << " rows=" << layout->visibleIndexes().size() << " samples=" << times.size()
+            << " mean_ms=" << sum / times.size() << " p50_ms=" << times[times.size() / 2]
+            << " p95_ms=" << times[times.size() * 95 / 100] << " max_ms=" << times.last();
+        runtime->shutdown();
+    }
+
+    void viewportAndBricksStayOnPhysicalPixelGridAt175Percent() {
+        QQuickView view;
+        if (qAbs(view.devicePixelRatio() - 1.75) > 0.001)
+            QSKIP("Run this regression with QT_SCALE_FACTOR=1.75");
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession(QStringLiteral("pixel-grid-parents"));
+        QVERIFY(session->applyExternalCatalog(plainCatalog(96), 1,
+                                             {{"metadataDeferred", true}}));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(
+            view, session, QStringLiteral("pixelGridParentsSession"),
+            QStringLiteral("details")));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("animateLayoutChanges", false);
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        view.resize(813, 473);
+        view.show();
+        QTRY_VERIFY(layout->viewport());
+
+        // A host can move/reparent a panel without changing its own geometry.
+        auto *host = new QQuickItem(view.contentItem());
+        panel->setParentItem(host);
+        const auto verifyItem = [&](QQuickItem *item, bool size) {
+            const qreal dpr = view.devicePixelRatio();
+            const QPointF origin = item->mapToItem(view.contentItem(), QPointF());
+            for (const qreal coordinate : {origin.x(), origin.y()}) {
+                QVERIFY2(qAbs(coordinate * dpr - qRound(coordinate * dpr)) < 0.001,
+                         qPrintable(QStringLiteral("%1 physical coordinate=%2 mode=%3")
+                             .arg(item->objectName()).arg(coordinate * dpr, 0, 'f', 6)
+                             .arg(layout->presentationMode())));
+            }
+            QCOMPARE(item->mapToItem(view.contentItem(), {1, 0}) - origin, QPointF(1, 0));
+            QCOMPARE(item->mapToItem(view.contentItem(), {0, 1}) - origin, QPointF(0, 1));
+            if (size) {
+                for (const qreal extent : {item->width(), item->height()})
+                    QVERIFY(qAbs(extent * dpr - qRound(extent * dpr)) < 0.001);
+            }
+        };
+        for (const QString &mode : {QStringLiteral("details"), QStringLiteral("columns"),
+                                   QStringLiteral("icons"), QStringLiteral("grid"),
+                                   QStringLiteral("masonry")}) {
+            panel->setProperty("presentationMode", mode);
+            layout->setDensity(mode == QStringLiteral("details") ? 24.2 : 132.3);
+            QTest::qWait(100);
+            for (const QPointF &position : {QPointF(0.37, 0.23), QPointF(1.13, 2.19)}) {
+                host->setPosition(position);
+                for (qreal offset : {0.0, 37.13, 113.71}) {
+                    layout->setContentY(offset);
+                    QCoreApplication::processEvents();
+                    verifyItem(layout->viewport(), false);
+                    for (const QVariant &value : layout->visibleIndexes()) {
+                        const int index = value.toInt();
+                        auto *brick = layout->itemForIndex(index);
+                        QVERIFY(brick);
+                        verifyItem(brick, true);
+                        const QPointF center = brick->mapToItem(
+                            layout, QPointF(brick->width() / 2, brick->height() / 2));
+                        QCOMPARE(layout->indexAtViewport(center.x(), center.y()), index);
+                    }
+                }
+            }
+        }
+        runtime->shutdown();
+    }
+
+    void detailsFileFieldLeavesStayOnPhysicalPixelGridAt175Percent() {
+        QQuickView view;
+        if (qAbs(view.devicePixelRatio() - 1.75) > 0.001) {
+            QSKIP("Run this regression with QT_SCALE_FACTOR=1.75");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath = directory.filePath(QStringLiteral("pixel-grid.png"));
+        QImage image(64, 64, QImage::Format_RGB32);
+        image.fill(QColor(30, 130, 200));
+        QVERIFY(image.save(imagePath));
+        view.engine()->addImageProvider(QStringLiteral("field-grid"), new CompactIconProvider(true));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("details-file-field-pixel-grid"));
+        QVERIFY(session);
+        const QVariantMap fields{
+            {QStringLiteral("exif.exposure_time"), 1.0 / 125.0},
+            {QStringLiteral("exif.iso"), 800},
+            {QStringLiteral("exif.f_number"), 2.8},
+            {QStringLiteral("exif.focal_length_35mm"), 75.0},
+            {QStringLiteral("exif.lens_focal_range"),
+             QVariantMap{{QStringLiteral("min"), 24.0},
+                         {QStringLiteral("max"), 70.0}}},
+            {QStringLiteral("exif.camera_model"), QStringLiteral("Canon R5")},
+            {QStringLiteral("exif.lens_model"),
+             QStringLiteral("RF 24-70mm")},
+        };
+        QVariantList catalog{QVariantMap{
+            {QStringLiteral("entryId"), QStringLiteral("field-photo")},
+            {QStringLiteral("index"), 0},
+            {QStringLiteral("name"), QStringLiteral("photo.jpg")},
+            {QStringLiteral("isDir"), false},
+            {QStringLiteral("isImage"), false},
+            {QStringLiteral("size"), qint64(1536)},
+            {QStringLiteral("displayBaseName"), QStringLiteral("photo")},
+            {QStringLiteral("displayExtension"), QStringLiteral("jpg")},
+            {QStringLiteral("sizeText"), QStringLiteral("1.5 KiB")},
+            {QStringLiteral("displayFields"), fields},
+        }};
+        for (int index = 1; index < 96; ++index) {
+            QVariantMap row = catalog.first().toMap();
+            row[QStringLiteral("entryId")] = QStringLiteral("field-photo-%1").arg(index);
+            row[QStringLiteral("index")] = index;
+            row[QStringLiteral("name")] = QStringLiteral("photo-%1.jpg").arg(index);
+            row[QStringLiteral("displayBaseName")] = QStringLiteral("photo-%1").arg(index);
+            if (index % 3 == 2) {
+                const QString name = QStringLiteral("pixel-grid-%1.png").arg(index);
+                const QString path = directory.filePath(name);
+                QVERIFY(QFile::copy(imagePath, path));
+                row[QStringLiteral("localPath")] = path;
+                row[QStringLiteral("isImage")] = true;
+                row[QStringLiteral("name")] = name;
+                row[QStringLiteral("displayExtension")] = QStringLiteral("png");
+                const QFileInfo source(path);
+                row[QStringLiteral("size")] = source.size();
+                row[QStringLiteral("mtimeNs")] = source.lastModified().toMSecsSinceEpoch() * 1000000;
+            }
+            catalog.append(row);
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        QVariantList appearance;
+        for (int index = 1; index < 96; index += 3)
+            appearance.append(QVariantMap{
+                {QStringLiteral("entryId"), QStringLiteral("field-photo-%1").arg(index)},
+                {QStringLiteral("highlightStyle"), QVariantMap{
+                    {QStringLiteral("icon"), QStringLiteral("image://field-grid/colour")}}},
+            });
+        QVERIFY(session->applyExternalAppearance(appearance, 1));
+        session->setCurrentIndex(0);
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("fieldPixelSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("separateFileExtensions", true);
+        panel->setProperty("animateLayoutChanges", false);
+        panel->setProperty("fileFieldDescriptors", QVariantList{
+            QVariantMap{{"id", "exif.exposure_time"}, {"kind", "number"},
+                        {"format", "exposure"}, {"unit", "s"},
+                        {"precision", 3}},
+            QVariantMap{{"id", "exif.iso"}, {"kind", "integer"},
+                        {"format", "integer"}},
+            QVariantMap{{"id", "exif.f_number"}, {"kind", "number"},
+                        {"format", "aperture"}, {"unit", "f"},
+                        {"precision", 1}},
+            QVariantMap{{"id", "exif.focal_length_35mm"},
+                        {"kind", "number"}, {"format", "quantity"},
+                        {"unit", "mm"}, {"precision", 0}},
+            QVariantMap{{"id", "exif.lens_focal_range"},
+                        {"kind", "range"}, {"format", "range"},
+                        {"unit", "mm"}, {"precision", 0}},
+            QVariantMap{{"id", "exif.camera_model"}, {"kind", "text"},
+                        {"format", "text"}},
+            QVariantMap{{"id", "exif.lens_model"}, {"kind", "text"},
+                        {"format", "text"}},
+        });
+        panel->setProperty("columnSchema", QVariantList{
+            QVariantMap{
+                {QStringLiteral("id"), QStringLiteral("name")},
+                {QStringLiteral("role"), QStringLiteral("name")},
+                {QStringLiteral("title"), QStringLiteral("Name")},
+                {QStringLiteral("width"), 42},
+                {QStringLiteral("alignment"), QStringLiteral("left")},
+                {QStringLiteral("sortable"), true},
+            },
+            QVariantMap{
+                {QStringLiteral("id"), QStringLiteral("size")},
+                {QStringLiteral("role"), QStringLiteral("size")},
+                {QStringLiteral("title"), QStringLiteral("Size")},
+                {QStringLiteral("width"), 14},
+                {QStringLiteral("alignment"), QStringLiteral("right")},
+                {QStringLiteral("sortable"), true},
+            },
+            QVariantMap{
+                {QStringLiteral("id"), QStringLiteral("exif.exposure_time")},
+                {QStringLiteral("role"), QStringLiteral("exif.exposure_time")},
+                {QStringLiteral("title"), QStringLiteral("Exposure")},
+                {QStringLiteral("width"), 12},
+                {QStringLiteral("alignment"), QStringLiteral("right")},
+                {QStringLiteral("sortable"), true},
+            },
+            QVariantMap{
+                {QStringLiteral("id"), QStringLiteral("exif.iso")},
+                {QStringLiteral("role"), QStringLiteral("exif.iso")},
+                {QStringLiteral("title"), QStringLiteral("ISO")},
+                {QStringLiteral("width"), 10},
+                {QStringLiteral("alignment"), QStringLiteral("right")},
+                {QStringLiteral("sortable"), true},
+            },
+            QVariantMap{
+                {QStringLiteral("id"), QStringLiteral("exif.f_number")},
+                {QStringLiteral("role"), QStringLiteral("exif.f_number")},
+                {QStringLiteral("title"), QStringLiteral("Aperture")},
+                {QStringLiteral("width"), 10},
+                {QStringLiteral("alignment"), QStringLiteral("right")},
+                {QStringLiteral("sortable"), true},
+            },
+            QVariantMap{
+                {QStringLiteral("id"), QStringLiteral("exif.focal_length_35mm")},
+                {QStringLiteral("role"), QStringLiteral("exif.focal_length_35mm")},
+                {QStringLiteral("title"), QStringLiteral("Focal length")},
+                {QStringLiteral("width"), 12},
+                {QStringLiteral("alignment"), QStringLiteral("right")},
+                {QStringLiteral("sortable"), true},
+            },
+            QVariantMap{
+                {QStringLiteral("id"), QStringLiteral("exif.lens_focal_range")},
+                {QStringLiteral("role"), QStringLiteral("exif.lens_focal_range")},
+                {QStringLiteral("title"), QStringLiteral("Lens range")},
+                {QStringLiteral("width"), 12},
+                {QStringLiteral("alignment"), QStringLiteral("right")},
+                {QStringLiteral("sortable"), true},
+            },
+            QVariantMap{
+                {QStringLiteral("id"), QStringLiteral("exif.camera_model")},
+                {QStringLiteral("role"), QStringLiteral("exif.camera_model")},
+                {QStringLiteral("title"), QStringLiteral("Camera")},
+                {QStringLiteral("width"), 34},
+                {QStringLiteral("alignment"), QStringLiteral("left")},
+                {QStringLiteral("sortable"), true},
+            },
+            QVariantMap{
+                {QStringLiteral("id"), QStringLiteral("exif.lens_model")},
+                {QStringLiteral("role"), QStringLiteral("exif.lens_model")},
+                {QStringLiteral("title"), QStringLiteral("Lens")},
+                {QStringLiteral("width"), 22},
+                {QStringLiteral("alignment"), QStringLiteral("left")},
+                {QStringLiteral("sortable"), true},
+            },
+        });
+        panel->setProperty("groupRanges", QVariantList{QVariantMap{
+            {QStringLiteral("key"), QStringLiteral("field:exposure:1/125")},
+            {QStringLiteral("title"), QStringLiteral("Exposure: 1/125 с")},
+            {QStringLiteral("startIndex"), 0},
+            {QStringLiteral("count"), 96},
+        }});
+        panel->setProperty("width", 1050);
+        panel->setProperty("height", 360);
+        view.resize(1050, 360);
+        view.show();
+
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        QVERIFY(panelItem);
+        auto *header = panel->findChild<QObject *>(
+            QStringLiteral("galleryDetailsHeader"));
+        QVERIFY(header);
+        const auto findLeaf = [panelItem](const QString &objectName) {
+            return findVisualItem(panelItem, objectName);
+        };
+        const auto verifyLeaf = [&](const QString &objectName) {
+            QQuickItem *leaf = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (leaf = findLeaf(objectName)) != nullptr,
+                5000);
+            QTRY_VERIFY_WITH_TIMEOUT(leaf->isVisible(), 5000);
+            const qreal dpr = view.devicePixelRatio();
+            const QPointF origin =
+                leaf->mapToItem(view.contentItem(), QPointF());
+            QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr))
+                         < 0.001,
+                     qPrintable(QStringLiteral("%1 physical x=%2")
+                         .arg(objectName).arg(origin.x() * dpr, 0, 'f', 6)));
+            QVERIFY2(qAbs(origin.y() * dpr - qRound(origin.y() * dpr))
+                         < 0.001,
+                     qPrintable(QStringLiteral("%1 physical y=%2")
+                         .arg(objectName).arg(origin.y() * dpr, 0, 'f', 6)));
+            QVERIFY2(qAbs(leaf->width() * dpr
+                          - qRound(leaf->width() * dpr)) < 0.001,
+                     qPrintable(objectName));
+            QVERIFY2(qAbs(leaf->height() * dpr
+                          - qRound(leaf->height() * dpr)) < 0.001,
+                     qPrintable(objectName));
+            const QPointF sceneUnitX = leaf->mapToItem(
+                view.contentItem(), QPointF(1, 0)) - origin;
+            const QPointF sceneUnitY = leaf->mapToItem(
+                view.contentItem(), QPointF(0, 1)) - origin;
+            QCOMPARE(sceneUnitX, QPointF(1, 0));
+            QCOMPARE(sceneUnitY, QPointF(0, 1));
+        };
+
+        for (int index = 0; index < 9; ++index) {
+            verifyLeaf(QStringLiteral("galleryDetailsHeaderText-%1")
+                           .arg(index));
+        }
+        verifyLeaf(QStringLiteral(
+            "galleryGroupHeaderText-field:exposure:1/125"));
+        verifyLeaf(QStringLiteral(
+            "galleryGroupHeaderSeparator-field:exposure:1/125"));
+        for (const QString &fieldId : {
+                 QStringLiteral("exif.exposure_time"),
+                 QStringLiteral("exif.iso"),
+                 QStringLiteral("exif.f_number"),
+                 QStringLiteral("exif.focal_length_35mm"),
+                 QStringLiteral("exif.lens_focal_range"),
+                 QStringLiteral("exif.camera_model"),
+                 QStringLiteral("exif.lens_model"),
+             }) {
+            verifyLeaf(QStringLiteral("galleryFileField-%1-0").arg(fieldId));
+        }
+        for (const QString &leaf : {
+                 QStringLiteral("galleryBaseName-0"),
+                 QStringLiteral("gallerySize-0"),
+             }) {
+            verifyLeaf(leaf);
+        }
+        const QMap<QString, QString> expectedFields{
+            {QStringLiteral("exif.exposure_time"), QStringLiteral("1/125 с")},
+            {QStringLiteral("exif.iso"), QStringLiteral("800")},
+            {QStringLiteral("exif.f_number"), QStringLiteral("f/2.8")},
+            {QStringLiteral("exif.focal_length_35mm"), QStringLiteral("75 мм")},
+            {QStringLiteral("exif.lens_focal_range"), QStringLiteral("24–70 мм")},
+            {QStringLiteral("exif.camera_model"), QStringLiteral("Canon R5")},
+            {QStringLiteral("exif.lens_model"), QStringLiteral("RF 24-70mm")},
+        };
+        for (auto it = expectedFields.cbegin(); it != expectedFields.cend(); ++it) {
+            QQuickItem *field = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (field = findLeaf(QStringLiteral("galleryFileField-%1-0")
+                                      .arg(it.key())))
+                    != nullptr,
+                5000);
+            QCOMPARE(field->property("text").toString(), it.value());
+        }
+
+        for (int index = 0; index < 8; ++index) {
+            auto *handle = findVisualItem(
+                panelItem, QStringLiteral("galleryDetailsResizeHandle-%1")
+                               .arg(index));
+            QVERIFY2(handle, qPrintable(QStringLiteral(
+                "missing Details resize handle %1").arg(index)));
+            const QPointF origin =
+                handle->mapToItem(view.contentItem(), QPointF());
+            const qreal dpr = view.devicePixelRatio();
+            QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr))
+                         < 0.001,
+                     qPrintable(QStringLiteral("resize handle %1 x=%2")
+                         .arg(index).arg(origin.x() * dpr, 0, 'f', 6)));
+            QVERIFY2(qAbs(origin.y() * dpr - qRound(origin.y() * dpr))
+                         < 0.001,
+                     qPrintable(QStringLiteral("resize handle %1 y=%2")
+                         .arg(index).arg(origin.y() * dpr, 0, 'f', 6)));
+            QVERIFY2(qAbs(handle->width() * dpr
+                          - qRound(handle->width() * dpr)) < 0.001,
+                     qPrintable(QStringLiteral("resize handle %1 width")
+                         .arg(index)));
+        }
+
+        auto *firstResizeHandle = findVisualItem(
+            panelItem, QStringLiteral("galleryDetailsResizeHandle-7"));
+        QVERIFY(firstResizeHandle);
+        auto *resizableCell0 = findVisualItem(
+            panelItem, QStringLiteral("galleryDetailsHeaderCell-7"));
+        auto *resizableCell1 = findVisualItem(
+            panelItem, QStringLiteral("galleryDetailsHeaderCell-8"));
+        QVERIFY(resizableCell0);
+        QVERIFY(resizableCell1);
+        const qreal originalFirstColumnWidth = resizableCell0->width();
+        const qreal originalSecondColumnWidth = resizableCell1->width();
+        const QPoint resizeStart = firstResizeHandle->mapToItem(
+            view.contentItem(),
+            QPointF(firstResizeHandle->width() / 2,
+                    firstResizeHandle->height() / 2)).toPoint();
+        QSignalSpy resizeRequests(
+            header, SIGNAL(columnResizeRequested(QVariant)));
+        QVERIFY(resizeRequests.isValid());
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, resizeStart);
+        QTest::mouseMove(&view, resizeStart + QPoint(48, 0), 20);
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier,
+                            resizeStart + QPoint(48, 0));
+        QTRY_COMPARE_WITH_TIMEOUT(resizeRequests.size(), 1, 3000);
+        const QVariantList requestedWidths =
+            resizeRequests.takeFirst().at(0).toList();
+        QVERIFY(requestedWidths.size() > 8);
+        QVERIFY(requestedWidths.at(7).toMap()
+                    .value(QStringLiteral("width")).toInt()
+                > requestedWidths.at(8).toMap()
+                    .value(QStringLiteral("width")).toInt());
+        QQuickItem *resizedCell0 = nullptr;
+        QQuickItem *resizedCell1 = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (resizedCell0 = findVisualItem(
+                 panelItem, QStringLiteral("galleryDetailsHeaderCell-7")))
+                    != nullptr
+                && (resizedCell1 = findVisualItem(
+                    panelItem, QStringLiteral("galleryDetailsHeaderCell-8")))
+                    != nullptr
+                && resizedCell0->width() > originalFirstColumnWidth + 30,
+            3000);
+        QVERIFY(resizedCell1->width() < originalSecondColumnWidth - 30);
+        QVERIFY(qAbs(resizedCell0->width() + resizedCell1->width()
+                     - originalFirstColumnWidth - originalSecondColumnWidth)
+                < 1.0);
+        for (int index = 0; index < 9; ++index) {
+            verifyLeaf(QStringLiteral("galleryDetailsHeaderText-%1")
+                           .arg(index));
+        }
+        for (const QString &fieldId : {
+                 QStringLiteral("exif.exposure_time"),
+                 QStringLiteral("exif.iso"),
+                 QStringLiteral("exif.f_number"),
+                 QStringLiteral("exif.focal_length_35mm"),
+                 QStringLiteral("exif.lens_focal_range"),
+                 QStringLiteral("exif.camera_model"),
+                 QStringLiteral("exif.lens_model"),
+             }) {
+            verifyLeaf(QStringLiteral("galleryFileField-%1-0").arg(fieldId));
+        }
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        // Keep the capture alongside the leaf geometry checks so 1.75x
+        // rendering can catch clipping or text-edge softness as well.
+        QVERIFY(capture.save(visualCapturePath(
+            QStringLiteral("gallery-details-fields-175.png"),
+            directory.filePath(QStringLiteral("details-file-fields.png")))));
+        QVERIFY(capture.save(visualCapturePath(
+            QStringLiteral("gallery-details-fields-resize-175.png"),
+            directory.filePath(QStringLiteral("details-file-fields-resize.png")))));
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        auto *host = new QQuickItem(view.contentItem());
+        panelItem->setParentItem(host);
+        host->setPosition(QPointF(0.37, 0.23));
+        layout->setDensity(24.2);
+        // Let the 120ms initial width-settle decode/viewport transaction
+        // finish before retaining the visible row list across image waits.
+        QTest::qWait(200);
+        QSet<QString> checkedRasterRoles;
+        auto *firstThumbnail = findLeaf(QStringLiteral("galleryThumbnailImage-2"));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (firstThumbnail = findLeaf(QStringLiteral("galleryThumbnailImage-2"))), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(firstThumbnail->property("status").toInt(), 1, 5000);
+        for (qreal offset : {0.0, 37.13, 213.71}) {
+            layout->setContentY(offset);
+            QTest::qWait(30);
+            for (int column = 0; column < 9; ++column)
+                verifyLeaf(QStringLiteral("galleryDetailsHeaderText-%1").arg(column));
+            for (const QVariant &value : layout->visibleIndexes()) {
+                const int row = value.toInt();
+                const QVariantList schema = panel->property("columnSchema").toList();
+                for (int column = 2; column < schema.size(); ++column) {
+                    auto *cell = findLeaf(QStringLiteral("galleryDetailsHeaderCell-%1").arg(column));
+                    const QString role = schema[column].toMap().value(QStringLiteral("role")).toString();
+                    auto *text = findLeaf(QStringLiteral("galleryFileField-%1-%2").arg(role).arg(row));
+                    QVERIFY(cell && text);
+                    const qreal expectedX = cell->mapToItem(view.contentItem(), QPointF()).x()
+                        + panel->property("detailsHeaderCellInset").toReal();
+                    QVERIFY(qAbs(text->mapToItem(view.contentItem(), QPointF()).x() - expectedX) < 0.001);
+                }
+                for (auto field = fields.cbegin(); field != fields.cend(); ++field)
+                    verifyLeaf(QStringLiteral("galleryFileField-%1-%2").arg(field.key()).arg(row));
+                for (const QString &role : {QStringLiteral("galleryBaseName"),
+                                           QStringLiteral("galleryExtension"),
+                                           QStringLiteral("gallerySize")})
+                    verifyLeaf(QStringLiteral("%1-%2").arg(role).arg(row));
+                // Inspect the actual rendered leaves in this frame. The
+                // normal thumbnail pipeline may replace an icon after a
+                // recycled row is rebound; waiting for a predicted icon kind
+                // would also allow the visible row list to change underneath us.
+                for (const QString &role : {QStringLiteral("galleryThumbnailImage"),
+                                           QStringLiteral("gallerySourceColorIcon"),
+                                           QStringLiteral("galleryFallbackIcon")}) {
+                    const QString name = QStringLiteral("%1-%2").arg(role).arg(row);
+                    auto *raster = findLeaf(name);
+                    if (raster && raster->isVisible()) {
+                        verifyLeaf(name);
+                        checkedRasterRoles.insert(role);
+                    }
+                }
+            }
+        }
+        QCOMPARE(checkedRasterRoles.size(), 3);
+        QVERIFY(view.grabWindow().save(visualCapturePath(
+            QStringLiteral("gallery-details-fields-scroll-175.png"),
+            directory.filePath(QStringLiteral("details-fields-scroll.png")))));
+        runtime->shutdown();
+    }
+
+    void groupHeadingLeavesStayOnPhysicalPixelGridAt175Percent() {
+        QQuickView view;
+        if (qAbs(view.devicePixelRatio() - 1.75) > 0.001) {
+            QSKIP("Run this regression with QT_SCALE_FACTOR=1.75");
+        }
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("group-heading-pixel-grid"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(8), 1));
+        session->setCurrentIndex(0);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("groupHeadingSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("showDetailsHeader", false);
+        panel->setProperty("groupRanges", QVariantList{QVariantMap{
+            {QStringLiteral("key"), QStringLiteral("file-field:exposure")},
+            {QStringLiteral("title"), QStringLiteral("Exposure: 1/125 s")},
+            {QStringLiteral("startIndex"), 2},
+            {QStringLiteral("count"), 3},
+        }});
+        QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
+            {QStringLiteral("panelBackground"), QStringLiteral("#101010")},
+            {QStringLiteral("headerText"), QStringLiteral("#e8edf2")},
+            {QStringLiteral("separator"), QStringLiteral("#30363d")},
+        }));
+        view.resize(960, 640);
+        view.show();
+
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        QVERIFY(panelItem);
+        const qreal dpr = view.devicePixelRatio();
+        const auto verifyLeaf = [&](QQuickItem *leaf,
+                                    const QString &objectName) {
+            QVERIFY2(leaf, qPrintable(objectName));
+            QTRY_VERIFY_WITH_TIMEOUT(leaf->isVisible(), 5000);
+            const QPointF origin =
+                leaf->mapToItem(view.contentItem(), QPointF());
+            QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr))
+                         < 0.001,
+                     qPrintable(QStringLiteral("%1 x=%2")
+                         .arg(objectName)
+                         .arg(origin.x() * dpr, 0, 'f', 6)));
+            QVERIFY2(qAbs(origin.y() * dpr - qRound(origin.y() * dpr))
+                         < 0.001,
+                     qPrintable(QStringLiteral("%1 y=%2")
+                         .arg(objectName)
+                         .arg(origin.y() * dpr, 0, 'f', 6)));
+            QVERIFY2(qAbs(leaf->width() * dpr
+                          - qRound(leaf->width() * dpr)) < 0.001,
+                     qPrintable(objectName));
+            QVERIFY2(qAbs(leaf->height() * dpr
+                          - qRound(leaf->height() * dpr)) < 0.001,
+                     qPrintable(objectName));
+            const QPointF unitX = leaf->mapToItem(
+                view.contentItem(), QPointF(1, 0)) - origin;
+            const QPointF unitY = leaf->mapToItem(
+                view.contentItem(), QPointF(0, 1)) - origin;
+            QCOMPARE(unitX, QPointF(1, 0));
+            QCOMPARE(unitY, QPointF(0, 1));
+        };
+
+        const QList<QString> modes = {
+            QStringLiteral("details"), QStringLiteral("columns"),
+            QStringLiteral("grid"), QStringLiteral("icons"),
+            QStringLiteral("masonry"),
+        };
+        for (const QString &mode : modes) {
+            panel->setProperty("presentationMode", mode);
+            auto *layout = panel->findChild<MasonryLayout *>(
+                "galleryViewportItem");
+            QTRY_VERIFY_WITH_TIMEOUT(layout, 5000);
+            // Each mode gets an independent top-of-catalog capture. A prior
+            // horizontal Columns offset is not a vertical scroll position.
+            layout->setContentY(0);
+            QTRY_VERIFY_WITH_TIMEOUT(qAbs(layout->contentY()) < 0.001,
+                                     5000);
+            const QVariantList groupHeaders =
+                layout->groupHeaderGeometries();
+            QCOMPARE(groupHeaders.size(), 1);
+            const QVariantMap header = groupHeaders.first().toMap();
+            const QRectF headerGeometry(
+                header.value(QStringLiteral("x")).toReal(),
+                header.value(QStringLiteral("y")).toReal(),
+                header.value(QStringLiteral("width")).toReal(),
+                header.value(QStringLiteral("height")).toReal());
+            QVERIFY(headerGeometry.isValid());
+            QVERIFY(headerGeometry.width() > 0);
+            QVERIFY(headerGeometry.height() > 0);
+            QCOMPARE(layout->indexAt(headerGeometry.center().x(),
+                                     headerGeometry.center().y()), -1);
+            const QRectF firstGroupedFile = layout->indexGeometry(2);
+            QVERIFY(firstGroupedFile.isValid());
+            QVERIFY(firstGroupedFile.top() >= headerGeometry.bottom());
+            QCOMPARE(layout->indexAt(firstGroupedFile.center().x(),
+                                     firstGroupedFile.center().y()), 2);
+            const QString titleName = QStringLiteral(
+                "galleryGroupHeaderText-file-field:exposure");
+            const QString separatorName = QStringLiteral(
+                "galleryGroupHeaderSeparator-file-field:exposure");
+            QQuickItem *title = nullptr;
+            QQuickItem *separator = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (title = findVisualItem(panelItem, titleName))
+                    && title->isVisible(),
+                5000);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (separator = findVisualItem(panelItem, separatorName))
+                    && separator->isVisible(),
+                5000);
+            verifyLeaf(title, titleName + QLatin1Char('/') + mode);
+            verifyLeaf(separator, separatorName + QLatin1Char('/') + mode);
+            QCOMPARE(title->property("text").toString(),
+                     QStringLiteral("Exposure: 1/125 s"));
+            const QString entryLeafName = mode == QStringLiteral("grid")
+                ? QStringLiteral("galleryGridLabel-0")
+                : mode == QStringLiteral("icons")
+                    ? QStringLiteral("galleryIconsLabel-0")
+                    : mode == QStringLiteral("masonry")
+                        ? QStringLiteral("galleryMasonryLabel-0")
+                        : QStringLiteral("galleryBaseName-0");
+            QQuickItem *entryLeaf = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (entryLeaf = findVisualItem(panelItem, entryLeafName))
+                    && entryLeaf->isVisible(),
+                5000);
+            verifyLeaf(entryLeaf, entryLeafName + QLatin1Char('/') + mode);
+
+            QTest::qWait(40);
+            const QImage capture = view.grabWindow();
+            QVERIFY2(!capture.isNull(), qPrintable(mode));
+            const QRectF titleRect = title->mapRectToItem(
+                view.contentItem(), title->boundingRect());
+            const int inkLeft = qBound(0, qFloor(titleRect.left() * dpr),
+                                       capture.width());
+            const int inkTop = qBound(0, qFloor(titleRect.top() * dpr),
+                                      capture.height());
+            const int inkRight = qBound(inkLeft,
+                qCeil(titleRect.right() * dpr), capture.width());
+            const int inkBottom = qBound(inkTop,
+                qCeil(titleRect.bottom() * dpr), capture.height());
+            int renderedTitlePixels = 0;
+            for (int y = inkTop; y < inkBottom; ++y) {
+                for (int x = inkLeft; x < inkRight; ++x) {
+                    if (qGray(capture.pixel(x, y)) > 48) {
+                        ++renderedTitlePixels;
+                    }
+                }
+            }
+            QVERIFY2(renderedTitlePixels >= 8,
+                     qPrintable(QStringLiteral(
+                         "%1 group title has only %2 rendered pixels in (%3,%4 %5x%6)")
+                         .arg(mode).arg(renderedTitlePixels)
+                         .arg(titleRect.x() * dpr, 0, 'f', 2)
+                         .arg(titleRect.y() * dpr, 0, 'f', 2)
+                         .arg(titleRect.width() * dpr, 0, 'f', 2)
+                         .arg(titleRect.height() * dpr, 0, 'f', 2)));
+            QVERIFY(capture.save(visualCapturePath(
+                QStringLiteral("gallery-group-heading-%1-175.png").arg(mode),
+                directory.filePath(QStringLiteral("group-heading-%1.png")
+                                       .arg(mode)))));
+            QTest::qWait(20);
+        }
+        runtime->shutdown();
+    }
+
     void detailsDelegateMatchesClassicFileListVisualContract() {
         QVariantList catalog;
         catalog.reserve(30);
@@ -5543,9 +6291,11 @@ private slots:
         QCOMPARE(extension0->property("horizontalAlignment").toInt(),
                  int(Qt::AlignLeft));
         QCOMPARE(extension0->width(), 40.0);
-        QCOMPARE(size0->width(), 96.0);
+        // Configurable Details columns now share the header schema, including
+        // its size column, instead of reserving a separate fixed 96px lane.
+        QCOMPARE(size0->width(), headerCell1->width());
         QCOMPARE(size0->mapToItem(row0, QPointF()).x() + size0->width(),
-                 632.0);
+                 headerCell1->x() + headerCell1->width());
         QCOMPARE(base0->property("color").value<QColor>(),
                  QColor(QStringLiteral("#c4cbd3")));
         QCOMPARE(folderBase->property("color").value<QColor>(),
@@ -6236,8 +6986,8 @@ private slots:
             3000);
 
         // Check both the strategy geometry and the instantiated QQuickItem.
-        // The latter catches a regression where BrickItem::setGeometry()
-        // rounded every row even though indexGeometry() remained fractional.
+        // Density/content extent retain full precision. Painted edges snap
+        // independently, rather than rounding the pitch and accumulating drift.
         const QList<int> visibleRows{0, 1, 4, 5, 10};
         for (const int index : visibleRows) {
             const QRectF geometry = layout->indexGeometry(index);
@@ -6257,14 +7007,17 @@ private slots:
             QQuickItem *brick = surface->parentItem();
             QVERIFY(brick);
             QTRY_VERIFY2_WITH_TIMEOUT(
-                qAbs(brick->y() - index * rowExtent) < 0.0001,
+                qAbs(brick->y() - qRound(index * rowExtent * layout->devicePixelRatio())
+                     / layout->devicePixelRatio()) < 0.0001,
                 qPrintable(QStringLiteral(
                     "row %1 delegate y=%2 expected=%3")
                     .arg(index).arg(brick->y())
                     .arg(index * rowExtent)),
                 3000);
             QTRY_VERIFY2_WITH_TIMEOUT(
-                qAbs(brick->height() - rowExtent) < 0.0001,
+                qAbs(brick->height() - (qRound((index + 1) * rowExtent * layout->devicePixelRatio())
+                    - qRound(index * rowExtent * layout->devicePixelRatio()))
+                        / layout->devicePixelRatio()) < 0.0001,
                 qPrintable(QStringLiteral(
                     "row %1 delegate height=%2 expected=%3")
                     .arg(index).arg(brick->height()).arg(rowExtent)),
@@ -6927,7 +7680,8 @@ private slots:
                  qPrintable(QStringLiteral(
                      "known-size reordered reset took %1 ms")
                      .arg(reorderedResetNs / 1'000'000.0, 0, 'f', 3)));
-        const QRectF expectedResetGeometry(layout->indexGeometry(4).toRect());
+        const QRectF expectedResetGeometry = ZoinGallery::PixelGrid::snapDeviceRect(
+            layout->indexGeometry(4), layout->devicePixelRatio());
         QCOMPARE(firstSlot->visualRow().value("entryId"), identityBeforeReorder);
         QVERIFY(geometryBeforeReorder != expectedResetGeometry);
         QCOMPARE(firstSlot->geometry(), expectedResetGeometry);

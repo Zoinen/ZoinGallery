@@ -67,6 +67,7 @@ void ImageInfoReadRunner::run() {
             result.fileSize = _source.size;
         }
         result.thumbnailKind = QStringLiteral("video");
+        result.fileFieldsRead = true;
         result.imageSize = QSize(16, 9);
         result.orientation = ExifOrientation::Horizontal;
         timingSpan.set(QStringLiteral("outcome"),
@@ -121,6 +122,10 @@ void ImageInfoReadRunner::run() {
         ZoinGallery::MediaTimingTrace::Span readSpan(
             QStringLiteral("qt.gallery.metadata.decode"), timingFields);
         metadataRead = ThumbnailLoader::readMetadata(result);
+        // A successful source open and completed decoder pass establishes
+        // missing values as known-missing even when no supported EXIF tag is
+        // present or the image itself is damaged.
+        result.fileFieldsRead = true;
         readSpan.set(QStringLiteral("ok"), metadataRead);
         readSpan.set(QStringLiteral("imageWidth"),
                      result.imageSize.width());
@@ -132,7 +137,7 @@ void ImageInfoReadRunner::run() {
         // Never leak a temporary materialized path into catalog identity or a
         // later cache key. Decode stages acquire their own shared lease.
         result.path = _source.runtimeIdentity();
-        if (_writeDerivedMetadataCache && metadataRead) {
+        if (_writeDerivedMetadataCache && result.fileFieldsRead) {
             PersistentDerivedImageCache::storeMetadata(result);
         }
     }

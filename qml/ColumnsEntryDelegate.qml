@@ -54,11 +54,13 @@ Item {
             readonly property point pixelCorrection: content.pixelOffset(baseNameLabel)
             objectName: "galleryBaseName-" + content.entry.viewIndex
             x: 0
-            width: Math.max(0, (extensionLabel.visible
-                               ? extensionLabel.x : parent.width)
-                              - x - (extensionLabel.visible
-                                     ? textRow.gap : 0))
-            height: implicitHeight
+            width: Math.max(0, Math.round(
+                ((extensionLabel.visible
+                  ? extensionLabel.x : parent.width)
+                 - x - (extensionLabel.visible ? textRow.gap : 0))
+                * content.entry.renderDpr) / content.entry.renderDpr)
+            height: Math.ceil(implicitHeight * content.entry.renderDpr)
+                    / content.entry.renderDpr
             y: (parent.height - height) / 2
             text: content.entry.panelRoot.quickSearchFormatter.styledText(
                       content.entry.panelRoot.separateFileExtensions
@@ -88,7 +90,8 @@ Item {
             visible: content.entry.panelRoot.separateFileExtensions
                      && content.entry.displayExtension !== ""
             anchors.right: parent.right
-            height: implicitHeight
+            height: Math.ceil(implicitHeight * content.entry.renderDpr)
+                    / content.entry.renderDpr
             y: (parent.height - height) / 2
             width: Math.floor(textRow.extensionColumnWidth * content.entry.renderDpr) / content.entry.renderDpr
             text: content.entry.panelRoot.quickSearchFormatter.styledSuffix(

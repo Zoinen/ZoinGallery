@@ -25,14 +25,14 @@ namespace {
 constexpr quint32 DerivedFileMagic = 0x5a474431; // "ZGD1"
 constexpr quint16 DerivedFileVersion = 3;
 constexpr quint32 MetadataFileMagic = 0x5a474d31; // "ZGM1"
-constexpr quint16 MetadataFileVersion = 1;
+constexpr quint16 MetadataFileVersion = 2;
 qint64 derivedCacheBudget = 512LL * 1024LL * 1024LL; // guarded by cacheMutex
 constexpr qint64 MaximumEntryBytes = 64LL * 1024LL * 1024LL;
 constexpr qint64 MaximumMetadataEntryBytes = 1024LL * 1024LL;
 constexpr float CacheWebpQuality = 82.0F;
 constexpr auto DerivedDecoderSchema =
     "decoded-pixels-v1/webp-v1/display-colorspace-v1";
-constexpr auto MetadataSchema = "image-metadata-v1";
+constexpr auto MetadataSchema = "image-metadata-v3";
 
 enum class Artifact : quint8 {
     Invalid = 0,
@@ -223,6 +223,8 @@ void rememberMetadata(const ImageInfo &info, qsizetype serializedBytes) {
     stored->imageSize = info.imageSize;
     stored->orientation = info.orientation;
     stored->exif = info.exif;
+    stored->typedFileFields = info.typedFileFields;
+    stored->fileFieldsRead = info.fileFieldsRead;
     QMutexLocker locker(&metadataMemoryMutex);
     metadataMemory.insert(key, stored,
         static_cast<int>(serializedBytes + key.size() + sizeof(ImageInfo)));
@@ -371,7 +373,8 @@ bool parsePreparedEntry(const QByteArray &entry, DerivedKey &key,
 
 bool parseMetadataEntry(const QByteArray &entry, MetadataKey &key,
                         QSize &imageSize, ExifOrientation &orientation,
-                        QVariantMap &exif) {
+                        QVariantMap &exif, QVariantMap &typedFileFields,
+                        bool &fileFieldsRead) {
     if (entry.isEmpty() || entry.size() > MaximumMetadataEntryBytes) {
         return false;
     }
@@ -385,7 +388,8 @@ bool parseMetadataEntry(const QByteArray &entry, MetadataKey &key,
     quint32 magic = 0;
     quint16 version = 0;
     qint32 orientationValue = 0;
-    stream >> magic >> version >> key >> imageSize >> orientationValue >> exif;
+    stream >> magic >> version >> key >> imageSize >> orientationValue
+           >> exif >> typedFileFields >> fileFieldsRead;
     if (stream.status() != QDataStream::Ok ||
         magic != MetadataFileMagic || version != MetadataFileVersion ||
         !key.isValid() ||
@@ -809,6 +813,8 @@ bool PersistentDerivedImageCache::retrieveMemoryMetadata(ImageInfo &info) {
     info.imageSize = cached->imageSize;
     info.orientation = cached->orientation;
     info.exif = cached->exif;
+    info.typedFileFields = cached->typedFileFields;
+    info.fileFieldsRead = cached->fileFieldsRead;
     info.fileSize = info.source.size;
     info.isCached = true;
     return true;
@@ -902,8 +908,11 @@ void PersistentDerivedImageCache::retrieveMetadataBatch(
         QSize imageSize;
         ExifOrientation orientation = ExifOrientation::Horizontal;
         QVariantMap exif;
+        QVariantMap typedFileFields;
+        bool fileFieldsRead = false;
         if (!parseMetadataEntry(read.entry, storedKey, imageSize,
-                                orientation, exif) ||
+                                orientation, exif, typedFileFields,
+                                fileFieldsRead) ||
             !metadataKeysEqual(read.key, storedKey)) {
             removeMetadataIfUnchanged(read.path, read.entry, read.key);
             misses.append(std::move(read.info));
@@ -912,6 +921,8 @@ void PersistentDerivedImageCache::retrieveMetadataBatch(
         read.info.imageSize = imageSize;
         read.info.orientation = orientation;
         read.info.exif = std::move(exif);
+        read.info.typedFileFields = std::move(typedFileFields);
+        read.info.fileFieldsRead = fileFieldsRead;
         read.info.fileSize = read.info.source.size;
         read.info.isCached = true;
         rememberMetadata(read.info, read.entry.size());
@@ -937,7 +948,7 @@ void PersistentDerivedImageCache::storeMetadata(const ImageInfo &info) {
     stream.setVersion(QDataStream::Qt_6_0);
     stream << MetadataFileMagic << MetadataFileVersion << key
            << info.imageSize << static_cast<qint32>(info.orientation)
-           << info.exif;
+           << info.exif << info.typedFileFields << info.fileFieldsRead;
     if (stream.status() != QDataStream::Ok ||
         entry.size() > MaximumMetadataEntryBytes) {
         return;

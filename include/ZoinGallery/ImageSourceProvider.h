@@ -27,6 +27,7 @@ struct ImageSourceDescriptor {
     QString displayName;
     QString mimeType;
     qint64 size = -1;
+    quint64 catalogGeneration = 0;
 
     bool isValid() const {
         return !resourceId.isEmpty() && !sourceKey.isEmpty();

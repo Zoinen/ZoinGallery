@@ -166,6 +166,8 @@ signals:
     void viewerImageUrlChanged();
     void viewerSourceAtChanged(int row);
     void viewerRequestStateAtChanged(int row);
+    void fileFieldsRead(const QVariantMap &update);
+    void fileFieldsReadBatch(const QVariantList &updates);
 
 private:
     friend class ExternalCatalogResetTransaction;
@@ -216,7 +218,7 @@ private:
 
     bool setEntryHighlightStyle(Entry &entry,
                                 const QVariantMap &highlightStyle) const;
-    void restoreCachedMetadata(Entry &entry) const;
+    void restoreCachedMetadata(Entry &entry);
 
     struct ViewerPlan {
         QSize viewportSize;
@@ -249,6 +251,8 @@ private:
         bool viewerMetadataChanged = false;
         bool acceptedNamespace = false;
         bool allChangedMetadataCached = true;
+        QList<QVariantMap> fileFieldUpdates;
+        QSet<QString> fileFieldUpdateKeys;
     };
 
     struct ProbeBatch {
@@ -332,7 +336,7 @@ private:
     bool applySparseCatalog(const QVariantList &entries,
                             bool metadataDeferred, int totalCount);
     bool parseCatalogEntry(const QVariantMap &value, int row,
-                           bool metadataDeferred, Entry *entry) const;
+                           bool metadataDeferred, Entry *entry);
     ImageFile *ensureItem(int row) const;
     QVariantMap visualSnapshot(int row) const;
     void retireItemAfterReset(ImageFile *item);

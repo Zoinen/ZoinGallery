@@ -42,6 +42,8 @@ BrickItem {
     readonly property real renderDpr:
         Math.max(0.01, Number(panelRoot.devicePixelRatio) || 1)
     readonly property point iconSceneOrigin: {
+        if (detailsMode)
+            return Qt.point(0, 0)
         // mapToItem() does not register dependencies on ancestor geometry.
         // Track geometry through the complete chain so host
         // panel placement invalidates the correction without any scrolling.
@@ -61,10 +63,11 @@ BrickItem {
     readonly property real iconPixelAlignmentRevision: {
         if (!visible)
             return 0
-        const viewport = panelRoot.cursorPixelGridViewportOrigin
+        const viewport = detailsMode ? Qt.point(0, 0)
+                                     : panelRoot.cursorPixelGridViewportOrigin
         const preview = previewContainerItem
         return Number(viewport.x || 0) + Number(viewport.y || 0)
-                + x + y + width + height
+                + (detailsMode ? 0 : x + y) + width + height
                 + (preview ? preview.x + preview.y
                              + preview.width + preview.height : 0)
                 + presentationMode
@@ -83,7 +86,9 @@ BrickItem {
             return Qt.point(0, 0)
         const revision = iconPixelAlignmentRevision
         const origin = iconSceneOrigin
-        const scenePoint = item.parent.mapToItem(null, item.x, item.y)
+        // Details' brick origin is already aligned by C++; only the short
+        // chain inside the brick can contribute a local centering offset.
+        const scenePoint = item.parent.mapToItem(detailsMode ? entry : null, item.x, item.y)
         return Qt.point(
             Math.round(scenePoint.x * renderDpr) / renderDpr
                 - scenePoint.x + revision * 0 + origin.x * 0,
@@ -146,11 +151,10 @@ BrickItem {
         || panelRoot.labelBackgroundColor
     readonly property rect effectivePreviewRect: {
         if (detailsMode) {
-            return Qt.rect(panelRoot.detailsRowInset,
-                           Math.max(0, (height
-                                        - panelRoot.detailsIconSlotSize) / 2),
-                           panelRoot.detailsIconSlotSize,
-                           panelRoot.detailsIconSlotSize)
+            const side = Math.round(panelRoot.detailsIconSlotSize * renderDpr) / renderDpr
+            return Qt.rect(Math.round(panelRoot.detailsRowInset * renderDpr) / renderDpr,
+                           Math.round(Math.max(0, (height - side) / 2) * renderDpr) / renderDpr,
+                           side, side)
         }
         const rect = previewRect
         if (rect && rect.width > 0 && rect.height > 0)

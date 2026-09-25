@@ -1,22 +1,39 @@
 #include "PersistentDerivedImageCache.h"
 #include "PersistentImageCache.h"
+#include "Decoders/ImageDecoderInterface.h"
+#include "Decoders/RawDecoder.h"
 #include "Runners/CacheImageRunners.h"
 #include "Runners/ImageInfoReadRunner.h"
 #include "Runners/ImageReadRunner.h"
 #include "StorageLocations.h"
+#include "TinyEXIF/TinyEXIF.h"
 
 #include <QFileInfo>
 #include <QColorSpace>
 #include <QDataStream>
+#include <QImage>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <libraw/libraw.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
+#include <limits>
 #include <utility>
 
 namespace {
+
+class TypedExifFieldReader final : public ImageDecoderInterface {
+public:
+    using ImageDecoderInterface::readTypedFileFields;
+};
+
+class TypedRawFieldReader final : public RawDecoder {
+public:
+    using RawDecoder::readTypedFileFields;
+};
 
 class CountingSourceProvider final
     : public ZoinGallery::ImageSourceProvider {
@@ -126,6 +143,199 @@ class PersistentDerivedImageCacheTest final : public QObject {
     QTemporaryDir cacheRoot;
 
 private slots:
+    void typedExifFieldsKeepDecoderValuesAndDoNotInventMissingTags() {
+        TinyEXIF::EXIFInfo exif;
+        exif.ExposureTime = 1.0 / 125.0;
+        exif.ISOSpeedRatings = 800;
+        exif.FNumber = 2.8;
+        exif.LensInfo.FocalLengthIn35mm = 75.0;
+        exif.LensInfo.FocalLengthMin = 24.0;
+        exif.LensInfo.FocalLengthMax = 70.0;
+        exif.Make = "Canon";
+        exif.Model = "R5";
+        exif.LensInfo.Make = "Canon";
+        exif.LensInfo.Model = "RF 24-70mm F2.8";
+
+        const QVariantMap fields =
+            TypedExifFieldReader::readTypedFileFields(exif);
+        QCOMPARE(fields.value(QStringLiteral("exif.exposure_time")).toDouble(),
+                 1.0 / 125.0);
+        QCOMPARE(fields.value(QStringLiteral("exif.iso")).toUInt(), 800U);
+        QCOMPARE(fields.value(QStringLiteral("exif.f_number")).toDouble(), 2.8);
+        QCOMPARE(fields.value(QStringLiteral("exif.focal_length_35mm")).toDouble(), 75.0);
+        const QVariantMap range = fields.value(
+            QStringLiteral("exif.lens_focal_range")).toMap();
+        QCOMPARE(range.value(QStringLiteral("min")).toDouble(), 24.0);
+        QCOMPARE(range.value(QStringLiteral("max")).toDouble(), 70.0);
+        QCOMPARE(fields.value(QStringLiteral("exif.camera_model")).toString(),
+                 QStringLiteral("Canon R5"));
+        QCOMPARE(fields.value(QStringLiteral("exif.lens_model")).toString(),
+                 QStringLiteral("Canon RF 24-70mm F2.8"));
+
+        TinyEXIF::EXIFInfo missing;
+        // TinyEXIF initializes the numeric members when parsing, not in its
+        // default constructor. clear() gives this absent-tag fixture the
+        // same initialized state as a real parser miss.
+        missing.clear();
+        const QVariantMap empty =
+            TypedExifFieldReader::readTypedFileFields(missing);
+        QVERIFY(empty.isEmpty());
+        missing.ExposureTime = std::numeric_limits<double>::quiet_NaN();
+        missing.ISOSpeedRatings = 0;
+        missing.FNumber = -1.0;
+        missing.LensInfo.FocalLengthIn35mm = 0.0;
+        missing.LensInfo.FocalLengthMin = 50.0;
+        missing.LensInfo.FocalLengthMax = 35.0;
+        const QVariantMap malformed =
+            TypedExifFieldReader::readTypedFileFields(missing);
+        QVERIFY(malformed.isEmpty());
+
+        // The APP1 segment advertises an EXIF TIFF header whose IFD offset
+        // points past the end of the segment. The decoder must treat it as a
+        // completed read with no typed values, not manufacture zeroes.
+        const QByteArray damagedJpeg = QByteArray::fromHex(
+            "FFD8FFE1001045786966000049492A0008000000FFD9");
+        TinyEXIF::EXIFInfo damaged;
+        const int damagedStatus = damaged.parseFrom(
+            reinterpret_cast<const uint8_t *>(damagedJpeg.constData()),
+            static_cast<unsigned>(damagedJpeg.size()));
+        QCOMPARE(damagedStatus, TinyEXIF::PARSE_CORRUPT_DATA);
+        QVERIFY(TypedExifFieldReader::readTypedFileFields(damaged).isEmpty());
+
+        missing.LensInfo.FocalLengthMax = 50.0;
+        const QVariantMap fixedLens =
+            TypedExifFieldReader::readTypedFileFields(missing);
+        const QVariantMap fixedRange = fixedLens.value(
+            QStringLiteral("exif.lens_focal_range")).toMap();
+        QCOMPARE(fixedRange.value(QStringLiteral("min")).toDouble(), 50.0);
+        QCOMPARE(fixedRange.value(QStringLiteral("max")).toDouble(), 50.0);
+    }
+
+    void rawFileFieldsStaySeparateFromLegacyExifDisplayMap() {
+        LibRaw raw;
+        raw.imgdata.other.shutter = 1.0 / 125.0;
+        raw.imgdata.other.iso_speed = 800.0;
+        raw.imgdata.other.aperture = 2.8;
+        std::strncpy(raw.imgdata.idata.make, "Canon",
+                     sizeof(raw.imgdata.idata.make) - 1);
+        std::strncpy(raw.imgdata.idata.model, "R5",
+                     sizeof(raw.imgdata.idata.model) - 1);
+        raw.imgdata.lens.FocalLengthIn35mmFormat = 75;
+        raw.imgdata.lens.makernotes.FocalLengthIn35mmFormat = 50.0;
+        raw.imgdata.lens.makernotes.MinFocal = 24.0;
+        raw.imgdata.lens.makernotes.MaxFocal = 70.0;
+        std::strncpy(raw.imgdata.lens.Lens, "RF 24-70mm",
+                     sizeof(raw.imgdata.lens.Lens) - 1);
+
+        TypedRawFieldReader reader;
+        const QVariantMap fields = reader.readTypedFileFields(raw);
+        QVERIFY(qAbs(fields.value(QStringLiteral("exif.exposure_time")).toDouble()
+                     - 1.0 / 125.0) < 0.000001);
+        QCOMPARE(fields.value(QStringLiteral("exif.iso")).toUInt(), 800U);
+        QVERIFY(qAbs(fields.value(QStringLiteral("exif.f_number")).toDouble()
+                     - 2.8) < 0.000001);
+        QVERIFY(qAbs(fields.value(
+                         QStringLiteral("exif.focal_length_35mm")).toDouble()
+                     - 75.0) < 0.000001);
+        const QVariantMap range = fields.value(
+            QStringLiteral("exif.lens_focal_range")).toMap();
+        QVERIFY(qAbs(range.value(QStringLiteral("min")).toDouble() - 24.0)
+                < 0.000001);
+        QVERIFY(qAbs(range.value(QStringLiteral("max")).toDouble() - 70.0)
+                < 0.000001);
+        QCOMPARE(fields.value(QStringLiteral("exif.camera_model")).toString(),
+                 QStringLiteral("Canon R5"));
+        QCOMPARE(fields.value(QStringLiteral("exif.lens_model")).toString(),
+                 QStringLiteral("RF 24-70mm"));
+
+        raw.imgdata.other.shutter = 0.0;
+        raw.imgdata.other.iso_speed = 0.0;
+        raw.imgdata.other.aperture = 0.0;
+        raw.imgdata.lens.FocalLengthIn35mmFormat = 0;
+        QCOMPARE(reader.readTypedFileFields(raw).value(
+                     QStringLiteral("exif.focal_length_35mm")).toDouble(), 50.0);
+        raw.imgdata.lens.makernotes.FocalLengthIn35mmFormat = 0.0;
+        raw.imgdata.lens.makernotes.MinFocal = 0.0;
+        raw.imgdata.lens.makernotes.MaxFocal = 0.0;
+        raw.imgdata.idata.make[0] = '\0';
+        raw.imgdata.idata.model[0] = '\0';
+        raw.imgdata.lens.Lens[0] = '\0';
+        QVERIFY(reader.readTypedFileFields(raw).isEmpty());
+    }
+
+    void rawMetadataReads35mmFieldDuringLibRawPass() {
+        const QString externalDng =
+            qEnvironmentVariable("F4_EXIF_TEST_DNG").trimmed();
+        if (externalDng.isEmpty()) {
+            QSKIP("Set F4_EXIF_TEST_DNG to a DNG fixture to test LibRaw EXIF capture");
+        }
+        LibRaw expectedRaw;
+#if defined(Q_OS_WIN)
+        QCOMPARE(expectedRaw.open_file(externalDng.toStdWString().c_str()),
+                 LIBRAW_SUCCESS);
+#else
+        QCOMPARE(expectedRaw.open_file(externalDng.toUtf8().constData()),
+                 LIBRAW_SUCCESS);
+#endif
+        const double expectedFocalLength35mm =
+            expectedRaw.imgdata.lens.FocalLengthIn35mmFormat;
+        QVERIFY(expectedFocalLength35mm > 0.0);
+
+        TypedRawFieldReader reader;
+        ImageInfo decoded;
+        decoded.path = externalDng;
+        QVERIFY(reader.readMetadata(decoded));
+        QCOMPARE(decoded.typedFileFields.value(
+                     QStringLiteral("exif.focal_length_35mm")).toDouble(),
+                 expectedFocalLength35mm);
+    }
+
+    void typedFileFieldsAndReadCompletionSurviveMetadataCache() {
+        ImageInfo source;
+        source.source = {
+            .resourceId = QStringLiteral("field-cache-resource"),
+            .sourceKey = QStringLiteral("field-cache/photo.jpg"),
+            .contentVersion = QStringLiteral("field-cache-v1"),
+            .versionStrength = QStringLiteral("strong"),
+            .storageClass = QStringLiteral("network"),
+            .displayName = QStringLiteral("photo.jpg"),
+            .size = 4096,
+        };
+        source.sourceVersionToken = source.source.contentVersion;
+        source.imageSize = QSize(120, 80);
+        source.fileFieldsRead = true;
+        source.typedFileFields = {
+            {QStringLiteral("exif.exposure_time"), 1.0 / 60.0},
+            {QStringLiteral("exif.iso"), 800},
+            {QStringLiteral("exif.f_number"), 2.8},
+            {QStringLiteral("exif.focal_length_35mm"), 75.0},
+            {QStringLiteral("exif.lens_focal_range"), QVariantMap{
+                {QStringLiteral("min"), 24.0}, {QStringLiteral("max"), 70.0}}},
+            {QStringLiteral("exif.camera_model"), QStringLiteral("Canon R5")},
+            {QStringLiteral("exif.lens_model"), QStringLiteral("RF 24-70mm")},
+        };
+        PersistentDerivedImageCache::storeMetadata(source);
+
+        ImageInfo restored;
+        restored.source = source.source;
+        restored.sourceVersionToken = source.sourceVersionToken;
+        QVERIFY(PersistentDerivedImageCache::retrieveMetadata(restored));
+        QVERIFY(restored.fileFieldsRead);
+        QCOMPARE(restored.typedFileFields, source.typedFileFields);
+
+        ImageInfo noTags = source;
+        noTags.source.contentVersion = QStringLiteral("field-cache-no-tags");
+        noTags.sourceVersionToken = noTags.source.contentVersion;
+        noTags.typedFileFields.clear();
+        PersistentDerivedImageCache::storeMetadata(noTags);
+        ImageInfo noTagsRestored;
+        noTagsRestored.source = noTags.source;
+        noTagsRestored.sourceVersionToken = noTags.sourceVersionToken;
+        QVERIFY(PersistentDerivedImageCache::retrieveMetadata(noTagsRestored));
+        QVERIFY(noTagsRestored.fileFieldsRead);
+        QVERIFY(noTagsRestored.typedFileFields.isEmpty());
+    }
+
     void oldViewerFilterCacheIsNotReused_data() {
         QTest::addColumn<QString>("oldTransform");
         QTest::newRow("area") << QStringLiteral("viewer-fit-v1");
@@ -278,6 +488,7 @@ private slots:
         request.info.fileSize = QFileInfo(path).size();
         request.info.thumbnailKind = QStringLiteral("video");
         request.targetSize = QSize(96, 54);
+        request.info.imageSize = request.targetSize;
         request.checkCache = true;
         request.storeInPersistentCache = true;
 

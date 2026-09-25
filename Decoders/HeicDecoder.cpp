@@ -84,6 +84,7 @@ bool HeicDecoder::readMetadata(ImageInfo &result) {
                 TinyEXIF::EXIFInfo exifInfo;
                 if (exifInfo.parseFromEXIFSegment(exifStart, exifLen) == TinyEXIF::PARSE_SUCCESS) {
                     result.exif = readExifToMap(exifInfo);
+                    result.typedFileFields = readTypedFileFields(exifInfo);
                 }
             }
         }

@@ -655,12 +655,29 @@ if(BUILD_TESTING)
                 masonryFirstRowLucideProviderUsesPhysicalRasterAndGrid
                 fractionalDetailsDensityPreservesRowPhaseAndContentExtent
                 verticalScrollBarDoesNotChangeViewportWidth)
-        set_tests_properties(${_zoin_visual_test} PROPERTIES
+    set_tests_properties(${_zoin_visual_test} PROPERTIES
             ENVIRONMENT
                 "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic;QT_SCALE_FACTOR=${_zoin_visual_dpr}"
             LABELS "visual;dpr"
             TIMEOUT 30)
     endforeach()
+    add_test(NAME MasonryDetailsFileFieldsPixelGridTest
+        COMMAND ZoinGalleryMasonryLayoutModesTests
+            viewportAndBricksStayOnPhysicalPixelGridAt175Percent
+            detailsFileFieldLeavesStayOnPhysicalPixelGridAt175Percent)
+    set_tests_properties(MasonryDetailsFileFieldsPixelGridTest PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic;QT_SCALE_FACTOR=1.75"
+        LABELS "visual;dpr"
+        TIMEOUT 30)
+    add_test(NAME MasonryGroupHeadingsPixelGridTest
+        COMMAND ZoinGalleryMasonryLayoutModesTests
+            groupHeadingLeavesStayOnPhysicalPixelGridAt175Percent)
+    set_tests_properties(MasonryGroupHeadingsPixelGridTest PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic;QT_SCALE_FACTOR=1.75"
+        LABELS "visual;dpr"
+        TIMEOUT 45)
 
     add_executable(ZoinGalleryLayoutEngineTests
         tests/GalleryLayoutEngineTest.cpp)
@@ -784,6 +801,8 @@ set(ZOIN_QML_FILES
     qml/ViewerResample.qml
     qml/AutoScrollController.qml
     qml/GalleryPanel.qml
+    qml/GalleryFileFieldPresentation.qml
+    qml/GalleryGroupHeaders.qml
     qml/GalleryViewport.qml
     qml/GalleryPanelOverlays.qml
     qml/GalleryPanelChrome.qml

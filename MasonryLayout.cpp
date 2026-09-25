@@ -112,6 +112,7 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
 
 void MasonryLayout::componentComplete() {
     QQuickItem::componentComplete();
+    observePixelGridAncestors();
     connect(this, &MasonryLayout::visibleChanged, this, &MasonryLayout::updateViewportIndexSets);
 
     connect(this, &MasonryLayout::widthChanged,
@@ -140,6 +141,7 @@ void MasonryLayout::componentComplete() {
             updateProperties();
         }
         updateNeedScroll();
+        emit groupHeaderGeometriesChanged();
     });
 
     // Declarative anchors can establish the final width during completion,
@@ -152,6 +154,16 @@ void MasonryLayout::componentComplete() {
 void MasonryLayout::updatePolish() {
     QQuickItem::updatePolish();
     flushDeferredDelegateRefresh();
+}
+
+void MasonryLayout::itemChange(ItemChange change, const ItemChangeData &data) {
+    QQuickItem::itemChange(change, data);
+    if (change == ItemDevicePixelRatioHasChanged && isComponentComplete()
+        && _devicePixelRatioOverride <= 0) {
+        emit devicePixelRatioChanged();
+        positionViewport();
+        rewrap(false);
+    }
 }
 
 

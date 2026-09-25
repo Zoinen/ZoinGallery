@@ -39,6 +39,7 @@ struct GalleryEntryVisual::SnapshotValues {
     QString displayBaseName;
     QString displayExtension;
     QString sizeText;
+    QVariantMap displayFields;
     bool isHidden = false;
     QString highlightMarker;
     QString normalForeground;
@@ -83,6 +84,7 @@ GalleryEntryVisual::SnapshotValues GalleryEntryVisual::parseSnapshot(
             QStringLiteral("displayExtension")).toString(),
         .sizeText = display.value(
             QStringLiteral("sizeText")).toString(),
+        .displayFields = display,
         .isHidden = display.value(QStringLiteral("isHidden")).toBool(),
         .highlightMarker = style.value(
             QStringLiteral("marker")).toString(),
@@ -136,6 +138,7 @@ bool GalleryEntryVisual::applyState(const SnapshotValues &values) {
     bool changed = false;
     changed |= assignChanged(_isSelected, values.isSelected);
     changed |= assignChanged(_sizeText, values.sizeText);
+    changed |= assignChanged(_displayFields, values.displayFields);
     changed |= assignChanged(_isHidden, values.isHidden);
     return changed;
 }
@@ -202,6 +205,7 @@ QString GalleryEntryVisual::iconKey() const { return _iconKey; }
 QString GalleryEntryVisual::displayBaseName() const { return _displayBaseName; }
 QString GalleryEntryVisual::displayExtension() const { return _displayExtension; }
 QString GalleryEntryVisual::sizeText() const { return _sizeText; }
+QVariantMap GalleryEntryVisual::displayFields() const { return _displayFields; }
 bool GalleryEntryVisual::isHidden() const { return _isHidden; }
 QString GalleryEntryVisual::highlightMarker() const { return _highlightMarker; }
 QString GalleryEntryVisual::normalForeground() const { return _normalForeground; }

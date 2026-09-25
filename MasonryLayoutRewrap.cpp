@@ -4,6 +4,8 @@
 
 #include <QElapsedTimer>
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 struct MasonryLayout::RewrapTrace
@@ -25,6 +27,7 @@ struct MasonryLayout::ViewportAnchor
 
 void MasonryLayout::rewrap(bool animate)
 {
+    _fixedLayoutPlanCached = false;
     RewrapTrace trace;
     trace.enabled = qEnvironmentVariableIsSet("F4_NAV_BENCHMARK_TRACE");
     if (trace.enabled) {
@@ -62,34 +65,73 @@ MasonryLayout::ViewportAnchor MasonryLayout::fixedViewportAnchor(
     return anchor;
 }
 
-int MasonryLayout::updateFixedContentExtent(
+void MasonryLayout::updateFixedContentExtent(
     const ZoinGallery::GalleryFixedLayoutPlan &plan)
 {
-    const int columns = effectiveColumnCount();
-    int virtualRows = 0;
-    if (_presentationMode == Details) {
-        virtualRows = logicalBrickCount();
-        setContentHeight(plan.contentExtent);
-    } else if (_presentationMode == Columns) {
-        setContentHeight(plan.contentExtent);
-    } else {
-        virtualRows = columns > 0
-            ? (logicalBrickCount() + columns - 1) / columns : 0;
-        if (_presentationMode == Icons) {
-            setContentHeight(_paddingTop
-                             + virtualRows * virtualGridRowHeight()
-                             + _paddingBottom);
-        } else if (_presentationMode != Icons) {
-            setContentHeight(plan.contentExtent);
-        }
-    }
+    setContentHeight(plan.contentExtent);
     if (_presentationMode == Columns) {
         _contentY = qBound<qreal>(0, _contentY, maximumContentOffset());
     } else if (_presentationMode != Icons || sparseVirtualLayout()) {
         _contentY = qBound<qreal>(
             0, _contentY, qMax<qreal>(0, _contentHeight - height()));
     }
-    return virtualRows;
+}
+
+void MasonryLayout::calcGroupedMasonryLayout(
+    qreal canvasWidth, int targetHeight, int spacing, qreal paddingTop,
+    CalcLayoutMode mode) {
+    _masonryGroupHeaders.clear();
+    const qreal dpr = qMax<qreal>(0.01, devicePixelRatio());
+    const qreal headerHeight = std::ceil(_groupHeaderHeight * dpr - 0.000001)
+        / dpr;
+    qreal nextTop = paddingTop;
+    int nextBand = 0;
+
+    auto layoutSpan = [&](int start, int end) {
+        if (end <= start) {
+            return;
+        }
+        QList<MasonryBrick> span;
+        span.reserve(end - start);
+        for (int index = start; index < end; ++index) {
+            span.append(_bricks.at(index));
+        }
+        calcLayout(span, qRound(canvasWidth), targetHeight, spacing,
+                   !_listView, nextTop, mode);
+        int largestRow = -1;
+        qreal bottom = nextTop;
+        for (int offset = 0; offset < span.size(); ++offset) {
+            MasonryBrick &brick = span[offset];
+            brick.row += nextBand;
+            largestRow = qMax(largestRow, brick.row - nextBand);
+            bottom = qMax(bottom, brick.geometry().bottom());
+            _bricks[start + offset] = std::move(brick);
+        }
+        nextTop = bottom;
+        nextBand += largestRow + 1;
+    };
+
+    int cursor = 0;
+    for (const auto &group : _groupRanges) {
+        const int start = qBound(0, group.start, _bricks.size());
+        const int end = qBound(start, group.start + group.count,
+                               _bricks.size());
+        if (end <= cursor) {
+            continue;
+        }
+        layoutSpan(cursor, qMax(cursor, start));
+        const int effectiveStart = qMax(cursor, start);
+        nextTop = std::ceil(nextTop * dpr - 0.000001) / dpr;
+        _masonryGroupHeaders.append({
+            .key = group.key,
+            .title = group.title,
+            .geometry = QRectF(0, nextTop, canvasWidth, headerHeight),
+        });
+        nextTop += headerHeight;
+        layoutSpan(effectiveStart, end);
+        cursor = end;
+    }
+    layoutSpan(cursor, _bricks.size());
 }
 
 void MasonryLayout::restoreFixedViewportAnchor(const ViewportAnchor &anchor)
@@ -175,20 +217,13 @@ void MasonryLayout::rewrapFixed(bool animate, RewrapTrace *trace)
         _preserveViewportAnchorForNextRewrap, false);
     const ViewportAnchor anchor = fixedViewportAnchor(preserve);
     const ZoinGallery::GalleryFixedLayoutPlan plan = fixedLayoutPlan();
-    const int virtualRows = updateFixedContentExtent(plan);
+    updateFixedContentExtent(plan);
     trace->extentCompletedNs = trace->enabled
         ? trace->timer.nsecsElapsed() : 0;
 
     calcFixedLayout();
     trace->layoutCompletedNs = trace->enabled
         ? trace->timer.nsecsElapsed() : 0;
-    if (_presentationMode == Icons) {
-        const qreal iconContentHeight = _paddingTop
-            + virtualRows * virtualGridRowHeight() + _paddingBottom;
-        setContentHeight(iconContentHeight);
-        _contentY = qBound<qreal>(
-            0, _contentY, qMax<qreal>(0, _contentHeight - height()));
-    }
     rebuildLayoutBands();
     trace->bandsCompletedNs = trace->enabled
         ? trace->timer.nsecsElapsed() : 0;
@@ -202,10 +237,7 @@ void MasonryLayout::rewrapSparseMasonry(bool animate,
 {
     const qreal oldContentY = _contentY;
     const int count = logicalBrickCount();
-    const int columns = virtualGridColumnCount();
-    const int rows = columns > 0 ? (count + columns - 1) / columns : 0;
-    setContentHeight(_paddingTop + rows * virtualGridRowHeight()
-                     + _paddingBottom);
+    setContentHeight(fixedLayoutPlan().contentExtent);
     _contentY = qBound<qreal>(
         0, _contentY, qMax<qreal>(0, _contentHeight - height()));
     rebuildLayoutBands();
@@ -240,9 +272,16 @@ void MasonryLayout::rewrapSparseMasonry(bool animate,
 
 void MasonryLayout::rewrapMasonry(bool animate, qreal currentIndexOffset)
 {
-    calcLayout(_bricks, width() - _paddingLeft - _paddingRight,
-               _targetHeight, _spacing, !_listView, _paddingTop,
-               layoutMode());
+    if (_groupRanges.isEmpty()) {
+        _masonryGroupHeaders.clear();
+        calcLayout(_bricks, width() - _paddingLeft - _paddingRight,
+                   _targetHeight, _spacing, !_listView, _paddingTop,
+                   layoutMode());
+    } else {
+        calcGroupedMasonryLayout(
+            width() - _paddingLeft - _paddingRight, _targetHeight,
+            _spacing, _paddingTop, layoutMode());
+    }
     if (_containedPreview) {
         const qreal dpr = devicePixelRatio();
         const int columns = width() < 80 ? 1 : width() < 150 ? 2 : width() < 300 ? 3 : 4;

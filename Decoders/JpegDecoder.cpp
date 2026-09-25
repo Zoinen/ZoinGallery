@@ -120,6 +120,7 @@ bool JpegDecoder::readMetadata(ImageInfo &result) {
     if (exifInfo.parseFrom(mappedFile, f.size()) == TinyEXIF::PARSE_SUCCESS) {
         result.orientation = readOrientationFromExif(exifInfo);
         result.exif = readExifToMap(exifInfo);
+        result.typedFileFields = readTypedFileFields(exifInfo);
         if (!result.imageSize.isValid()) {
             result.imageSize = readResolutionFromExif(exifInfo);
         }

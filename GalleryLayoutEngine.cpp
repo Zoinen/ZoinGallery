@@ -24,6 +24,133 @@ int uniformColumnCount(const GalleryLayoutRequest &request) {
                        qMax<qreal>(1, canvasWidth(request)) / extent)));
 }
 
+qreal snappedHeaderHeight(const GalleryLayoutRequest &request) {
+    if (request.groupHeaderHeight <= 0) {
+        return 0;
+    }
+    const qreal dpr = qMax<qreal>(0.01, request.devicePixelRatio);
+    return std::ceil(request.groupHeaderHeight * dpr - 0.000001) / dpr;
+}
+
+void buildFixedSections(const GalleryLayoutRequest &request,
+                        GalleryFixedLayoutPlan *plan) {
+    if (!plan || plan->entryCount <= 0) {
+        return;
+    }
+
+    QVector<GalleryLayoutGroup> groups = request.groups;
+    std::sort(groups.begin(), groups.end(), [](const auto &left,
+                                               const auto &right) {
+        if (left.start != right.start) {
+            return left.start < right.start;
+        }
+        return left.count < right.count;
+    });
+    int cursor = 0;
+    for (const GalleryLayoutGroup &group : groups) {
+        const int start = qBound(0, group.start, plan->entryCount);
+        const int end = qBound(start, group.start + group.count,
+                               plan->entryCount);
+        if (end <= cursor) {
+            continue;
+        }
+        if (start > cursor) {
+            plan->sections.append({.start = cursor,
+                                   .count = start - cursor});
+        }
+        const int effectiveStart = qMax(cursor, start);
+        plan->sections.append({.start = effectiveStart,
+                               .count = end - effectiveStart,
+                               .key = group.key,
+                               .title = group.title.isEmpty()
+                                   ? group.key : group.title});
+        cursor = end;
+    }
+    if (cursor < plan->entryCount) {
+        plan->sections.append({.start = cursor,
+                               .count = plan->entryCount - cursor});
+    }
+
+    const qreal headerHeight = snappedHeaderHeight(request);
+    plan->groupHeaderHeight = headerHeight;
+    if (plan->horizontal()) {
+        if (std::any_of(plan->sections.cbegin(), plan->sections.cend(),
+                        [](const GalleryLayoutSection &section) {
+                            return !section.title.isEmpty();
+                        })) {
+            plan->rowsPerColumn = qMax(1, static_cast<int>(std::floor(
+                qMax<qreal>(1, usableHeight(request) - headerHeight)
+                / plan->extent)));
+        }
+        qreal x = 0;
+        for (GalleryLayoutSection &section : plan->sections) {
+            section.primaryOffset = x;
+            section.primaryCells = (section.count + plan->rowsPerColumn - 1)
+                / plan->rowsPerColumn;
+            if (!section.title.isEmpty()) {
+                plan->groupHeaders.append({
+                    .key = section.key,
+                    .title = section.title,
+                    .geometry = QRectF(
+                        x, plan->insets.top,
+                        section.primaryCells * plan->cellWidth,
+                        headerHeight),
+                });
+            }
+            x += section.primaryCells * plan->cellWidth;
+        }
+        const qreal trailingCanvasRemainder = qMax<qreal>(
+            0, plan->canvasWidth - plan->columns * plan->cellWidth);
+        plan->contentExtent = plan->insets.left + x
+            + trailingCanvasRemainder + plan->insets.right;
+        return;
+    }
+
+    qreal offset = 0;
+    for (GalleryLayoutSection &section : plan->sections) {
+        section.contentOffset = offset;
+        section.primaryCells = plan->mode == GalleryPresentationMode::Details
+            ? section.count
+            : (section.count + plan->columns - 1) / plan->columns;
+        if (!section.title.isEmpty()) {
+            plan->groupHeaders.append({
+                .key = section.key,
+                .title = section.title,
+                .geometry = QRectF(
+                    0, plan->insets.top + offset,
+                    plan->canvasWidth, headerHeight),
+            });
+        }
+        offset += (!section.title.isEmpty() ? headerHeight : 0)
+            + section.primaryCells * plan->extent;
+    }
+    if (plan->mode == GalleryPresentationMode::Details) {
+        const qreal height = usableHeight(request);
+        const int visibleRows = int(std::floor(
+            height / plan->extent + 0.000000001));
+        const qreal remainder = visibleRows > 0
+            ? qMax<qreal>(0, height - visibleRows * plan->extent) : 0;
+        plan->contentExtent = plan->insets.top + offset + remainder
+            + plan->insets.bottom;
+    } else {
+        plan->contentExtent = plan->insets.top + offset + plan->insets.bottom;
+    }
+}
+
+int sectionForIndex(const GalleryFixedLayoutPlan &plan, int index) {
+    const auto found = std::upper_bound(
+        plan.sections.cbegin(), plan.sections.cend(), index,
+        [](int value, const GalleryLayoutSection &section) {
+            return value < section.start;
+        });
+    if (found == plan.sections.cbegin()) {
+        return -1;
+    }
+    const int sectionIndex = int(std::distance(plan.sections.cbegin(), found)) - 1;
+    const GalleryLayoutSection &section = plan.sections.at(sectionIndex);
+    return index < section.start + section.count ? sectionIndex : -1;
+}
+
 QSizeF scaleToWidthWithSpacing(const QSizeF &size, qreal width,
                                qreal spacing) {
     if (size.width() <= 0 || size.height() <= 0) {
@@ -151,21 +278,31 @@ bool GalleryFixedLayoutPlan::horizontal() const {
 }
 
 QRectF GalleryFixedLayoutPlan::geometryFor(int index) const {
-    if (index < 0 || index >= entryCount) {
+    const int sectionIndex = sectionForIndex(*this, index);
+    if (sectionIndex < 0) {
         return {};
     }
+    const GalleryLayoutSection &section = sections.at(sectionIndex);
+    const int localIndex = index - section.start;
+    const qreal headerHeight = section.title.isEmpty()
+        ? 0 : groupHeaderHeight;
     if (mode == GalleryPresentationMode::Columns) {
-        return QRectF((index / rowsPerColumn) * cellWidth,
-                      insets.top + (index % rowsPerColumn) * extent,
+        return QRectF(section.primaryOffset
+                          + (localIndex / rowsPerColumn) * cellWidth,
+                      insets.top + headerHeight
+                          + (localIndex % rowsPerColumn) * extent,
                       cellWidth, extent);
     }
     if (mode == GalleryPresentationMode::Details) {
-        return QRectF(0, insets.top + index * extent,
+        return QRectF(0, insets.top + section.contentOffset
+                          + headerHeight + localIndex * extent,
                       canvasWidth, extent);
     }
-    const int row = index / columns;
-    const int column = index % columns;
-    return QRectF(column * cellWidth, insets.top + row * extent,
+    const int row = localIndex / columns;
+    const int column = localIndex % columns;
+    return QRectF(column * cellWidth,
+                  insets.top + section.contentOffset + headerHeight
+                      + row * extent,
                   cellWidth, extent);
 }
 
@@ -193,46 +330,101 @@ QRectF GalleryFixedLayoutPlan::previewGeometryFor(int index) const {
 QVector<int> GalleryFixedLayoutPlan::indexesIntersecting(
     qreal start, qreal end) const {
     QVector<int> result;
-    if (entryCount <= 0 || cellWidth <= 0 || extent <= 0) {
+    if (entryCount <= 0 || cellWidth <= 0 || extent <= 0
+        || sections.isEmpty()) {
         return result;
     }
     if (end < start) {
         std::swap(start, end);
     }
     if (horizontal()) {
-        const int lastColumn = (entryCount - 1) / rowsPerColumn;
-        const int first = qBound(0, int(std::floor(start / cellWidth)),
-                                 lastColumn);
-        const int last = qBound(0, int(std::floor(end / cellWidth)),
-                                lastColumn);
-        result.reserve((last - first + 1) * rowsPerColumn);
-        for (int column = first; column <= last; ++column) {
-            const int begin = column * rowsPerColumn;
-            const int finish = qMin(entryCount, begin + rowsPerColumn);
-            for (int index = begin; index < finish; ++index) {
-                result.append(index);
+        for (const GalleryLayoutSection &section : sections) {
+            const qreal sectionLeft = section.primaryOffset;
+            const qreal sectionRight = sectionLeft
+                + section.primaryCells * cellWidth;
+            if (sectionRight < start || sectionLeft > end) {
+                continue;
+            }
+            const int firstColumn = qBound(0, int(std::floor(
+                (start - sectionLeft) / cellWidth)),
+                qMax(0, section.primaryCells - 1));
+            const int lastColumn = qBound(0, int(std::floor(
+                (end - sectionLeft) / cellWidth)),
+                qMax(0, section.primaryCells - 1));
+            for (int column = firstColumn; column <= lastColumn; ++column) {
+                const int begin = section.start + column * rowsPerColumn;
+                const int finish = qMin(section.start + section.count,
+                                        begin + rowsPerColumn);
+                for (int index = begin; index < finish; ++index) {
+                    const QRectF geometry = geometryFor(index);
+                    if (geometry.right() >= start
+                        && geometry.left() <= end) {
+                        result.append(index);
+                    }
+                }
             }
         }
         return result;
     }
 
-    const int rowCount = (entryCount + columns - 1) / columns;
-    int firstRow = int(std::floor((start - insets.top) / extent));
-    int lastRow = int(std::floor((end - insets.top) / extent));
-    firstRow = qBound(0, firstRow, rowCount - 1);
-    lastRow = qBound(0, lastRow, rowCount - 1);
-    if (lastRow < firstRow) {
-        return result;
-    }
-    result.reserve((lastRow - firstRow + 1) * columns);
-    for (int row = firstRow; row <= lastRow; ++row) {
-        const int begin = row * columns;
-        const int finish = qMin(entryCount, begin + columns);
-        for (int index = begin; index < finish; ++index) {
-            result.append(index);
+    for (const GalleryLayoutSection &section : sections) {
+        const qreal sectionTop = insets.top + section.contentOffset;
+        const qreal sectionBottom = sectionTop
+            + (section.title.isEmpty() ? 0 : groupHeaderHeight)
+            + section.primaryCells * extent;
+        if (sectionBottom < start || sectionTop > end) {
+            continue;
+        }
+        const qreal itemTop = sectionTop
+            + (section.title.isEmpty() ? 0 : groupHeaderHeight);
+        int firstRow = int(std::floor((start - itemTop) / extent));
+        int lastRow = int(std::floor((end - itemTop) / extent));
+        firstRow = qBound(0, firstRow, qMax(0, section.primaryCells - 1));
+        lastRow = qBound(0, lastRow, qMax(0, section.primaryCells - 1));
+        if (lastRow < firstRow || section.primaryCells <= 0) {
+            continue;
+        }
+        for (int row = firstRow; row <= lastRow; ++row) {
+            const int begin = section.start + row * columns;
+            const int finish = qMin(section.start + section.count,
+                                    begin + columns);
+            for (int index = begin; index < finish; ++index) {
+                const QRectF geometry = geometryFor(index);
+                if (geometry.bottom() >= start && geometry.top() <= end) {
+                    result.append(index);
+                }
+            }
         }
     }
     return result;
+}
+
+int GalleryFixedLayoutPlan::rowFor(int index) const {
+    const int sectionIndex = sectionForIndex(*this, index);
+    if (sectionIndex < 0) {
+        return -1;
+    }
+    const GalleryLayoutSection &section = sections.at(sectionIndex);
+    const int localIndex = index - section.start;
+    return horizontal() ? localIndex % rowsPerColumn
+                        : (mode == GalleryPresentationMode::Details
+                               ? localIndex : localIndex / columns);
+}
+
+int GalleryFixedLayoutPlan::sectionIndexFor(int index) const {
+    return sectionForIndex(*this, index);
+}
+
+int GalleryFixedLayoutPlan::columnFor(int index) const {
+    const int sectionIndex = sectionForIndex(*this, index);
+    if (sectionIndex < 0) {
+        return -1;
+    }
+    const GalleryLayoutSection &section = sections.at(sectionIndex);
+    const int localIndex = index - section.start;
+    return horizontal() ? localIndex / rowsPerColumn
+                        : (mode == GalleryPresentationMode::Details
+                               ? 0 : localIndex % columns);
 }
 
 qreal GalleryDensityPolicy::normalized(
@@ -282,6 +474,7 @@ GalleryFixedLayoutPlan ColumnMajorStrategy::plan(
     result.contentExtent = request.insets.left
         + totalColumns * result.cellWidth + trailingCanvasRemainder
         + request.insets.right;
+    buildFixedSections(request, &result);
     return result;
 }
 
@@ -306,6 +499,7 @@ GalleryFixedLayoutPlan DetailsStrategy::plan(
         + request.insets.bottom;
     result.insets = request.insets;
     result.spacing = request.spacing;
+    buildFixedSections(request, &result);
     return result;
 }
 
@@ -317,7 +511,9 @@ GalleryFixedLayoutPlan UniformGridStrategy::analyticalPlan(
     result.columns = uniformColumnCount(request);
     result.rowsPerColumn = 1;
     result.canvasWidth = canvasWidth(request);
-    result.extent = qMax<qreal>(1, request.density);
+    result.extent = request.mode == GalleryPresentationMode::Icons
+        && request.iconRowHeight > 0
+        ? request.iconRowHeight : qMax<qreal>(1, request.density);
     result.cellWidth = result.columns > 0
         ? result.canvasWidth / result.columns : result.canvasWidth;
     const int rows = result.columns > 0
@@ -326,6 +522,7 @@ GalleryFixedLayoutPlan UniformGridStrategy::analyticalPlan(
         + request.insets.bottom;
     result.insets = request.insets;
     result.spacing = request.spacing;
+    buildFixedSections(request, &result);
     return result;
 }
 

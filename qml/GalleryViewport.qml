@@ -82,9 +82,10 @@ Item {
         id: detailsHeader
         visible: false
         anchors.left: parent.left
-        anchors.right: parent.right
         anchors.top: parent.top
+        width: viewportRoot.panelRoot.fileFieldPresentationHelper.detailsPixelExtent(parent.width)
         height: viewportRoot.panelRoot.detailsHeaderHeight
+        pixelGridOffset: galleryLayout.parentPixelGridOffset
         z: 5
         columnSchema: viewportRoot.panelRoot.columnSchema
         hoverColor: viewportRoot.panelRoot.headerHoverColor
@@ -96,8 +97,13 @@ Item {
         separatorVerticalMargin:
             viewportRoot.panelRoot.detailsSeparatorVerticalMargin
         textPixelSize: viewportRoot.panelRoot.detailsHeaderFontPixelSize
+        devicePixelRatio: viewportRoot.panelRoot.devicePixelRatio
         onSortRequested: (sortMode, contextMenu) =>
             viewportRoot.panelRoot.sortRequested(sortMode, contextMenu)
+        onColumnResizePreviewed: columns =>
+            viewportRoot.panelRoot.previewColumnSchema(columns)
+        onColumnResizeRequested: columns =>
+            viewportRoot.panelRoot.columnResizeRequested(columns)
     }
 
     Label {
@@ -126,6 +132,8 @@ Item {
         paddingTop: 6
         paddingBottom: 6
         model: viewportRoot.controller.catalogModel
+        groupRanges: viewportRoot.panelRoot.groupRanges
+        groupHeaderHeight: viewportRoot.panelRoot.groupHeaderHeight
         currentIndex: viewportRoot.controller.currentIndex
         presentationMode: GalleryViewportItem.Masonry
         columnCount: Math.max(

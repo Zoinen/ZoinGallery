@@ -1,9 +1,11 @@
 #include "MasonryLayout.h"
 #include "GalleryIconTextMeasurer.h"
+#include "GalleryPixelGrid.h"
 
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <utility>
 
 namespace {
 
@@ -40,12 +42,26 @@ ZoinGallery::GalleryLayoutRequest MasonryLayout::layoutRequest() const {
     request.spacing = _spacing;
     request.columnCount = _columnCount;
     request.devicePixelRatio = devicePixelRatio();
+    request.groupHeaderHeight = _groupHeaderHeight;
+    request.groups = _groupRanges;
+    if (_presentationMode == Icons || sparseVirtualLayout()) {
+        request.iconRowHeight = virtualGridRowHeight();
+    }
     return request;
 }
 
 ZoinGallery::GalleryFixedLayoutPlan MasonryLayout::fixedLayoutPlan() const {
-    return ZoinGallery::GalleryLayoutEngine::fixedPlan(
-        layoutRequest(), logicalBrickCount());
+    if (_fixedLayoutPlanCached) {
+        return _cachedFixedLayoutPlan;
+    }
+    ZoinGallery::GalleryLayoutRequest request = layoutRequest();
+    if (_presentationMode == Masonry && sparseVirtualLayout()) {
+        request.mode = ZoinGallery::GalleryPresentationMode::Grid;
+    }
+    _cachedFixedLayoutPlan = ZoinGallery::GalleryLayoutEngine::fixedPlan(
+        request, logicalBrickCount());
+    _fixedLayoutPlanCached = true;
+    return _cachedFixedLayoutPlan;
 }
 
 int MasonryLayout::effectiveColumnCount() const {
@@ -108,12 +124,58 @@ qreal MasonryLayout::viewportExtent() const {
 }
 
 void MasonryLayout::positionViewport() {
+    // The scrolling surface owns the scene-space phase for every delegate.
+    // Observe host placement once per panel; QML leaves need only local
+    // insets/centering, with no dependency on contentY or the host hierarchy.
+    const QPointF origin = mapToScene(QPointF());
+    const QPointF offset = mapFromScene(
+        ZoinGallery::PixelGrid::snapDevicePoint(origin, devicePixelRatio()));
+    const auto *parent = parentItem();
+    const QPointF parentOffset = parent ? parent->mapFromScene(
+        ZoinGallery::PixelGrid::snapDevicePoint(
+            parent->mapToScene(QPointF()), devicePixelRatio())) : QPointF();
+    if (_parentPixelGridOffset != parentOffset) {
+        _parentPixelGridOffset = parentOffset;
+        emit parentPixelGridOffsetChanged();
+    }
     if (!_viewport) {
         return;
     }
-    _viewport->setX(_paddingLeft
-                    - (_presentationMode == Columns ? _contentY : 0));
-    _viewport->setY(_presentationMode == Columns ? 0 : -_contentY);
+    const QPointF scrollPosition(
+        _paddingLeft - (_presentationMode == Columns ? _contentY : 0),
+        _presentationMode == Columns ? 0 : -_contentY);
+    _viewport->setPosition(offset + ZoinGallery::PixelGrid::snapDevicePoint(
+        scrollPosition, devicePixelRatio()));
+    const QPointF viewportOrigin = _viewport->mapToScene(QPointF());
+    if (_viewportSceneOrigin != viewportOrigin) {
+        _viewportSceneOrigin = viewportOrigin;
+        emit viewportSceneOriginChanged();
+    }
+}
+
+void MasonryLayout::observePixelGridAncestors() {
+    for (const auto &connection : std::as_const(_pixelGridConnections))
+        disconnect(connection);
+    _pixelGridConnections.clear();
+    for (QQuickItem *item = this; item; item = item->parentItem()) {
+        _pixelGridConnections.append(connect(item, &QQuickItem::parentChanged,
+            this, &MasonryLayout::observePixelGridAncestors));
+        _pixelGridConnections.append(connect(item, &QQuickItem::xChanged,
+            this, &MasonryLayout::positionViewport));
+        _pixelGridConnections.append(connect(item, &QQuickItem::yChanged,
+            this, &MasonryLayout::positionViewport));
+        _pixelGridConnections.append(connect(item, &QQuickItem::widthChanged,
+            this, &MasonryLayout::positionViewport));
+        _pixelGridConnections.append(connect(item, &QQuickItem::heightChanged,
+            this, &MasonryLayout::positionViewport));
+        _pixelGridConnections.append(connect(item, &QQuickItem::scaleChanged,
+            this, &MasonryLayout::positionViewport));
+        _pixelGridConnections.append(connect(item, &QQuickItem::rotationChanged,
+            this, &MasonryLayout::positionViewport));
+        _pixelGridConnections.append(connect(item, &QQuickItem::transformOriginChanged,
+            this, &MasonryLayout::positionViewport));
+    }
+    positionViewport();
 }
 
 void MasonryLayout::calcFixedLayout() {
@@ -163,19 +225,7 @@ QRectF MasonryLayout::virtualGridGeometry(int index) const {
     if (index < 0 || index >= logicalBrickCount()) {
         return {};
     }
-    const int columns = virtualGridColumnCount();
-    if (columns <= 0) {
-        return {};
-    }
-    const qreal canvasWidth = qMax<qreal>(
-        0, width() - _paddingLeft - _paddingRight);
-    const qreal cellWidth = canvasWidth / columns;
-    const qreal rowHeight = virtualGridRowHeight();
-    const int row = index / columns;
-    const int column = index % columns;
-    return QRectF(column * cellWidth,
-                  _paddingTop + row * rowHeight,
-                  cellWidth, rowHeight);
+    return fixedLayoutPlan().geometryFor(index);
 }
 
 void MasonryLayout::applyVirtualGridGeometry(
@@ -184,9 +234,9 @@ void MasonryLayout::applyVirtualGridGeometry(
     if (!geometry.isValid() || geometry.isEmpty()) {
         return;
     }
-    const int columns = virtualGridColumnCount();
-    brick.row = index / columns;
-    brick.column = index % columns;
+    const ZoinGallery::GalleryFixedLayoutPlan plan = fixedLayoutPlan();
+    brick.row = plan.rowFor(index);
+    brick.column = plan.columnFor(index);
     brick.x = geometry.x();
     brick.y = geometry.y();
     brick.normalizedSize = geometry.size();
@@ -354,6 +404,7 @@ void MasonryLayout::rebuildLayoutBands() {
         ++_layoutRevision;
         emit layoutRevisionChanged();
         emit layoutBandsChanged();
+        emit groupHeaderGeometriesChanged();
         return;
     }
     QVector<ZoinGallery::GalleryGeometryRecord> records;
@@ -366,11 +417,14 @@ void MasonryLayout::rebuildLayoutBands() {
             .geometry = brick.geometry(),
         });
     }
-    if (!_geometryIndex.rebuild(records))
+    if (!_geometryIndex.rebuild(records)) {
+        emit groupHeaderGeometriesChanged();
         return;
+    }
     ++_layoutRevision;
     emit layoutRevisionChanged();
     emit layoutBandsChanged();
+    emit groupHeaderGeometriesChanged();
 }
 
 int MasonryLayout::bandIndexAt(qreal y) const {
@@ -385,44 +439,7 @@ QList<int> MasonryLayout::indexesForVerticalRange(
     }
     if (_presentationMode == Details || _presentationMode == Grid
         || _presentationMode == Icons || sparseVirtualLayout()) {
-        const bool virtualLayout = _presentationMode == Icons
-            || sparseVirtualLayout();
-        if (!virtualLayout) {
-            return fixedLayoutPlan().indexesIntersecting(top, bottom).toList();
-        }
-        const int count = logicalBrickCount();
-        const qreal extent = qMax<qreal>(1.0, effectiveTargetExtent());
-        const qreal rowExtent = virtualLayout
-            ? virtualGridRowHeight() : extent;
-        const int columns = virtualLayout
-            ? virtualGridColumnCount()
-            : (_presentationMode == Grid ? effectiveColumnCount() : 1);
-        const int rowCount = columns > 0
-            ? (count + columns - 1) / columns : 0;
-        if (rowCount <= 0) {
-            return indexes;
-        }
-        int firstRow = int(std::floor((top - _paddingTop) / rowExtent));
-        int lastRow = int(std::floor((bottom - _paddingTop) / rowExtent));
-        firstRow = qBound(0, firstRow, rowCount - 1);
-        lastRow = qBound(0, lastRow, rowCount - 1);
-        if (lastRow < firstRow) {
-            return indexes;
-        }
-        indexes.reserve((lastRow - firstRow + 1) * columns);
-        for (int row = firstRow; row <= lastRow; ++row) {
-            const int begin = row * columns;
-            const int end = qMin(count, begin + columns);
-            for (int index = begin; index < end; ++index) {
-                const QRectF geometry = virtualLayout
-                    ? virtualGridGeometry(index)
-                    : analyticFixedGeometry(index);
-                if (geometry.bottom() >= top && geometry.top() <= bottom) {
-                    indexes.append(index);
-                }
-            }
-        }
-        return indexes;
+        return fixedLayoutPlan().indexesIntersecting(top, bottom).toList();
     }
     return _geometryIndex.indexesIntersecting(top, bottom).toList();
 }

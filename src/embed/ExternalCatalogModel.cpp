@@ -216,6 +216,10 @@ QVariantMap ExternalCatalogModel::visualSnapshot(int row) const {
         imageIdUrl = entry->item->imageIdUrl();
     }
     QVariantMap visualFields = entry->displayFields;
+    for (auto field = entry->imageInfo.typedFileFields.cbegin();
+         field != entry->imageInfo.typedFileFields.cend(); ++field) {
+        visualFields.insert(field.key(), field.value());
+    }
     const QFileInfo nameInfo(entry->name);
     if (!visualFields.contains(QStringLiteral("displayBaseName"))) {
         QString baseName = entry->directory
@@ -477,7 +481,7 @@ bool ExternalCatalogModel::catalogMatches(
     return true;
 }
 
-void ExternalCatalogModel::restoreCachedMetadata(Entry &entry) const {
+void ExternalCatalogModel::restoreCachedMetadata(Entry &entry) {
     if (!entry.image || entry.originalSize.isValid()
         || !cacheReadsEnabled(_decodeManager->imageCacheMode())
         || !PersistentDerivedImageCache::retrieveMemoryMetadata(entry.imageInfo)) return;
@@ -487,6 +491,15 @@ void ExternalCatalogModel::restoreCachedMetadata(Entry &entry) const {
         entry.item->setInfo(entry.imageInfo);
         entry.item->setFullSize(entry.originalSize);
     }
+    if (entry.imageInfo.fileFieldsRead && entry.source.isValid()) {
+        emit fileFieldsRead(QVariantMap{
+            {QStringLiteral("sourceKey"), entry.source.sourceKey},
+            {QStringLiteral("sourceVersion"), entry.contentVersion},
+            {QStringLiteral("generation"), entry.source.catalogGeneration},
+            {QStringLiteral("complete"), true},
+            {QStringLiteral("values"), entry.imageInfo.typedFileFields},
+        });
+    }
     MediaTimingTrace::event(QStringLiteral("qt.gallery.metadata.restored"),
         {{QStringLiteral("fix"), QStringLiteral("[FIX:cached-catalog-geometry]")},
          {QStringLiteral("sessionId"), _sessionId}, {QStringLiteral("row"), entry.sourceIndex}});
@@ -494,7 +507,7 @@ void ExternalCatalogModel::restoreCachedMetadata(Entry &entry) const {
 
 bool ExternalCatalogModel::parseCatalogEntry(
     const QVariantMap &map, int row, bool metadataDeferred,
-    Entry *entry) const {
+    Entry *entry) {
     if (!entry || row < 0) {
         return false;
     }

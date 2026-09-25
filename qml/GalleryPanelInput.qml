@@ -148,7 +148,8 @@ QtObject {
 
     function handleEdgePress(event, shiftSelection) {
         const home = event.key === Qt.Key_Home
-        const index = home ? 0 : panel.galleryLayout.count - 1
+        const rawIndex = home ? 0 : panel.galleryLayout.count - 1
+        const index = panel.visibleNavigationIndex(rawIndex, !home)
         panel.moveCursorWithSelection(
                     index, shiftSelection, false, true, false,
                     home ? -1 : 1)
@@ -179,7 +180,8 @@ QtObject {
             const currentIndex = controller.currentIndex
             panel.togglePendingKeyboardSelection(currentIndex)
             if (event.key === Qt.Key_Insert && currentIndex + 1 < layout.count)
-                panel.moveCursor(currentIndex + 1, false, false,
+                panel.moveCursor(panel.visibleNavigationIndex(
+                                     currentIndex + 1, true), false, false,
                                  true, false, 1)
             event.accepted = true
         } else if (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal) {
@@ -201,7 +203,7 @@ QtObject {
         const controller = panel.controller
         if (event.key === Qt.Key_Shift) {
             if (!event.isAutoRepeat)
-                panel.beginKeyboardShiftSelection(controller.currentIndex, true)
+                panel.beginKeyboardShiftSelection(controller.currentIndex)
             event.accepted = true
             return
         }

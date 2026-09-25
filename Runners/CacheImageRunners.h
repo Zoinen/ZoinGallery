@@ -18,6 +18,10 @@ public:
     RunnerType type() override { return RunnerType::CachedImageInfo; }
     void run() override;
     bool isHighPriority() const override { return _highPriority; }
+    bool isPanelThumbnailRequest() const override {
+        return !_versionedCandidates.isEmpty()
+            && _versionedCandidates.constFirst().panelThumbnailRequest;
+    }
     QString requestNamespace() const override { return _requestNamespace; }
 
 signals:
@@ -54,6 +58,9 @@ public:
     bool isViewerRequest() const override {
         return _request.viewerRequest &&
             !_request.backgroundViewerRequest;
+    }
+    bool isPanelThumbnailRequest() const override {
+        return _request.panelThumbnailRequest;
     }
     bool isHighPriority() const override { return _request.highPriority; }
     QString requestNamespace() const override {

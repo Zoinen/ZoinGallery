@@ -43,6 +43,8 @@ class GallerySession final : public QObject {
                NOTIFY panelViewportCursorEntryIdChanged)
     Q_PROPERTY(bool panelViewportStateAvailable READ panelViewportStateAvailable
                NOTIFY panelViewportStateAvailableChanged)
+    Q_PROPERTY(bool thumbnailsEnabled READ thumbnailsEnabled
+               WRITE setThumbnailsEnabled NOTIFY thumbnailsEnabledChanged)
     Q_PROPERTY(QString thumbnailProviderName READ thumbnailProviderName CONSTANT)
     Q_PROPERTY(bool viewerOpen READ viewerOpen WRITE setViewerOpen NOTIFY viewerOpenChanged)
     Q_PROPERTY(QUrl viewerSource READ viewerSource NOTIFY viewerSourceChanged)
@@ -91,6 +93,12 @@ public:
     QString panelViewportCursorEntryId() const;
     void setPanelViewportCursorEntryId(const QString &entryId);
     bool panelViewportStateAvailable() const;
+    bool thumbnailsEnabled() const;
+    void setThumbnailsEnabled(bool enabled);
+    Q_INVOKABLE QStringList collapsedGroupKeys(
+        const QString &stateKey) const;
+    Q_INVOKABLE void setCollapsedGroupKeys(
+        const QString &stateKey, const QStringList &keys);
     QString thumbnailProviderName() const;
     bool viewerOpen() const;
     void setViewerOpen(bool open);
@@ -188,6 +196,7 @@ signals:
     void panelScrollOffsetChanged();
     void panelViewportCursorEntryIdChanged();
     void panelViewportStateAvailableChanged();
+    void thumbnailsEnabledChanged();
     void viewerOpenChanged();
     void viewerSourceChanged();
     void viewerSourceAtChanged(int index);

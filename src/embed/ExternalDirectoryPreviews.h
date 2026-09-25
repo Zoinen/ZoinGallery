@@ -44,7 +44,11 @@ private:
     QSharedPointer<DirectoryPreviewCache> _cache;
     QSharedPointer<DirectoryPreviewScheduler> _scheduler;
     QHash<QString, QSharedPointer<Record>> _records;
-    QList<int> _demand;
+    // Demand is published by the renderer in row coordinates, but row
+    // coordinates change when grouping/sorting reorders the parent catalog.
+    // Keep stable entry identities so a model reset cannot evict a folder
+    // preview merely because its row moved.
+    QStringList _demandIds;
     quint64 _clock = 0;
     bool _scheduled = false;
     bool _clearing = false;

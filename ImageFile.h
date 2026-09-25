@@ -78,6 +78,9 @@ struct ImageInfo {
     // Optional owner for metadata work running on the shared embedded
     // scheduler. Standalone requests leave this empty.
     QString requestNamespace;
+    // True only for work admitted to render a panel preview. Viewer requests
+    // and their retries remain independent of the panel thumbnail switch.
+    bool panelThumbnailRequest = false;
     // Empty/image denotes a still image. "video" selects the Qt Multimedia
     // contact-sheet decoder while keeping the still-image viewer separate.
     QString thumbnailKind;
@@ -90,6 +93,7 @@ struct ImageDecodeRequest {
     // Optional owner used by a shared embedded scheduler. Standalone requests
     // leave this empty; external sessions stamp their stable session ID.
     QString requestNamespace;
+    bool panelThumbnailRequest = false;
     bool viewerRequest = false;
     // A catalog-wide Fit preparation is stored in the viewer/derived cache,
     // but stays in the background scheduler band. Interactive viewer work

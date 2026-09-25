@@ -31,6 +31,7 @@ BrickItem {
            ? panelRoot.controller.entryNameAt(sourceIndex) : "")
     readonly property bool folderPreviewRequested:
         visualGeometryReady && (masonryMode || gridMode || iconsMode) && panelRoot.controllerReady
+        && panelRoot.controller.thumbnailsEnabled
         && panelRoot.controller.directoryPreviewEnabled
         && (visualModel.folderPreviewState === 2 || Boolean(model && model.folderView))
     readonly property bool folderPreviewActive:
@@ -150,11 +151,17 @@ BrickItem {
          ? visualModel.cursorBackground : visualModel.normalBackground)
         || panelRoot.labelBackgroundColor
     readonly property rect effectivePreviewRect: {
-        if (detailsMode) {
-            const side = Math.round(panelRoot.detailsIconSlotSize * renderDpr) / renderDpr
-            return Qt.rect(Math.round(panelRoot.detailsRowInset * renderDpr) / renderDpr,
-                           Math.round(Math.max(0, (height - side) / 2) * renderDpr) / renderDpr,
-                           side, side)
+        if (detailsMode || columnsMode) {
+            // Keep the compact slot's padding as the row grows. Both the
+            // shared preview and Details text layout consume this rectangle.
+            const extent = Math.max(0, Math.round((height - 4) * renderDpr)
+                                      / renderDpr)
+            const origin = detailsMode ? Qt.point(0, 0) : iconSceneOrigin
+            const left = panelRoot.detailsRowInset
+            const top = Math.max(0, (height - extent) / 2)
+            return Qt.rect(Math.round((origin.x + left) * renderDpr) / renderDpr - origin.x,
+                           Math.round((origin.y + top) * renderDpr) / renderDpr - origin.y,
+                           extent, extent)
         }
         const rect = previewRect
         if (rect && rect.width > 0 && rect.height > 0)
@@ -163,6 +170,23 @@ BrickItem {
         return Qt.rect(inset, inset,
                        Math.max(0, width - inset * 2),
                        Math.max(0, height - inset * 2))
+    }
+
+    readonly property real compactImageContentWidth: {
+        const extent = effectivePreviewRect.width
+        if (!(detailsMode || columnsMode) || !isImage)
+            return extent
+        // Position a portrait inside the shared square slot rather than
+        // shrinking that slot: every row's filename must retain one x-origin.
+        const size = model && model.fullSize ? model.fullSize : null
+        const imageWidth = Number(visualModel.imageWidth
+                                  || (size && size.width) || 0)
+        const imageHeight = Number(visualModel.imageHeight
+                                   || (size && size.height) || 0)
+        if (imageWidth <= 0 || imageHeight <= imageWidth)
+            return extent
+        return Math.max(0, Math.round(extent * imageWidth / imageHeight
+                                       * renderDpr) / renderDpr)
     }
 
     function isLucideIconSource(source) {
@@ -183,12 +207,28 @@ BrickItem {
 
     function sourceColorIconAtSize(source, logicalSize, tint) {
         const value = source ? source.toString() : ""
+        const lucide = isLucideIconSource(value)
+        const iconName = iconKey !== ""
+                ? iconKey : panelRoot.iconResolver.keyFromSource(value)
+        const provider = panelRoot.iconProvider
+        if (lucide && iconName !== "" && provider
+                && typeof provider.rasterizedLucideSource === "function"
+                && typeof provider.lucideStrokeWidth === "function") {
+            const requestedSize = Math.max(1, Math.round(Number(logicalSize) || 1))
+            const strokeWidth = provider.lucideStrokeWidth(
+                        Math.max(1, Number(logicalSize) || 1))
+            return provider.rasterizedLucideSource(
+                        iconName, requestedSize,
+                        Math.max(0.5, Number(renderDpr) || 1),
+                        tint === undefined || tint === null ? "" : String(tint),
+                        strokeWidth)
+        }
         return panelRoot.iconResolver.retargetProviderSource(
                     value,
                     Math.max(1, Math.round(Number(logicalSize) || 1)),
                     Math.max(0.5, Number(renderDpr) || 1),
                     tint === undefined || tint === null ? "" : String(tint),
-                    isLucideIconSource(value))
+                    lucide)
     }
 
     GalleryEntrySelectionSurface {

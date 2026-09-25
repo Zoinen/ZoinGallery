@@ -2,6 +2,7 @@
 #include "GalleryPixelGrid.h"
 
 #include <ZoinGallery/GalleryCatalogSource.h>
+#include <ZoinGallery/GallerySession.h>
 
 #include <QQuickWindow>
 #include <QSettings>
@@ -125,7 +126,9 @@ void MasonryLayout::updateNeedScroll() {
         }
         return;
     }
-    if (_presentationMode != Masonry || sparseVirtualLayout()) {
+    // Grouped geometry includes headers and independent rows per section.
+    // Repacking those bricks as one ungrouped list can incorrectly hide the bar.
+    if (groupingActive() || _presentationMode != Masonry || sparseVirtualLayout()) {
         const bool newNeedScroll = _contentHeight > viewportExtent();
         if (newNeedScroll != _needScroll && height() > 0) {
             _needScroll = newNeedScroll;
@@ -775,7 +778,9 @@ QVariantList MasonryLayout::visibleGroupHeaderGeometries() const {
 }
 
 qreal MasonryLayout::groupHeaderHeight() const {
-    return _groupHeaderHeight;
+    return groupingActive()
+        ? qMax<qreal>(22, qRound(_groupHeaderExtent * devicePixelRatio()) / devicePixelRatio())
+        : _groupHeaderHeight;
 }
 
 void MasonryLayout::setGroupHeaderHeight(qreal height) {
@@ -797,6 +802,323 @@ void MasonryLayout::setGroupHeaderHeight(qreal height) {
     _fixedLayoutPlanCached = false;
     emit groupHeaderHeightChanged();
     requestRewrap(false);
+}
+
+QVariantList MasonryLayout::groups() const
+{
+    return _groupDescriptors;
+}
+
+void MasonryLayout::setGroups(const QVariantList &groups)
+{
+    if (_groupDescriptors == groups) {
+        return;
+    }
+    _groupDescriptors = groups;
+    const int catalogCount = _model ? _model->rowCount() : -1;
+    if (!_groupIndex.setDescriptors(_groupDescriptors, catalogCount)) {
+        _groupIndex.clear();
+    }
+    restoreGroupState();
+    emit groupsChanged();
+    requestRewrap(false);
+    // The ungrouped rewrap path does not publish header geometry. Notify even
+    // when clearing groups leaves the viewport/content extent unchanged.
+    emit groupHeadersChanged();
+}
+
+QString MasonryLayout::groupStateKey() const
+{
+    return _groupStateKey;
+}
+
+void MasonryLayout::setGroupStateKey(const QString &key)
+{
+    if (_groupStateKey == key) {
+        return;
+    }
+    saveGroupState();
+    _groupStateKey = key;
+    restoreGroupState();
+    emit groupStateKeyChanged();
+    requestRewrap(false);
+}
+
+ZoinGallery::GallerySession *MasonryLayout::groupSession() const
+{
+    return _groupSession;
+}
+
+bool MasonryLayout::thumbnailsEnabled() const
+{
+    return _thumbnailsEnabled;
+}
+
+void MasonryLayout::setThumbnailsEnabled(bool enabled)
+{
+    if (_thumbnailsEnabled == enabled) {
+        return;
+    }
+    _thumbnailsEnabled = enabled;
+    const auto updateBrick = [this, enabled](MasonryBrick &brick) {
+        if (!brick.modelIsImage) {
+            return;
+        }
+        const QSize size = enabled && brick.modelKnownSize.isValid()
+            ? brick.modelKnownSize : GridView_Folder.toSize();
+        brick.originalSize = size;
+        brick.masonryGeometryReady = enabled
+            ? (_metadataSettledRole < 0 || brick.modelMetadataSettled
+               || _presentationMode != Masonry)
+            : true;
+        if (brick.item) {
+            brick.item->setProperty("masonryGeometryReady",
+                                    brick.masonryGeometryReady);
+        }
+    };
+    for (MasonryBrick &brick : _bricks) {
+        updateBrick(brick);
+    }
+    for (auto it = _sparseBricks.begin(); it != _sparseBricks.end(); ++it) {
+        updateBrick(it.value());
+    }
+    _preserveViewportAnchorForNextRewrap = true;
+    emit thumbnailsEnabledChanged();
+    requestRewrap(false);
+    if (enabled) {
+        planViewportThumbnails(_overscanIndexSet);
+    }
+}
+
+void MasonryLayout::setGroupSession(ZoinGallery::GallerySession *session)
+{
+    if (_groupSession == session) {
+        return;
+    }
+    saveGroupState();
+    if (_groupSessionThumbnailsConnection) {
+        disconnect(_groupSessionThumbnailsConnection);
+        _groupSessionThumbnailsConnection = {};
+    }
+    _groupSession = session;
+    if (session) {
+        setThumbnailsEnabled(session->thumbnailsEnabled());
+        _groupSessionThumbnailsConnection = connect(
+            session, &ZoinGallery::GallerySession::thumbnailsEnabledChanged,
+            this, [this, session]() {
+                if (_groupSession == session) {
+                    setThumbnailsEnabled(session->thumbnailsEnabled());
+                }
+            });
+    } else {
+        setThumbnailsEnabled(true);
+    }
+    restoreGroupState();
+    emit groupSessionChanged();
+    requestRewrap(false);
+}
+
+QVariantList MasonryLayout::visibleGroupHeaders() const
+{
+    QVariantList result;
+    if (!groupingActive()) {
+        return result;
+    }
+    const qreal headerHeight = groupHeaderHeight();
+    const bool horizontal = _presentationMode == Columns;
+    const qreal start = _contentY;
+    const qreal end = _contentY + (horizontal ? width() : height());
+    if (!horizontal) {
+        const QVariantList candidates = _groupIndex.headersForRange(
+            start, end, height());
+        result.reserve(candidates.size());
+        for (const QVariant &candidateValue : candidates) {
+            QVariantMap candidate = candidateValue.toMap();
+            const qreal offset = candidate.value(
+                QStringLiteral("offset")).toReal();
+            candidate.insert(QStringLiteral("x"), 0);
+            candidate.insert(QStringLiteral("y"), offset - _contentY);
+            candidate.insert(QStringLiteral("width"), width());
+            candidate.insert(QStringLiteral("height"), headerHeight);
+            result.append(candidate);
+        }
+        return result;
+    }
+
+    const qreal cellWidth = qMax<qreal>(1, fixedLayoutPlan().cellWidth);
+    const auto firstIt = std::lower_bound(
+        _groupSections.cbegin(), _groupSections.cend(), start,
+        [](const GroupSection &section, qreal value) {
+            return section.offset + section.extent < value;
+        });
+    const auto lastIt = std::upper_bound(
+        _groupSections.cbegin(), _groupSections.cend(), end,
+        [](qreal value, const GroupSection &section) {
+            return value < section.offset;
+        });
+    const int firstGroup = static_cast<int>(std::distance(
+        _groupSections.cbegin(), firstIt));
+    const int lastGroup = static_cast<int>(std::distance(
+        _groupSections.cbegin(), lastIt));
+    for (int group = firstGroup; group < lastGroup; ++group) {
+        const GroupSection &section = _groupSections.at(group);
+        const auto *descriptor = _groupIndex.descriptor(group);
+        for (int column = 0; column < section.columns; ++column) {
+            const qreal offset = section.offset + column * cellWidth;
+            if (offset + cellWidth < start || offset > end) {
+                continue;
+            }
+            result.append(QVariantMap{
+                {QStringLiteral("key"), descriptor->key},
+                {QStringLiteral("title"), descriptor->title},
+                {QStringLiteral("count"), descriptor->count},
+                {QStringLiteral("collapsed"),
+                 _groupIndex.isCollapsed(group)},
+                {QStringLiteral("groupIndex"), group},
+                {QStringLiteral("column"), column},
+                {QStringLiteral("offset"), offset},
+                {QStringLiteral("extent"), cellWidth},
+                {QStringLiteral("groupOffset"), section.offset},
+                {QStringLiteral("groupExtent"), section.extent},
+                {QStringLiteral("headerExtent"), headerHeight},
+                {QStringLiteral("x"), offset - _contentY},
+                {QStringLiteral("y"), _paddingTop},
+                {QStringLiteral("width"), cellWidth},
+                {QStringLiteral("height"), headerHeight},
+            });
+        }
+    }
+    return result;
+}
+
+bool MasonryLayout::groupingActive() const
+{
+    return !_containedPreview && _groupIndex.active();
+}
+
+
+void MasonryLayout::saveGroupState()
+{
+    if (_groupStateKey.isEmpty() || !_groupIndex.active()) {
+        return;
+    }
+    const QSet<QString> collapsed = _groupIndex.collapsedKeys();
+    _groupCollapsedState.insert(_groupStateKey, collapsed);
+    while (_groupCollapsedState.size() > 64) {
+        _groupCollapsedState.erase(_groupCollapsedState.begin());
+    }
+    if (_groupSession) {
+        QStringList keys = collapsed.values();
+        keys.sort();
+        _groupSession->setCollapsedGroupKeys(_groupStateKey, keys);
+    }
+}
+
+void MasonryLayout::restoreGroupState()
+{
+    if (!_groupIndex.active()) {
+        return;
+    }
+    if (_groupSession) {
+        QSet<QString> collapsed;
+        for (const QString &key :
+             _groupSession->collapsedGroupKeys(_groupStateKey)) {
+            collapsed.insert(key);
+        }
+        _groupIndex.setCollapsedKeys(collapsed);
+    } else {
+        _groupIndex.setCollapsedKeys(_groupCollapsedState.value(_groupStateKey));
+    }
+}
+
+bool MasonryLayout::toggleGroup(const QString &key)
+{
+    return setGroupCollapsed(key, !_groupIndex.isCollapsed(key));
+}
+
+bool MasonryLayout::setGroupCollapsed(const QString &key, bool collapsed)
+{
+    if (!groupingActive() || !_groupIndex.setCollapsed(key, collapsed)) {
+        return false;
+    }
+    saveGroupState();
+    requestRewrap(false);
+    emit groupHeadersChanged();
+    return true;
+}
+
+bool MasonryLayout::isGroupCollapsed(const QString &key) const
+{
+    return groupingActive() && _groupIndex.isCollapsed(key);
+}
+
+int MasonryLayout::groupForIndex(int index) const
+{
+    return groupingActive() ? _groupIndex.groupForSourceIndex(index) : -1;
+}
+
+int MasonryLayout::nearestVisibleIndexOutsideGroup(
+    int index, const QString &key, bool forward) const
+{
+    const int count = logicalBrickCount();
+    if (count <= 0) {
+        return -1;
+    }
+    if (!groupingActive()) {
+        const int candidate = index + (forward ? 1 : -1);
+        return candidate >= 0 && candidate < count ? candidate : -1;
+    }
+    const int group = _groupIndex.groupForSourceIndex(index);
+    if (group >= 0 && _groupIndex.descriptor(group)->key == key) {
+        const auto *descriptor = _groupIndex.descriptor(group);
+        return forward
+            ? _groupIndex.nearestVisibleSourceIndex(
+                  descriptor->startIndex + descriptor->count - 1, true)
+            : _groupIndex.nearestVisibleSourceIndex(
+                  descriptor->startIndex, false);
+    }
+    return _groupIndex.nearestVisibleSourceIndex(index, forward);
+}
+
+int MasonryLayout::nearestVisibleIndex(int index, bool forward) const
+{
+    const int count = logicalBrickCount();
+    if (count <= 0) {
+        return -1;
+    }
+    if (groupingActive()) {
+        return _groupIndex.nearestVisibleSourceIndex(index, forward);
+    }
+    const int candidate = index + (forward ? 1 : -1);
+    return candidate >= 0 && candidate < count ? candidate : -1;
+}
+
+QVariantList MasonryLayout::visibleIndexesInRange(int first, int last) const
+{
+    QVariantList result;
+    const int count = logicalBrickCount();
+    if (count <= 0) {
+        return result;
+    }
+    if (groupingActive()) {
+        const QVector<int> indexes =
+            _groupIndex.visibleSourceIndexesInRange(first, last);
+        result.reserve(indexes.size());
+        for (const int index : indexes) {
+            result.append(index);
+        }
+        return result;
+    }
+    first = qBound(0, first, count - 1);
+    last = qBound(0, last, count - 1);
+    if (first > last) {
+        std::swap(first, last);
+    }
+    result.reserve(last - first + 1);
+    for (int index = first; index <= last; ++index) {
+        result.append(index);
+    }
+    return result;
 }
 
 quint64 MasonryLayout::layoutRevision() const {
@@ -857,6 +1179,9 @@ void MasonryLayout::setContentYInternal(qreal newContentY) {
         updateProperties();
         emit contentYChanged();
         emit groupHeaderGeometriesChanged();
+        if (groupingActive()) {
+            emit groupHeadersChanged();
+        }
     }
     depth--;
 }
@@ -893,6 +1218,13 @@ void MasonryLayout::setModel(QAbstractItemModel *newModel) {
     }
     _model = newModel;
     updateModelRoleCache();
+    if (!_groupDescriptors.isEmpty()) {
+        if (!_groupIndex.setDescriptors(_groupDescriptors,
+                                        _model ? _model->rowCount() : -1)) {
+            _groupIndex.clear();
+        }
+        restoreGroupState();
+    }
     if (_model) {
         connect(_model, &QObject::destroyed, this, [this]() {
             // Preview catalogs can expire while their pooled QML delegate and

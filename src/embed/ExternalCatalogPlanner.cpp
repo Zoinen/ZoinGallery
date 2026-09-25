@@ -103,6 +103,8 @@ ImageDecodeRequest ExternalCatalogModel::catalogFitRequestForRow(
     stabilizeViewerFitRequest(request);
     request.requestNamespace = _sessionId;
     request.info.requestNamespace = _sessionId;
+    request.panelThumbnailRequest = true;
+    request.info.panelThumbnailRequest = true;
     request.info.source = entry.source;
     request.info.path = entry.sourceIdentity;
     request.info.sourceVersionToken = entry.contentVersion;
@@ -359,7 +361,8 @@ void ExternalCatalogModel::pumpMetadataRequests() {
 
 bool ExternalCatalogModel::scheduleMetadataRetry(
     const QString &sourceIdentity, const QString &contentVersion,
-    const QString &resourceId, bool background) {
+    const QString &resourceId, bool background,
+    bool panelThumbnailRequest) {
     const QString retryKey = sourceIdentity + QChar(0x1f) +
         contentVersion;
     if (_metadataRetryScheduled.contains(retryKey)) {
@@ -381,15 +384,16 @@ bool ExternalCatalogModel::scheduleMetadataRetry(
             .contentVersion = contentVersion,
             .resourceId = resourceId,
             .notBeforeMs = QDateTime::currentMSecsSinceEpoch() + delayMs,
+            .panelThumbnailRequest = panelThumbnailRequest,
         });
         scheduleBackgroundRetryWake();
         return true;
     }
     QTimer::singleShot(delayMs, this,
                        [this, sourceIdentity, contentVersion, resourceId,
-                        retryKey]() {
+                        retryKey, panelThumbnailRequest]() {
         _metadataRetryScheduled.remove(retryKey);
-        if (_shutdown) {
+        if (_shutdown || (panelThumbnailRequest && !_thumbnailsEnabled)) {
             return;
         }
         const int row = _sourceToRow.value(sourceIdentity, -1);
@@ -454,6 +458,9 @@ void ExternalCatalogModel::processBackgroundRetries() {
         const BackgroundMetadataRetry retry = it.value();
         it = _backgroundMetadataRetries.erase(it);
         _metadataRetryScheduled.remove(retryKey);
+        if (retry.panelThumbnailRequest && !_thumbnailsEnabled) {
+            continue;
+        }
         const int row = _sourceToRow.value(retry.sourceIdentity, -1);
         if (!validRow(row)) {
             _metadataRetryAttempts.remove(retryKey);
@@ -482,6 +489,9 @@ void ExternalCatalogModel::processBackgroundRetries() {
         const ImageDecodeRequest request = it->request;
         it = _backgroundDecodeRetries.erase(it);
         _sourceDecodeRetryScheduled.remove(retryKey);
+        if (request.panelThumbnailRequest && !_thumbnailsEnabled) {
+            continue;
+        }
         const QString sourceIdentity = request.info.sourceIdentity();
         const int row = _sourceToRow.value(sourceIdentity, -1);
         if (!validRow(row) ||

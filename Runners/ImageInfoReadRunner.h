@@ -15,7 +15,8 @@ public:
                         ZoinGallery::ImageSourceDescriptor source = {},
                         QSharedPointer<ZoinGallery::ImageSourceProvider> provider = {},
                         bool readDerivedMetadataCache = true,
-                        bool writeDerivedMetadataCache = true);
+                        bool writeDerivedMetadataCache = true,
+                        bool panelThumbnailRequest = false);
 
     RunnerType type() override { return RunnerType::ImageInfoRead; }
     void run() override;
@@ -25,6 +26,9 @@ public:
 
     bool isEmbeddedRequest() const;
     bool isHighPriority() const override { return _highPriority; }
+    bool isPanelThumbnailRequest() const override {
+        return _panelThumbnailRequest;
+    }
     QString requestNamespace() const override { return _requestNamespace; }
     QSharedPointer<ZoinGallery::ImageSourceCancellation>
     sourceCancellation() const override { return _cancellation; }
@@ -48,6 +52,7 @@ private:
     QSharedPointer<ZoinGallery::ImageSourceCancellation> _cancellation;
     bool _readDerivedMetadataCache = true;
     bool _writeDerivedMetadataCache = true;
+    bool _panelThumbnailRequest = false;
 };
 
 #endif // IMAGEINFOREADRUNNER_H

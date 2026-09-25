@@ -262,6 +262,8 @@ QVariantMap ExternalCatalogModel::visualSnapshot(int row) const {
         {QStringLiteral("isImage"), entry->image},
         {QStringLiteral("thumbnailKind"), entry->thumbnailKind},
         {QStringLiteral("imageDimensionsKnown"), entry->image && !entry->originalSize.isEmpty()},
+        {QStringLiteral("imageWidth"), entry->originalSize.width()},
+        {QStringLiteral("imageHeight"), entry->originalSize.height()},
         {QStringLiteral("isSelected"), entry->selected},
         {QStringLiteral("iconPath"), entry->iconPath},
         {QStringLiteral("iconKey"), entry->iconKey},
@@ -448,7 +450,8 @@ bool ExternalCatalogModel::catalogMatches(
                && FileListModel::isImage(name));
         const QString thumbnailKind = map.value(
             QStringLiteral("thumbnailKind")).toString().trimmed().toLower();
-        const bool thumbnailable = image || thumbnailKind == QStringLiteral("video");
+        const bool thumbnailable = thumbnailKind == QStringLiteral("video")
+            ? zoinVideoThumbnailsEnabled() : image;
         const qint64 mtimeNs = integerValue(
             map, QStringLiteral("mtimeNs"),
             QStringLiteral("mtimeNanos"), 0);
@@ -545,7 +548,8 @@ bool ExternalCatalogModel::parseCatalogEntry(
         ? map.value(QStringLiteral("isImage")).toBool()
         : (!metadataDeferred && !parsed.directory
            && FileListModel::isImage(parsed.name));
-    parsed.image = parsed.image || thumbnailKind == QStringLiteral("video");
+    if (thumbnailKind == QStringLiteral("video"))
+        parsed.image = zoinVideoThumbnailsEnabled();
     parsed.selected = map.value(QStringLiteral("selected")).toBool();
     if (metadataDeferred) {
         parsed.mtimeNs = 0;
@@ -576,7 +580,7 @@ bool ExternalCatalogModel::parseCatalogEntry(
         : QDateTime{};
     parsed.imageInfo.fileSize = parsed.size;
     parsed.imageInfo.thumbnailKind = parsed.thumbnailKind;
-    if (parsed.thumbnailKind == QStringLiteral("video")) {
+    if (parsed.image && parsed.thumbnailKind == QStringLiteral("video")) {
         // Video metadata is obtained by the thumbnail decoder. A stable
         // 16:9 placeholder keeps Masonry geometry and thumbnail admission
         // independent of a full-file image probe.

@@ -10,7 +10,11 @@ void ExternalCatalogModel::configureDirectoryPreviews(QSharedPointer<DirectoryPr
     if (!scheduler) scheduler = QSharedPointer<DirectoryPreviewScheduler>::create(std::move(pool));
     _directoryPreviews = new ExternalDirectoryPreviews(this, std::move(provider), _directoryPreviewCache, std::move(scheduler));
 }
-void ExternalCatalogModel::requestDirectoryPreviews(const QList<int> &rows) { if (_directoryPreviews) _directoryPreviews->demand(rows); }
+void ExternalCatalogModel::requestDirectoryPreviews(const QList<int> &rows) {
+    if (_directoryPreviews) {
+        _directoryPreviews->demand(_thumbnailsEnabled ? rows : QList<int>{});
+    }
+}
 void ExternalCatalogModel::clearDirectoryPreviews() {
     if (_directoryPreviewCache) _directoryPreviewCache->clear();
     if (_directoryPreviews) _directoryPreviews->clear();

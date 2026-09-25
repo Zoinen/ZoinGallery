@@ -62,7 +62,7 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
 find_package(QT NAMES Qt6)
-set(ZOIN_QT_COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2)
+set(ZOIN_QT_COMPONENTS Core Quick Gui GuiPrivate Qml Concurrent Svg QuickControls2)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     list(APPEND ZOIN_QT_COMPONENTS Multimedia)
 endif()
@@ -156,6 +156,8 @@ set(ZOIN_CORE_SOURCES
     GalleryPixelGrid.h
     GalleryLayoutEngine.h
     GalleryLayoutEngine.cpp
+    GalleryGroupIndex.h
+    GalleryGroupIndex.cpp
     GalleryGeometryIndex.h
     GalleryGeometryIndex.cpp
     GalleryDelegatePool.h
@@ -653,6 +655,9 @@ if(BUILD_TESTING)
                 columnsTextUsesPhysicalPixelGrid
                 columnsAndDetailsUseIdenticalCompactLucideIcons
                 masonryFirstRowLucideProviderUsesPhysicalRasterAndGrid
+                  groupedLayoutsRenderHeadersAndSkipCollapsedRows
+                  groupHeaderPixelGridAndSpacing
+                stickyGroupHeaderPinsSeparatorAtViewportTop
                 fractionalDetailsDensityPreservesRowPhaseAndContentExtent
                 verticalScrollBarDoesNotChangeViewportWidth)
     set_tests_properties(${_zoin_visual_test} PROPERTIES
@@ -679,6 +684,15 @@ if(BUILD_TESTING)
         LABELS "visual;dpr"
         TIMEOUT 45)
 
+    add_test(NAME MasonryThumbnailPolicyDpr175Test
+        COMMAND ZoinGalleryMasonryLayoutModesTests
+            thumbnailsDisabledIgnoreLateImageDimensions)
+    set_tests_properties(MasonryThumbnailPolicyDpr175Test PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic;QT_SCALE_FACTOR=1.75"
+        LABELS "visual;dpr;thumbnails"
+        TIMEOUT 45)
+
     add_executable(ZoinGalleryLayoutEngineTests
         tests/GalleryLayoutEngineTest.cpp)
     target_include_directories(ZoinGalleryLayoutEngineTests PRIVATE
@@ -688,6 +702,16 @@ if(BUILD_TESTING)
         Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME GalleryLayoutEngineTest
         COMMAND ZoinGalleryLayoutEngineTests)
+
+    add_executable(ZoinGalleryGroupIndexTests
+        tests/GalleryGroupIndexTest.cpp)
+    target_include_directories(ZoinGalleryGroupIndexTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryGroupIndexTests PRIVATE
+        ZoinGallery::Core
+        Qt${QT_VERSION_MAJOR}::Test)
+    add_test(NAME GalleryGroupIndexTest
+        COMMAND ZoinGalleryGroupIndexTests)
 
     add_executable(ZoinGalleryPanelControllerTests
         tests/GalleryPanelControllerTest.cpp)

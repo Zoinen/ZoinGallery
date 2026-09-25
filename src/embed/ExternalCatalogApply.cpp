@@ -179,7 +179,8 @@ bool ExternalCatalogModel::reconcileSparseCatalog(
 }
 
 bool ExternalCatalogModel::applySparseCatalog(
-    const QVariantList &values, bool metadataDeferred, int totalCount) {
+    const QVariantList &values, bool metadataDeferred, int totalCount,
+    bool preserveEquivalent) {
     if (_shutdown || totalCount < 0 || values.size() > totalCount) {
         return false;
     }
@@ -209,19 +210,149 @@ bool ExternalCatalogModel::applySparseCatalog(
         next.push_back(std::move(parsed));
     }
 
-    cancelAllRunners();
-    clearViewer();
-    beginResetModel();
+    QHash<QString, Entry> previous;
+    previous.reserve(_entries.size());
     for (Entry &old : _entries) {
-        if (!old.loaded) {
+        if (old.loaded && !old.id.isEmpty()) {
+            previous.insert(old.id, std::move(old));
+        }
+    }
+
+    const auto sourceChanged = [](const Entry &old, const Entry &entry) {
+        return old.source.resourceId != entry.source.resourceId
+            || old.source.sourceKey != entry.source.sourceKey
+            || old.contentVersion != entry.contentVersion
+            || old.source.versionStrength != entry.source.versionStrength
+            || old.source.accessProfile != entry.source.accessProfile
+            || old.source.storageClass != entry.source.storageClass
+            || old.source.mimeType != entry.source.mimeType
+            || old.localPath != entry.localPath || old.size != entry.size
+            || old.image != entry.image || old.directory != entry.directory;
+    };
+    const auto updateMaterializedItem = [this](Entry &entry) {
+        if (!entry.item) {
+            return;
+        }
+        QString folder;
+        QString fileName = entry.name;
+        if (!entry.localPath.isEmpty()) {
+            const QFileInfo pathInfo(entry.localPath);
+            folder = pathInfo.absolutePath();
+            if (fileName.isEmpty()) {
+                fileName = pathInfo.fileName();
+            }
+        }
+        entry.item->setFolderPath(folder);
+        entry.item->setFileName(fileName);
+        entry.item->setIndex(entry.sourceIndex);
+        entry.item->setIsFolder(entry.directory);
+        entry.item->setIsFolderView(
+            entry.directoryPreviewState == DirectoryPreviewState::HasImages);
+        entry.item->setIsImage(entry.image);
+        entry.item->setHighlightStyle(entry.highlightStyle);
+        entry.item->setIconPath(entry.iconPath);
+        entry.item->setIsSelected(entry.selected);
+        entry.item->setImageProviderName(_thumbnailProviderName);
+        entry.item->setInfo(entry.imageInfo);
+        entry.item->setFullSize(entry.originalSize);
+        entry.item->setDisplayFields(entry.displayFields);
+    };
+
+    QSet<QString> invalidatedSources;
+    QList<ImageFile *> retiredItems;
+    int retainedItems = 0;
+    int retainedThumbnails = 0;
+    for (Entry &entry : next) {
+        if (!preserveEquivalent || !previous.contains(entry.id)) {
             continue;
+        }
+        Entry old = previous.take(entry.id);
+        if (old.item) {
+            old.imageInfo = old.item->info();
+            if (old.item->fullSize().isValid()) {
+                old.originalSize = old.item->fullSize();
+            }
+        }
+        if (sourceChanged(old, entry)) {
+            if (!old.sourceIdentity.isEmpty()) {
+                invalidatedSources.insert(old.sourceIdentity);
+            }
+            clearPublishedImage(old);
+            if (old.item) {
+                retiredItems.append(old.item);
+                old.item = nullptr;
+            }
+            continue;
+        }
+        entry.imageInfo = old.imageInfo;
+        entry.imageInfo.path = entry.sourceIdentity;
+        entry.imageInfo.source = entry.source;
+        entry.imageInfo.requestNamespace = _sessionId;
+        entry.imageInfo.sourceVersionToken = entry.contentVersion;
+        entry.imageInfo.lastModified = entry.mtimeNs != 0
+            ? QDateTime::fromMSecsSinceEpoch(
+                entry.mtimeNs / 1000000, QTimeZone::UTC)
+            : QDateTime{};
+        entry.imageInfo.fileSize = entry.size;
+        entry.originalSize = old.originalSize;
+        entry.metadataSettled = old.metadataSettled;
+        entry.iconPath = old.iconPath;
+        entry.thumbnailProviderId = old.thumbnailProviderId;
+        entry.thumbnailRequestedSize = old.thumbnailRequestedSize;
+        entry.thumbnailTransformKey = old.thumbnailTransformKey;
+        if (entry.directorySource == old.directorySource) {
+            entry.directoryPreviewRevision = old.directoryPreviewRevision;
+        }
+        entry.item = old.item;
+        old.item = nullptr;
+        updateMaterializedItem(entry);
+        ++retainedItems;
+        if (!entry.thumbnailProviderId.isEmpty()) {
+            ++retainedThumbnails;
+        }
+    }
+    for (Entry &old : previous) {
+        if (!old.sourceIdentity.isEmpty()) {
+            invalidatedSources.insert(old.sourceIdentity);
         }
         clearPublishedImage(old);
         if (old.item) {
-            retireItemAfterReset(old.item);
+            retiredItems.append(old.item);
             old.item = nullptr;
         }
     }
+
+    if (!preserveEquivalent) {
+        cancelAllRunners();
+        clearViewer();
+    } else if (!invalidatedSources.isEmpty()) {
+        _decodeManager->cancelSourceRequests(_sessionId, invalidatedSources);
+        if (_thumbnailCache) {
+            _thumbnailCache->cancelRequests(_sessionId, invalidatedSources);
+        }
+    }
+    if (preserveEquivalent) {
+        // Row coordinates are stale, but source-keyed metadata and decode
+        // admissions remain valid. Reset only viewport queues; do not cancel
+        // or recreate work for retained files.
+        _metadataVisibleRows.clear();
+        _metadataLastVisibleRows.clear();
+        _metadataOverscanRows.clear();
+        _metadataUrgentRows.clear();
+        _metadataAdHocRows.clear();
+        _catalogMetadataCursor = 0;
+        _metadataPumpScheduled = false;
+        _probeVisibleRows.clear();
+        _probeOverscanRows.clear();
+        _probeUrgentRows.clear();
+        _catalogProbeCursor = 0;
+        _probePumpScheduled = false;
+        _catalogFitRows.clear();
+        _catalogFitPumpScheduled = false;
+        invalidateNativeDwell();
+    }
+
+    beginResetModel();
     _entries = std::move(next);
     _virtualRowCount = totalCount;
     _sparseRowToOffset = std::move(nextRows);
@@ -246,6 +377,28 @@ bool ExternalCatalogModel::applySparseCatalog(
     }
     _cursorRow = totalCount > 0 ? qBound(0, _cursorRow, totalCount - 1) : -1;
     endResetModel();
+    for (ImageFile *item : std::as_const(retiredItems)) {
+        retireItemAfterReset(item);
+    }
+    if (preserveEquivalent) {
+        const bool viewerStillAvailable = !_viewerEntryId.isEmpty()
+            && validRow(_idToRow.value(_viewerEntryId, -1))
+            && loadedEntry(_idToRow.value(_viewerEntryId)).image;
+        if (!viewerStillAvailable) {
+            clearViewer();
+        }
+        if (MediaTimingTrace::enabled()) {
+            MediaTimingTrace::event(
+                QStringLiteral("qt.gallery.catalog.sparse_retain"), {
+                    {QStringLiteral("fix"), QStringLiteral(
+                        "[FIX:group-layout-thumbnail-retention]")},
+                    {QStringLiteral("sessionId"), _sessionId},
+                    {QStringLiteral("retainedEntries"), retainedItems},
+                    {QStringLiteral("retainedThumbnails"), retainedThumbnails},
+                    {QStringLiteral("retiredItems"), retiredItems.size()},
+                });
+        }
+    }
     return true;
 }
 
@@ -283,7 +436,7 @@ bool ExternalCatalogModel::applyCatalog(
             return true;
         }
         const bool applied = applySparseCatalog(
-            values, metadataDeferred, totalCount);
+            values, metadataDeferred, totalCount, checkEquivalentCatalog);
         timingSpan.set(QStringLiteral("outcome"),
                        applied ? QStringLiteral("sparse-reset")
                                : QStringLiteral("invalid-sparse"));
@@ -568,6 +721,88 @@ QSize ExternalCatalogModel::imageOriginalSizeAt(int row) const {
     return entry && entry->loaded ? entry->originalSize : QSize();
 }
 
+void ExternalCatalogModel::setThumbnailsEnabled(bool enabled) {
+    if (_thumbnailsEnabled == enabled) {
+        return;
+    }
+    _thumbnailsEnabled = enabled;
+    if (!enabled) {
+        _decodeManager->cancelPanelThumbnailRequests(_sessionId);
+        if (_thumbnailCache) {
+            _thumbnailCache->cancelRequests(_sessionId);
+        }
+        _metadataVisibleRows.clear();
+        _metadataOverscanRows.clear();
+        _metadataLastVisibleRows.clear();
+        _catalogMetadataRequested = false;
+        _catalogMetadataCursor = 0;
+        _catalogProbeRequested = false;
+        _catalogFitStarted = false;
+        _catalogFitRows.clear();
+        _catalogFitWaitingMetadata.clear();
+        for (auto it = _panelMetadataPendingIdentities.cbegin();
+             it != _panelMetadataPendingIdentities.cend(); ++it) {
+            const auto pending = _metadataPendingVersions.constFind(it.key());
+            if (pending != _metadataPendingVersions.cend()
+                && pending.value() == it.value()) {
+                _metadataPendingVersions.remove(it.key());
+            }
+        }
+        _panelMetadataPendingIdentities.clear();
+        for (const QString &identity :
+             std::as_const(_panelProbePendingIdentities)) {
+            _probePendingVersions.remove(identity);
+            _probeResolvedVersions.remove(identity);
+        }
+        _panelProbePendingIdentities.clear();
+
+        const auto keepCurrentViewerRow = [this](QList<int> &rows) {
+            rows.erase(std::remove_if(rows.begin(), rows.end(),
+                                      [this](int row) {
+                return !validRow(row)
+                    || loadedEntry(row).id != _viewerEntryId;
+            }), rows.end());
+        };
+        keepCurrentViewerRow(_metadataUrgentRows);
+        keepCurrentViewerRow(_metadataAdHocRows);
+        keepCurrentViewerRow(_probeUrgentRows);
+        keepCurrentViewerRow(_probeOverscanRows);
+        for (auto it = _pendingThumbnailRequests.begin();
+             it != _pendingThumbnailRequests.end();) {
+            it = it->panelThumbnailRequest
+                ? _pendingThumbnailRequests.erase(it) : std::next(it);
+        }
+        for (const QString &key : std::as_const(_catalogFitPendingKeys)) {
+            _pendingViewerRequests.remove(key);
+        }
+        _catalogFitPendingKeys.clear();
+
+        for (auto it = _backgroundMetadataRetries.begin();
+             it != _backgroundMetadataRetries.end();) {
+            if (it->panelThumbnailRequest) {
+                _metadataRetryScheduled.remove(it.key());
+                it = _backgroundMetadataRetries.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = _backgroundDecodeRetries.begin();
+             it != _backgroundDecodeRetries.end();) {
+            it = it->request.panelThumbnailRequest
+                ? _backgroundDecodeRetries.erase(it) : std::next(it);
+        }
+        if (_backgroundMetadataRetries.isEmpty()
+            && _backgroundDecodeRetries.isEmpty()) {
+            _backgroundRetryTimer.stop();
+        }
+        _probePumpScheduled = false;
+        _probePassComplete = false;
+        if (_directoryPreviews) {
+            _directoryPreviews->demand({});
+        }
+    }
+}
+
 QVariantMap ExternalCatalogModel::highlightStyleAt(int row) const {
     const Entry *entry = entryAt(row);
     return entry && entry->loaded ? entry->highlightStyle : QVariantMap();
@@ -582,7 +817,7 @@ int ExternalCatalogModel::cursorRow() const {
 }
 
 void ExternalCatalogModel::ensurePreviews() {
-    if (_shutdown) {
+    if (_shutdown || !_thumbnailsEnabled) {
         return;
     }
     const bool hasExpensiveSource = std::any_of(

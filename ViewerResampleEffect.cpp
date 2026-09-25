@@ -1,5 +1,6 @@
 #include "ViewerResampleEffect.h"
 
+#include <QDebug>
 #include <QQuickWindow>
 #include <QSGGeometryNode>
 #include <QSGMaterial>
@@ -11,6 +12,7 @@
 #include <cstddef>
 #include <cstring>
 #include <memory>
+#include <atomic>
 
 namespace {
 
@@ -144,6 +146,21 @@ bool ResampleShader::updateUniformData(RenderState &state, QSGMaterial *newMater
     const QRhi *rhi = state.rhi();
     uniforms.framebufferYDirection = rhi->isYUpInFramebuffer() == rhi->isYUpInNDC()
         ? 1.0f : -1.0f;
+    if (qEnvironmentVariableIsSet("F4_VIEWER_RESAMPLE_DEBUG")) {
+        static std::atomic<int> emitted = 0;
+        if (emitted.fetch_add(1, std::memory_order_relaxed) < 24) {
+            qInfo().noquote() << QStringLiteral(
+                "[FIX:viewer-resample-dpr] targetDpr=%1 viewport=(%2,%3 %4x%5) "
+                "requested=%6x%7 item=%8x%9 aligned=%10 intermediate=%11")
+                .arg(state.devicePixelRatio())
+                .arg(viewport.x()).arg(viewport.y())
+                .arg(viewport.width()).arg(viewport.height())
+                .arg(material->viewportSize.width())
+                .arg(material->viewportSize.height())
+                .arg(material->itemSize.width()).arg(material->itemSize.height())
+                .arg(material->pixelAligned).arg(material->intermediate);
+        }
+    }
     std::memcpy(buffer->data(), &uniforms, UniformByteSize);
     return true;
 }

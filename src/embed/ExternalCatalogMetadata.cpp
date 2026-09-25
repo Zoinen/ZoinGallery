@@ -125,9 +125,9 @@ void ExternalCatalogMetadataTransaction::applyBaseFields(
     if (value.contains(QStringLiteral("thumbnailKind"))) {
         entry.thumbnailKind = value.value(QStringLiteral(
             "thumbnailKind")).toString().trimmed().toLower();
-        entry.image = entry.image
-            || entry.thumbnailKind == QStringLiteral("video");
     }
+    if (entry.thumbnailKind == QStringLiteral("video"))
+        entry.image = zoinVideoThumbnailsEnabled();
     if (value.contains(QStringLiteral("localPath"))) {
         entry.localPath = value.value(
             QStringLiteral("localPath")).toString();
@@ -290,7 +290,7 @@ void ExternalCatalogMetadataTransaction::updateImageInfo(
         : QDateTime{};
     imageInfo.fileSize = entry.size;
     imageInfo.thumbnailKind = entry.thumbnailKind;
-    if (entry.thumbnailKind == QStringLiteral("video")) {
+    if (entry.image && entry.thumbnailKind == QStringLiteral("video")) {
         imageInfo.imageSize = QSize(16, 9);
         entry.originalSize = imageInfo.imageSize;
         entry.metadataSettled = true;

@@ -37,6 +37,7 @@ public:
 
     virtual QString path() const { return QString(); }
     virtual bool isViewerRequest() const { return false; }
+    virtual bool isPanelThumbnailRequest() const { return false; }
     virtual bool isHighPriority() const { return false; }
     virtual QString requestNamespace() const { return QString(); }
     virtual quint64 viewerGeneration() const { return 0; }
@@ -76,6 +77,7 @@ public:
         // enter the urgent source-I/O lane. The method-level flag remains an
         // override for callers whose entire batch is urgent.
         bool highPriority = false;
+        bool panelThumbnailRequest = false;
     };
 
     enum class ImageInfoCachePolicy {
@@ -121,6 +123,7 @@ public:
     void cancelAllRunners();
     void cancelAllDecodeViewerRunners();
     void cancelThumbnailRequests(const QString &requestNamespace);
+    void cancelPanelThumbnailRequests(const QString &requestNamespace);
     void cancelViewerRequests(const QString &requestNamespace);
     void cancelRequests(const QString &requestNamespace);
     void cancelSourceRequests(const QString &requestNamespace,

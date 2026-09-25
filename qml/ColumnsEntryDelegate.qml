@@ -9,6 +9,11 @@ Item {
     readonly property real paintedHeight: height
     opacity: content.entry.hiddenEntry ? 0.5 : 1
 
+    FontMetrics {
+        id: nameMetrics
+        font: baseNameLabel.font
+    }
+
     function pixelOffset(item) {
         // The row observes its complete ancestor chain once. Labels only
         // need their local chain plus that shared scene-space origin.
@@ -61,6 +66,9 @@ Item {
                 * content.entry.renderDpr) / content.entry.renderDpr)
             height: Math.ceil(implicitHeight * content.entry.renderDpr)
                     / content.entry.renderDpr
+            maximumLineCount: Math.max(1, Math.floor((content.height - 4) / nameMetrics.height))
+            wrapMode: maximumLineCount > 1 ? Text.Wrap : Text.NoWrap
+            elide: maximumLineCount > 1 ? Text.ElideRight : Text.ElideMiddle
             y: (parent.height - height) / 2
             text: content.entry.panelRoot.quickSearchFormatter.styledText(
                       content.entry.panelRoot.separateFileExtensions
@@ -74,7 +82,6 @@ Item {
                     content.entry.entryId)
                 ? Text.StyledText : Text.PlainText
             color: content.entry.itemTextColor
-            elide: Text.ElideMiddle
             verticalAlignment: Text.AlignVCenter
             font.pixelSize: -1
             transform: Translate {

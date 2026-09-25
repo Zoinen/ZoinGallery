@@ -36,6 +36,18 @@ QtObject {
     function openRequested(entryId, index, isImage, autoRepeat) {
         panel.openRequested(entryId, index, isImage, autoRepeat)
     }
+    function cancelPendingCursorCommit(reason, entryId) {
+        const wasPending = cursorCommitPending
+        cursorCommitPending = false
+        cursorCommitAfterScroll = false
+        cursorCommitTimer.stop()
+        cursorCommitAfterScrollTimer.stop()
+        if (wasPending) {
+            console.debug("[FIX:double-click-open] canceled deferred cursor",
+                          "reason=" + String(reason || ""),
+                          "entryId=" + String(entryId || ""))
+        }
+    }
     function coordinateVisualCursor(targetIndex, previousIndex) {
         panel.coordinateVisualCursor(targetIndex, previousIndex)
     }
@@ -101,6 +113,15 @@ QtObject {
                 || viewIndex >= galleryLayout.count)
             return
         if (openItem) {
+            // The second press of a native double-click runs through the
+            // ordinary pointer-selection path before Qt emits doubleClicked.
+            // That path arms a deferred cursor commit; if it survives until
+            // release, it is emitted after panel.open and can race the
+            // destination catalog (notably when opening ".."). The stable
+            // open intent already carries the row identity, so the deferred
+            // cursor is neither needed nor safe here.
+            cancelPendingCursorCommit(
+                        "open", controller.entryIdAt(viewIndex))
             controller.activateIndex(viewIndex)
             openRequested(controller.entryIdAt(viewIndex),
                           sourceIndex(viewIndex),
@@ -194,8 +215,49 @@ QtObject {
                 ? current.y - 2
                 : current.y + current.height + 2
         let adjacent = galleryLayout.indexAt(currentItemCenterX, adjacentY)
+        if (adjacent < 0) {
+            const currentIndex = galleryLayout.currentIndex
+            const forward = direction > 0
+            if (galleryLayout.groupBoundaryIndex) {
+                const boundary = galleryLayout.groupBoundaryIndex(
+                    currentIndex, currentItemCenterX, forward)
+                if (boundary >= 0) {
+                    adjacent = boundary
+                    panel.traceBenchmarkStage(
+                        "navigation.group-header-skip", {
+                            "fix": "[FIX:group-header-navigation]",
+                            "fromIndex": currentIndex,
+                            "toIndex": boundary,
+                            "direction": direction
+                        })
+                }
+            }
+        }
         if (adjacent < 0 && galleryLayout.listView)
             adjacent = galleryLayout.indexAt(0, adjacentY)
+        if (adjacent < 0) {
+            // A group separator is layout space, not a file row.  The hit
+            // test can still return -1 for a hole in a masonry row. Preserve
+            // the established source-order fallback for that non-boundary
+            // case, but never use it to cross a section header.
+            const currentIndex = galleryLayout.currentIndex
+            const forward = direction > 0
+            const fallback = galleryLayout.nearestVisibleIndex(
+                currentIndex, forward)
+            adjacent = fallback >= 0 ? fallback : currentIndex
+            if (fallback >= 0
+                && galleryLayout.groupForIndex
+                && galleryLayout.groupForIndex(currentIndex)
+                   !== galleryLayout.groupForIndex(fallback)) {
+                panel.traceBenchmarkStage(
+                    "navigation.group-header-skip", {
+                        "fix": "[FIX:group-header-navigation]",
+                        "fromIndex": currentIndex,
+                        "toIndex": fallback,
+                        "direction": direction
+                    })
+            }
+        }
         return adjacent
     }
 
@@ -237,7 +299,8 @@ QtObject {
                 && nextTop >= 0
                 && nextTop !== galleryLayout.windowTopIndex)
             galleryLayout.windowTopIndex = nextTop
-        return Number(result.targetIndex)
+        const forward = key === Qt.Key_Right || key === Qt.Key_Down
+        return panel.visibleNavigationIndex(Number(result.targetIndex), forward)
     }
 
     function moveCursor(index, preserveSelectionAnchor,
@@ -431,6 +494,7 @@ QtObject {
         if (targetIndex < 0) {
             targetIndex = direction < 0 ? 0 : galleryLayout.count - 1
         }
+        targetIndex = panel.visibleNavigationIndex(targetIndex, direction > 0)
 
         const hitEdge = atStart || atEnd
         // Do not run a second minimal ensure-visible animation: the exact
@@ -529,7 +593,8 @@ QtObject {
                 storeMasonryPageNode(nextOrdinal, targetNode)
         }
 
-        const targetIndex = Number(targetNode.targetIndex)
+        const targetIndex = panel.visibleNavigationIndex(
+                    Number(targetNode.targetIndex), direction > 0)
         const destination = Number(targetNode.contentY)
         const hitEdge = Boolean(targetNode.hitEdge)
         panel.traceBenchmarkStage("navigation.page.planned", {
@@ -633,6 +698,7 @@ QtObject {
             }
         }
 
+        targetIndex = panel.visibleNavigationIndex(targetIndex, direction > 0)
         moveCursorWithSelection(targetIndex, togglePrevious,
                                 !hitEdge, deferCursorCommit, !hitEdge)
         scrollBy(direction * deltaY, false, true, direction)

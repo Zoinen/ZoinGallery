@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Window
 
 import ZoinGallery.Native 1.0
 
@@ -12,6 +13,8 @@ Item {
     property bool ready: true
     property string presentationMode: "masonry"
     property real detailsScrollBarWidth: 16
+    readonly property real verticalScrollBarInset:
+        verticalScroll.visible ? width - verticalScroll.x : 0
     readonly property point layoutOrigin:
         layout ? layout.mapToItem(chromeRoot, 0, 0) : Qt.point(0, 0)
 
@@ -21,7 +24,19 @@ Item {
         id: verticalScroll
         objectName: "galleryPanelScrollBar"
         theme: chromeRoot.theme
-        x: parent.width - width + 8
+        x: {
+            // Tiles stop at the content padding plus half their inter-item
+            // spacing. Center the thumb in that lane, not at a fixed inset.
+            const gap = Math.max(width, chromeRoot.layout.paddingRight
+                                + chromeRoot.layout.spacing / 2)
+            const localX = parent.width - (gap + width) / 2
+            let dependency = 0
+            for (let item = chromeRoot; item; item = item.parent)
+                dependency += item.x + item.y
+            const origin = chromeRoot.mapToItem(null, dependency * 0, 0).x
+            const dpr = chromeRoot.Screen.devicePixelRatio
+            return Math.round((origin + localX) * dpr) / dpr - origin
+        }
         y: chromeRoot.layoutOrigin.y
         height: chromeRoot.layout.height
         z: 10

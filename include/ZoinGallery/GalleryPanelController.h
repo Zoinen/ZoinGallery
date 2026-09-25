@@ -69,6 +69,8 @@ class GalleryPanelController : public QObject {
                NOTIFY backendChanged)
     Q_PROPERTY(bool directoryPreviewEnabled READ directoryPreviewEnabled
                NOTIFY backendChanged)
+    Q_PROPERTY(bool thumbnailsEnabled READ thumbnailsEnabled
+               NOTIFY thumbnailsEnabledChanged)
     Q_PROPERTY(QVariantList dragUrls READ dragUrls
                NOTIFY dragPayloadChanged)
     Q_PROPERTY(QAbstractItemModel *dragPreviewModel READ dragPreviewModel
@@ -108,6 +110,7 @@ public:
     bool dragEnabled() const;
     bool directoryDropEnabled() const;
     bool directoryPreviewEnabled() const;
+    bool thumbnailsEnabled() const;
     QVariantList dragUrls() const;
     QAbstractItemModel *dragPreviewModel() const;
     int dragPreviewRemainingCount() const;
@@ -138,6 +141,7 @@ public:
         const QString &entryId, bool authoritative) const;
     Q_INVOKABLE void beginSelectionGesture(bool add);
     Q_INVOKABLE void previewSelectionRange(int first, int last);
+    Q_INVOKABLE void previewSelectionIndexes(const QVariantList &indexes);
     Q_INVOKABLE void toggleSelectionAt(int index);
     Q_INVOKABLE bool flushSelectionGesture();
     Q_INVOKABLE bool commitSelectionGesture();
@@ -166,6 +170,7 @@ signals:
     void catalogRevisionChanged();
     void selectionRevisionChanged();
     void panelViewportChanged();
+    void thumbnailsEnabledChanged();
     void quickSearchChanged();
     void dragPayloadChanged();
     void fileOperationFailed(const QString &title, const QString &message);
@@ -213,10 +218,12 @@ private:
     QHash<QString, bool> _selectionAwaiting;
     int _selectionRangeFirst = -1;
     int _selectionRangeLast = -1;
+    QSet<QString> _selectionRangeIds;
     int _selectionVisualRevision = 0;
     std::unique_ptr<GalleryQuickSearchIndex> _quickSearch;
     int _quickSearchRevision = 0;
     std::unique_ptr<GalleryDragPreviewModel> _dragPreviewModel;
+    QMetaObject::Connection _sessionThumbnailConnection;
     QVariantList _dragUrls;
     int _dragPreviewTotalCount = 0;
 };

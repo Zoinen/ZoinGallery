@@ -69,6 +69,228 @@ class GalleryQmlInteractionTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void detailsZoom_data() {
+        QTest::addColumn<bool>("geometryOnly");
+        QTest::addColumn<bool>("separateExtensions");
+        QTest::newRow("zoom-combined") << false << false;
+        QTest::newRow("zoom-separated") << false << true;
+        QTest::newRow("pixel-grid-combined") << true << false;
+        QTest::newRow("pixel-grid-separated") << true << true;
+    }
+
+    void detailsZoom() {
+        QFETCH(bool, geometryOnly);
+        QFETCH(bool, separateExtensions);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral(
+            "A photograph with a descriptive filename and additional words.png"));
+        QVERIFY(writeImage(path, QSize(80, 160), QColor("#3da5d9")));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(QStringLiteral("details-zoom"));
+        auto photo = imageEntry(QStringLiteral("photo"), 0, path);
+        auto file = imageEntry(QStringLiteral("file"), 1, directory.filePath("document.txt"));
+        file[QStringLiteral("isImage")] = false;
+        file[QStringLiteral("name")] = QStringLiteral("VeryLongUnbrokenFilename").repeated(100) + ".txt";
+        auto shortFile = imageEntry(QStringLiteral("short"), 2, directory.filePath("short.txt"));
+        shortFile[QStringLiteral("isImage")] = false;
+        shortFile[QStringLiteral("highlightStyle")] = QVariantMap{
+            {QStringLiteral("icon"), QUrl::fromLocalFile(path).toString()}};
+        QVERIFY(session->applyExternalCatalog({photo, file, shortFile}, 1));
+        QVERIFY(session->applyExternalState(QStringLiteral("photo"), 0, {}, 1));
+        view.engine()->rootContext()->setContextProperty(QStringLiteral("zoomSession"), session);
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 460; height: 260
+                property alias panel: panel
+                Item {
+                    id: offset
+                    objectName: "offset"
+                    x: 0.3; y: 0.7
+                    width: 440; height: 240
+                    GalleryPanel {
+                        id: panel
+                        objectName: "detailsZoomPanel"
+                        anchors.fill: parent
+                        session: zoomSession
+                        devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+                        presentationMode: "details"
+                        showDetailsHeader: false
+                        animateLayoutChanges: false
+                        autoFocus: false
+                        density: 22
+                    }
+                }
+            }
+        )QML", QStringLiteral("DetailsZoom.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        auto *panel = root->findChild<QQuickItem *>(QStringLiteral("detailsZoomPanel"));
+        QVERIFY(panel);
+        panel->setProperty("separateFileExtensions", separateExtensions);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QCOMPARE(view.devicePixelRatio(), 1.75);
+        auto leaf = [root](const QString &name) {
+            return root->findChild<QQuickItem *>(name);
+        };
+        QTRY_VERIFY(leaf(QStringLiteral("galleryBaseName-0")));
+        QTRY_VERIFY_WITH_TIMEOUT(leaf(QStringLiteral("galleryThumbnailImage-0")), 5000);
+        QTRY_COMPARE(leaf(QStringLiteral("galleryThumbnailImage-0"))->property("status").toInt(), 1);
+        QTRY_VERIFY(leaf(QStringLiteral("gallerySourceColorIcon-2")));
+        QTRY_COMPARE(leaf(QStringLiteral("gallerySourceColorIcon-2"))->property("status").toInt(), 1);
+        auto *name = leaf(QStringLiteral("galleryBaseName-0"));
+        auto *slot = leaf(QStringLiteral("galleryDetailsIconSlot-0"));
+        auto *icon = leaf(QStringLiteral("galleryFallbackIcon-1"));
+        QVERIFY(slot);
+        QVERIFY(icon);
+        const qreal smallSlot = slot->height();
+        const qreal smallIcon = icon->height();
+        qInfo() << "[FIX:details-zoom] compact" << name->property("text")
+                << name->width() << slot->height() << icon->height();
+        QCOMPARE(name->property("lineCount").toInt(), 1);
+        QVERIFY(name->property("truncated").toBool());
+
+        for (const int height : {22, 40, 72, 22}) {
+            panel->setProperty("density", height);
+            QTRY_COMPARE(panel->property("density").toInt(), height);
+            QTest::qWait(150);
+            auto *shortName = leaf(QStringLiteral("galleryBaseName-2"));
+            QVERIFY(shortName);
+            QCOMPARE(shortName->property("lineCount").toInt(), 1);
+            QVERIFY(!shortName->property("truncated").toBool());
+            for (int row = 0; row < 3; ++row)
+                QVERIFY(leaf(QStringLiteral("galleryBaseName-%1").arg(row))->height() <= height - 3);
+            if (!geometryOnly && height > 22) {
+                QVERIFY2(slot->height() > smallSlot, "Details preview must grow with row height");
+                QVERIFY2(icon->height() > smallIcon, "Details fallback icon must grow with row height");
+                QVERIFY2(name->property("lineCount").toInt() > 1, "Filename must use the extra row height");
+                QVERIFY(leaf(QStringLiteral("galleryBaseName-1"))->property("truncated").toBool());
+                if (height == 72)
+                    QVERIFY(!name->property("truncated").toBool());
+            }
+            if (!geometryOnly && height == 22) {
+                QCOMPARE(slot->height(), smallSlot);
+                QCOMPARE(icon->height(), smallIcon);
+                QCOMPARE(name->property("lineCount").toInt(), 1);
+                QVERIFY(name->property("truncated").toBool());
+            }
+            if (geometryOnly) {
+                for (const qreal offset : {0.3, 0.65}) {
+                    root->findChild<QQuickItem *>(QStringLiteral("offset"))->setX(offset);
+                    QTest::qWait(50);
+                    QStringList leaves{QStringLiteral("galleryThumbnailImage-0"),
+                                       QStringLiteral("galleryFallbackIcon-1"),
+                                       QStringLiteral("gallerySourceColorIcon-2")};
+                    for (int row = 0; row < 3; ++row) {
+                        leaves << QStringLiteral("galleryBaseName-%1").arg(row)
+                               << QStringLiteral("gallerySize-%1").arg(row);
+                        if (separateExtensions)
+                            leaves << QStringLiteral("galleryExtension-%1").arg(row);
+                    }
+                    for (const auto &id : leaves) {
+                        auto *item = leaf(id);
+                        QVERIFY2(item && item->isVisible(), qPrintable(id));
+                        const QPointF origin = item->mapToItem(view.contentItem(), QPointF());
+                        const QPointF physical = origin * view.devicePixelRatio();
+                        const QString diagnostic = QStringLiteral("%1 height %2 physical (%3, %4)")
+                            .arg(id).arg(height).arg(physical.x(), 0, 'f', 6).arg(physical.y(), 0, 'f', 6);
+                        QVERIFY2(qAbs(physical.x() - qRound(physical.x())) < 0.001
+                                 && qAbs(physical.y() - qRound(physical.y())) < 0.001,
+                                 qPrintable(diagnostic));
+                        const QPointF dx = item->mapToItem(view.contentItem(), QPointF(1, 0)) - origin;
+                        const QPointF dy = item->mapToItem(view.contentItem(), QPointF(0, 1)) - origin;
+                        QVERIFY(QLineF(dx, QPointF(1, 0)).length() < 0.0001);
+                        QVERIFY(QLineF(dy, QPointF(0, 1)).length() < 0.0001);
+                        QVERIFY2(qAbs(item->width() * view.devicePixelRatio()
+                                      - qRound(item->width() * view.devicePixelRatio())) < 0.001,
+                                 qPrintable(id + " fractional physical width"));
+                        QVERIFY2(qAbs(item->height() * view.devicePixelRatio()
+                                      - qRound(item->height() * view.devicePixelRatio())) < 0.001,
+                                 qPrintable(id + " fractional physical height"));
+                    }
+                }
+            }
+            const QImage frame = view.grabWindow();
+            QVERIFY(!frame.isNull());
+            const QString captureDir = qEnvironmentVariable("F4_DETAILS_CAPTURE_DIR");
+            if (!captureDir.isEmpty()) {
+                QVERIFY(QDir().mkpath(captureDir));
+                QVERIFY(frame.save(captureDir + QStringLiteral("/details-%1-%2.png")
+                    .arg(separateExtensions ? "separated" : "combined").arg(height)));
+            }
+        }
+        // Columns shares the enlarged row range, in both two- and three-column layouts.
+        root->setProperty("height", 800);
+        root->setProperty("width", 850);
+        root->findChild<QQuickItem *>(QStringLiteral("offset"))->setHeight(780);
+        root->findChild<QQuickItem *>(QStringLiteral("offset"))->setWidth(830);
+        for (const QString &mode : {QStringLiteral("details"), QStringLiteral("columns")}) {
+            panel->setProperty("presentationMode", mode);
+            for (const int columns : {2, 3}) {
+                panel->setProperty("columnCount", columns);
+                panel->setProperty("density", 216);
+                QTRY_COMPARE(panel->property("density").toInt(), 216);
+                QTest::qWait(100); // Let the old mode delegate finish its deferred destruction.
+                QTRY_VERIFY(leaf(QStringLiteral("galleryFallbackIcon-1")));
+                QTRY_VERIFY(leaf(QStringLiteral("galleryFallbackIcon-1"))->height() > 180);
+                QTRY_VERIFY(leaf(QStringLiteral("galleryBaseName-0")));
+                QTRY_VERIFY(leaf(QStringLiteral("galleryThumbnailImage-0")));
+                QTRY_COMPARE(leaf(QStringLiteral("galleryThumbnailImage-0"))->property("status").toInt(), 1);
+                qInfo() << "[FIX:columns-wrap]" << mode << columns
+                        << leaf(QStringLiteral("galleryBaseName-0"))->width()
+                        << leaf(QStringLiteral("galleryBaseName-0"))->property("lineCount")
+                        << leaf(QStringLiteral("galleryBaseName-0"))->property("maximumLineCount")
+                        << leaf(QStringLiteral("galleryBaseName-0"))->property("wrapMode");
+                if (mode == QStringLiteral("columns"))
+                    QTRY_VERIFY2(leaf(QStringLiteral("galleryBaseName-0"))->property("lineCount").toInt() > 1,
+                                 "Column names should wrap when rows are tall");
+                auto *photoName = leaf(QStringLiteral("galleryBaseName-0"));
+                auto *photoImage = leaf(QStringLiteral("galleryThumbnailImage-0"));
+                auto *photoSlot = leaf(QStringLiteral("galleryThumbnail-0"));
+                QVERIFY(photoSlot);
+                const qreal imageLeft = photoImage->mapToItem(view.contentItem(), QPointF()).x();
+                const qreal slotLeft = photoSlot->mapToItem(view.contentItem(), QPointF()).x();
+                const qreal imageCenter = imageLeft + photoImage->width() / 2;
+                const qreal slotCenter = slotLeft + photoSlot->width() / 2;
+                qInfo() << "[FIX:thumbnail-center]" << mode << columns
+                        << imageCenter << slotCenter;
+                QVERIFY2(qAbs(imageCenter - slotCenter) <= 1 / view.devicePixelRatio(),
+                         "Portrait thumbnail must be centered in its slot");
+                auto *fileName = leaf(QStringLiteral("galleryBaseName-1"));
+                const qreal photoTextX = photoName->mapToItem(view.contentItem(), QPointF()).x();
+                const qreal fileTextX = fileName->mapToItem(view.contentItem(), QPointF()).x();
+                qInfo() << "[FIX:column-alignment]" << mode << columns
+                        << photoTextX << fileTextX;
+                QVERIFY2(qAbs(photoTextX - fileTextX) <= 1 / view.devicePixelRatio(),
+                         "Text must align across rows with and without thumbnails");
+                QVERIFY(leaf(QStringLiteral("galleryBaseName-1"))->property("truncated").toBool());
+                const qreal nameLeft = photoName->mapToItem(view.contentItem(), QPointF()).x();
+                const qreal slotRight = slotLeft + photoSlot->width();
+                const qreal slotGap = nameLeft - slotRight;
+                qInfo() << "[FIX:columns-spacing]" << mode << columns << slotGap;
+                QVERIFY2(slotGap >= 3 && slotGap <= 16,
+                         "Thumbnail slot-to-name gutter must remain fixed at high zoom");
+                if (mode == QStringLiteral("columns")) {
+                    panel->setProperty("density", 22);
+                    QTRY_COMPARE(panel->property("density").toInt(), 22);
+                    QTRY_COMPARE(leaf(QStringLiteral("galleryBaseName-0"))->property("maximumLineCount").toInt(), 1);
+                    QCOMPARE(leaf(QStringLiteral("galleryBaseName-0"))->property("lineCount").toInt(), 1);
+                    QVERIFY(leaf(QStringLiteral("galleryBaseName-1"))->property("truncated").toBool());
+                }
+            }
+        }
+        runtime->shutdown();
+    }
+
     void terminalViewerFailureStopsBusyIndicatorAndFrames() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

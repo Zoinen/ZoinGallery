@@ -241,7 +241,11 @@ void GalleryLayoutEngineTest::densityPolicyIsPresentationSpecific() {
     QCOMPARE(GalleryDensityPolicy::normalized(
                  GalleryPresentationMode::Masonry, 1), 30.0);
     QCOMPARE(GalleryDensityPolicy::normalized(
-                 GalleryPresentationMode::Details, 200), 72.0);
+                 GalleryPresentationMode::Details, 200), 200.0);
+    QCOMPARE(GalleryDensityPolicy::normalized(
+                 GalleryPresentationMode::Details, 500), 216.0);
+    QCOMPARE(GalleryDensityPolicy::normalized(
+                 GalleryPresentationMode::Columns, 500), 216.0);
     QCOMPARE(GalleryDensityPolicy::normalized(
                  GalleryPresentationMode::Grid, 1), 96.0);
     QCOMPARE(GalleryDensityPolicy::normalized(

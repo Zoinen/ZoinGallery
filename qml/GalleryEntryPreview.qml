@@ -18,7 +18,8 @@ Item {
     // Cached metadata establishes the image's geometry before its pixels (or
     // even its lazy ImageFile facade) arrive. Suppress icons from that point.
     readonly property bool thumbnailExpected:
-        (entry.imageIdUrl !== "" || (entry.isImage
+        entry.panelRoot.controller.thumbnailsEnabled
+        && (entry.imageIdUrl !== "" || (entry.isImage
             && (entry.visualModel.imageDimensionsKnown
                 || (entry.model && entry.model.fullSize
                     && entry.model.fullSize.width > 0 && entry.model.fullSize.height > 0))))
@@ -79,8 +80,9 @@ Item {
         anchors.centerIn: parent
         readonly property real nominalIconSize:
             preview.entry.detailsMode || preview.entry.columnsMode
-            ? Math.min(parent.width,
-                       preview.entry.panelRoot.detailsIconSize)
+            ? Math.max(0, parent.width
+                       - (preview.entry.panelRoot.detailsIconSlotSize
+                          - preview.entry.panelRoot.detailsIconSize))
             : preview.entry.iconsMode
             ? Math.max(0, Math.min(parent.width, parent.height))
             : Math.max(0, Math.min(parent.width, parent.height) * 0.55)
@@ -103,7 +105,10 @@ Item {
                  ? 1 : 0.78
         visible: (lucideSource
                   || (systemFileSource
-                      && !preview.thumbnailReady))
+                      && !preview.thumbnailReady
+                      && (!previewContent.item
+                          || previewContent.item.sourceStatus
+                             !== Image.Ready)))
                  && !preview.thumbnailExpected
                  && fallbackIcon.modelIconSource.toString() !== ""
                  && (!preview.entry.highlightMarker || lucideSource)
@@ -124,6 +129,7 @@ Item {
                 / preview.entry.renderDpr
         property url source:
             preview.activePresentation
+                && preview.entry.panelRoot.controller.thumbnailsEnabled
                 && (!preview.entry.masonryMode || preview.entry.masonryGeometryReady)
                 ? preview.entry.imageIdUrl : ""
         visible: thumbnail.source.toString() !== ""

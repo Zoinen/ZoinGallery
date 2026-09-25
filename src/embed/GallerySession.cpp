@@ -40,7 +40,9 @@ public:
     qreal panelScrollOffset = 0;
     QString panelViewportCursorEntryId;
     QHash<QString, PanelViewportState> panelViewportStates;
+    QHash<QString, QStringList> collapsedGroupStates;
     bool panelViewportStateAvailable = false;
+    bool thumbnailsEnabled = true;
     bool applyingPanelViewportState = false;
     int currentIndex = -1;
     bool viewerOpen = false;
@@ -271,6 +273,44 @@ void GallerySession::setPanelViewportCursorEntryId(const QString &entryId) {
 
 bool GallerySession::panelViewportStateAvailable() const {
     return d->panelViewportStateAvailable;
+}
+
+bool GallerySession::thumbnailsEnabled() const {
+    return d->thumbnailsEnabled;
+}
+
+void GallerySession::setThumbnailsEnabled(bool enabled) {
+    if (d->thumbnailsEnabled == enabled) {
+        return;
+    }
+    d->thumbnailsEnabled = enabled;
+    if (d->external) {
+        d->external->setThumbnailsEnabled(enabled);
+    }
+    emit thumbnailsEnabledChanged();
+}
+
+QStringList GallerySession::collapsedGroupKeys(
+    const QString &stateKey) const {
+    return stateKey.isEmpty()
+        ? QStringList()
+        : d->collapsedGroupStates.value(stateKey);
+}
+
+void GallerySession::setCollapsedGroupKeys(
+    const QString &stateKey, const QStringList &keys) {
+    if (stateKey.isEmpty()) {
+        return;
+    }
+    QStringList normalized = keys;
+    normalized.removeDuplicates();
+    normalized.sort();
+    constexpr qsizetype MaxRememberedGroupStates = 512;
+    if (!d->collapsedGroupStates.contains(stateKey)
+        && d->collapsedGroupStates.size() >= MaxRememberedGroupStates) {
+        d->collapsedGroupStates.erase(d->collapsedGroupStates.begin());
+    }
+    d->collapsedGroupStates.insert(stateKey, std::move(normalized));
 }
 
 void GallerySession::rememberPanelViewportStateForCurrentPath() {

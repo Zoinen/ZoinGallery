@@ -17,8 +17,10 @@ private:
     bool rowNeedsMetadata(int row) const;
     bool hasEligibleRow(const QList<int> &rows) const;
     bool prepareCapacity();
-    void appendRow(int row, QList<Request> &requests);
-    void drainRows(QList<int> &rows, QList<Request> &requests);
+    void appendRow(int row, QList<Request> &requests,
+                   bool panelThumbnailRequest);
+    void drainRows(QList<int> &rows, QList<Request> &requests,
+                   bool panelThumbnailRequest);
     void drainCurrentViewer(QList<int> &rows, QList<Request> &requests);
     bool serviceProbeBarrier();
     void collectCatalogRows();

@@ -25,6 +25,9 @@ public:
 
     QString path() const override;
     bool isViewerRequest() const override;
+    bool isPanelThumbnailRequest() const override {
+        return _request.panelThumbnailRequest;
+    }
     bool isHighPriority() const override { return _request.highPriority; }
     QString requestNamespace() const override {
         return _request.requestNamespace;

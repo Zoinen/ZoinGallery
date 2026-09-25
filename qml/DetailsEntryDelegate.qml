@@ -15,6 +15,11 @@ Item {
         return entry.panelRoot.fileFieldPresentationHelper.detailsPixelExtent(value)
     }
 
+    FontMetrics {
+        id: nameMetrics
+        font: baseNameText.font
+    }
+
     Item {
         id: detailsRow
         anchors.fill: parent
@@ -24,10 +29,10 @@ Item {
         Item {
             id: detailsIconSlot
             objectName: "galleryDetailsIconSlot-" + content.entry.viewIndex
-            x: content.snap(content.entry.panelRoot.detailsRowInset)
-            y: content.snap((parent.height - height) / 2)
-            width: content.snap(content.entry.panelRoot.detailsIconSlotSize)
-            height: width
+            x: content.entry.effectivePreviewRect.x
+            y: content.entry.effectivePreviewRect.y
+            width: content.entry.effectivePreviewRect.width
+            height: content.entry.effectivePreviewRect.height
         }
 
         Text {
@@ -55,7 +60,11 @@ Item {
                     content.entry.entryId)
                 ? Text.StyledText : Text.PlainText
             color: content.entry.itemTextColor
-            elide: Text.ElideMiddle
+            // Qt supports multi-line elision only at the right edge. Keep
+            // middle elision for the compact, single-line presentation.
+            maximumLineCount: Math.max(1, Math.floor((content.height - 4) / nameMetrics.height))
+            wrapMode: maximumLineCount > 1 ? Text.Wrap : Text.NoWrap
+            elide: maximumLineCount > 1 ? Text.ElideRight : Text.ElideMiddle
             font.pixelSize:
                 content.entry.panelRoot.detailsNameFontPixelSize
         }

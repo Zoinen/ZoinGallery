@@ -107,6 +107,12 @@ QString GalleryIconResolver::fallbackSource(
 
 bool GalleryIconResolver::isMonochrome(
     const QString &semanticKey, const QString &source) const {
+    // A native file-provider URL is full-colour even when stale semantic
+    // metadata still accompanies it.  Keep source classification authoritative
+    // so QML cannot put the Lucide mask path on top of the native image.
+    if (isSystemFileSource(source)) {
+        return false;
+    }
     return !normalizedKey(semanticKey).isEmpty()
         || !keyFromSource(source).isEmpty()
         || source.startsWith(QStringLiteral("qrc:/ZoinGallery/resources/"));

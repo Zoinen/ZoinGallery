@@ -439,7 +439,7 @@ qreal GalleryDensityPolicy::normalized(
         return qBound<qreal>(30, density, 500);
     case GalleryPresentationMode::Columns:
     case GalleryPresentationMode::Details:
-        return qBound<qreal>(22, density, 72);
+        return qBound<qreal>(22, density, 216);
     case GalleryPresentationMode::Grid:
         return qBound<qreal>(96, density, 320);
     case GalleryPresentationMode::Icons:

@@ -8387,6 +8387,68 @@ private slots:
         runtime->shutdown();
     }
 
+    void deferredFacadesFollowEntriesThroughIncrementalInserts_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::newRow("grid") << QStringLiteral("grid");
+        QTest::newRow("masonry") << QStringLiteral("masonry");
+    }
+
+    void deferredFacadesFollowEntriesThroughIncrementalInserts() {
+        QFETCH(QString, mode);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("deferred-inserts");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(8), 1));
+        QObject *panel = createPanel(view, session, "deferredInsertsSession", mode);
+        QVERIFY(panel);
+        panel->setProperty("width", 1280);
+        panel->setProperty("height", 900);
+        view.resize(1280, 900);
+        // Isolate facade scheduling from filesystem and decoder throughput.
+        session->setThumbnailsEnabled(false);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        layout->setDensity(60);
+        const auto readyVisibleRows = [&]() {
+            const QVariantList visible = layout->visibleIndexes();
+            if (visible.isEmpty()) return false;
+            for (const QVariant &value : visible) {
+                const int row = value.toInt();
+                const auto rect = layout->indexGeometry(row);
+                auto *slot = qobject_cast<BrickItem *>(layout->itemAt(
+                    rect.center().x(), rect.center().y()));
+                if (!slot || slot->viewIndex() != row
+                    || !slot->visualFacadeReady()) return false;
+                const auto *image = slot->property("model").value<ImageFile *>();
+                if (!image || image->fileName() != session->model()->index(row, 0)
+                    .data(ZoinGallery::ExternalCatalogModel::EntryNameRole)
+                    .toString()) return false;
+            }
+            return true;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(readyVisibleRows(), 3000);
+
+        const QVariantList finalCatalog = prefixedCatalog("incoming", 144);
+        const QVariantMap state{{"currentPath", "/incoming"}, {"metadataDeferred", true}};
+        // The cached snapshot and its refresh land before the first swap.
+        // Inserting the missing prefix shifts the same entries many times;
+        // that must not create a timer-sized delay per obsolete row identity.
+        QVERIFY(session->applyExternalCatalog(finalCatalog.mid(64, 64), 2, state));
+        QVERIFY(session->applyExternalCatalog(finalCatalog, 3, state));
+        session->setCurrentIndex(0);
+        layout->setContentY(0);
+        QVERIFY2(layout->visibleIndexes().size() >= 30,
+                 qPrintable(QString::number(layout->visibleIndexes().size())));
+        QElapsedTimer elapsed;
+        elapsed.start();
+        view.update();
+        QTRY_VERIFY_WITH_TIMEOUT(readyVisibleRows(), 750);
+        qInfo() << "Deferred facade convergence after prefix inserts ms" << elapsed.elapsed();
+        runtime->shutdown();
+    }
+
     void masonryCatalogResetRetainsSlotsAndBoundsMaterialization() {
         QQuickView view;
         ZoinGallery::RuntimeOptions runtimeOptions;

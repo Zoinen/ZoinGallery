@@ -48,6 +48,14 @@ catalogs without that role retain their existing behavior. Cached dimension
 batches still apply atomically without waiting for uncached rows. Opt-in
 `F4_MEDIA_TIMING_TRACE` includes `qt.gallery.masonry.row_metadata_commit` events.
 
+Deferred delegate facades are queued by stable entry ID, with the current row
+updated in place during incremental catalog inserts and moves. Superseded or
+offscreen work does not consume the four-facade batch limit; the elapsed-time
+budget still bounds each pass. This preserves the first-frame snapshot and
+avoids delaying cached thumbnails behind obsolete row positions. Opt-in media
+tracing reports `qt.gallery.facade.batch` with completed, skipped and remaining
+work counts.
+
 In natural-size masonry, a decoded or cached thumbnail becomes visible only
 after its row geometry is committed. The publication gate also covers reused
 delegates and cached folder reentry, including settled metadata failures whose

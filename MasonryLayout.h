@@ -642,8 +642,8 @@ private:
     QMetaObject::Connection _delegateFrameSwappedConnection;
     QMetaObject::Connection _delegateAfterSynchronizingConnection;
     std::atomic<quint64> _delegateSynchronizedGeneration{0};
-    QList<QPair<int, QString>> _delegateMaterializationRows;
-    QHash<int, QString> _delegateMaterializationEntries;
+    QList<QString> _delegateMaterializationRows;
+    QHash<QString, int> _delegateMaterializationEntries;
     qsizetype _delegateMaterializationCursor = 0;
 
     QAbstractItemModel *_model;

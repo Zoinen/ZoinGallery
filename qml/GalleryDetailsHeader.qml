@@ -14,6 +14,8 @@ Rectangle {
     required property real separatorWidth
     required property real separatorVerticalMargin
     required property real textPixelSize
+    property real columnInset: 0
+    property real columnRightInset: columnInset
     property real devicePixelRatio: 1
     property point pixelGridOffset: Qt.point(0, 0)
     transform: Translate {
@@ -45,20 +47,24 @@ Rectangle {
             total += Math.max(1, Number(columns[index].width || 1))
         return Math.max(1, total)
     }
+    readonly property real columnContentWidth:
+        Math.max(0, width - columnInset - columnRightInset)
 
     function columnX(index) {
         let before = 0
         for (let candidate = 0; candidate < index; ++candidate)
             before += Math.max(1, Number(columns[candidate].width || 1))
-        const local = Math.round(width * before / totalColumnWidth)
+        const local = Math.round(columnContentWidth
+                                 * before / totalColumnWidth)
         const dpr = Math.max(0.01, Number(devicePixelRatio) || 1)
-        return Math.round(local * dpr) / dpr
+        return Math.round((columnInset + local) * dpr) / dpr
     }
 
     function columnWidth(index) {
         const start = columnX(index)
         return index === columns.length - 1
-                ? width - start : columnX(index + 1) - start
+                ? columnInset + columnContentWidth - start
+                : columnX(index + 1) - start
     }
 
     function pointerXInHeader(item, itemX, itemY) {
@@ -68,29 +74,29 @@ Rectangle {
     function minimumColumnPixels(column) {
         const desired = String(column.id || column.role || "") === "name"
                 ? 96 : 44
-        const perColumn = width / Math.max(1, columns.length)
+        const perColumn = columnContentWidth / Math.max(1, columns.length)
         return Math.min(desired, Math.max(1, perColumn * 0.7))
     }
 
     function resizedColumnsForDrag(startWidths, boundaryIndex, deltaPixels) {
         const totalWeight = startWidths.reduce(
                     (total, value) => total + value, 0)
-        if (width <= 0 || totalWeight <= 0)
+        if (columnContentWidth <= 0 || totalWeight <= 0)
             return []
         const leftIndex = boundaryIndex
         const rightIndex = boundaryIndex + 1
         const pairWeight = startWidths[leftIndex] + startWidths[rightIndex]
         let minimumLeft = minimumColumnPixels(columns[leftIndex])
-                * totalWeight / width
+                * totalWeight / columnContentWidth
         let minimumRight = minimumColumnPixels(columns[rightIndex])
-                * totalWeight / width
+                * totalWeight / columnContentWidth
         if (minimumLeft + minimumRight > pairWeight) {
             const ratio = pairWeight / (minimumLeft + minimumRight)
             minimumLeft *= ratio
             minimumRight *= ratio
         }
         const desiredLeft = startWidths[leftIndex]
-                + deltaPixels * totalWeight / width
+                + deltaPixels * totalWeight / columnContentWidth
         const nextLeft = Math.round(Math.max(minimumLeft,
             Math.min(pairWeight - minimumRight, desiredLeft)))
         const nextRight = Math.round(pairWeight - nextLeft)

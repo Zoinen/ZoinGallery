@@ -669,12 +669,18 @@ if(BUILD_TESTING)
     add_test(NAME MasonryDetailsFileFieldsPixelGridTest
         COMMAND ZoinGalleryMasonryLayoutModesTests
             viewportAndBricksStayOnPhysicalPixelGridAt175Percent
+            detailsTextColumnsRespectEmbeddedInsetsAt175Percent
+            detailsRowsLeaveScrollbarGutterAt175Percent
             detailsFileFieldLeavesStayOnPhysicalPixelGridAt175Percent)
     set_tests_properties(MasonryDetailsFileFieldsPixelGridTest PROPERTIES
         ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic;QT_SCALE_FACTOR=1.75"
         LABELS "visual;dpr"
         TIMEOUT 30)
+    if(WIN32)
+        set_property(TEST MasonryDetailsFileFieldsPixelGridTest APPEND PROPERTY
+            ENVIRONMENT "QT_QPA_FONTDIR=$ENV{WINDIR}/Fonts")
+    endif()
     add_test(NAME MasonryGroupHeadingsPixelGridTest
         COMMAND ZoinGalleryMasonryLayoutModesTests
             groupHeadingLeavesStayOnPhysicalPixelGridAt175Percent)

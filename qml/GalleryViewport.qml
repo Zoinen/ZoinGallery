@@ -53,16 +53,11 @@ Item {
             panel.fileFieldPresentationHelper.detailsPixelExtent(value)
         const horizontalPadding = pixelInset(
                     embeddingInset + (details ? 0 : 6))
-        // Details rows fill their available width, unlike the spaced tiles
-        // whose scrollbar already sits in an inter-item lane. Reserve enough
-        // trailing room to keep the overlay bar outside the row and leave a
-        // four-pixel gap between the row and the bar's hit area.
-        const detailsScrollBarLane = details && galleryLayout.needScroll
-                ? pixelInset(Number(panel.detailsScrollBarWidth || 16)
-                             + galleryLayout.spacing / 2 + 8)
-                : 0
-        const rightPadding = pixelInset(
-                    horizontalPadding + detailsScrollBarLane)
+        // The edge-aligned scrollbar owns its full hit area. Its internal
+        // thumb inset supplies the visual gap without an extra content gutter.
+        const rightPadding = details && galleryLayout.needScroll
+                ? pixelInset(Number(panel.detailsScrollBarWidth || 16))
+                : horizontalPadding
 
         panel.beginPresentationStateUpdate(Boolean(switchingMode))
         try {

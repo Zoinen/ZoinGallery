@@ -6761,6 +6761,7 @@ private slots:
         QVERIFY(panel);
         QVERIFY(panel->setProperty("devicePixelRatio", view.devicePixelRatio()));
         QVERIFY(panel->setProperty("animateLayoutChanges", false));
+        QVERIFY(panel->setProperty("contentHorizontalInset", 8));
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
             QStringLiteral("galleryViewportItem"));
@@ -6792,12 +6793,14 @@ private slots:
             << rowRight * dpr
             << " scrollbar-left-physical=" << scrollBarLeft * dpr
             << " gutter-physical=" << gutterPhysical;
-        QVERIFY2(gutterPhysical >= qRound(4 * dpr),
-                 qPrintable(QStringLiteral(
-                     "selected row right=%1 physical px, scrollbar left=%2 physical px, gutter=%3 px")
-                     .arg(rowRight * dpr, 0, 'f', 3)
-                     .arg(scrollBarLeft * dpr, 0, 'f', 3)
-                     .arg(gutterPhysical, 0, 'f', 3)));
+        const qreal panelRight = panelItem->mapToItem(
+            view.contentItem(), QPointF(panelItem->width(), 0)).x();
+        const qreal scrollBarRight = scrollBar->mapToItem(
+            view.contentItem(), QPointF(scrollBar->width(), 0)).x();
+        qInfo() << "DETAILS_SCROLLBAR_OUTER_GAP_DPR175"
+                << (panelRight - scrollBarRight) * dpr;
+        QVERIFY(qAbs(gutterPhysical) < 0.001);
+        QVERIFY(qAbs((panelRight - scrollBarRight) * dpr) < 0.001);
 
         const auto verifyLeaf = [&](const QString &objectName) {
             QQuickItem *leaf = findVisualItem(panelItem, objectName);
@@ -6825,6 +6828,7 @@ private slots:
         };
         for (const QString &leaf : {
                  QStringLiteral("gallerySelectionSurface-0"),
+                 QStringLiteral("galleryScrollBarTrack"),
                  QStringLiteral("galleryDetailsIconSlot-0"),
                  QStringLiteral("galleryBaseName-0"),
                  QStringLiteral("gallerySize-0"),
@@ -6833,6 +6837,19 @@ private slots:
              }) {
             verifyLeaf(leaf);
         }
+
+        auto *handle = scrollBar->findChild<QQuickItem *>(
+            QStringLiteral("galleryScrollBarHandle"));
+        QVERIFY(handle);
+        const QPointF handleOrigin = handle->mapToItem(view.contentItem(), QPointF());
+        for (qreal coordinate : {handleOrigin.x(), handleOrigin.y()})
+            QVERIFY(qAbs(coordinate * dpr - qRound(coordinate * dpr)) < 0.001);
+        QCOMPARE(handle->mapToItem(view.contentItem(), QPointF(1, 0)) - handleOrigin,
+                 QPointF(1, 0));
+        QCOMPARE(handle->mapToItem(view.contentItem(), QPointF(0, 1)) - handleOrigin,
+                 QPointF(0, 1));
+        QCOMPARE((handleOrigin.x() - rowRight) * dpr, qreal(7));
+        QCOMPARE((panelRight - handleOrigin.x() - handle->width()) * dpr, qreal(7));
 
         const QImage capture = view.grabWindow();
         QVERIFY(!capture.isNull());
@@ -6851,6 +6868,15 @@ private slots:
         QVERIFY(capture.save(visualCapturePath(
             QStringLiteral("gallery-details-scrollbar-gutter-175.png"),
             directory.filePath(QStringLiteral("details-scrollbar-gutter.png")))));
+        const QPoint grab = scrollBar->mapToScene(
+            QPointF(scrollBar->width() / 2, 10)).toPoint();
+        QTest::mouseMove(&view, grab);
+        QTRY_VERIFY(scrollBar->property("hovered").toBool());
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, grab);
+        QTRY_VERIFY(scrollBar->property("pressed").toBool());
+        QTest::mouseMove(&view, grab + QPoint(0, 80));
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, grab + QPoint(0, 80));
+        QTRY_VERIFY(layout->contentY() > 0);
         runtime->shutdown();
     }
 
@@ -7761,9 +7787,9 @@ private slots:
                  QColor(QStringLiteral("#ffffff")));
         QTRY_VERIFY_WITH_TIMEOUT(scrollBar->isVisible(), 3000);
         QCOMPARE(scrollBar->width(), 16.0);
-        QCOMPARE(scrollBar->x(), 616.0);
+        QCOMPARE(scrollBar->x(), 624.0);
         const qreal rowRight = layout->width() - layout->paddingRight();
-        QCOMPARE(scrollBar->x() - rowRight, 4.0);
+        QCOMPARE(scrollBar->x() - rowRight, 0.0);
         QCOMPARE(layout->width(), panelItem->width());
     }
 

@@ -6605,6 +6605,7 @@ private slots:
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         QVERIFY(layout && panelItem);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 4, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!layout->needScroll(), 5000);
         QQuickItem *sizeText = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT(
             (sizeText = findVisualItem(panelItem,
@@ -6615,10 +6616,35 @@ private slots:
 
         QQuickItem *row = sizeText->parentItem();
         QVERIFY(row);
+        QQuickItem *selection = findVisualItem(
+            panelItem, QStringLiteral("gallerySelectionSurface-0"));
+        QVERIFY(selection);
         QQuickItem *iconSlot = findVisualItem(
             panelItem, QStringLiteral("galleryDetailsIconSlot-0"));
         QVERIFY(iconSlot);
         const qreal dpr = view.devicePixelRatio();
+        const qreal viewportLeft = layout->mapToItem(
+            view.contentItem(), QPointF()).x();
+        const qreal viewportRight = layout->mapToItem(
+            view.contentItem(), QPointF(layout->width(), 0)).x();
+        const qreal selectionLeft = selection->mapToItem(
+            view.contentItem(), QPointF()).x();
+        const qreal selectionRight = selection->mapToItem(
+            view.contentItem(), QPointF(selection->width(), 0)).x();
+        const qreal selectionLeftMarginPhysical =
+            (selectionLeft - viewportLeft) * dpr;
+        const qreal selectionRightMarginPhysical =
+            (viewportRight - selectionRight) * dpr;
+        qInfo().nospace()
+            << "DETAILS_SELECTION_MARGINS_DPR175 left-physical="
+            << selectionLeftMarginPhysical
+            << " right-physical=" << selectionRightMarginPhysical;
+        QVERIFY2(qAbs(selectionLeftMarginPhysical
+                       - selectionRightMarginPhysical) < 0.001,
+                 qPrintable(QStringLiteral(
+                     "selected row margins differ: left=%1 physical px, right=%2 physical px")
+                     .arg(selectionLeftMarginPhysical, 0, 'f', 3)
+                     .arg(selectionRightMarginPhysical, 0, 'f', 3)));
         const qreal rowLeft = row->mapToItem(
             view.contentItem(), QPointF()).x();
         const qreal sizeRight = sizeText->mapToItem(

@@ -57,7 +57,7 @@ Item {
         // whose scrollbar already sits in an inter-item lane. Reserve enough
         // trailing room to keep the overlay bar outside the row and leave a
         // four-pixel gap between the row and the bar's hit area.
-        const detailsScrollBarLane = details
+        const detailsScrollBarLane = details && galleryLayout.needScroll
                 ? pixelInset(Number(panel.detailsScrollBarWidth || 16)
                              + galleryLayout.spacing / 2 + 8)
                 : 0
@@ -90,6 +90,15 @@ Item {
                              "layoutWidth": galleryLayout.width})
         } finally {
             panel.endPresentationStateUpdate(true)
+        }
+    }
+
+    Connections {
+        target: galleryLayout
+
+        function onNeedScrollChanged() {
+            if (viewportRoot.panelRoot.presentationMode === "details")
+                viewportRoot.applyPresentationState(false, "details")
         }
     }
 

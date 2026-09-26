@@ -107,6 +107,22 @@ QtObject {
         return Math.round(Number(value || 0) * dpr) / dpr
     }
 
+    function detailsRowContentInset() {
+        return detailsPixelExtent(Math.max(
+            0, Number(panelRoot.detailsRowInset || 0)))
+    }
+
+    function detailsContentWidth() {
+        const layout = panelRoot.galleryLayout
+        const availableWidth = layout
+                ? Math.max(0, Number(layout.width || 0)
+                           - Number(layout.paddingLeft || 0)
+                           - Number(layout.paddingRight || 0))
+                : Math.max(0, Number(panelRoot.width || 0))
+        return detailsPixelExtent(Math.max(
+            0, availableWidth - detailsRowContentInset() * 2))
+    }
+
     function detailsColumnX(index) {
         const columns = columnSchema || []
         let total = 0
@@ -117,16 +133,16 @@ QtObject {
             if (candidate < index)
                 before += extent
         }
-        const local = Math.round(detailsPixelExtent(panelRoot.width)
+        const local = Math.round(detailsContentWidth()
                                  * before / Math.max(1, total))
-        return detailsPixelExtent(local)
+        return detailsPixelExtent(detailsRowContentInset() + local)
     }
 
     function detailsColumnWidth(index) {
         const columns = columnSchema || []
         const start = detailsColumnX(index)
         return index === columns.length - 1
-                ? detailsPixelExtent(panelRoot.width) - start
+                ? detailsRowContentInset() + detailsContentWidth() - start
                 : detailsColumnX(index + 1) - start
     }
 

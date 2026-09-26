@@ -30,7 +30,9 @@ Item {
             // spacing. Center the thumb in that lane, not at a fixed inset.
             const gap = Math.max(width, chromeRoot.layout.paddingRight
                                 + chromeRoot.layout.spacing / 2)
-            const localX = parent.width - (gap + width) / 2
+            const localX = chromeRoot.presentationMode === "details"
+                    ? parent.width - width
+                    : parent.width - (gap + width) / 2
             let dependency = 0
             for (let item = chromeRoot; item; item = item.parent)
                 dependency += item.x + item.y

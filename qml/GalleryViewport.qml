@@ -49,7 +49,15 @@ Item {
                 || mode === "grid" || mode === "icons"
         const embeddingInset = Math.max(
                     0, Number(contentHorizontalInset) || 0)
-        const horizontalPadding = embeddingInset + (details ? 0 : 6)
+        const pixelInset = value =>
+            panel.fileFieldPresentationHelper.detailsPixelExtent(value)
+        const horizontalPadding = pixelInset(
+                    embeddingInset + (details ? 0 : 6))
+        // The edge-aligned scrollbar owns its full hit area. Its internal
+        // thumb inset supplies the visual gap without an extra content gutter.
+        const rightPadding = details && galleryLayout.needScroll
+                ? pixelInset(Number(panel.detailsScrollBarWidth || 16))
+                : horizontalPadding
 
         panel.beginPresentationStateUpdate(Boolean(switchingMode))
         try {
@@ -62,7 +70,7 @@ Item {
                     || verticalContentInset ? 0 : 6
             galleryLayout.anchors.rightMargin = 0
             galleryLayout.paddingLeft = horizontalPadding
-            galleryLayout.paddingRight = horizontalPadding
+            galleryLayout.paddingRight = rightPadding
             galleryLayout.paddingTop = verticalContentInset ? 6 : 0
             galleryLayout.paddingBottom = verticalContentInset ? 6 : 0
             galleryLayout.presentationMode = nativePresentationMode(mode)
@@ -72,11 +80,20 @@ Item {
                             {"fix": "[FIX:panel-content-inset]",
                              "embeddingInset": embeddingInset,
                              "paddingLeft": horizontalPadding,
-                             "paddingRight": horizontalPadding,
+                             "paddingRight": rightPadding,
                              "layoutX": galleryLayout.x,
                              "layoutWidth": galleryLayout.width})
         } finally {
             panel.endPresentationStateUpdate(true)
+        }
+    }
+
+    Connections {
+        target: galleryLayout
+
+        function onNeedScrollChanged() {
+            if (viewportRoot.panelRoot.presentationMode === "details")
+                viewportRoot.applyPresentationState(false, "details")
         }
     }
 
@@ -180,6 +197,14 @@ Item {
         pixelGridOffset: galleryLayout.parentPixelGridOffset
         z: 5
         columnSchema: viewportRoot.panelRoot.columnSchema
+        columnInset:
+            viewportRoot.panelRoot.fileFieldPresentationHelper.detailsPixelExtent(
+                galleryLayout.paddingLeft
+                + viewportRoot.panelRoot.fileFieldPresentationHelper.detailsRowContentInset())
+        columnRightInset:
+            viewportRoot.panelRoot.fileFieldPresentationHelper.detailsPixelExtent(
+                galleryLayout.paddingRight
+                + viewportRoot.panelRoot.fileFieldPresentationHelper.detailsRowContentInset())
         hoverColor: viewportRoot.panelRoot.headerHoverColor
         textColor: viewportRoot.panelRoot.headerTextColor
         mutedTextColor: viewportRoot.panelRoot.mutedColor

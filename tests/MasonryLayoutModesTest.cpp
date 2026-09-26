@@ -6541,6 +6541,345 @@ private slots:
         runtime->shutdown();
     }
 
+    void detailsTextColumnsRespectEmbeddedInsetsAt175Percent() {
+        QQuickView view;
+        if (qAbs(view.devicePixelRatio() - 1.75) > 0.001) {
+            QSKIP("Run this regression with QT_SCALE_FACTOR=1.75");
+        }
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("details-embedded-insets-pixel-grid"));
+        QVERIFY(session);
+        QVariantList catalog;
+        for (int index = 0; index < 4; ++index) {
+            catalog.append(QVariantMap{
+                {QStringLiteral("entryId"),
+                 QStringLiteral("inset-photo-%1").arg(index)},
+                {QStringLiteral("index"), index},
+                {QStringLiteral("name"),
+                 QStringLiteral("IMG_20260912_%1.dng").arg(index)},
+                {QStringLiteral("isDir"), false},
+                {QStringLiteral("isImage"), false},
+                {QStringLiteral("size"), qint64(47097052 + index)},
+                {QStringLiteral("displayBaseName"),
+                 QStringLiteral("IMG_20260912_%1").arg(index)},
+                {QStringLiteral("displayExtension"), QStringLiteral("dng")},
+                {QStringLiteral("sizeText"), QStringLiteral("47 097 052")},
+                {QStringLiteral("displayFields"),
+                 QVariantMap{{QStringLiteral("exif.iso"), 800}}},
+            });
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("detailsInsetSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("contentHorizontalInset", 8.0);
+        panel->setProperty("showDetailsHeader", false);
+        panel->setProperty("separateFileExtensions", true);
+        panel->setProperty("animateLayoutChanges", false);
+        panel->setProperty("fileFieldDescriptors", QVariantList{
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("exif.iso")},
+                        {QStringLiteral("kind"), QStringLiteral("integer")}},
+        });
+        panel->setProperty("columnSchema", QVariantList{
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("name")},
+                        {QStringLiteral("role"), QStringLiteral("name")},
+                        {QStringLiteral("width"), 42}},
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("size")},
+                        {QStringLiteral("role"), QStringLiteral("size")},
+                        {QStringLiteral("width"), 14}},
+        });
+        panel->setProperty("width", 640.0);
+        panel->setProperty("height", 360.0);
+        view.resize(640, 360);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        QVERIFY(layout && panelItem);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 4, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!layout->needScroll(), 5000);
+        QQuickItem *sizeText = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (sizeText = findVisualItem(panelItem,
+                QStringLiteral("gallerySize-0"))) != nullptr,
+            5000);
+        QTRY_VERIFY_WITH_TIMEOUT(sizeText->isVisible(), 5000);
+        QTest::qWait(100);
+
+        QQuickItem *row = sizeText->parentItem();
+        QVERIFY(row);
+        QQuickItem *selection = findVisualItem(
+            panelItem, QStringLiteral("gallerySelectionSurface-0"));
+        QVERIFY(selection);
+        QQuickItem *iconSlot = findVisualItem(
+            panelItem, QStringLiteral("galleryDetailsIconSlot-0"));
+        QVERIFY(iconSlot);
+        const qreal dpr = view.devicePixelRatio();
+        const qreal viewportLeft = layout->mapToItem(
+            view.contentItem(), QPointF()).x();
+        const qreal viewportRight = layout->mapToItem(
+            view.contentItem(), QPointF(layout->width(), 0)).x();
+        const qreal selectionLeft = selection->mapToItem(
+            view.contentItem(), QPointF()).x();
+        const qreal selectionRight = selection->mapToItem(
+            view.contentItem(), QPointF(selection->width(), 0)).x();
+        const qreal selectionLeftMarginPhysical =
+            (selectionLeft - viewportLeft) * dpr;
+        const qreal selectionRightMarginPhysical =
+            (viewportRight - selectionRight) * dpr;
+        qInfo().nospace()
+            << "DETAILS_SELECTION_MARGINS_DPR175 left-physical="
+            << selectionLeftMarginPhysical
+            << " right-physical=" << selectionRightMarginPhysical;
+        QVERIFY2(qAbs(selectionLeftMarginPhysical
+                       - selectionRightMarginPhysical) < 0.001,
+                 qPrintable(QStringLiteral(
+                     "selected row margins differ: left=%1 physical px, right=%2 physical px")
+                     .arg(selectionLeftMarginPhysical, 0, 'f', 3)
+                     .arg(selectionRightMarginPhysical, 0, 'f', 3)));
+        const qreal rowLeft = row->mapToItem(
+            view.contentItem(), QPointF()).x();
+        const qreal sizeRight = sizeText->mapToItem(
+            view.contentItem(), QPointF(sizeText->width(), 0)).x();
+        const qreal rowRight = row->mapToItem(
+            view.contentItem(), QPointF(row->width(), 0)).x();
+        const qreal iconLeft = iconSlot->mapToItem(
+            view.contentItem(), QPointF()).x();
+        const qreal leftInsetPhysical = (iconLeft - rowLeft) * dpr;
+        const qreal rightInsetPhysical = (rowRight - sizeRight) * dpr;
+        qInfo().nospace()
+            << "DETAILS_INSET_DPR175 size-right-physical=" << sizeRight * dpr
+            << " row-right-physical=" << rowRight * dpr
+            << " overflow-physical=" << (sizeRight - rowRight) * dpr
+            << " left-inset-physical=" << leftInsetPhysical
+            << " right-inset-physical=" << rightInsetPhysical;
+        QVERIFY2(sizeRight <= rowRight + 0.001,
+                 qPrintable(QStringLiteral(
+                     "size column right=%1 physical px, row right=%2 physical px")
+                     .arg(sizeRight * dpr, 0, 'f', 3)
+                     .arg(rowRight * dpr, 0, 'f', 3)));
+        QVERIFY2(qAbs(leftInsetPhysical - rightInsetPhysical) < 0.001,
+                 qPrintable(QStringLiteral(
+                     "left inner inset=%1 physical px, right inner inset=%2 physical px")
+                     .arg(leftInsetPhysical, 0, 'f', 3)
+                     .arg(rightInsetPhysical, 0, 'f', 3)));
+
+        const auto verifyLeaf = [&](const QString &objectName) {
+            QQuickItem *leaf = findVisualItem(panelItem, objectName);
+            QVERIFY2(leaf, qPrintable(objectName));
+            QTRY_VERIFY_WITH_TIMEOUT(leaf->isVisible(), 5000);
+            const QPointF origin = leaf->mapToItem(
+                view.contentItem(), QPointF());
+            for (qreal coordinate : {origin.x(), origin.y()}) {
+                QVERIFY2(qAbs(coordinate * dpr - qRound(coordinate * dpr))
+                             < 0.001,
+                         qPrintable(QStringLiteral("%1 physical origin=%2")
+                             .arg(objectName)
+                             .arg(coordinate * dpr, 0, 'f', 6)));
+            }
+            for (qreal extent : {leaf->width(), leaf->height()}) {
+                QVERIFY2(qAbs(extent * dpr - qRound(extent * dpr)) < 0.001,
+                         qPrintable(objectName));
+            }
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0))
+                         - origin,
+                     QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1))
+                         - origin,
+                     QPointF(0, 1));
+            const qreal leafRight = leaf->mapToItem(
+                view.contentItem(), QPointF(leaf->width(), 0)).x();
+            QVERIFY2(leafRight <= rowRight + 0.001,
+                     qPrintable(QStringLiteral("%1 exceeds row right edge")
+                         .arg(objectName)));
+        };
+        for (const QString &leaf : {
+                 QStringLiteral("galleryBaseName-0"),
+                 QStringLiteral("galleryExtension-0"),
+                 QStringLiteral("gallerySize-0"),
+             }) {
+            verifyLeaf(leaf);
+        }
+        // Also cover a metadata Text leaf after Size, as happens when the
+        // embedder adds file-field columns to the same Details row.
+        panel->setProperty("columnSchema", QVariantList{
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("name")},
+                        {QStringLiteral("role"), QStringLiteral("name")},
+                        {QStringLiteral("width"), 42}},
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("size")},
+                        {QStringLiteral("role"), QStringLiteral("size")},
+                        {QStringLiteral("width"), 14}},
+            QVariantMap{{QStringLiteral("id"), QStringLiteral("exif.iso")},
+                        {QStringLiteral("role"), QStringLiteral("exif.iso")},
+                        {QStringLiteral("width"), 14},
+                        {QStringLiteral("alignment"), QStringLiteral("right")}},
+        });
+        QQuickItem *fieldText = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (fieldText = findVisualItem(panelItem,
+                QStringLiteral("galleryFileField-exif.iso-0"))) != nullptr,
+            5000);
+        verifyLeaf(QStringLiteral("galleryFileField-exif.iso-0"));
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QVERIFY(capture.save(visualCapturePath(
+            QStringLiteral("gallery-details-size-inset-175.png"),
+            directory.filePath(QStringLiteral("details-size-inset.png")))));
+        runtime->shutdown();
+    }
+
+    void detailsRowsLeaveScrollbarGutterAt175Percent() {
+        QQuickView view;
+        if (qAbs(view.devicePixelRatio() - 1.75) > 0.001) {
+            QSKIP("Run this regression with QT_SCALE_FACTOR=1.75");
+        }
+        view.resize(640, 360);
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(
+            view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("details-scrollbar-gutter-pixel-grid"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(200), 1));
+        session->setCurrentIndex(0);
+
+        QObject *panel = createPanel(
+            view, session, QStringLiteral("detailsScrollbarGutterSession"),
+            QStringLiteral("details"));
+        QVERIFY(panel);
+        QVERIFY(panel->setProperty("devicePixelRatio", view.devicePixelRatio()));
+        QVERIFY(panel->setProperty("animateLayoutChanges", false));
+        QVERIFY(panel->setProperty("contentHorizontalInset", 8));
+        auto *panelItem = qobject_cast<QQuickItem *>(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(
+            QStringLiteral("galleryViewportItem"));
+        auto *scrollBar = panel->findChild<QQuickItem *>(
+            QStringLiteral("galleryPanelScrollBar"));
+        QVERIFY(panelItem && layout && scrollBar);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 200, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(layout->needScroll(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(scrollBar->isVisible(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            findVisualItem(panelItem,
+                QStringLiteral("gallerySelectionSurface-0")), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            findVisualItem(panelItem,
+                QStringLiteral("galleryDetailsHeaderText-1")), 5000);
+        QTest::qWait(100);
+
+        QQuickItem *selection = findVisualItem(
+            panelItem, QStringLiteral("gallerySelectionSurface-0"));
+        QVERIFY(selection);
+        const qreal dpr = view.devicePixelRatio();
+        const qreal rowRight = selection->mapToItem(
+            view.contentItem(), QPointF(selection->width(), 0)).x();
+        const qreal scrollBarLeft = scrollBar->mapToItem(
+            view.contentItem(), QPointF()).x();
+        const qreal gutterPhysical = (scrollBarLeft - rowRight) * dpr;
+        qInfo().nospace()
+            << "DETAILS_SCROLLBAR_GUTTER_DPR175 row-right-physical="
+            << rowRight * dpr
+            << " scrollbar-left-physical=" << scrollBarLeft * dpr
+            << " gutter-physical=" << gutterPhysical;
+        const qreal panelRight = panelItem->mapToItem(
+            view.contentItem(), QPointF(panelItem->width(), 0)).x();
+        const qreal scrollBarRight = scrollBar->mapToItem(
+            view.contentItem(), QPointF(scrollBar->width(), 0)).x();
+        qInfo() << "DETAILS_SCROLLBAR_OUTER_GAP_DPR175"
+                << (panelRight - scrollBarRight) * dpr;
+        QVERIFY(qAbs(gutterPhysical) < 0.001);
+        QVERIFY(qAbs((panelRight - scrollBarRight) * dpr) < 0.001);
+
+        const auto verifyLeaf = [&](const QString &objectName) {
+            QQuickItem *leaf = findVisualItem(panelItem, objectName);
+            QVERIFY2(leaf, qPrintable(objectName));
+            QTRY_VERIFY_WITH_TIMEOUT(leaf->isVisible(), 5000);
+            const QPointF origin = leaf->mapToItem(
+                view.contentItem(), QPointF());
+            for (qreal coordinate : {origin.x(), origin.y()}) {
+                QVERIFY2(qAbs(coordinate * dpr - qRound(coordinate * dpr))
+                             < 0.001,
+                         qPrintable(QStringLiteral("%1 physical origin=%2")
+                             .arg(objectName)
+                             .arg(coordinate * dpr, 0, 'f', 6)));
+            }
+            for (qreal extent : {leaf->width(), leaf->height()}) {
+                QVERIFY2(qAbs(extent * dpr - qRound(extent * dpr)) < 0.001,
+                         qPrintable(objectName));
+            }
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0))
+                         - origin,
+                     QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1))
+                         - origin,
+                     QPointF(0, 1));
+        };
+        for (const QString &leaf : {
+                 QStringLiteral("gallerySelectionSurface-0"),
+                 QStringLiteral("galleryScrollBarTrack"),
+                 QStringLiteral("galleryDetailsIconSlot-0"),
+                 QStringLiteral("galleryBaseName-0"),
+                 QStringLiteral("gallerySize-0"),
+                 QStringLiteral("galleryDetailsHeaderText-0"),
+                 QStringLiteral("galleryDetailsHeaderText-1"),
+             }) {
+            verifyLeaf(leaf);
+        }
+
+        auto *handle = scrollBar->findChild<QQuickItem *>(
+            QStringLiteral("galleryScrollBarHandle"));
+        QVERIFY(handle);
+        const QPointF handleOrigin = handle->mapToItem(view.contentItem(), QPointF());
+        for (qreal coordinate : {handleOrigin.x(), handleOrigin.y()})
+            QVERIFY(qAbs(coordinate * dpr - qRound(coordinate * dpr)) < 0.001);
+        QCOMPARE(handle->mapToItem(view.contentItem(), QPointF(1, 0)) - handleOrigin,
+                 QPointF(1, 0));
+        QCOMPARE(handle->mapToItem(view.contentItem(), QPointF(0, 1)) - handleOrigin,
+                 QPointF(0, 1));
+        QCOMPARE((handleOrigin.x() - rowRight) * dpr, qreal(7));
+        QCOMPARE((panelRight - handleOrigin.x() - handle->width()) * dpr, qreal(7));
+
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        const QColor cursorColor = selection->property("color").value<QColor>();
+        QVERIFY(cursorColor.alpha() > 0);
+        const qreal rowCenterY = selection->mapToItem(
+            view.contentItem(), QPointF(selection->width() / 2,
+                                        selection->height() / 2)).y();
+        const QPoint gutterSample(qRound(rowRight * dpr) + 2,
+                                  qRound(rowCenterY * dpr));
+        QVERIFY(capture.rect().contains(gutterSample));
+        QVERIFY2(capture.pixelColor(gutterSample) != cursorColor,
+                 "rendered selected-row fill reaches into the scrollbar gutter");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QVERIFY(capture.save(visualCapturePath(
+            QStringLiteral("gallery-details-scrollbar-gutter-175.png"),
+            directory.filePath(QStringLiteral("details-scrollbar-gutter.png")))));
+        const QPoint grab = scrollBar->mapToScene(
+            QPointF(scrollBar->width() / 2, 10)).toPoint();
+        QTest::mouseMove(&view, grab);
+        QTRY_VERIFY(scrollBar->property("hovered").toBool());
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, grab);
+        QTRY_VERIFY(scrollBar->property("pressed").toBool());
+        QTest::mouseMove(&view, grab + QPoint(0, 80));
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, grab + QPoint(0, 80));
+        QTRY_VERIFY(layout->contentY() > 0);
+        runtime->shutdown();
+    }
+
     void detailsFileFieldLeavesStayOnPhysicalPixelGridAt175Percent() {
         QQuickView view;
         if (qAbs(view.devicePixelRatio() - 1.75) > 0.001) {
@@ -7290,10 +7629,19 @@ private slots:
         QVERIFY2(bottomSeparator, "missing Gallery Details bottom separator");
         QCOMPARE(header->height(), 38.0);
         QCOMPARE(header->width(), 640.0);
-        QCOMPARE(headerCell0->x(), 0.0);
-        QCOMPARE(headerCell0->width(), 500.0);
-        QCOMPARE(headerCell1->x(), 500.0);
-        QCOMPARE(headerCell1->width(), 140.0);
+        const qreal headerLeftInset =
+            header->property("columnInset").toReal();
+        const qreal headerRightInset =
+            header->property("columnRightInset").toReal();
+        const qreal headerContentWidth =
+            header->property("columnContentWidth").toReal();
+        const qreal headerBoundary = headerLeftInset
+            + qRound(headerContentWidth * 50.0 / 64.0);
+        QCOMPARE(headerCell0->x(), headerLeftInset);
+        QCOMPARE(headerCell0->width(), headerBoundary - headerLeftInset);
+        QCOMPARE(headerCell1->x(), headerBoundary);
+        QCOMPARE(headerCell1->width(),
+                 header->width() - headerRightInset - headerBoundary);
         QCOMPARE(headerText0->x(), 8.0);
         QCOMPARE(headerText1->property("horizontalAlignment").toInt(),
                  int(Qt::AlignRight));
@@ -7315,8 +7663,10 @@ private slots:
         auto *extension0 = findItem(QStringLiteral("galleryExtension-0"));
         auto *size0 = findItem(QStringLiteral("gallerySize-0"));
         auto *fileIcon = findItem(QStringLiteral("galleryFallbackIcon-0"));
+        auto *iconSlot0 = findItem(QStringLiteral("galleryDetailsIconSlot-0"));
         auto *folderBase = findItem(QStringLiteral("galleryBaseName-1"));
         auto *folderIcon = findItem(QStringLiteral("galleryFallbackIcon-1"));
+        auto *folderIconSlot = findItem(QStringLiteral("galleryDetailsIconSlot-1"));
         auto *plainFolderBase = findItem(
             QStringLiteral("galleryBaseName-2"));
         auto *plainFolderIcon = findItem(
@@ -7330,11 +7680,13 @@ private slots:
         auto *folderSize = findItem(QStringLiteral("gallerySize-1"));
         auto *scrollBar = findItem(QStringLiteral("galleryPanelScrollBar"));
         QVERIFY(cursorSurface && markedSurface && base0 && extension0
-                && size0 && fileIcon && folderBase && folderIcon
+                && size0 && fileIcon && iconSlot0 && folderBase && folderIcon
+                && folderIconSlot
                 && plainFolderBase && plainFolderIcon
                 && hiddenSurface && hiddenDetailsRow
                 && folderExtension && folderSize && scrollBar);
-        QCOMPARE(cursorSurface->width(), 640.0);
+        QCOMPARE(cursorSurface->width(), layout->width()
+                 - layout->paddingLeft() - layout->paddingRight());
         QCOMPARE(cursorSurface->height(), 30.0);
         QCOMPARE(cursorSurface->property("color").value<QColor>(),
                  QColor(QStringLiteral("#18456e")));
@@ -7350,14 +7702,22 @@ private slots:
         QCOMPARE(hiddenSurface->opacity(), 1.0);
         QCOMPARE(hiddenDetailsRow->opacity(), 0.5);
         QCOMPARE(row0->opacity(), 1.0);
+        const auto expectedBaseNameX = [&]() {
+            return iconSlot0->mapToItem(
+                row0, QPointF(iconSlot0->width() + 8.0, 0)).x();
+        };
         QTRY_VERIFY_WITH_TIMEOUT(
-            qAbs(base0->mapToItem(row0, QPointF()).x() - 34.0) < 0.01,
-            3000);
+            qAbs(base0->mapToItem(row0, QPointF()).x()
+                 - expectedBaseNameX()) < 0.01, 3000);
         const QPointF basePosition = base0->mapToItem(row0, QPointF());
         const QPointF iconPosition = fileIcon->mapToItem(row0, QPointF());
-        QCOMPARE(basePosition.x(), 34.0);
-        QCOMPARE(iconPosition.x(), 9.0);
-        QCOMPARE(fileIcon->width(), 16.0);
+        QCOMPARE(basePosition.x(), expectedBaseNameX());
+        const qreal expectedIconX = iconSlot0->mapToItem(
+            row0, QPointF()).x()
+            + (iconSlot0->width() - fileIcon->width()) / 2;
+        QCOMPARE(iconPosition.x(), expectedIconX);
+        QCOMPARE(fileIcon->width(),
+                 qMin(iconSlot0->width(), row0->height() - 6.0));
         QVERIFY(QString::fromLatin1(base0->metaObject()->className())
                     .contains(QStringLiteral("QQuickText")));
         QCOMPARE(base0->height(), base0->implicitHeight());
@@ -7386,7 +7746,8 @@ private slots:
             row1, QPointF());
         const QPointF folderSizePosition = folderSize->mapToItem(
             row1, QPointF());
-        QCOMPARE(folderBasePosition.x(), 34.0);
+        QCOMPARE(folderBasePosition.x(), folderIconSlot->mapToItem(
+                     row1, QPointF(folderIconSlot->width() + 8.0, 0)).x());
         QCOMPARE(folderBase->width(), folderSizePosition.x() - 8.0
                                       - folderBasePosition.x());
         QCOMPARE(fileIcon->property("effectiveIconColor").value<QColor>(),
@@ -7426,9 +7787,9 @@ private slots:
                  QColor(QStringLiteral("#ffffff")));
         QTRY_VERIFY_WITH_TIMEOUT(scrollBar->isVisible(), 3000);
         QCOMPARE(scrollBar->width(), 16.0);
-        QCOMPARE(scrollBar->x(), 632.0);
-        // The host reserves an 8px trailing panel inset. The 16px overlay is
-        // anchored into that lane, while Details keeps its full 640px row.
+        QCOMPARE(scrollBar->x(), 624.0);
+        const qreal rowRight = layout->width() - layout->paddingRight();
+        QCOMPARE(scrollBar->x() - rowRight, 0.0);
         QCOMPARE(layout->width(), panelItem->width());
     }
 

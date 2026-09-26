@@ -49,7 +49,7 @@ Item {
                 || mode === "grid" || mode === "icons"
         const embeddingInset = Math.max(
                     0, Number(contentHorizontalInset) || 0)
-        const horizontalPadding = details ? 0 : 6 + embeddingInset
+        const horizontalPadding = embeddingInset + (details ? 0 : 6)
 
         panel.beginPresentationStateUpdate(Boolean(switchingMode))
         try {

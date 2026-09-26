@@ -47,6 +47,7 @@ FocusScope {
     // headers still need an opaque fill so file content cannot show through.
     property color groupHeaderBackdropColor: "#17191d"
     readonly property real groupHeaderRightInset: panelOverlays.verticalScrollBarInset
+    readonly property var scrollBars: panelOverlays.scrollBars
     readonly property font iconLabelFont: galleryViewport.iconLabelFont
     property alias galleryLayout: galleryViewport.layout
     property alias detailsHeader: galleryViewport.detailsHeader

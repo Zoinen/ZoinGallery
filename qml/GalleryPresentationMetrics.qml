@@ -7,6 +7,8 @@ QtObject {
     property real detailsRowSpacing: 8
     property real detailsIconSlotSize: 18
     property real detailsIconSize: 16
+    // Per-edge inset in compact rows; independent of the current zoom.
+    property real detailsIconVerticalPadding: 3
     property real detailsNameFontPixelSize: 13
     property real detailsSecondaryFontPixelSize: 12
     property real detailsExtensionMinimumWidth: 40

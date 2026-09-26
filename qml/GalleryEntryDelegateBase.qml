@@ -152,10 +152,12 @@ BrickItem {
         || panelRoot.labelBackgroundColor
     readonly property rect effectivePreviewRect: {
         if (detailsMode || columnsMode) {
-            // Keep the compact slot's padding as the row grows. Both the
-            // shared preview and Details text layout consume this rectangle.
-            const extent = Math.max(0, Math.round((height - 4) * renderDpr)
-                                      / renderDpr)
+            // Keep the slot tied to the scaled icon, not unused row height:
+            // both the preview centering and filename origin use this extent.
+            const extent = Math.max(0, Math.round((height
+                - 2 * panelRoot.metrics.detailsIconVerticalPadding
+                + panelRoot.detailsIconSlotSize - panelRoot.detailsIconSize)
+                * renderDpr) / renderDpr)
             const origin = detailsMode ? Qt.point(0, 0) : iconSceneOrigin
             const left = panelRoot.detailsRowInset
             const top = Math.max(0, (height - extent) / 2)

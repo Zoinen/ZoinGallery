@@ -1,5 +1,6 @@
 #include <ZoinGallery/GalleryIconResolver.h>
 
+#include <QByteArray>
 #include <QUrl>
 #include <QUrlQuery>
 
@@ -57,7 +58,16 @@ QString GalleryIconResolver::keyFromSource(const QString &source) const {
             normalized.sliced(slash + 1, dot - slash - 1));
     }
     if (QUrl(source).scheme() == QStringLiteral("image")) {
-        return normalizedKey(normalized.sliced(slash + 1));
+        // Provider routes encode the icon key; passing that token back as a
+        // semantic name makes the host fall back to its generic file icon.
+        const QByteArray encoded = normalized.sliced(slash + 1).toLatin1();
+        const QByteArray decoded = QByteArray::fromBase64(
+            encoded, QByteArray::Base64UrlEncoding);
+        if (decoded.toBase64(QByteArray::Base64UrlEncoding
+                             | QByteArray::OmitTrailingEquals) != encoded) {
+            return {};
+        }
+        return normalizedKey(QString::fromUtf8(decoded));
     }
     return {};
 }

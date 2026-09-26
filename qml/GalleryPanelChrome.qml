@@ -13,6 +13,7 @@ Item {
     property bool ready: true
     property string presentationMode: "masonry"
     property real detailsScrollBarWidth: 16
+    readonly property var scrollBars: [verticalScroll, horizontalScroll]
     readonly property real verticalScrollBarInset:
         verticalScroll.visible ? width - verticalScroll.x : 0
     readonly property point layoutOrigin:
@@ -82,6 +83,7 @@ Item {
     }
 
     GalleryScrollBar {
+        id: horizontalScroll
         objectName: "galleryPanelColumnsScrollBar"
         theme: chromeRoot.theme
         x: chromeRoot.layoutOrigin.x

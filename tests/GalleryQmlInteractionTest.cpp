@@ -72,15 +72,19 @@ private slots:
     void detailsZoom_data() {
         QTest::addColumn<bool>("geometryOnly");
         QTest::addColumn<bool>("separateExtensions");
-        QTest::newRow("zoom-combined") << false << false;
-        QTest::newRow("zoom-separated") << false << true;
-        QTest::newRow("pixel-grid-combined") << true << false;
-        QTest::newRow("pixel-grid-separated") << true << true;
+        QTest::addColumn<int>("iconPadding");
+        QTest::newRow("zoom-combined") << false << false << 3;
+        QTest::newRow("zoom-separated") << false << true << 3;
+        QTest::newRow("pixel-grid-combined") << true << false << 3;
+        QTest::newRow("pixel-grid-separated") << true << true << 3;
+        QTest::newRow("padded-pixel-grid-combined") << true << false << 6;
+        QTest::newRow("padded-pixel-grid-separated") << true << true << 6;
     }
 
     void detailsZoom() {
         QFETCH(bool, geometryOnly);
         QFETCH(bool, separateExtensions);
+        QFETCH(int, iconPadding);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString path = directory.filePath(QStringLiteral(
@@ -136,6 +140,9 @@ private slots:
         auto *panel = root->findChild<QQuickItem *>(QStringLiteral("detailsZoomPanel"));
         QVERIFY(panel);
         panel->setProperty("separateFileExtensions", separateExtensions);
+        auto *metrics = panel->property("metrics").value<QObject *>();
+        QVERIFY(metrics);
+        QVERIFY(metrics->setProperty("detailsIconVerticalPadding", iconPadding));
         view.show();
         QVERIFY(QTest::qWaitForWindowExposed(&view));
         QCOMPARE(view.devicePixelRatio(), 1.75);
@@ -159,19 +166,20 @@ private slots:
         QCOMPARE(name->property("lineCount").toInt(), 1);
         QVERIFY(name->property("truncated").toBool());
 
-        for (const int height : {22, 40, 72, 22}) {
+        for (const int height : {22, 28, 40, 72, 22}) {
             panel->setProperty("density", height);
             QTRY_COMPARE(panel->property("density").toInt(), height);
             QTest::qWait(150);
+            QCOMPARE(icon->height(), qRound((height - 2 * iconPadding) * 1.75) / 1.75);
+            QCOMPARE(slot->width(), qRound((height - 2 * iconPadding + 2) * 1.75) / 1.75);
             auto *shortName = leaf(QStringLiteral("galleryBaseName-2"));
             QVERIFY(shortName);
             QCOMPARE(shortName->property("lineCount").toInt(), 1);
             QVERIFY(!shortName->property("truncated").toBool());
             for (int row = 0; row < 3; ++row)
                 QVERIFY(leaf(QStringLiteral("galleryBaseName-%1").arg(row))->height() <= height - 3);
-            if (!geometryOnly && height > 22) {
+            if (!geometryOnly && height > 28) {
                 QVERIFY2(slot->height() > smallSlot, "Details preview must grow with row height");
-                QVERIFY2(icon->height() > smallIcon, "Details fallback icon must grow with row height");
                 QVERIFY2(name->property("lineCount").toInt() > 1, "Filename must use the extra row height");
                 QVERIFY(leaf(QStringLiteral("galleryBaseName-1"))->property("truncated").toBool());
                 if (height == 72)

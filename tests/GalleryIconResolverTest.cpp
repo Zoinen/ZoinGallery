@@ -46,7 +46,16 @@ private slots:
         resolver.setCompactPrefix(QStringLiteral("qrc:/host/lucide"));
         const QString source = QStringLiteral(
             "image://icons/lucide/ZmlsZQ?size=128&dpr=2&revision=1");
-        QVERIFY(!resolver.keyFromSource(source).isEmpty());
+        QCOMPARE(resolver.keyFromSource(source), QStringLiteral("file"));
+        for (const QString &key : {QStringLiteral("folder"),
+                                  QStringLiteral("folder-up"),
+                                  QStringLiteral("file-image")}) {
+            const QString encoded = QString::fromLatin1(key.toUtf8().toBase64(
+                QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+            QCOMPARE(resolver.keyFromSource(
+                         QStringLiteral("image://icons/lucide/") + encoded
+                         + QStringLiteral("?size=16&dpr=1.75")), key);
+        }
         QVERIFY(resolver.isMonochrome({}, source));
         QCOMPARE(resolver.resolve({}, source, false, false, false, false),
                  source);

@@ -16,6 +16,7 @@ Item {
     required property real detailsScrollBarWidth
     required property real devicePixelRatio
     readonly property real verticalScrollBarInset: panelChrome.verticalScrollBarInset
+    readonly property var scrollBars: panelChrome.scrollBars
 
     signal seekRequested(real contentOffset)
 

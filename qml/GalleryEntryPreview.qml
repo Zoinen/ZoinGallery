@@ -80,9 +80,8 @@ Item {
         anchors.centerIn: parent
         readonly property real nominalIconSize:
             preview.entry.detailsMode || preview.entry.columnsMode
-            ? Math.max(0, parent.width
-                       - (preview.entry.panelRoot.detailsIconSlotSize
-                          - preview.entry.panelRoot.detailsIconSize))
+            ? Math.max(0, Math.min(parent.width, preview.entry.height
+                       - 2 * preview.entry.panelRoot.metrics.detailsIconVerticalPadding))
             : preview.entry.iconsMode
             ? Math.max(0, Math.min(parent.width, parent.height))
             : Math.max(0, Math.min(parent.width, parent.height) * 0.55)

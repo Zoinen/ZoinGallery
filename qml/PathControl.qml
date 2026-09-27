@@ -32,6 +32,7 @@ Item {
     // Hosts may align breadcrumb labels with their ordinary UI typography
     // without changing the editable path field or standalone defaults.
     property real breadcrumbFontPixelSize: 14
+    property string breadcrumbFontFamily: Qt.application.font.family
     property alias breadcrumbFont: rootFolder.font
     property color pathBackgroundColor: Style.pathBackground
     // Actual composited surface, for embedded hosts with translucent chrome.
@@ -89,7 +90,7 @@ Item {
     }
 
     onTextChanged: {
-        Qt.callLater(resetPathScroll)
+        resetPathScroll()
         if (editMode) {
             updatePathField()
         }
@@ -209,6 +210,7 @@ Item {
     readonly property real breadcrumbSeparatorSize: snap(12)
     readonly property real breadcrumbSeparatorHorizontalPadding: snap(6)
     property bool compactBreadcrumbs: true
+    property bool debugPathLayout: false
     FontMetrics { id: breadcrumbMetrics; font: rootFolder.font }
     // Water-fill the labels: short names retain their natural width, while
     // long names share the remaining space. Keep every ancestor addressable.
@@ -238,9 +240,25 @@ Item {
             Math.ceil((Math.max(minimum[i], Math.min(value, low)) + overhead[i]) * dpr) / dpr)
     }
     readonly property real collapsedPathWidth: breadcrumbWidths.reduce((sum, value) => sum + value, 0)
-    onCollapsedPathWidthChanged: Qt.callLater(resetPathScroll)
+    onCollapsedPathWidthChanged: resetPathScroll()
+    Component.onCompleted: resetPathScroll()
     function resetPathScroll() {
-        dynamicPart.contentX = Math.max(0, dynamicPart.contentWidth - dynamicPart.width)
+        if (!dynamicPart)
+            return
+        // Row geometry settles during polish, not necessarily before callLater.
+        // Follow that geometry through the first frame of each new path.
+        dynamicPart.contentX = Qt.binding(function() {
+            return Math.max(0, dynamicPart.contentWidth - dynamicPart.width)
+        })
+        if (debugPathLayout)
+            console.debug("[FIX:breadcrumb-scroll] following path end",
+                          breadcrumbs.length, dynamicPart.width,
+                          dynamicPart.contentWidth)
+    }
+    function holdPathScroll() {
+        // Deliberately release the binding before hover expansion. Successors
+        // move right while the hovered breadcrumb stays in its original place.
+        dynamicPart.contentX = dynamicPart.contentX
     }
     readonly property real driveIconLogicalSize: 18
     readonly property real driveIconSize: snap(driveIconLogicalSize)
@@ -248,6 +266,7 @@ Item {
         alignmentRevision
         + fixedPart.x + fixedPart.y + fixedPart.width + fixedPart.height
         + dynamicPart.x + dynamicPart.y + dynamicPart.width + dynamicPart.height
+        + dynamicPart.contentX
         + collapsiblePart.x + collapsiblePart.y
         + collapsiblePart.width + collapsiblePart.height
 
@@ -331,6 +350,7 @@ Item {
                 objectName: folderDelegate.objectName + "-text"
                 color: pathRoot.pathTextColor
                 font.pixelSize: pathRoot.breadcrumbFontPixelSize
+                font.family: pathRoot.breadcrumbFontFamily
                 transform: Translate {
                     x: pathRoot.visualPixelOffsetX(
                            folderText, folderDelegate.geometryRevision)
@@ -382,6 +402,7 @@ Item {
                 }
             }
             Text {
+                id: rootSlashText
                 objectName: folderDelegate.objectName + "-slash"
                 x: (folderDelegate.width - width) / 2 - folder.x
                 y: pathRoot.snap((folderDelegate.height - height) / 2)
@@ -394,6 +415,12 @@ Item {
                 opacity: 0.5
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
+                transform: Translate {
+                    x: pathRoot.visualPixelOffsetX(
+                           rootSlashText, folderDelegate.geometryRevision)
+                    y: pathRoot.visualPixelOffsetY(
+                           rootSlashText, folderDelegate.geometryRevision)
+                }
             }
         }
 
@@ -402,6 +429,7 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
 
+            onEntered: pathRoot.holdPathScroll()
             onClicked: folderDelegate.clicked(folderDelegate.splitIndex)
         }
         }
@@ -466,7 +494,7 @@ Item {
         contentHeight: height
         boundsBehavior: Flickable.StopAtBounds
         interactive: false
-        onWidthChanged: Qt.callLater(pathRoot.resetPathScroll)
+        onWidthChanged: pathRoot.resetPathScroll()
 
         function scrollWheel(event) {
                 const delta = event.pixelDelta.x !== 0 ? event.pixelDelta.x

@@ -20,6 +20,15 @@ Item {
         font: baseNameText.font
     }
 
+    GalleryExtensionMetrics {
+        id: extensionMetrics
+        font: extensionText.font
+        textWidth: extensionText.implicitWidth
+        minimumWidth: content.entry.panelRoot.detailsExtensionMinimumWidth
+        maximumWidth: content.entry.panelRoot.detailsExtensionMaximumWidth
+        devicePixelRatio: content.entry.renderDpr
+    }
+
     Item {
         id: detailsRow
         anchors.fill: parent
@@ -37,6 +46,7 @@ Item {
 
         Text {
             id: baseNameText
+            font.family: content.entry.panelRoot.metrics.panelFontFamily
             objectName: "galleryBaseName-" + content.entry.viewIndex
             x: content.snap(detailsIconSlot.x + detailsIconSlot.width
                             + content.entry.panelRoot.detailsRowSpacing)
@@ -45,7 +55,9 @@ Item {
                         implicitHeight)
             width: Math.max(0,
                 content.entry.panelRoot.fileFieldPresentationHelper.detailsPixelExtent(
-                    (extensionText.visible ? extensionText.x : sizeText.x)
+                    (extensionText.visible
+                     ? extensionText.x - content.entry.panelRoot.detailsRowInset
+                     : content.entry.panelRoot.fileFieldPresentationHelper.detailsColumnX(1))
                     - baseNameText.x
                     - content.entry.panelRoot.detailsRowSpacing))
             text: content.entry.panelRoot.quickSearchFormatter.styledText(
@@ -71,15 +83,14 @@ Item {
 
         Text {
             id: extensionText
+            font.family: content.entry.panelRoot.metrics.panelFontFamily
             objectName: "galleryExtension-" + content.entry.viewIndex
-            x: content.snap(sizeText.x - content.entry.panelRoot.detailsRowSpacing - width)
+            x: content.snap(content.entry.panelRoot.fileFieldPresentationHelper.detailsColumnX(1)
+                            - content.entry.panelRoot.detailsRowInset - width)
             y: content.snap((parent.height - height) / 2)
             visible: content.entry.panelRoot.separateFileExtensions
                      && content.entry.displayExtension.length > 0
-            width: content.snap(Math.min(
-                content.entry.panelRoot.detailsExtensionMaximumWidth,
-                Math.max(content.entry.panelRoot.detailsExtensionMinimumWidth,
-                         implicitWidth)))
+            width: extensionMetrics.columnWidth
             height: content.snap(implicitHeight)
             text: content.entry.panelRoot.quickSearchFormatter.styledSuffix(
                       content.entry.displayExtension,
@@ -91,7 +102,7 @@ Item {
                 ? Text.StyledText : Text.PlainText
             color: content.entry.itemTextColor
             elide: Text.ElideRight
-            horizontalAlignment: Text.AlignLeft
+            horizontalAlignment: extensionMetrics.alignment
             font.pixelSize:
                 content.entry.panelRoot.detailsSecondaryFontPixelSize
         }
@@ -102,6 +113,7 @@ Item {
 
             delegate: Text {
                 id: detailsFieldText
+                font.family: content.entry.panelRoot.metrics.panelFontFamily
                 required property int index
                 required property var modelData
                 readonly property var column: modelData.column
@@ -135,12 +147,17 @@ Item {
 
         Text {
             id: sizeText
+            font.family: content.entry.panelRoot.metrics.panelFontFamily
             objectName: "gallerySize-" + content.entry.viewIndex
-            x: content.entry.panelRoot.fileFieldPresentationHelper.detailsColumnX(1)
-            width: content.entry.panelRoot.fileFieldPresentationHelper.detailsColumnWidth(1)
+            x: content.snap(content.entry.panelRoot.fileFieldPresentationHelper.detailsColumnX(1)
+                            + content.entry.panelRoot.detailsHeaderCellInset)
+            width: Math.max(0, content.snap(
+                content.entry.panelRoot.fileFieldPresentationHelper.detailsColumnWidth(1)
+                - content.entry.panelRoot.detailsHeaderCellInset * 2))
             y: content.snap((parent.height - height) / 2)
             height: content.snap(implicitHeight)
             text: content.entry.displaySize
+            elide: Text.ElideRight
             color: content.entry.itemMetadataColor
             horizontalAlignment: Text.AlignRight
             font.pixelSize:

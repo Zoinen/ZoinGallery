@@ -32,6 +32,7 @@ Item {
 
         Text {
             id: masonryLabel
+            font: content.entry.panelRoot.iconLabelFont
             objectName: "galleryMasonryLabel-" + content.entry.viewIndex
             anchors.fill: parent
             anchors.margins: labelSurface.padding

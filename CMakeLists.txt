@@ -853,6 +853,7 @@ set(ZOIN_QML_FILES
     qml/GalleryViewerTransitionSource.qml
     qml/GalleryThemePalette.qml
     qml/GalleryPresentationMetrics.qml
+    qml/GalleryExtensionMetrics.qml
     qml/StandaloneGalleryTheme.qml
     qml/StandaloneGalleryPanel.qml
     qml/GalleryEntryDelegateBase.qml

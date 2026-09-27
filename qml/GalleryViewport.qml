@@ -196,7 +196,15 @@ Item {
         height: viewportRoot.panelRoot.detailsHeaderHeight
         pixelGridOffset: galleryLayout.parentPixelGridOffset
         z: 5
-        columnSchema: viewportRoot.panelRoot.columnSchema
+        columnSchema: {
+            const columns = viewportRoot.panelRoot.columnSchema
+            if (!columns.some(column => column.autoWidth))
+                return columns
+            return columns.map((column, index) => Object.assign({}, column, {
+                width: viewportRoot.panelRoot.fileFieldPresentationHelper.pixelWidths[index],
+                autoWidth: false
+            }))
+        }
         columnInset:
             viewportRoot.panelRoot.fileFieldPresentationHelper.detailsPixelExtent(
                 galleryLayout.paddingLeft
@@ -225,6 +233,8 @@ Item {
 
     Label {
         id: iconLabelFontProbe
+        font.family: viewportRoot.panelRoot.metrics.panelFontFamily
+        font.pixelSize: viewportRoot.panelRoot.metrics.panelFontPixelSize
         visible: false
         text: "M"
     }

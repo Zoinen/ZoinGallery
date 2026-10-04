@@ -132,6 +132,8 @@ void ExternalCatalogThumbnailPlanner::admitRequest(
         traceAdmission(request, row, QStringLiteral("hit"),
                        cached.handle.providerId);
         m_model.attachThumbnail(row, cached.handle.providerId);
+        if (entry->thumbnailKind == QStringLiteral("video"))
+            m_model.videoPosterUrlAt(row);
         return;
     }
     m_model._pendingThumbnailRequests.insert(

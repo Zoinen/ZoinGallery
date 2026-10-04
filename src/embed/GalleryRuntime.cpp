@@ -266,6 +266,7 @@ GallerySession *GalleryRuntime::createExternalSession(
         canonicalId, GallerySession::ExternalCatalogSource,
         d->thumbnailProviderName, d->asyncProviderName,
         d->store, d->thumbnailCache, d->decodeManager,
+        d->imageSourceProvider, d->options.enableVideoPlayback,
         d->options.viewerFitCacheByteBudget,
         d->options.viewerNativeCacheByteBudget,
         parent ? parent : this);
@@ -300,6 +301,7 @@ GallerySession *GalleryRuntime::createSession(
         canonicalId, GallerySession::LocalFilesystemSource,
         d->thumbnailProviderName, d->asyncProviderName,
         d->store, d->thumbnailCache, d->decodeManager,
+        d->imageSourceProvider, d->options.enableVideoPlayback,
         d->options.viewerFitCacheByteBudget,
         d->options.viewerNativeCacheByteBudget,
         parent ? parent : this);

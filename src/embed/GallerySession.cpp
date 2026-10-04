@@ -8,6 +8,9 @@
 #include "LocalFilesystemSource.h"
 #include "SelectedImagesModel.h"
 #include "ThumbnailMemoryCache.h"
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+#include "VideoPlaybackController.h"
+#endif
 
 #include <QAbstractItemModel>
 #include <QHash>
@@ -46,6 +49,9 @@ public:
     bool applyingPanelViewportState = false;
     int currentIndex = -1;
     bool viewerOpen = false;
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    VideoPlaybackController *videoPlaybackController = nullptr;
+#endif
     QString viewerPreviousEntryId;
     QString viewerPreviousReturnEntryId;
     bool viewerPreviousLocked = false;
@@ -74,6 +80,8 @@ GallerySession::GallerySession(
     const QSharedPointer<::ProviderImageStore> &store,
     const QSharedPointer<ThumbnailMemoryCache> &thumbnailCache,
     ::DecodeManager *decodeManager,
+    const QSharedPointer<ImageSourceProvider> &imageSourceProvider,
+    bool enableVideoPlayback,
     qint64 viewerFitCacheByteBudget,
     qint64 viewerNativeCacheByteBudget,
     QObject *parent)
@@ -81,6 +89,18 @@ GallerySession::GallerySession(
     d->sessionId = sessionId;
     d->sourceKind = sourceKind;
     d->thumbnailProviderName = thumbnailProviderName;
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    if (enableVideoPlayback) {
+        d->videoPlaybackController = new VideoPlaybackController(
+            imageSourceProvider, this);
+        connect(d->videoPlaybackController,
+                &VideoPlaybackController::availableChanged,
+                this, &GallerySession::videoPlaybackAvailableChanged);
+    }
+#else
+    Q_UNUSED(imageSourceProvider)
+    Q_UNUSED(enableVideoPlayback)
+#endif
 
     if (sourceKind == ExternalCatalogSource) {
         d->external = new ExternalCatalogModel(
@@ -106,7 +126,7 @@ GallerySession::GallerySession(
 
     d->local = new ::ZoinGallery::LocalFilesystemSource(
         sessionId, thumbnailProviderName, asyncProviderName,
-        store, decodeManager,
+        store, thumbnailCache, decodeManager,
         viewerFitCacheByteBudget, viewerNativeCacheByteBudget,
         this);
     connect(d->local,
@@ -350,6 +370,23 @@ void GallerySession::restorePanelViewportStateForPath(const QString &path) {
 
 QString GallerySession::thumbnailProviderName() const {
     return d->thumbnailProviderName;
+}
+
+bool GallerySession::videoPlaybackAvailable() const {
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    return d->videoPlaybackController
+        && d->videoPlaybackController->available();
+#else
+    return false;
+#endif
+}
+
+QObject *GallerySession::videoPlaybackController() const {
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    return d->videoPlaybackController;
+#else
+    return nullptr;
+#endif
 }
 
 bool GallerySession::viewerOpen() const {
@@ -794,6 +831,15 @@ bool GallerySession::isImageAt(int index) const {
                        : d->local && d->local->isImageAt(index);
 }
 
+bool GallerySession::isVideoAt(int index) const {
+    return d->external ? d->external->isVideoAt(index)
+                       : d->local && d->local->isVideoAt(index);
+}
+
+bool GallerySession::isViewableAt(int index) const {
+    return isImageAt(index) || (videoPlaybackAvailable() && isVideoAt(index));
+}
+
 bool GallerySession::isDirectoryAt(int index) const {
     return d->external ? d->external->isDirectoryAt(index)
                        : d->local && d->local->isDirectoryAt(index);
@@ -853,6 +899,90 @@ int GallerySession::adjacentImageIndex(
         }
     }
     return fromIndex;
+}
+
+int GallerySession::adjacentViewableIndex(
+    int fromIndex, int direction) const {
+    QAbstractItemModel *catalog = d->model();
+    const int count = catalog ? catalog->rowCount() : 0;
+    if (fromIndex < 0 || fromIndex >= count || direction == 0) {
+        return -1;
+    }
+    const int step = direction < 0 ? -1 : 1;
+    for (int row = fromIndex + step; row >= 0 && row < count; row += step) {
+        if (isViewableAt(row)) {
+            return row;
+        }
+    }
+    return fromIndex;
+}
+
+QVariantMap GallerySession::videoSourceAt(int index) const {
+    if (!videoPlaybackAvailable() || !isVideoAt(index)) {
+        return {};
+    }
+    QVariantMap source;
+    source.insert(QStringLiteral("entryId"), entryIdAt(index));
+    source.insert(QStringLiteral("catalogRevision"), catalogRevision());
+    source.insert(QStringLiteral("path"), localPathAt(index));
+    source.insert(QStringLiteral("displayName"), entryNameAt(index));
+    const QUrl thumbnailSource = d->external
+        ? QUrl(d->external->videoThumbnailUrlAt(index))
+        : d->local ? d->local->videoThumbnailSourceAt(index) : QUrl();
+    if (!thumbnailSource.isEmpty()) {
+        source.insert(QStringLiteral("thumbnailSource"), thumbnailSource);
+    }
+    const QUrl posterSource = d->external
+        ? QUrl(d->external->videoPosterUrlAt(index))
+        : d->local ? d->local->videoPosterSourceAt(index) : QUrl();
+    if (!posterSource.isEmpty()) {
+        source.insert(QStringLiteral("posterSource"), posterSource);
+    }
+
+    ImageSourceDescriptor descriptor;
+    if (d->external) {
+        descriptor = d->external->imageSourceAt(index);
+    }
+    const QString contentVersion = descriptor.isValid()
+        ? descriptor.contentVersion
+        : d->local ? d->local->sourceVersionAt(index) : QString();
+    if (descriptor.isValid()) {
+        source.insert(QStringLiteral("resourceId"), descriptor.resourceId);
+        source.insert(QStringLiteral("sourceKey"), descriptor.sourceKey);
+        source.insert(QStringLiteral("versionStrength"), descriptor.versionStrength);
+        source.insert(QStringLiteral("storageClass"), descriptor.storageClass);
+        source.insert(QStringLiteral("accessProfile"), descriptor.accessProfile);
+        source.insert(QStringLiteral("displayName"), descriptor.displayName);
+        source.insert(QStringLiteral("mimeType"), descriptor.mimeType);
+        source.insert(QStringLiteral("size"), descriptor.size);
+        source.insert(QStringLiteral("catalogGeneration"),
+                      QVariant::fromValue<qulonglong>(descriptor.catalogGeneration));
+    }
+    if (!contentVersion.isEmpty()) {
+        source.insert(QStringLiteral("contentVersion"), contentVersion);
+    }
+    source.insert(QStringLiteral("sourceKind"),
+                  d->external && descriptor.storageClass
+                          != QStringLiteral("local")
+                      ? QStringLiteral("external")
+                      : QStringLiteral("local"));
+    QString stableVersion = descriptor.versionStrength
+            == QStringLiteral("strong")
+        || descriptor.versionStrength == QStringLiteral("local-stat")
+        ? descriptor.contentVersion
+        : descriptor.contentVersion + QChar(0x1e)
+            + QString::number(descriptor.catalogGeneration);
+    if (!descriptor.isValid()) {
+        stableVersion = contentVersion.isEmpty()
+            ? QString::number(catalogRevision())
+            : QStringLiteral("local-stat:") + contentVersion;
+    }
+    const QString identity = entryIdAt(index) + QChar(0x1f)
+        + (descriptor.sourceKey.isEmpty() ? localPathAt(index)
+                                          : descriptor.sourceKey)
+        + QChar(0x1f) + stableVersion;
+    source.insert(QStringLiteral("identity"), identity);
+    return source;
 }
 
 QUrl GallerySession::viewerSourceAt(int index) const {
@@ -1053,6 +1183,11 @@ void GallerySession::resetExternalSource() {
     const bool hadSelectionRevision = d->selectionRevision != 0;
 
     d->external->resetExternalSource();
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    if (d->videoPlaybackController) {
+        d->videoPlaybackController->stop();
+    }
+#endif
     d->currentPath.clear();
     d->currentIndex = -1;
     d->stableCursorEntryId.clear();
@@ -1082,6 +1217,11 @@ void GallerySession::shutdown() {
     }
     setViewerOpen(false);
     d->shutdown = true;
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    if (d->videoPlaybackController) {
+        d->videoPlaybackController->stop();
+    }
+#endif
     if (d->external) {
         d->external->shutdown();
     }

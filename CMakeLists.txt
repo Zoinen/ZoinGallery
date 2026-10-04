@@ -38,15 +38,25 @@ endif()
 option(USE_QWK "Use QWindowKit" ON)
 option(USE_EXIV2 "Use Exiv2 for metadata extraction" OFF)
 option(ZOIN_ENABLE_VIDEO_THUMBNAILS
-    "Enable video thumbnails through Qt Multimedia" OFF)
+    "Enable video thumbnails through Qt Multimedia" ON)
 option(ZOIN_ENABLE_FFMPEG_BACKEND
     "Use the Qt Multimedia FFmpeg backend for video thumbnails"
-    OFF)
+    ON)
+option(ZOIN_ENABLE_VIDEO_PLAYBACK
+    "Enable embedded gallery video playback through Qt Multimedia/FFmpeg"
+    ON)
 if(NOT ZOIN_ENABLE_VIDEO_THUMBNAILS AND ZOIN_ENABLE_FFMPEG_BACKEND)
     message(STATUS
         "ZOIN_ENABLE_VIDEO_THUMBNAILS=OFF disables the FFmpeg backend as well")
     set(ZOIN_ENABLE_FFMPEG_BACKEND OFF CACHE BOOL
         "Use the Qt Multimedia FFmpeg backend for video thumbnails" FORCE)
+endif()
+if(ZOIN_ENABLE_VIDEO_PLAYBACK AND
+   (NOT ZOIN_ENABLE_VIDEO_THUMBNAILS OR NOT ZOIN_ENABLE_FFMPEG_BACKEND))
+    message(STATUS
+        "ZOIN_ENABLE_VIDEO_PLAYBACK requires Qt Multimedia and the FFmpeg backend")
+    set(ZOIN_ENABLE_VIDEO_PLAYBACK OFF CACHE BOOL
+        "Enable embedded gallery video playback through Qt Multimedia/FFmpeg" FORCE)
 endif()
 option(ZOIN_BUILD_BENCHMARKS
     "Build standalone decode/performance audit tools" OFF)
@@ -62,11 +72,42 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
 find_package(QT NAMES Qt6)
-set(ZOIN_QT_COMPONENTS Core Quick Gui GuiPrivate Qml Concurrent Svg QuickControls2)
+set(ZOIN_QT_COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     list(APPEND ZOIN_QT_COMPONENTS Multimedia)
 endif()
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS ${ZOIN_QT_COMPONENTS} REQUIRED)
+if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    find_package(Qt${QT_VERSION_MAJOR} COMPONENTS QuickPrivate MultimediaPrivate REQUIRED)
+endif()
+find_package(Qt${QT_VERSION_MAJOR}GuiPrivate ${Qt6_VERSION} CONFIG QUIET)
+if(NOT TARGET Qt${QT_VERSION_MAJOR}::GuiPrivate)
+    get_filename_component(_zoin_qt_prefix "${Qt6_DIR}/../../../" ABSOLUTE)
+    set(_zoin_qt_private_include "${_zoin_qt_prefix}/include")
+    set(_zoin_qt_core_private_include "${_zoin_qt_private_include}/QtCore/${Qt6_VERSION}")
+    set(_zoin_qt_gui_private_include "${_zoin_qt_private_include}/QtGui/${Qt6_VERSION}")
+    if(NOT EXISTS "${_zoin_qt_core_private_include}/QtCore/private/qglobal_p.h" OR
+       NOT EXISTS "${_zoin_qt_gui_private_include}/QtGui/private/qguiapplication_p.h")
+        message(FATAL_ERROR
+            "Qt${QT_VERSION_MAJOR}GuiPrivate is unavailable and its private headers are not installed")
+    endif()
+    if(NOT TARGET Qt${QT_VERSION_MAJOR}::CorePrivate)
+        add_library(Qt${QT_VERSION_MAJOR}::CorePrivate INTERFACE IMPORTED GLOBAL)
+        set_target_properties(Qt${QT_VERSION_MAJOR}::CorePrivate PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES
+                "${_zoin_qt_core_private_include};${_zoin_qt_core_private_include}/QtCore"
+            INTERFACE_LINK_LIBRARIES Qt${QT_VERSION_MAJOR}::Core)
+    endif()
+    add_library(Qt${QT_VERSION_MAJOR}::GuiPrivate INTERFACE IMPORTED GLOBAL)
+    set_target_properties(Qt${QT_VERSION_MAJOR}::GuiPrivate PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES
+            "${_zoin_qt_gui_private_include};${_zoin_qt_gui_private_include}/QtGui"
+        INTERFACE_LINK_LIBRARIES
+            "Qt${QT_VERSION_MAJOR}::CorePrivate;Qt${QT_VERSION_MAJOR}::Gui")
+    set(Qt${QT_VERSION_MAJOR}GuiPrivate_FOUND TRUE)
+    message(STATUS
+        "Qt${QT_VERSION_MAJOR}GuiPrivate CMake package missing; using installed private headers")
+endif()
 find_package(Qt6 COMPONENTS ShaderTools REQUIRED)
 if(ZOIN_BUILD_STANDALONE)
     find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Widgets REQUIRED)
@@ -314,8 +355,16 @@ set(ZOIN_CORE_SOURCES
 
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     list(APPEND ZOIN_CORE_SOURCES
+        VideoFrameGeometry.h
         Runners/VideoThumbnailRunner.h
-        Runners/VideoThumbnailRunner.cpp)
+        Runners/VideoThumbnailRunner.cpp
+        src/embed/ImageSourceRangeDevice.h
+        src/embed/ImageSourceRangeDevice.cpp)
+endif()
+if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    list(APPEND ZOIN_CORE_SOURCES
+        src/embed/VideoPlaybackController.h
+        src/embed/VideoPlaybackController.cpp)
 endif()
 
 set(ZOIN_STANDALONE_SOURCES
@@ -383,6 +432,10 @@ target_compile_definitions(ZoinGalleryCore PRIVATE
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     target_compile_definitions(ZoinGalleryCore PUBLIC
         ZOIN_ENABLE_VIDEO_THUMBNAILS=1)
+endif()
+if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    target_compile_definitions(ZoinGalleryCore PUBLIC
+        ZOIN_ENABLE_VIDEO_PLAYBACK=1)
 endif()
 if(BUILD_TESTING)
     target_compile_definitions(ZoinGalleryCore PRIVATE
@@ -549,6 +602,10 @@ if(BUILD_TESTING)
         tests/GallerySessionTest.cpp)
     target_compile_definitions(ZoinGallerySessionTests PRIVATE
         ZOIN_TEST_QML_IMPORT_PATH="${CMAKE_CURRENT_BINARY_DIR}")
+    if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        target_compile_definitions(ZoinGallerySessionTests PRIVATE
+            "ZOIN_TEST_VIDEO_PATH=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/data/gallery-video-playback.mp4\"")
+    endif()
     target_include_directories(ZoinGallerySessionTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(ZoinGallerySessionTests PRIVATE
@@ -558,6 +615,10 @@ if(BUILD_TESTING)
     add_test(NAME GallerySessionTest COMMAND ZoinGallerySessionTests)
     set_tests_properties(GallerySessionTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+    if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        set_property(TEST GallerySessionTest APPEND PROPERTY
+            ENVIRONMENT "QT_MEDIA_BACKEND=ffmpeg")
+    endif()
 
     add_executable(ZoinGalleryQmlInteractionTests
         tests/GalleryQmlInteractionTest.cpp)
@@ -572,7 +633,12 @@ if(BUILD_TESTING)
     add_test(NAME GalleryQmlInteractionTest
         COMMAND ZoinGalleryQmlInteractionTests)
     set_tests_properties(GalleryQmlInteractionTest PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_SCALE_FACTOR=1.75;QT_QUICK_CONTROLS_STYLE=Basic")
+    if(WIN32)
+        set_property(TEST GalleryQmlInteractionTest APPEND PROPERTY
+            ENVIRONMENT "QT_QPA_FONTDIR=$ENV{WINDIR}/Fonts")
+    endif()
 
     add_executable(ZoinGalleryReusableViewerPrimitivesTests
         tests/ReusableViewerPrimitivesTest.cpp)
@@ -947,6 +1013,16 @@ qt_add_shaders(ZoinGalleryQml zoin_gallery_shaders
         "resources/sphere.frag"
         "resources/outline.frag")
 
+if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    qt_add_shaders(ZoinGalleryQml zoin_gallery_video_shader
+        BATCHABLE
+        ${SHADER_GLSL_FLAGS}
+        PREFIX "/ZoinGallery"
+        OUTPUTS "resources/viewer_resample_video.frag.qsb"
+        DEFINES ZOIN_VIDEO_SHADER=1
+        FILES "resources/viewer_resample.frag")
+endif()
+
 qt_add_resources(ZoinGalleryQml zoin_gallery_assets
     PREFIX "/ZoinGallery"
     FILES
@@ -955,6 +1031,8 @@ qt_add_resources(ZoinGalleryQml zoin_gallery_assets
         resources/FileIcon.svg
         resources/FolderIcon.svg
         resources/ImageIcon.svg
+        resources/VideoPlay.svg
+        resources/VideoPlayFilled.svg
         resources/ScrollMode.svg
         resources/ScrollModeDown.svg
         resources/ScrollModeUp.svg
@@ -1001,17 +1079,33 @@ option(ZOIN_GENERATE_QMLLS_INI
     ${PROJECT_IS_TOP_LEVEL})
 set(QT_QML_GENERATE_QMLLS_INI ${ZOIN_GENERATE_QMLLS_INI})
 
+if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    list(APPEND ZOIN_QML_FILES
+        qml/GalleryVideoPlaybackSurface.qml)
+endif()
+
 # Set QTP0004 policy to NEW to generate qmldir files for each directory with QML files
 qt_policy(SET QTP0004 NEW)
 
+set(_zoin_qml_install_args)
+if(Qt6_VERSION VERSION_GREATER_EQUAL "6.11")
+    list(APPEND _zoin_qml_install_args
+        INSTALLED_QMLDIR_PATH "lib/qml/ZoinGallery/qmldir")
+endif()
+set(ZOIN_QML_CPP_SOURCES ViewerResampleEffect.h ViewerResampleEffect.cpp)
+if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    list(APPEND ZOIN_QML_CPP_SOURCES
+        ViewerVideoFrameSource.h
+        ViewerVideoFrameSource.cpp)
+endif()
 qt6_add_qml_module(ZoinGalleryQml
     URI ZoinGallery
     VERSION 1.0
     RESOURCE_PREFIX /
     OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/ZoinGallery"
     INSTALLED_PLUGIN_TARGET ZoinGallery::ZoinGalleryQmlplugin
-    INSTALLED_QMLDIR_PATH "lib/qml/ZoinGallery/qmldir"
-    SOURCES ViewerResampleEffect.h ViewerResampleEffect.cpp
+    ${_zoin_qml_install_args}
+    SOURCES ${ZOIN_QML_CPP_SOURCES}
     QML_FILES ${ZOIN_QML_FILES}
     RESOURCES ${ZOIN_QML_RESOURCES}
     )
@@ -1110,6 +1204,11 @@ target_link_libraries(ZoinGalleryQml PRIVATE
     Qt${QT_VERSION_MAJOR}::Quick
     Qt${QT_VERSION_MAJOR}::GuiPrivate
     Qt${QT_VERSION_MAJOR}::QuickControls2)
+if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    target_link_libraries(ZoinGalleryQml PRIVATE
+        Qt${QT_VERSION_MAJOR}::QuickPrivate
+        Qt${QT_VERSION_MAJOR}::MultimediaPrivate)
+endif()
 
 if(ZOIN_BUILD_STANDALONE)
     target_link_libraries(ZoinGallery PRIVATE

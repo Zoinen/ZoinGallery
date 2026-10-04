@@ -191,7 +191,8 @@ ViewerImageCache::StoredImage ViewerImageCache::storeDecodedImage(
     }
 
     const bool incomingNativePrepared = fullSize &&
-        !decodedInfo.isFromCache && decodedInfo.previewUsed.isEmpty();
+        !decodedInfo.isFromCache && (decodedInfo.previewUsed.isEmpty()
+                                    || decodedInfo.isAuthoritativePreview);
 
     QHash<QString, Entry> &cache =
         fullSize ? _fullSizeImages : _viewerImages;

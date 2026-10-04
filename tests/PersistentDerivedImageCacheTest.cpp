@@ -5,6 +5,9 @@
 #include "Runners/CacheImageRunners.h"
 #include "Runners/ImageInfoReadRunner.h"
 #include "Runners/ImageReadRunner.h"
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+#include "Runners/VideoThumbnailRunner.h"
+#endif
 #include "StorageLocations.h"
 #include "TinyEXIF/TinyEXIF.h"
 
@@ -511,6 +514,124 @@ private slots:
         cacheRunner.run();
         QVERIFY(PersistentDerivedImageCache::waitForLookup(
             gate, cancellation));
+    }
+
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    void decodedVideoPosterSizeIsIndependentOfPanelSize() {
+        const QString fixture = QFINDTESTDATA("data/video-poster-1280x720.mp4");
+        QVERIFY(!fixture.isEmpty());
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("video.mp4");
+        QVERIFY(QFile::copy(fixture, path));
+
+        bool cachedPosterExpected = false;
+        for (const QSize panelSize : {QSize(96, 54), QSize(640, 360)}) {
+            ImageDecodeRequest request;
+            request.info.path = path;
+            request.info.lastModified = QFileInfo(path).lastModified();
+            request.info.fileSize = QFileInfo(path).size();
+            request.info.imageSize = QSize(1280, 720);
+            request.info.thumbnailKind = QStringLiteral("video");
+            request.targetSize = panelSize;
+            request.panelThumbnailRequest = true;
+            request.checkCache = true;
+
+            VideoThumbnailRunner runner(request);
+            QImage poster;
+            QImage sheet;
+            ImageDecodeRequest posterRequest;
+            bool posterFromCache = false;
+            connect(&runner, &VideoThumbnailRunner::imageReady, this,
+                    [&](const ImageDecodeRequest &ready, const QImage &image,
+                        const DecodedImageInfo &info) {
+                if (ready.videoPosterRequest) {
+                    poster = image;
+                    posterRequest = ready;
+                    posterFromCache = info.isFromCache;
+                } else {
+                    sheet = image;
+                }
+            });
+            connect(&runner, &VideoThumbnailRunner::storeInCache, this,
+                    [](const ImageDecodeRequest &ready, const QByteArray &data) {
+                PersistentImageCache::storeImage(ready, data);
+            });
+            runner.run();
+
+            QCOMPARE(sheet.size(), panelSize);
+            QCOMPARE(poster.size(), QSize(1024, 576));
+            QCOMPARE(posterRequest.targetSize, QSize(1024, 1024));
+            QVERIFY(!posterRequest.panelThumbnailRequest);
+            QCOMPARE(posterFromCache, cachedPosterExpected);
+            QCOMPARE(PersistentImageCache::retrieveImage(posterRequest).size(),
+                     QSize(1024, 576));
+            cachedPosterExpected = true;
+        }
+    }
+#endif
+
+    void firstVideoFramePosterUsesSeparateStatValidatedCacheArtifact() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(
+            QStringLiteral("local-video.mp4"));
+        QFile source(path);
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        QCOMPARE(source.write(QByteArrayLiteral("video-revision-one")),
+                 qint64(18));
+        source.close();
+
+        ImageDecodeRequest sheet;
+        sheet.info.path = path;
+        sheet.info.lastModified = QFileInfo(path).lastModified();
+        sheet.info.fileSize = QFileInfo(path).size();
+        sheet.info.imageSize = QSize(384, 216);
+        sheet.info.thumbnailKind = QStringLiteral("video");
+        sheet.targetSize = QSize(384, 216);
+        sheet.checkCache = true;
+        sheet.thumbnailTransformKey = QStringLiteral(
+            "video-contact-sheet-2x2-v3");
+        const QImage sheetImage = testImage(sheet.targetSize, qRgb(30, 60, 90));
+        const QByteArray sheetBytes = PersistentImageCache::createImageForCache(
+            sheet, sheetImage);
+        QVERIFY(!sheetBytes.isEmpty());
+        PersistentImageCache::storeImage(sheet.info, sheetBytes);
+
+        ImageDecodeRequest poster = sheet;
+        poster.videoPosterRequest = true;
+        poster.targetSize = QSize(1024, 1024);
+        poster.thumbnailTransformKey = QStringLiteral(
+            "video-first-frame-poster-1024-display-v3");
+        const QImage posterImage = testImage(QSize(960, 540), qRgb(200, 120, 40));
+        const QByteArray posterBytes = PersistentDerivedImageCache::
+            createImageForCache(poster, posterImage);
+        QVERIFY(!posterBytes.isEmpty());
+        PersistentDerivedImageCache::storeImage(poster, posterBytes);
+
+        const auto verifiesCachedColor = [](const QImage &actual,
+                                            const QImage &expected) {
+            if (actual.isNull() || actual.size() != expected.size()) {
+                return false;
+            }
+            const QColor actualColor = actual.pixelColor(0, 0);
+            const QColor expectedColor = expected.pixelColor(0, 0);
+            return qAbs(actualColor.red() - expectedColor.red()) <= 12
+                && qAbs(actualColor.green() - expectedColor.green()) <= 12
+                && qAbs(actualColor.blue() - expectedColor.blue()) <= 12;
+        };
+        QVERIFY(verifiesCachedColor(
+            PersistentImageCache::retrieveImage(sheet), sheetImage));
+        QVERIFY(verifiesCachedColor(
+            PersistentDerivedImageCache::retrieveImage(poster), posterImage));
+
+        QVERIFY(source.open(QIODevice::Append));
+        QCOMPARE(source.write(QByteArrayLiteral("-changed")), qint64(8));
+        source.close();
+        const QFileInfo changed(path);
+        poster.info.lastModified = changed.lastModified();
+        poster.info.fileSize = changed.size();
+        QVERIFY(!PersistentDerivedImageCache::hasImage(poster));
     }
 
     void jpegWithoutOrientationRetainsMetadata() {

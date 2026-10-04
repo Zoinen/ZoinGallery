@@ -9,10 +9,27 @@
 #include <QDir>
 #include <QFutureWatcher>
 #include <QSettings>
+#include <QSet>
 #include <QWindow>
 #include <QtConcurrentRun>
 
 namespace ZoinGallery {
+namespace {
+const QSet<QString> &videoPlaybackModes() {
+    static const QSet<QString> modes{
+        QStringLiteral("autoplay-muted"), QStringLiteral("autoplay-sound"),
+        QStringLiteral("manual")};
+    return modes;
+}
+
+QString storedVideoPlaybackMode(const QSettings &settings) {
+    const QString mode = settings.value(
+        "Gallery/videoPlaybackMode", QStringLiteral("autoplay-muted")).toString();
+    return videoPlaybackModes().contains(mode)
+        ? mode : QStringLiteral("autoplay-muted");
+}
+}
+
 GalleryPreferences::GalleryPreferences(DecodeManager *decoder, bool persistent, QObject *parent)
     : QObject(parent), _decoder(decoder), _decoders(ImageDecoderFactory::decoderInventory()) {
     _cachePool.setMaxThreadCount(1);
@@ -23,7 +40,8 @@ GalleryPreferences::GalleryPreferences(DecodeManager *decoder, bool persistent, 
         {"location", settings.value("Cache/location", QString()).toString()},
         {"activeLocation", StorageLocations::cacheRoot()},
         {"convertColors", DisplayColorSpace::conversionEnabled()},
-        {"animateResizing", settings.value("Gallery/animateResizing", false).toBool()}};
+        {"animateResizing", settings.value("Gallery/animateResizing", false).toBool()},
+        {"videoPlaybackMode", storedVideoPlaybackMode(settings)}};
     if (persistent) runCacheOperation(false, true);
 }
 QVariantMap GalleryPreferences::values() const { return _values; }
@@ -36,10 +54,18 @@ bool GalleryPreferences::apply(const QVariantMap &values) {
     const QString location = values.value("location").toString().trimmed();
     const int imageMode = values.value("imageMode").toInt();
     const int folderMode = values.value("folderMode").toInt();
+    const QString videoPlaybackMode = values.value(
+        "videoPlaybackMode", _values.value("videoPlaybackMode",
+        QStringLiteral("autoplay-muted"))).toString();
+    const bool validVideoPlaybackMode =
+        videoPlaybackModes().contains(videoPlaybackMode);
     if (limit < 64 || limit > 65536 || imageMode < 0 || imageMode > 2
         || folderMode < 0 || folderMode > 2
+        || !validVideoPlaybackMode
         || (!location.isEmpty() && !QDir::isAbsolutePath(location))) {
-        _error = tr("Use a limit from 64 to 65536 MiB and an absolute cache path.");
+        _error = validVideoPlaybackMode
+            ? tr("Use a limit from 64 to 65536 MiB and an absolute cache path.")
+            : tr("Choose a valid video playback mode.");
         emit changed();
         return false;
     }
@@ -50,11 +76,13 @@ bool GalleryPreferences::apply(const QVariantMap &values) {
     settings.setValue("Cache/diskLimitMiB", limit);
     settings.setValue("Cache/location", location);
     settings.setValue("Gallery/animateResizing", values.value("animateResizing").toBool());
+    settings.setValue("Gallery/videoPlaybackMode", videoPlaybackMode);
     const bool colorsChanged = DisplayColorSpace::conversionEnabled() != values.value("convertColors").toBool();
     DisplayColorSpace::setConversionEnabled(values.value("convertColors").toBool());
     settings.sync();
     if (settings.status() != QSettings::NoError) { _error = tr("Could not save Gallery settings."); emit changed(); return false; }
     _values = values;
+    _values["videoPlaybackMode"] = videoPlaybackMode;
     _values["location"] = location;
     _values["activeLocation"] = StorageLocations::cacheRoot();
     _decoder->setImageCacheMode(cacheUsageModeFromInt(imageMode));

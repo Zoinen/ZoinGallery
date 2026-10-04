@@ -268,6 +268,44 @@ private slots:
         QCOMPARE(repeatedFitPlan.cachedImages.first().second, 1);
     }
 
+    void fullResolutionPreviewOnlySourceIsRetainedForZoom() {
+        const QSize originalSize(400, 300);
+        ImageFile item;
+        configureImage(item, QStringLiteral("preview-only.dng"), originalSize);
+        const QList<ImageFile *> items{&item};
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        ViewerImageCache cache(QStringLiteral("preview-native-"), store);
+        const auto initial = cache.planRequest(items, 0, QSize(), 1);
+        QCOMPARE(initial.decodeRequests.size(), 1);
+
+        QImage pixels(originalSize, QImage::Format_RGB32);
+        pixels.fill(Qt::green);
+        DecodedImageInfo info;
+        info.previewUsed = QStringLiteral("RAW embedded preview");
+        info.isAuthoritativePreview = true;
+        const auto stored = cache.storeDecodedImage(
+            initial.decodeRequests.first(), pixels, info);
+        QVERIFY(stored.presentable);
+        QCOMPARE(stored.level, 2);
+
+        // Animated zoom and filter switches replay the native plan. They must
+        // reuse the same async texture rather than decoding/replacing it.
+        for (int refresh = 0; refresh < 8; ++refresh) {
+            const auto plan = cache.planRequest(items, 0, QSize(), 1);
+            QVERIFY(plan.decodeRequests.isEmpty());
+            QCOMPARE(plan.cachedImages.size(), 1);
+            QCOMPARE(plan.cachedImages.first(), qMakePair(stored.url, 2));
+        }
+        QCOMPARE(cache.fullSizeImageCount(), 1);
+        const auto fit = cache.planRequest(items, 0, originalSize * 2, 1);
+        QVERIFY(fit.decodeRequests.isEmpty());
+
+        ImageInfo changed = item.info();
+        changed.sourceVersionToken = QStringLiteral("changed");
+        item.setInfo(changed);
+        QCOMPARE(cache.planRequest(items, 0, QSize(), 1).decodeRequests.size(), 1);
+    }
+
     void undersizedNativeDecodeStaysFallbackAndIsRetried() {
         const QSize originalSize(4000, 3000);
         const QSize viewportSize(1000, 750);
@@ -323,6 +361,26 @@ private slots:
         QCOMPARE(retryPlan.cachedImages.first().first, fitStored.url);
         QCOMPARE(retryPlan.decodeRequests.size(), 1);
         QCOMPARE(retryPlan.decodeRequests.first().targetSize, originalSize);
+    }
+
+    void undersizedPreviewOnlySourceStillRequiresCoverage() {
+        ImageFile item;
+        configureImage(item, QStringLiteral("undersized-preview.dng"), QSize(400, 300));
+        const QList<ImageFile *> items{&item};
+        ViewerImageCache cache(QStringLiteral("undersized-preview-"),
+                               QSharedPointer<ProviderImageStore>::create());
+        const auto initial = cache.planRequest(items, 0, QSize(), 1);
+        QImage pixels(QSize(200, 150), QImage::Format_RGB32);
+        pixels.fill(Qt::blue);
+        DecodedImageInfo info;
+        info.previewUsed = QStringLiteral("RAW embedded preview");
+        info.isAuthoritativePreview = true;
+        const auto stored = cache.storeDecodedImage(
+            initial.decodeRequests.first(), pixels, info);
+        QVERIFY(stored.accepted);
+        QVERIFY(!stored.presentable);
+        QVERIFY(cache.imageSources(&item, QSize()).isEmpty());
+        QCOMPARE(cache.planRequest(items, 0, QSize(), 1).decodeRequests.size(), 1);
     }
 
     void largerFitRequestDoesNotPresentUndersizedCachedTier() {

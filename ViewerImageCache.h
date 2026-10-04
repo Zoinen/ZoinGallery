@@ -42,8 +42,8 @@ public:
         // against the Fit budget so it receives the same retention guarantee
         // as a scaled Fit frame.
         bool fitPrepared = false;
-        // True only when this full-size frame came from the source decode,
-        // rather than a persistent Fit artifact or embedded preview. Native
+        // True when this full-size frame came from the source decode or a
+        // preview-only decoder, rather than a persistent Fit artifact. Native
         // presentation may use a cached Fit frame as a fallback, but it must
         // not label that frame authoritative or suppress the source decode.
         bool nativePrepared = false;

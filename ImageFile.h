@@ -125,6 +125,9 @@ struct ImageDecodeRequest {
     // Distinguishes decoded pixels produced with different thumbnail fit/crop
     // policies. Empty preserves the historical stretched-thumbnail policy.
     QString thumbnailTransformKey;
+    // Video's first decoded frame is cached separately from the panel's
+    // four-frame contact sheet and must never replace that presentation.
+    bool videoPosterRequest = false;
 };
 
 struct DecodedImageInfo {
@@ -135,6 +138,9 @@ struct DecodedImageInfo {
     // Opaque-versioned derived artifacts exactly match their requested tier
     // and do not need the legacy cache-to-source quality upgrade.
     bool isAuthoritativeDerivedCache = false;
+    // Preview-only decoders (e.g. RAW) have no original-pixel upgrade. The
+    // preview is their source result, subject to the normal size coverage check.
+    bool isAuthoritativePreview = false;
 };
 
 struct ImageData {
@@ -147,6 +153,7 @@ struct ImageData {
     int64_t previewDataSize = 0;
     QString previewMimeType;
     QString previewUsed;
+    bool nativeDecodeSupported = true;
 
     // Pins a provider-owned local backing file through preview extraction and
     // decode. It is intentionally not copied into persistent cache metadata.

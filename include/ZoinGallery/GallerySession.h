@@ -19,6 +19,8 @@ namespace ZoinGallery {
 
 class GalleryRuntime;
 class ThumbnailMemoryCache;
+class VideoPlaybackController;
+class ImageSourceProvider;
 
 class GallerySession final : public QObject {
     Q_OBJECT
@@ -46,6 +48,9 @@ class GallerySession final : public QObject {
     Q_PROPERTY(bool thumbnailsEnabled READ thumbnailsEnabled
                WRITE setThumbnailsEnabled NOTIFY thumbnailsEnabledChanged)
     Q_PROPERTY(QString thumbnailProviderName READ thumbnailProviderName CONSTANT)
+    Q_PROPERTY(bool videoPlaybackAvailable READ videoPlaybackAvailable
+               NOTIFY videoPlaybackAvailableChanged)
+    Q_PROPERTY(QObject *videoPlaybackController READ videoPlaybackController CONSTANT)
     Q_PROPERTY(bool viewerOpen READ viewerOpen WRITE setViewerOpen NOTIFY viewerOpenChanged)
     Q_PROPERTY(QUrl viewerSource READ viewerSource NOTIFY viewerSourceChanged)
     Q_PROPERTY(int viewerSourceLevel READ viewerSourceLevel NOTIFY viewerSourceChanged)
@@ -100,6 +105,8 @@ public:
     Q_INVOKABLE void setCollapsedGroupKeys(
         const QString &stateKey, const QStringList &keys);
     QString thumbnailProviderName() const;
+    bool videoPlaybackAvailable() const;
+    QObject *videoPlaybackController() const;
     bool viewerOpen() const;
     void setViewerOpen(bool open);
     QUrl viewerSource() const;
@@ -155,12 +162,16 @@ public:
     Q_INVOKABLE QString entryNameAt(int index) const;
     Q_INVOKABLE QString localPathAt(int index) const;
     Q_INVOKABLE bool isImageAt(int index) const;
+    Q_INVOKABLE bool isVideoAt(int index) const;
+    Q_INVOKABLE bool isViewableAt(int index) const;
     Q_INVOKABLE bool isDirectoryAt(int index) const;
     Q_INVOKABLE bool isSelectedAt(int index) const;
     Q_INVOKABLE QVariantMap highlightStyleAt(int index) const;
     Q_INVOKABLE int sourceIndexAt(int index) const;
     Q_INVOKABLE QSize imageOriginalSizeAt(int index) const;
     Q_INVOKABLE int adjacentImageIndex(int fromIndex, int direction) const;
+    Q_INVOKABLE int adjacentViewableIndex(int fromIndex, int direction) const;
+    Q_INVOKABLE QVariantMap videoSourceAt(int index) const;
     Q_INVOKABLE QUrl viewerSourceAt(int index) const;
     Q_INVOKABLE QVariantList viewerSourcesAt(int index) const;
     // Returns "idle", "pending", "ready", or "failed" for the requested
@@ -197,6 +208,7 @@ signals:
     void panelViewportCursorEntryIdChanged();
     void panelViewportStateAvailableChanged();
     void thumbnailsEnabledChanged();
+    void videoPlaybackAvailableChanged();
     void viewerOpenChanged();
     void viewerSourceChanged();
     void viewerSourceAtChanged(int index);
@@ -234,6 +246,8 @@ private:
                    const QSharedPointer<::ProviderImageStore> &store,
                    const QSharedPointer<ThumbnailMemoryCache> &thumbnailCache,
                    ::DecodeManager *decodeManager,
+                   const QSharedPointer<ImageSourceProvider> &imageSourceProvider,
+                   bool enableVideoPlayback,
                    qint64 viewerFitCacheByteBudget,
                    qint64 viewerNativeCacheByteBudget,
                    QObject *parent);

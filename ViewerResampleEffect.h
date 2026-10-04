@@ -6,6 +6,12 @@
 #include <QVector2D>
 #include <QtQmlIntegration/qqmlintegration.h>
 
+#ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+#include "ViewerVideoFrameSource.h"
+#else
+class QObject;
+#endif
+
 // Supplies the final image shader with the render target's physical viewport.
 // The QML wrapper owns source selection and its retained half-size pyramid.
 class ViewerResampleEffect : public QQuickItem
@@ -22,7 +28,10 @@ class ViewerResampleEffect : public QQuickItem
     Q_PROPERTY(qreal borderRadius READ borderRadius WRITE setBorderRadius NOTIFY borderRadiusChanged)
     Q_PROPERTY(bool intermediate READ intermediate WRITE setIntermediate NOTIFY intermediateChanged)
     Q_PROPERTY(bool pixelAligned READ pixelAligned WRITE setPixelAligned NOTIFY pixelAlignedChanged)
+    Q_PROPERTY(bool nearestNeighbor READ nearestNeighbor WRITE setNearestNeighbor NOTIFY nearestNeighborChanged)
     Q_PROPERTY(bool pixelAlignedIdentity READ pixelAlignedIdentity WRITE setPixelAlignedIdentity NOTIFY pixelAlignedIdentityChanged)
+    Q_PROPERTY(QObject *videoSource READ videoSourceObject
+               WRITE setVideoSourceObject NOTIFY videoSourceChanged)
 
 public:
     explicit ViewerResampleEffect(QQuickItem *parent = nullptr);
@@ -45,8 +54,12 @@ public:
     void setIntermediate(bool enabled);
     bool pixelAligned() const { return m_pixelAligned; }
     void setPixelAligned(bool enabled);
+    bool nearestNeighbor() const { return m_nearestNeighbor; }
+    void setNearestNeighbor(bool enabled);
     bool pixelAlignedIdentity() const { return m_pixelAlignedIdentity; }
     void setPixelAlignedIdentity(bool enabled);
+    QObject *videoSourceObject() const;
+    void setVideoSourceObject(QObject *source);
 
 signals:
     void sourceChanged();
@@ -58,7 +71,9 @@ signals:
     void borderRadiusChanged();
     void intermediateChanged();
     void pixelAlignedChanged();
+    void nearestNeighborChanged();
     void pixelAlignedIdentityChanged();
+    void videoSourceChanged();
 
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
@@ -77,4 +92,10 @@ private:
     bool m_intermediate = false;
     bool m_pixelAligned = false;
     bool m_pixelAlignedIdentity = false;
+    bool m_nearestNeighbor = false;
+#ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+    QPointer<ZoinGallery::ViewerVideoFrameSource> m_videoSource;
+    QMetaObject::Connection m_videoSourceDestroyed;
+    QMetaObject::Connection m_videoSourceFrameChanged;
+#endif
 };

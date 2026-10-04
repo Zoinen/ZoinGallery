@@ -225,12 +225,34 @@ Item {
             anchors.fill: parent
             // A completed native request is retained for later zooming. Fit
             // must still use its prepared tier when that tier covers output.
-            readonly property bool preparedFitReady: root.viewport.zoomFitView
+            readonly property bool preparedFitReady: !root.viewport.nearestNeighbor
+                && root.viewport.zoomFitView
                 && root.fromLevel === 1 && baseImage.status === Image.Ready
                 && baseImage.sourceSize.width + 1 >= viewportSize.width
                 && baseImage.sourceSize.height + 1 >= viewportSize.height
-            imageSource: preparedFitReady || nativeImage.status !== Image.Ready
-                         ? baseImage : nativeImage
+            imageSource: {
+                if (root.viewport.videoMode) {
+                    if (root.viewport.videoDisplayFailed
+                            && !(root.viewport.videoFrameSource
+                                 && root.viewport.videoFrameSource.hasFrame)
+                            && !(root.viewport.videoPosterImage
+                                 && root.viewport.videoPosterImage.status
+                                    === Image.Ready))
+                        return null
+                    if (root.viewport.videoPosterImage
+                            && root.viewport.videoPosterImage.status === Image.Ready)
+                        return root.viewport.videoPosterImage
+                    return baseImage
+                }
+                return preparedFitReady || nativeImage.status !== Image.Ready
+                    ? baseImage : nativeImage
+            }
+            nearestNeighbor: root.viewport.nearestNeighbor
+            videoFrameSource: root.viewport.videoMode
+                ? root.viewport.videoFrameSource : null
+            sourceExtent: root.viewport.videoFrameSource
+                    && root.viewport.videoFrameSource.hasFrame
+                ? root.viewport.videoFrameSource.frameSize : Qt.size(0, 0)
             viewportSize: Qt.size(
                 width * root.viewport.devicePixelRatio,
                 height * root.viewport.devicePixelRatio)
@@ -275,6 +297,7 @@ Item {
                 y: cropImage.y
                 width: cropImage.width
                 height: cropImage.height
+                nearestNeighbor: root.viewport.nearestNeighbor
                 imageSource: cropImage
                 pixelAligned: !root.moving
                 viewportSize: Qt.size(width * root.dpr, height * root.dpr)

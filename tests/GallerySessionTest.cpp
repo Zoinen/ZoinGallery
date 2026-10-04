@@ -11,6 +11,9 @@
 #include "PersistentDerivedImageCache.h"
 #include "StorageLocations.h"
 #include "QmlAsyncImageProvider.h"
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+#include "src/embed/ImageSourceRangeDevice.h"
+#endif
 #include "src/embed/ExternalCatalogModel.h"
 #include "tests/HeicTestFixture.h"
 #include "tests/DirectoryPreviewFixture.h"
@@ -36,6 +39,15 @@
 #include <QThread>
 #include <QTimeZone>
 #include <QtTest>
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+#include <QAudioBuffer>
+#include <QAudioBufferOutput>
+#include <QAudioOutput>
+#include <QMediaPlayer>
+#include <QUrl>
+#include <QVideoFrame>
+#include <QVideoSink>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -112,6 +124,76 @@ public:
 private:
     QString _path;
 };
+
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+struct PlaybackTestProviderState {
+    std::atomic_int rangeReads{0};
+    std::atomic_int materializations{0};
+    std::atomic_int releasedLeases{0};
+};
+
+class PlaybackTestLease final : public ZoinGallery::ImageSourceLease {
+public:
+    PlaybackTestLease(QString path,
+                      QSharedPointer<PlaybackTestProviderState> state)
+        : m_path(std::move(path)), m_state(std::move(state)) {}
+
+    ~PlaybackTestLease() override {
+        ++m_state->releasedLeases;
+    }
+
+    QString localPath() const override { return m_path; }
+    qint64 retainedBytes() const override {
+        // Keep this fixture out of SharedImageSourceProvider's lease cache so
+        // the test measures the playback controller's own lease lifetime.
+        return 2LL * 1024 * 1024 * 1024;
+    }
+
+private:
+    QString m_path;
+    QSharedPointer<PlaybackTestProviderState> m_state;
+};
+
+class PlaybackTestProvider final : public ZoinGallery::ImageSourceProvider {
+public:
+    explicit PlaybackTestProvider(QString path)
+        : m_path(std::move(path)),
+          state(QSharedPointer<PlaybackTestProviderState>::create()) {}
+
+    ZoinGallery::ImageSourceReadResult readRange(
+        const ZoinGallery::ImageSourceDescriptor &, qint64 offset,
+        qint64 length,
+        const QSharedPointer<ZoinGallery::ImageSourceCancellation>
+            &cancellation) override {
+        ++state->rangeReads;
+        if (cancellation && cancellation->isCanceled()) {
+            return {.errorString = QStringLiteral("canceled")};
+        }
+        QFile file(m_path);
+        if (!file.open(QIODevice::ReadOnly) || !file.seek(offset)) {
+            return {.errorString = file.errorString()};
+        }
+        const QByteArray data = file.read(length);
+        return {.data = data, .endOfFile = file.atEnd()};
+    }
+
+    QSharedPointer<ZoinGallery::ImageSourceLease> materialize(
+        const ZoinGallery::ImageSourceDescriptor &,
+        const QSharedPointer<ZoinGallery::ImageSourceCancellation>
+            &cancellation) override {
+        ++state->materializations;
+        if (cancellation && cancellation->isCanceled()) {
+            return {};
+        }
+        return QSharedPointer<PlaybackTestLease>::create(m_path, state);
+    }
+
+    QSharedPointer<PlaybackTestProviderState> state;
+
+private:
+    QString m_path;
+};
+#endif
 
 class ProgressiveTestProvider final
     : public ZoinGallery::ImageSourceProvider {
@@ -964,6 +1046,454 @@ private slots:
         QVERIFY(!model->directoryPreviewModel(40));
     }
 
+    void videoRowsStayInCatalogOrderAndRemainSeparateFromImages() {
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        options.enableVideoPlayback = true;
+#endif
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("video-viewer-catalog"));
+        QVERIFY(session);
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        auto *playbackController = session->videoPlaybackController();
+        QVERIFY(playbackController);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            session->videoPlaybackAvailable()
+                || playbackController->property("state").toString()
+                    == QStringLiteral("unavailable"),
+            5000);
+#endif
+
+        auto still = entry(QStringLiteral("still"), 0,
+                           QStringLiteral("still.png"), true);
+        auto video = entry(QStringLiteral("video"), 1,
+                           QStringLiteral("clip.mp4"));
+        video.insert(QStringLiteral("thumbnailKind"),
+                     QStringLiteral("video"));
+        auto text = entry(QStringLiteral("text"), 2,
+                          QStringLiteral("notes.txt"));
+        auto finalStill = entry(QStringLiteral("final-still"), 3,
+                                QStringLiteral("final.png"), true);
+        QVERIFY(session->applyExternalCatalog(
+            {still, video, text, finalStill}, 10));
+
+        QVERIFY(session->isImageAt(0));
+        QVERIFY(session->isVideoAt(1));
+        QVERIFY(!session->isImageAt(1));
+        QVERIFY(!session->isViewableAt(2));
+        QCOMPARE(session->isViewableAt(1),
+                 session->videoPlaybackAvailable());
+        QCOMPARE(session->adjacentViewableIndex(0, 1),
+                 session->videoPlaybackAvailable() ? 1 : 3);
+        QCOMPARE(session->adjacentViewableIndex(1, 1), 3);
+        QCOMPARE(session->adjacentViewableIndex(3, -1),
+                 session->videoPlaybackAvailable() ? 1 : 0);
+
+        if (session->videoPlaybackAvailable()) {
+            const QVariantMap source = session->videoSourceAt(1);
+            QVERIFY(!source.value(QStringLiteral("identity")).toString().isEmpty());
+            QCOMPARE(source.value(QStringLiteral("entryId")).toString(),
+                     QStringLiteral("video"));
+            QCOMPARE(source.value(QStringLiteral("path")).toString(),
+                     video.value(QStringLiteral("localPath")).toString());
+            QVERIFY(session->applyExternalCatalog(
+                {finalStill, video, still, text}, 11));
+            QCOMPARE(session->videoSourceAt(1).value(
+                         QStringLiteral("identity")),
+                     source.value(QStringLiteral("identity")));
+        }
+
+        runtime->shutdown();
+    }
+
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    void ffmpegAudioBuffersContinueWhenPlayerIsReplaced() {
+        const QString fixturePath = QStringLiteral(ZOIN_TEST_VIDEO_PATH);
+        QVERIFY(QFileInfo::exists(fixturePath));
+
+        QAudioBufferOutput decodedAudio;
+        int decodedFrameCount = 0;
+        connect(&decodedAudio, &QAudioBufferOutput::audioBufferReceived, this,
+                [&decodedFrameCount](const QAudioBuffer &buffer) {
+            if (buffer.isValid())
+                decodedFrameCount += buffer.frameCount();
+        });
+
+        for (int sourceIndex = 0; sourceIndex < 3; ++sourceIndex) {
+            const int baseline = decodedFrameCount;
+            {
+                QAudioOutput audioOutput;
+                audioOutput.setVolume(0.0); // Decode without test sound.
+                QMediaPlayer player;
+                player.setAudioOutput(&audioOutput);
+                player.setAudioBufferOutput(&decodedAudio);
+                player.setSource(QUrl::fromLocalFile(fixturePath));
+                player.play();
+                QTRY_VERIFY_WITH_TIMEOUT(decodedFrameCount > baseline, 10000);
+                player.stop();
+            }
+        }
+    }
+
+    void videoContactSheetCacheHitRestoresEvictedPoster() {
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.enableVideoPlayback = true;
+        // Both images fit individually, but the contact sheet evicts the
+        // first-frame poster when they share this small memory budget.
+        options.thumbnailCacheByteBudget = 96 * 64 * 4;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession("video-poster-eviction");
+        QVERIFY(session);
+        const QString path = QStringLiteral(ZOIN_TEST_VIDEO_PATH);
+        auto video = entry("video", 0, "video.mp4");
+        video["localPath"] = path;
+        video["size"] = QFileInfo(path).size();
+        video["thumbnailKind"] = "video";
+        video["contentVersion"] = "poster-eviction-v1";
+        video["versionStrength"] = "localStat";
+        video["sourceKey"] = "poster-eviction-source";
+        QVERIFY(session->applyExternalCatalog({video}, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        const int role = model->roleNames().key("imageFileRole", -1);
+        auto *item = model->data(model->index(0, 0), role).value<ImageFile *>();
+        QVERIFY(item);
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        QSignalSpy ready(decoder, &DecodeManager::imageReady);
+        ImageDecodeRequest request;
+        request.info = item->info();
+        request.targetSize = QSize(96, 54);
+        model->decodeImages({request});
+        QTRY_VERIFY_WITH_TIMEOUT(ready.size() >= 2, 10000);
+        bool generatedPoster = false;
+        for (const auto &delivery : ready) {
+            const auto decoded = delivery.at(0).value<ImageDecodeRequest>();
+            if (decoded.videoPosterRequest) {
+                generatedPoster = true;
+                const QByteArray cached = PersistentImageCache::createImageForCache(
+                    decoded, delivery.at(1).value<QImage>());
+                QVERIFY(!cached.isEmpty());
+                PersistentImageCache::storeImage(decoded, cached);
+            }
+        }
+        QVERIFY(generatedPoster);
+        QVERIFY(!model->videoThumbnailUrlAt(0).isEmpty());
+        QVERIFY(model->videoPosterUrlAt(0).isEmpty());
+        QVERIFY(runtime->thumbnailCacheEvictionCount() > 0);
+        const int deliveries = ready.size();
+        decoder->setImageCacheMode(CacheUsageMode::On);
+        model->decodeImages({request});
+        QTRY_VERIFY_WITH_TIMEOUT(!model->videoPosterUrlAt(0).isEmpty(), 5000);
+        QCOMPARE(ready.size(), deliveries + 1);
+        QVERIFY(ready.last().at(0).value<ImageDecodeRequest>().videoPosterRequest);
+        QVERIFY(ready.last().at(2).value<DecodedImageInfo>().isFromCache);
+        runtime->shutdown();
+    }
+
+    void videoPlaybackUsesLocalRangeAndMaterializedSources() {
+        const QString fixturePath = QStringLiteral(ZOIN_TEST_VIDEO_PATH);
+        QVERIFY(QFileInfo::exists(fixturePath));
+        const qint64 fixtureSize = QFileInfo(fixturePath).size();
+        QVERIFY(fixtureSize > 0);
+
+        QQmlEngine engine;
+        auto provider = QSharedPointer<PlaybackTestProvider>::create(
+            fixturePath);
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.enableVideoPlayback = true;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("video-playback-integration"));
+        QVERIFY(session);
+        QTRY_VERIFY_WITH_TIMEOUT(session->videoPlaybackAvailable(), 5000);
+        QObject *playback = session->videoPlaybackController();
+        QVERIFY(playback);
+
+        QVideoSink output;
+        int validFrames = 0;
+        QVideoFrame lastFrame;
+        connect(&output, &QVideoSink::videoFrameChanged, this,
+                [&validFrames, &lastFrame](const QVideoFrame &frame) {
+            if (frame.isValid()) {
+                ++validFrames;
+                lastFrame = frame;
+            }
+        });
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "setOutputSink", Qt::DirectConnection,
+            Q_ARG(QObject *, static_cast<QObject *>(&output))));
+
+        auto local = entry(QStringLiteral("local-video"), 0,
+                           QStringLiteral("local.mp4"));
+        local[QStringLiteral("localPath")] = fixturePath;
+        local[QStringLiteral("size")] = fixtureSize;
+        local[QStringLiteral("thumbnailKind")] = QStringLiteral("video");
+        QVERIFY(session->applyExternalCatalog({local}, 1));
+        QVERIFY(session->isVideoAt(0));
+        const int imageFileRole = session->model()->roleNames().key(
+            QByteArrayLiteral("imageFileRole"), -1);
+        QVERIFY(imageFileRole >= 0);
+        auto *videoItem = session->model()->data(
+            session->model()->index(0, 0), imageFileRole)
+                              .value<ImageFile *>();
+        QVERIFY(videoItem);
+        // The gallery tile and the viewer must use the same published
+        // thumbnail identity for this video row.
+        videoItem->setImageId(QStringLiteral("generated-video-thumbnail"));
+        QVariantMap source = session->videoSourceAt(0);
+        QVERIFY(!source.value(QStringLiteral("identity")).toString().isEmpty());
+        QCOMPARE(source.value(QStringLiteral("thumbnailSource")).toUrl().toString(),
+                 videoItem->imageIdUrl());
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "openSource", Qt::DirectConnection,
+            Q_ARG(QVariantMap, source),
+            Q_ARG(QString, QStringLiteral("manual"))));
+        QTRY_COMPARE_WITH_TIMEOUT(
+            playback->property("state").toString(), QStringLiteral("ready"),
+            10000);
+        const qint64 duration =
+            playback->property("duration").toLongLong();
+        QVERIFY(duration >= 1500);
+        QVERIFY(playback->property("muted").toBool());
+
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "playPause", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            playback->property("playing").toBool(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(validFrames > 0, 5000);
+        QVERIFY(lastFrame.isValid());
+
+        const qint64 seekTarget = duration / 2;
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "seekTo", Qt::DirectConnection,
+            Q_ARG(qint64, seekTarget)));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            playback->property("position").toLongLong() >= seekTarget - 150,
+            3000);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "playPause", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !playback->property("playing").toBool(), 3000);
+        const qint64 pausedPosition =
+            playback->property("position").toLongLong();
+        QTest::qWait(150);
+        QVERIFY(qAbs(playback->property("position").toLongLong()
+                     - pausedPosition) < 50);
+
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "toggleMute", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !playback->property("muted").toBool(), 3000);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "adjustVolume", Qt::DirectConnection,
+            Q_ARG(qreal, -0.25)));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            qAbs(playback->property("volume").toReal() - 0.75) < 0.01,
+            3000);
+
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "playPause", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            playback->property("playing").toBool(), 3000);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "setPresentationVisible", Qt::DirectConnection,
+            Q_ARG(bool, false)));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !playback->property("playing").toBool(), 3000);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "setPresentationVisible", Qt::DirectConnection,
+            Q_ARG(bool, true)));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            playback->property("playing").toBool(), 3000);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "playPause", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            !playback->property("playing").toBool(), 3000);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "setPresentationVisible", Qt::DirectConnection,
+            Q_ARG(bool, false)));
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "setPresentationVisible", Qt::DirectConnection,
+            Q_ARG(bool, true)));
+        QTest::qWait(150);
+        QVERIFY(!playback->property("playing").toBool());
+
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "seekTo", Qt::DirectConnection,
+            Q_ARG(qint64, duration - 150)));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            playback->property("position").toLongLong() >= duration - 500,
+            3000);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "playPause", Qt::DirectConnection));
+        QTRY_COMPARE_WITH_TIMEOUT(
+            playback->property("state").toString(), QStringLiteral("ended"),
+            5000);
+        QVERIFY(lastFrame.isValid());
+        const int framesBeforeReplay = validFrames;
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "playPause", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            playback->property("playing").toBool(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            playback->property("position").toLongLong() < duration / 2,
+            3000);
+        QTRY_VERIFY_WITH_TIMEOUT(validFrames > framesBeforeReplay, 3000);
+
+        auto externalVideo = [&](const QString &id,
+                                 const QString &name,
+                                 const QString &accessProfile) {
+            auto video = entry(id, 0, name);
+            video[QStringLiteral("localPath")] = fixturePath;
+            video[QStringLiteral("size")] = fixtureSize;
+            video[QStringLiteral("thumbnailKind")] =
+                QStringLiteral("video");
+            video[QStringLiteral("resourceId")] =
+                QStringLiteral("resource:") + id;
+            video[QStringLiteral("sourceKey")] =
+                QStringLiteral("media:") + id;
+            video[QStringLiteral("contentVersion")] = QStringLiteral("v1");
+            video[QStringLiteral("versionStrength")] =
+                QStringLiteral("strong");
+            video[QStringLiteral("storageClass")] = QStringLiteral("remote");
+            video[QStringLiteral("accessProfile")] = accessProfile;
+            video[QStringLiteral("mimeType")] = QStringLiteral("video/mp4");
+            return video;
+        };
+
+        auto rangeVideo = externalVideo(
+            QStringLiteral("range-video"), QStringLiteral("range.mp4"),
+            QStringLiteral("nativeRange"));
+        QVERIFY(session->applyExternalCatalog({rangeVideo}, 2));
+        source = session->videoSourceAt(0);
+        QCOMPARE(source.value(QStringLiteral("sourceKind")).toString(),
+                 QStringLiteral("external"));
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "openSource", Qt::DirectConnection,
+            Q_ARG(QVariantMap, source),
+            Q_ARG(QString, QStringLiteral("manual"))));
+        QTRY_COMPARE_WITH_TIMEOUT(
+            playback->property("state").toString(), QStringLiteral("ready"),
+            10000);
+        QVERIFY(!playback->property("muted").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(provider->state->rangeReads.load() > 0,
+                                 5000);
+        const int rangeFrameBaseline = validFrames;
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "playPause", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            validFrames > rangeFrameBaseline, 5000);
+
+        auto materializedVideo = externalVideo(
+            QStringLiteral("materialized-video"),
+            QStringLiteral("materialized.mp4"),
+            QStringLiteral("materialized"));
+        QVERIFY(session->applyExternalCatalog({materializedVideo}, 3));
+        source = session->videoSourceAt(0);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "openSource", Qt::DirectConnection,
+            Q_ARG(QVariantMap, source),
+            Q_ARG(QString, QStringLiteral("manual"))));
+        QTRY_COMPARE_WITH_TIMEOUT(
+            playback->property("state").toString(), QStringLiteral("ready"),
+            10000);
+        QVERIFY(!playback->property("muted").toBool());
+        QCOMPARE(provider->state->materializations.load(), 1);
+        const int materializedFrameBaseline = validFrames;
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "playPause", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            validFrames > materializedFrameBaseline, 5000);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "stop", Qt::DirectConnection));
+        QTRY_COMPARE_WITH_TIMEOUT(provider->state->releasedLeases.load(), 1,
+                                  5000);
+
+        QTemporaryDir invalidDirectory;
+        QVERIFY(invalidDirectory.isValid());
+        const QString invalidPath = invalidDirectory.filePath(
+            QStringLiteral("unsupported.mp4"));
+        QFile invalidFile(invalidPath);
+        QVERIFY(invalidFile.open(QIODevice::WriteOnly));
+        QCOMPARE(invalidFile.write(QByteArrayLiteral("not a video")),
+                 qint64(11));
+        invalidFile.close();
+        auto invalidVideo = entry(QStringLiteral("invalid-video"), 0,
+                                  QStringLiteral("unsupported.mp4"));
+        invalidVideo[QStringLiteral("localPath")] = invalidPath;
+        invalidVideo[QStringLiteral("thumbnailKind")] =
+            QStringLiteral("video");
+        QVERIFY(session->applyExternalCatalog({invalidVideo}, 4));
+        source = session->videoSourceAt(0);
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "openSource", Qt::DirectConnection,
+            Q_ARG(QVariantMap, source),
+            Q_ARG(QString, QStringLiteral("autoplay-muted"))));
+        QTRY_COMPARE_WITH_TIMEOUT(
+            playback->property("state").toString(), QStringLiteral("failed"),
+            10000);
+        QVERIFY(playback->property("muted").toBool());
+        QVERIFY(!playback->property("error").toString().isEmpty());
+
+        QVERIFY(QMetaObject::invokeMethod(
+            playback, "setOutputSink", Qt::DirectConnection,
+            Q_ARG(QObject *, static_cast<QObject *>(nullptr))));
+        runtime->shutdown();
+    }
+#endif
+
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    void videoRangeDeviceSeeksAndHonorsCancellation() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("range.bin"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        constexpr qint64 RangeChunkSize = 1024 * 1024;
+        QByteArray payload(RangeChunkSize + 32, 'x');
+        payload.replace(0, 5, QByteArrayLiteral("01234"));
+        payload.replace(RangeChunkSize + 7, 4, QByteArrayLiteral("789A"));
+        QCOMPARE(file.write(payload), payload.size());
+        file.close();
+
+        auto provider = QSharedPointer<MaterializingTestProvider>::create(path);
+        ZoinGallery::ImageSourceDescriptor source;
+        source.resourceId = QStringLiteral("range-resource");
+        source.sourceKey = QStringLiteral("range-source");
+        source.contentVersion = QStringLiteral("version-1");
+        source.versionStrength = QStringLiteral("strong");
+        source.storageClass = QStringLiteral("remote");
+        source.accessProfile = QStringLiteral("nativeRange");
+        source.displayName = QStringLiteral("clip.mp4");
+        source.size = payload.size();
+        auto cancellation =
+            QSharedPointer<ZoinGallery::ImageSourceCancellation>::create();
+        ZoinGallery::ImageSourceRangeDevice device(provider, source,
+                                                   cancellation);
+
+        QCOMPARE(device.read(5), QByteArray("01234"));
+        QVERIFY(device.seek(RangeChunkSize + 7));
+        QCOMPARE(device.read(4), QByteArray("789A"));
+        QVERIFY(provider->rangeReads.load() >= 2);
+        cancellation->cancel();
+        QVERIFY(device.seek(0));
+        QVERIFY(device.read(1).isEmpty());
+        QCOMPARE(device.errorString(),
+                 QStringLiteral("video source read cancelled"));
+    }
+#endif
+
     void externalVideoGeometryRequiresDecoder() {
         QQmlEngine engine;
         ZoinGallery::RuntimeOptions options;
@@ -982,6 +1512,7 @@ private slots:
             QVERIFY(item);
             QCOMPARE(item->isImage(), zoinVideoThumbnailsEnabled());
             QVERIFY(!model->isImageAt(0)); // Videos are never still-image viewer targets.
+            QVERIFY(model->isVideoAt(0));
             QCOMPARE(model->imageOriginalSizeAt(0).isValid(), zoinVideoThumbnailsEnabled());
             QVERIFY(model->applyMetadata({video}));
             QCOMPARE(item->isImage(), zoinVideoThumbnailsEnabled());

@@ -170,6 +170,11 @@ private slots:
             } else {
                 QVERIFY(data.data.isNull());
             }
+            DecodedImageInfo decodedInfo;
+            const QImage decoded = ThumbnailLoader::decode(data, decodedInfo);
+            QCOMPARE(decoded.size(), QSize(144, 96));
+            QVERIFY(!decodedInfo.previewUsed.isEmpty());
+            QCOMPARE(decodedInfo.isAuthoritativePreview, !nativeDecode);
         }
     }
 

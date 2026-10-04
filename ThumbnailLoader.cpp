@@ -55,12 +55,11 @@ bool ThumbnailLoader::readMetadata(ImageInfo &result) {
 
 bool ThumbnailLoader::readImage(ImageData &result) {
     bool previewLoaded = false;
-    bool nativeDecodeSupported = true;
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
         const auto decoder = ImageDecoderFactory::createDecoder(i);
         previewLoaded = decoder && decoder->readPreviewAndMime(result);
         if (previewLoaded) {
-            nativeDecodeSupported = decoder->supportsNativeDecode();
+            result.nativeDecodeSupported = decoder->supportsNativeDecode();
             break;
         }
     }
@@ -86,7 +85,7 @@ bool ThumbnailLoader::readImage(ImageData &result) {
     }
     QSize sizeRotated = rotateToOrientation(result.request.info.imageSize, result.request.info.orientation);
     if (result.data.isNull() &&
-        ((result.request.viewerRequest && nativeDecodeSupported) || !previewLoaded ||
+        ((result.request.viewerRequest && result.nativeDecodeSupported) || !previewLoaded ||
                           sizeRotated.width() < targetSize.width() ||
                           sizeRotated.height() < targetSize.height())) {
         QFile f(result.request.info.path);
@@ -124,6 +123,8 @@ QImage ThumbnailLoader::decode(const ImageData &imageData, DecodedImageInfo &dec
         image = decodeImage(previewData, imageData.previewMimeType,
                             rotateToOrientation(targetSize, imageData.request.info.orientation), decodedInfo);
         decodedInfo.previewUsed = "Used preview " + imageData.previewUsed;
+        decodedInfo.isAuthoritativePreview = !image.isNull()
+            && !imageData.nativeDecodeSupported;
     }
     if (!image.isNull()) {
         image = rotateAndFlip(image, imageData.request.info.orientation);

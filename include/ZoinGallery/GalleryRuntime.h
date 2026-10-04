@@ -43,6 +43,9 @@ struct RuntimeOptions {
     // historical retain-until-clear behavior. Embedded hosts should keep
     // both values non-negative so stale plans and excess frames are bounded.
     bool persistentCache = false;
+    // Embedded video playback is enabled only by hosts which selected the
+    // Qt Multimedia FFmpeg backend, and is also gated by runtime availability.
+    bool enableVideoPlayback = false;
     // Shared source access for external catalogs. When omitted, resourceId is
     // interpreted as a local path by LocalImageSourceProvider. Calls happen
     // synchronously on decode workers and may overlap across sessions.

@@ -346,6 +346,9 @@ void FileListModel::connectImageReadySignal() {
             return;
         }
         if (image.isNull()) {
+            if (request.videoPosterRequest) {
+                return;
+            }
             ImageDecodeRequest sourceRequest = request;
             sourceRequest.checkCache = false;
             const QString retryKey = decodeRetryKey(sourceRequest);
@@ -367,6 +370,14 @@ void FileListModel::connectImageReadySignal() {
         auto it = _fileToItem.find(request.info.path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
+            if (request.videoPosterRequest) {
+                if (!item->isVideoThumbnail()
+                    || !isCurrentFileVersion(item, request.info)) {
+                    return;
+                }
+                emit videoPosterReady(request, image, decodedInfo);
+                return;
+            }
             if (!item->isImage() ||
                 !isCurrentFileVersion(item, request.info)) {
                 return;

@@ -72,9 +72,56 @@ QtObject {
         return true
     }
 
+    function handleVideoControlPressed(event, altPressed, controlModifier) {
+        if (!viewer.currentIsVideo || !viewer.session
+                || !viewer.session.videoPlaybackController || altPressed)
+            return false
+        const playback = viewer.session.videoPlaybackController
+        if (controlModifier && event.key === Qt.Key_Left) {
+            playback.seekBy(-5000)
+        } else if (controlModifier && event.key === Qt.Key_Right) {
+            playback.seekBy(5000)
+        } else if (!controlModifier && event.key === Qt.Key_Space) {
+            playback.playPause()
+        } else if (!controlModifier && event.key === Qt.Key_M) {
+            playback.toggleMute()
+        } else if (controlModifier
+                   && (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal)) {
+            playback.adjustVolume(0.05)
+        } else if (controlModifier && event.key === Qt.Key_Minus) {
+            playback.adjustVolume(-0.05)
+        } else {
+            return false
+        }
+        return true
+    }
+
+    function isVideoControlRelease(event) {
+        if (!viewer.currentIsVideo || !viewer.session
+                || !viewer.session.videoPlaybackController)
+            return false
+        const controlModifier = Boolean(event.modifiers & Qt.ControlModifier)
+        const altPressed = Boolean(event.modifiers & Qt.AltModifier)
+        if (altPressed)
+            return false
+        if (controlModifier
+                && (event.key === Qt.Key_Left || event.key === Qt.Key_Right))
+            return true
+        if (controlModifier
+                && (event.key === Qt.Key_Plus || event.key === Qt.Key_Equal
+                    || event.key === Qt.Key_Minus))
+            return true
+        return event.key === Qt.Key_Space || event.key === Qt.Key_M
+    }
+
     function handleViewerCommand(event, altPressed, controlModifier,
                                  shiftModifier) {
         let navigated = false
+        if (event.key === Qt.Key_F9 && event.modifiers === Qt.NoModifier) {
+            if (!event.isAutoRepeat)
+                viewer.nearestNeighbor = !viewer.nearestNeighbor
+            return false
+        }
         if ((event.key === Qt.Key_Left
                     || event.key === Qt.Key_PageUp
                     || event.key === Qt.Key_Backspace
@@ -146,6 +193,10 @@ QtObject {
         const controlModifier = Boolean(
                                   event.modifiers & Qt.ControlModifier)
         const shiftModifier = Boolean(event.modifiers & Qt.ShiftModifier)
+        if (handleVideoControlPressed(event, altPressed, controlModifier)) {
+            event.accepted = true
+            return
+        }
         if (event.key === Qt.Key_Shift) {
             if (handleSelectionPressed(event))
                 event.accepted = true
@@ -173,6 +224,10 @@ QtObject {
         }
         if (event.isAutoRepeat)
             return
+        if (isVideoControlRelease(event)) {
+            event.accepted = true
+            return
+        }
         let heldMotionKey = true
         if (event.key === Qt.Key_Left)
             viewer.leftPressed = false

@@ -8,6 +8,10 @@
 #include "Runners/VideoThumbnailRunner.h"
 #endif
 #include "SelectedImagesModel.h"
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+#include "VideoFrameGeometry.h"
+#include <QVideoFrameFormat>
+#endif
 
 #include <QtTest>
 
@@ -95,8 +99,51 @@ private slots:
     void videoThumbnailPositionsUseInteriorQuintiles() {
         QCOMPARE(VideoThumbnailRunner::thumbnailPositions(10000),
                  QVector<qint64>({2000, 4000, 6000, 8000}));
+        QCOMPARE(VideoThumbnailRunner::capturePositions(10000),
+                 QVector<qint64>({0, 2000, 4000, 6000, 8000}));
         QVERIFY(VideoThumbnailRunner::thumbnailPositions(0).isEmpty());
         QVERIFY(VideoThumbnailRunner::thumbnailPositions(-1).isEmpty());
+        QVERIFY(VideoThumbnailRunner::capturePositions(0).isEmpty());
+        QVERIFY(VideoThumbnailRunner::capturePositions(-1).isEmpty());
+    }
+
+    void videoPosterDownscalePreservesExactAspectRatioWhenPossible() {
+        const QSize frameSize(1920, 800);
+        const QSize posterSize = VideoThumbnailRunner::posterSizeFor(frameSize);
+        QCOMPARE(posterSize, QSize(1020, 425));
+        QCOMPARE(qint64(posterSize.width()) * frameSize.height(),
+                 qint64(posterSize.height()) * frameSize.width());
+        QVERIFY(qMax(posterSize.width(), posterSize.height()) <= 1024);
+
+        QCOMPARE(VideoThumbnailRunner::posterSizeFor(QSize(3840, 2160)),
+                 QSize(1024, 576));
+        QCOMPARE(VideoThumbnailRunner::posterSizeFor(QSize(640, 360)),
+                 QSize(640, 360));
+    }
+
+    void videoPosterUsesVisibleViewportAndDisplayOrientation() {
+        QVideoFrameFormat format(QSize(1920, 1088),
+                                 QVideoFrameFormat::Format_ARGB8888);
+        format.setViewport(QRect(0, 0, 1920, 1080));
+        QVideoFrame frame(format);
+        QVERIFY(frame.isValid());
+        QVERIFY(frame.map(QVideoFrame::WriteOnly));
+        std::memset(frame.bits(0), 0,
+                    static_cast<size_t>(frame.mappedBytes(0)));
+        frame.unmap();
+        QCOMPARE(ZoinGallery::VideoFrameGeometry::displaySize(frame),
+                 QSize(1920, 1080));
+
+        frame.setRotation(QtVideo::Rotation::Clockwise90);
+        QCOMPARE(ZoinGallery::VideoFrameGeometry::displaySize(frame),
+                 QSize(1080, 1920));
+        const QImage poster =
+            ZoinGallery::VideoFrameGeometry::displayImage(frame);
+        QVERIFY(!poster.isNull());
+        QCOMPARE(poster.size(), QSize(1080, 1920));
+        QCOMPARE(VideoThumbnailRunner::posterSizeFor(
+                     ZoinGallery::VideoFrameGeometry::displaySize(frame)),
+                 QSize(576, 1024));
     }
 #endif
 

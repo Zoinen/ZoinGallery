@@ -26,6 +26,14 @@ Item {
     property int appliedSimpleSourceIndex: -1
     property bool simpleSourceMetadataKnown: false
     property bool sourceSizeFallbackPending: false
+    // Gallery video is presented by the same image layer and transform as
+    // still images. The player supplies only its current frame texture and
+    // poster Image; input, zoom, pan, rotation, and resampling stay here.
+    property bool nearestNeighbor: false
+    property bool videoMode: false
+    property var videoFrameSource: null
+    property var videoPosterImage: null
+    property bool videoDisplayFailed: false
 
     property alias image: viewerImage
     readonly property alias viewerImageBase: viewerImage.baseImage
@@ -83,9 +91,15 @@ Item {
     property real pinchZoomOutToThumbnailsScaleDistanceRatio: 0.45
     property real pinchZoomOutToThumbnailsCommitProgress: 0.35
 
-    property bool imageTextureReady: (viewerImage2.status === Image.Ready && viewerImage2.implicitWidth > 1 && viewerImage2.implicitHeight > 1)
-        || (viewerImage2.status !== Image.Ready && viewerImageBase.status === Image.Ready
-            && viewerImageBase.implicitWidth > 1 && viewerImageBase.implicitHeight > 1)
+    property bool imageTextureReady: videoMode
+        ? ((videoFrameSource && videoFrameSource.hasFrame)
+           || (videoPosterImage && videoPosterImage.status === Image.Ready)
+           || (!videoDisplayFailed && viewerImageBase.status === Image.Ready
+               && viewerImageBase.implicitWidth > 1
+               && viewerImageBase.implicitHeight > 1))
+        : ((viewerImage2.status === Image.Ready && viewerImage2.implicitWidth > 1 && viewerImage2.implicitHeight > 1)
+           || (viewerImage2.status !== Image.Ready && viewerImageBase.status === Image.Ready
+               && viewerImageBase.implicitWidth > 1 && viewerImageBase.implicitHeight > 1))
 
     property real zoomScale: 1.5
     readonly property real targetZoomScale: zoomAnimation.to

@@ -51,7 +51,7 @@ Item {
         const replacesFitTier = level === 1
                 && viewport.image.fromLevel === 0
         const sourceChanged = viewport.image.source !== imageIdUrl
-        if ((level === 0 && !indexChanged)
+        if ((level === 0 && !indexChanged && !sourceChanged)
                 || (level === 1 && !indexChanged
                     && !replacesFitTier && !sourceChanged))
             return
@@ -89,7 +89,8 @@ Item {
         const targetY = viewport.viewportAnimation.running
                 ? viewport.yAnimation.to : viewport.image.y
         const scale = viewport.zoomAnimation.to
-        if (viewport.width > viewport.effectiveOriginalSize.width * scale
+        if (viewport.nearestNeighbor
+                || viewport.width > viewport.effectiveOriginalSize.width * scale
                 || viewport.height
                    > viewport.effectiveOriginalSize.height * scale) {
             // A crop cannot cover the viewport when the scaled image leaves a
@@ -125,9 +126,15 @@ Item {
 
     function applyImageSize(originalSize) {
         if (!viewport.sourceSizeFallbackPending) {
-            applyOriginalSize(Qt.size(
-                originalSize.width / viewport.devicePixelRatio,
-                originalSize.height / viewport.devicePixelRatio))
+            // A base Image with asynchronous:false can become Ready inside
+            // applyBaseTier(). Its status handler may already have resolved
+            // the fallback size before setImage() reaches this point. Do not
+            // erase that size with the still-empty metadata argument.
+            if (originalSize.width > 1 && originalSize.height > 1) {
+                applyOriginalSize(Qt.size(
+                    originalSize.width / viewport.devicePixelRatio,
+                    originalSize.height / viewport.devicePixelRatio))
+            }
         } else if (viewport.viewerImageBase.status === Image.Ready
                    && viewport.viewerImageBase.sourceSize.width > 1
                    && viewport.viewerImageBase.sourceSize.height > 1) {

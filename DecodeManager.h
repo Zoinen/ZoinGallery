@@ -110,6 +110,7 @@ public:
     void probeImages(
         const QList<ZoinGallery::ImageProbeRequest> &requests);
     void decodeImages(const QList<ImageDecodeRequest> &requests);
+    void restoreCachedVideoPoster(const ImageDecodeRequest &thumbnailRequest);
     void readFolderList(const QStringList &paths, int totalImages = -1,
                         quint64 requestGeneration = 0,
                         const QString &requestNamespace = QString());
@@ -206,6 +207,7 @@ private:
     };
 
     QQueue<Runner *> _taskQueue;
+    QSet<QString> _pendingVideoPosterLookups;
     QList<WorkerInfo> _workers;
 
     enum class SpecialThreads {

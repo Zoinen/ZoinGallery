@@ -39,6 +39,7 @@ enum class Artifact : quint8 {
     Thumbnail = 1,
     ViewerFit = 2,
     Native = 3,
+    VideoPoster = 4,
 };
 
 struct DerivedKey {
@@ -125,6 +126,9 @@ bool hasSessionVersionStrength(const ImageInfo &info) {
 }
 
 Artifact artifactForRequest(const ImageDecodeRequest &request) {
+    if (request.videoPosterRequest) {
+        return Artifact::VideoPoster;
+    }
     if (request.viewerRequest) {
         return request.fitToViewerRequest
             ? Artifact::ViewerFit : Artifact::Native;
@@ -146,6 +150,9 @@ QString versionForRequest(const ImageDecodeRequest &request) {
 
 QString transformForRequest(const ImageDecodeRequest &request,
                             Artifact artifact) {
+    if (artifact == Artifact::VideoPoster) {
+        return QStringLiteral("video-first-frame-poster-1024-display-v3");
+    }
     if (artifact == Artifact::ViewerFit) {
         // v4 invalidates full-size Fit entries produced before native JPEG
         // decoding switched from the approximate IDCT. Those pixels may be
@@ -165,12 +172,27 @@ QString transformForRequest(const ImageDecodeRequest &request,
 
 DerivedKey keyForRequest(const ImageDecodeRequest &request) {
     const Artifact artifact = artifactForRequest(request);
+    const bool localPoster = request.videoPosterRequest
+        && !request.info.source.isValid();
+    const QString localVersion = !request.info.sourceVersionToken.isEmpty()
+        ? request.info.sourceVersionToken
+        : QStringLiteral("local-stat:%1:%2")
+            .arg(request.info.fileSize)
+            .arg(request.info.lastModified.isValid()
+                     ? QString::number(
+                           request.info.lastModified.toMSecsSinceEpoch())
+                     : QStringLiteral("unknown"));
     return {
-        .sourceKey = request.info.source.sourceKey,
-        .contentVersion = versionForRequest(request),
-        .authorityResourceId = hasSessionVersionStrength(request)
+        .sourceKey = localPoster
+            ? QDir::cleanPath(QFileInfo(request.info.path).absoluteFilePath())
+            : request.info.source.sourceKey,
+        .contentVersion = localPoster
+            ? localVersion : versionForRequest(request),
+        .authorityResourceId = !localPoster
+                && hasSessionVersionStrength(request)
             ? request.info.source.resourceId : QString{},
-        .sourceSize = request.info.source.size,
+        .sourceSize = localPoster
+            ? request.info.fileSize : request.info.source.size,
         .artifact = artifact,
         .targetTier = request.targetSize,
         .transformSchema = transformForRequest(request, artifact),
@@ -627,11 +649,21 @@ bool writeMetadataEntry(const MetadataKey &key, const QByteArray &entry) {
 
 bool PersistentDerivedImageCache::appliesTo(
     const ImageDecodeRequest &request) {
-    return request.info.source.isValid();
+    return request.info.source.isValid() || request.videoPosterRequest;
 }
 
 bool PersistentDerivedImageCache::isEligible(
     const ImageDecodeRequest &request) {
+    if (request.videoPosterRequest && !request.info.source.isValid()) {
+        if (request.info.path.isEmpty() || !request.info.lastModified.isValid()
+            || request.info.fileSize < 0) {
+            return false;
+        }
+        const QFileInfo file(request.info.path);
+        return file.isFile() && file.lastModified() == request.info.lastModified
+            && file.size() == request.info.fileSize
+            && keyForRequest(request).isValid();
+    }
     if (!appliesTo(request) ||
         (!hasPersistentVersionStrength(request) &&
          !hasSessionVersionStrength(request))) {

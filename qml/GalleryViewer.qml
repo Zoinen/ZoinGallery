@@ -9,6 +9,7 @@ FocusScope {
     id: root
     // Embedders can own presentation geometry without replacing the session.
     property bool managedPresentation: false
+    property var playbackSession: null
     property string previewEntryId: ""
     property var hostKeyHandler: null
     // Return true when the embedder consumes a viewport double-click.
@@ -63,6 +64,12 @@ FocusScope {
 
     property var session: null
     property var sourcePanel: null
+    property string videoPlaybackMode: "autoplay-muted"
+    property bool videoPlaybackInitializationAllowed: false
+    property var videoIconSources: ({})
+    property bool playbackPresentationVisible: visible
+    property bool currentIsVideoValue: false
+    readonly property bool currentIsVideo: currentIsVideoValue
     property GalleryThemePalette theme: GalleryThemePalette {}
     property var hostCapabilities: ({})
     property real devicePixelRatio: 1.0
@@ -98,6 +105,9 @@ FocusScope {
     property url currentSourceValue: ""
     property int currentSourceLevelValue: -1
     property var currentSourcesValue: []
+    property url currentVideoThumbnailSourceValue: ""
+    property url currentVideoPosterSourceValue: ""
+    property string currentVideoIdentityValue: ""
     property string currentViewerRequestState: "idle"
     property size currentOriginalSizeValue: Qt.size(0, 0)
     property int appliedPresentedIndex: -1
@@ -105,6 +115,28 @@ FocusScope {
     property int pendingAuthorityIndex: -1
     property string pendingAuthorityEntryId: ""
     property int pendingPreviousViewportAttempts: 0
+
+    function synchronizeVideoPlayback() {
+        if (!session || typeof session.videoPlaybackController === "undefined")
+            return
+        const playback = session.videoPlaybackController
+        if (!playback)
+            return
+        playback.setPresentationVisible(playbackPresentationVisible)
+        if (currentIsVideo && typeof session.videoSourceAt === "function") {
+            if (!videoPlaybackInitializationAllowed)
+                return
+            const source = session.videoSourceAt(presentedIndex)
+            if (source && source.identity)
+                playback.openSource(source, videoPlaybackMode)
+            else
+                playback.stop()
+        } else {
+            playback.stop()
+        }
+    }
+    onPlaybackPresentationVisibleChanged: synchronizeVideoPlayback()
+    onVideoPlaybackModeChanged: synchronizeVideoPlayback()
 
     property real transitionProgress: 0
     property rect transitionSourceGeometry: Qt.rect(0, 0, 0, 0)
@@ -477,6 +509,9 @@ FocusScope {
                 || event.key === Qt.Key_0
     }
 
+    property bool nearestNeighbor: false
+    onNearestNeighborChanged: requestImage()
+
     function ownsKey(event) {
         // A full-area viewer is a modal keyboard surface.  Known keys are
         // dispatched below; unknown/function/text/paste keys are deliberately
@@ -487,8 +522,8 @@ FocusScope {
     function setPanelTransition(active) {
         transitionState.setPanelTransition(active)
     }
-    function captureTransitionTarget() {
-        return transitionState.captureTransitionTarget()
+    function captureTransitionTarget(useVideoPoster) {
+        return transitionState.captureTransitionTarget(useVideoPoster)
     }
     function beginOpen() {
         transitionState.beginOpen()
@@ -655,6 +690,10 @@ FocusScope {
     }
 
     onSessionChanged: {
+        if (playbackSession && playbackSession !== session
+                && playbackSession.videoPlaybackController)
+            playbackSession.videoPlaybackController.stop()
+        playbackSession = session
         presentedIndex = session ? session.currentIndex : -1
         presentedEntryId = session && presentedIndex >= 0
                 ? session.entryIdAt(presentedIndex) : ""
@@ -668,6 +707,7 @@ FocusScope {
     onHeightChanged: decodeRequestTimer.start()
 
     Component.onCompleted: {
+        playbackSession = session
         if (!customContent) {
             presentedIndex = session ? session.currentIndex : -1
             presentedEntryId = session && presentedIndex >= 0
@@ -680,5 +720,7 @@ FocusScope {
     Component.onDestruction: {
         clearHeldKeys()
         setPanelTransition(false)
+        if (playbackSession && playbackSession.videoPlaybackController)
+            playbackSession.videoPlaybackController.stop()
     }
 }

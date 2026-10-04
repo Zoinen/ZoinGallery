@@ -125,7 +125,11 @@ QtObject {
             controller.activateIndex(viewIndex)
             openRequested(controller.entryIdAt(viewIndex),
                           sourceIndex(viewIndex),
-                          controller.isImageAt(viewIndex),
+                          controller.isImageAt(viewIndex)
+                              || (controller.session
+                                  && typeof controller.session.isViewableAt
+                                     === "function"
+                                  && controller.session.isViewableAt(viewIndex)),
                           Boolean(autoRepeat))
         } else {
             // The embedding host carries activation together with this stable

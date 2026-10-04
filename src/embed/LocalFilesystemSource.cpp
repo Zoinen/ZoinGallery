@@ -7,6 +7,7 @@
 #include "ImageModel.h"
 #include "ProviderImageStore.h"
 #include "SelectedImagesModel.h"
+#include "ThumbnailMemoryCache.h"
 
 #include <QAbstractItemModel>
 #include <QDir>
@@ -31,11 +32,14 @@ LocalFilesystemSource::LocalFilesystemSource(
     const QString &sessionId, const QString &thumbnailProviderName,
     const QString &asyncProviderName,
     const QSharedPointer<::ProviderImageStore> &store,
+    const QSharedPointer<ThumbnailMemoryCache> &thumbnailCache,
     ::DecodeManager *decodeManager,
     qint64 viewerFitCacheByteBudget,
     qint64 viewerNativeCacheByteBudget,
     QObject *parent)
-    : QObject(parent), _sessionId(sessionId) {
+    : QObject(parent), _sessionId(sessionId),
+      _thumbnailProviderName(thumbnailProviderName),
+      _thumbnailCache(thumbnailCache) {
     const QString requestPrefix =
         QStringLiteral("zoingallery.local.%1").arg(sessionId);
     _fileListModel = new FileListModel(
@@ -94,6 +98,43 @@ LocalFilesystemSource::LocalFilesystemSource(
                     ? _galleryViewModel->mapFromSourceRow(sourceIndex) : -1;
                 if (viewIndex >= 0) {
                     emit viewerRequestStateAtChanged(viewIndex);
+                }
+            });
+    connect(_fileListModel, &FileListModel::videoPosterReady,
+            this, [this](const ImageDecodeRequest &request,
+                         const QImage &image,
+                         const DecodedImageInfo &) {
+                if (_shutdown || !_thumbnailCache
+                    || !request.videoPosterRequest) {
+                    return;
+                }
+                const int viewIndex = rowForEntryId(request.info.path);
+                ImageFile *item = itemAt(viewIndex);
+                if (!item || !item->isVideoThumbnail()) {
+                    return;
+                }
+                const ImageInfo currentInfo = item->info();
+                if ((request.info.lastModified.isValid()
+                     && item->lastModified().isValid()
+                     && request.info.lastModified != item->lastModified())
+                    || (request.info.fileSize >= 0
+                        && item->fileSize() >= 0
+                        && request.info.fileSize != item->fileSize())) {
+                    return;
+                }
+                const QString version = sourceVersionAt(viewIndex);
+                const QString identity =
+                    ThumbnailMemoryCache::canonicalSourceIdentity(
+                        request.info.path);
+                const qint64 sourceSize = currentInfo.fileSize >= 0
+                    ? currentInfo.fileSize : request.info.fileSize;
+                const auto stored = _thumbnailCache->storeDecoded(
+                    _sessionId, identity, version, sourceSize,
+                    request.targetSize,
+                    QStringLiteral("video-first-frame-poster-1024-display-v3"),
+                    image);
+                if (stored.isValid()) {
+                    emit viewerSourceAtChanged(viewIndex);
                 }
             });
     connect(_fileListModel, &FileListModel::viewerReset,
@@ -167,9 +208,58 @@ QString LocalFilesystemSource::localPathAt(int viewIndex) const {
     return item ? item->fullPath() : QString();
 }
 
+QString LocalFilesystemSource::sourceVersionAt(int viewIndex) const {
+    const ImageFile *item = itemAt(viewIndex);
+    if (!item) {
+        return {};
+    }
+    const ImageInfo info = item->info();
+    if (!info.sourceVersionToken.isEmpty()) {
+        return info.sourceVersionToken;
+    }
+    if (info.fileSize < 0 && !info.lastModified.isValid()) {
+        return {};
+    }
+    return QStringLiteral("%1:%2")
+        .arg(info.fileSize)
+        .arg(info.lastModified.isValid()
+                 ? QString::number(info.lastModified.toMSecsSinceEpoch())
+                 : QStringLiteral("unknown"));
+}
+
 bool LocalFilesystemSource::isImageAt(int viewIndex) const {
     const ImageFile *item = itemAt(viewIndex);
     return item && item->isViewerImage();
+}
+
+bool LocalFilesystemSource::isVideoAt(int viewIndex) const {
+    const ImageFile *item = itemAt(viewIndex);
+    return item && item->isVideoThumbnail();
+}
+
+QUrl LocalFilesystemSource::videoThumbnailSourceAt(int viewIndex) const {
+    const ImageFile *item = itemAt(viewIndex);
+    return item && item->isVideoThumbnail()
+        ? QUrl(item->imageIdUrl()) : QUrl();
+}
+
+QUrl LocalFilesystemSource::videoPosterSourceAt(int viewIndex) const {
+    constexpr auto VideoPosterTransform =
+        "video-first-frame-poster-1024-display-v3";
+    const ImageFile *item = itemAt(viewIndex);
+    if (!item || !item->isVideoThumbnail() || !_thumbnailCache) {
+        return {};
+    }
+    const ImageInfo info = item->info();
+    const QString identity =
+        ThumbnailMemoryCache::canonicalSourceIdentity(item->fullPath());
+    const ThumbnailMemoryCache::Handle poster = _thumbnailCache->lookup(
+        identity, sourceVersionAt(viewIndex), info.fileSize,
+        QSize(1, 1), QString::fromLatin1(VideoPosterTransform));
+    return poster.isValid()
+        ? QUrl(QStringLiteral("image://") + _thumbnailProviderName
+               + QLatin1Char('/') + poster.providerId)
+        : QUrl();
 }
 
 bool LocalFilesystemSource::isDirectoryAt(int viewIndex) const {

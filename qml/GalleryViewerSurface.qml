@@ -62,6 +62,7 @@ Item {
             FlickableZoomable {
                 id: viewportItem
                 objectName: "galleryViewerViewport"
+                nearestNeighbor: root.viewer.nearestNeighbor
                 x: root.viewer.pinchCloseActive ? 0
                    : root.viewer.transitionHasGeometry
                      ? root.viewer.lerp(
@@ -88,6 +89,14 @@ Item {
                           : root.viewer.height
                 active: !root.viewer.customContent
                         && !root.viewer.completingClose
+                visible: !root.viewer.customContent
+                videoMode: root.viewer.currentIsVideo
+                videoFrameSource: videoPlaybackLoader.item
+                    ? videoPlaybackLoader.item.presentedFrameSource : null
+                videoPosterImage: videoPlaybackLoader.item
+                    ? videoPlaybackLoader.item.posterImageSource : null
+                videoDisplayFailed: videoPlaybackLoader.item
+                    ? videoPlaybackLoader.item.playbackFailed : false
                 animationDuration: root.viewer.animationDuration
                 devicePixelRatio: root.viewer.devicePixelRatio
                 pixelAlignmentRevision: navigationTranslation.x
@@ -106,7 +115,10 @@ Item {
                     || root.viewer.viewerNavigationCommitAfterAnimation
                     || Math.abs(root.viewer.viewerNavigationOffsetX) > 0.1
 
-                onZoomScaleChanged: root.viewer.scheduleDecodeRequest()
+                onZoomScaleChanged: {
+                    if (!root.viewer.currentIsVideo)
+                        root.viewer.scheduleDecodeRequest()
+                }
                 onCloseRequested: root.viewer.handleViewportDoubleClick()
                 onMiddleClickRequested:
                     root.viewer.fullscreenToggleRequested()
@@ -121,6 +133,7 @@ Item {
                 objectName: "gallerySphericViewerLoader"
                 anchors.fill: viewportItem
                 active: root.viewer.sphericViewerMode
+                        && !root.viewer.currentIsVideo
                 opacity: root.viewer.transitionHasGeometry
                          ? root.viewer.transitionProgress : 1
 
@@ -139,6 +152,50 @@ Item {
                     }
                 }
             }
+
+            Loader {
+                id: videoPlaybackLoader
+                objectName: "galleryVideoPlaybackLoader"
+                anchors.fill: viewportItem
+                z: 2
+                active: !root.viewer.customContent
+                        && root.viewer.currentIsVideo
+                        && root.viewer.videoPlaybackInitializationAllowed
+                        && root.viewer.session
+                        && root.viewer.session.videoPlaybackAvailable === true
+                source: active ? Qt.resolvedUrl("GalleryVideoPlaybackSurface.qml") : ""
+            }
+
+            Binding {
+                target: videoPlaybackLoader.item
+                property: "posterSource"
+                value: root.viewer.currentVideoPosterSourceValue
+                when: videoPlaybackLoader.item !== null
+            }
+
+            Binding {
+                target: videoPlaybackLoader.item
+                property: "videoIdentity"
+                value: root.viewer.currentVideoIdentityValue
+                when: videoPlaybackLoader.item !== null
+            }
+
+            Binding {
+                target: videoPlaybackLoader.item
+                property: "previewVisible"
+                value: viewportItem.imageTextureReady
+                when: videoPlaybackLoader.item !== null
+            }
+
+            Connections {
+                target: videoPlaybackLoader.item
+                function onDisplaySizeChanged() {
+                    root.applyVideoDisplaySize()
+                }
+                function onVideoIdentityChanged() {
+                    Qt.callLater(root.applyVideoDisplaySize)
+                }
+            }
         }
 
         Item {
@@ -150,6 +207,10 @@ Item {
                      && root.viewer.viewerNavigationTargetIndex !== -1
                      && root.viewer.viewerNavigationTargetSource.toString()
                         !== ""
+                     && !(root.viewer.session
+                          && typeof root.viewer.session.isVideoAt === "function"
+                          && root.viewer.session.isVideoAt(
+                              root.viewer.viewerNavigationTargetIndex))
 
             Item {
                 x: root.viewer.viewerNavigationTargetImageX
@@ -207,12 +268,58 @@ Item {
                 }
             }
         }
+
+        Binding {
+            target: videoPlaybackLoader.item
+            property: "controller"
+            value: root.viewer.session
+                   ? root.viewer.session.videoPlaybackController : null
+            when: videoPlaybackLoader.item !== null
+        }
+        Binding {
+            target: videoPlaybackLoader.item
+            property: "devicePixelRatio"
+            value: root.viewer.devicePixelRatio
+            when: videoPlaybackLoader.item !== null
+        }
+        Binding {
+            target: videoPlaybackLoader.item
+            property: "foregroundColor"
+            value: root.viewer.foregroundColor
+            when: videoPlaybackLoader.item !== null
+        }
+        Binding {
+            target: videoPlaybackLoader.item
+            property: "mutedColor"
+            value: root.viewer.theme.mutedText
+            when: videoPlaybackLoader.item !== null
+        }
+        Binding {
+            target: videoPlaybackLoader.item
+            property: "iconSources"
+            value: root.viewer.videoIconSources
+            when: videoPlaybackLoader.item !== null
+        }
+    }
+
+    function applyVideoDisplaySize() {
+        const video = videoPlaybackLoader.item
+        if (!video || !root.viewer.currentIsVideo)
+            return
+        const size = video.displaySize
+        if (size.width <= 1 || size.height <= 1)
+            return
+        viewportItem.sourceSizeFallbackPending = false
+        viewportItem.applyOriginalSize(Qt.size(
+            size.width / root.viewer.devicePixelRatio,
+            size.height / root.viewer.devicePixelRatio))
     }
 
     BusyIndicator {
         objectName: "galleryViewerBusyIndicator"
         anchors.centerIn: parent
         running: !root.viewer.customContent
+                 && !root.viewer.currentIsVideo
                  && root.viewer.visible
                  && root.viewer.viewerContentVisible
                  && root.viewer.transitionProgress > 0.5
@@ -229,7 +336,8 @@ Item {
         readonly property point alignedPosition: root.alignedCenter(loadFailure)
         x: alignedPosition.x
         y: alignedPosition.y
-        visible: !root.viewer.customContent && root.viewer.session
+        visible: !root.viewer.customContent && !root.viewer.currentIsVideo
+                 && root.viewer.session
                  && (root.viewer.presentedIndex < 0
                      || (root.viewer.currentViewerRequestState === "failed"
                          && root.viewer.currentSourceValue.toString() === ""))

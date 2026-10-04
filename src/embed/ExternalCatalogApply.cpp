@@ -706,6 +706,17 @@ bool ExternalCatalogModel::isImageAt(int row) const {
         && entry->thumbnailKind != QStringLiteral("video");
 }
 
+bool ExternalCatalogModel::isVideoAt(int row) const {
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded && !entry->directory
+        && entry->thumbnailKind == QStringLiteral("video");
+}
+
+ImageSourceDescriptor ExternalCatalogModel::imageSourceAt(int row) const {
+    const Entry *entry = entryAt(row);
+    return entry && entry->loaded ? entry->source : ImageSourceDescriptor{};
+}
+
 bool ExternalCatalogModel::isDirectoryAt(int row) const {
     const Entry *entry = entryAt(row);
     return entry && entry->loaded && entry->directory;

@@ -1,6 +1,8 @@
 #include "VideoThumbnailRunner.h"
 
 #include "PersistentImageCache.h"
+#include "../VideoFrameGeometry.h"
+#include "../src/embed/ImageSourceRangeDevice.h"
 
 #include <ZoinGallery/ImageSourceProvider.h>
 #include <ZoinGallery/MediaTimingTrace.h>
@@ -19,149 +21,18 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <numeric>
 #include <utility>
 
 namespace {
 
 constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-v3";
+constexpr auto VideoPosterTransform = "video-first-frame-poster-1024-display-v3";
 constexpr int VideoFrameCount = 4;
+constexpr int VideoPosterMaxLongEdge = 1024;
 constexpr int VideoFrameTimeoutMs = 1800;
 constexpr int VideoLoadTimeoutMs = 15000;
 constexpr qint64 RangeSourceReadChunkSize = 1024 * 1024;
-
-bool canStreamSource(const ZoinGallery::ImageSourceDescriptor &source,
-                     const QSharedPointer<ZoinGallery::ImageSourceProvider>
-                         &provider)
-{
-    if (!provider || !source.isValid() || source.size <= 0
-        || source.storageClass == QStringLiteral("local")) {
-        return false;
-    }
-    return source.accessProfile == QStringLiteral("nativeRange")
-        || source.accessProfile == QStringLiteral("hybridRange");
-}
-
-QUrl sourceUrlHint(const ZoinGallery::ImageSourceDescriptor &source)
-{
-    const QString name = source.displayName.trimmed().isEmpty()
-        ? QStringLiteral("f4-video") : source.displayName.trimmed();
-    return QUrl::fromLocalFile(name);
-}
-
-// QMediaPlayer's FFmpeg backend can consume a seekable QIODevice. Keep the
-// broker-backed source seekable while fetching only the requested byte ranges;
-// this avoids turning a large range-capable remote video into a full temp-file
-// download before the first thumbnail frame is decoded.
-class RangeImageSourceDevice final : public QIODevice
-{
-public:
-    RangeImageSourceDevice(
-        QSharedPointer<ZoinGallery::ImageSourceProvider> provider,
-        ZoinGallery::ImageSourceDescriptor source,
-        QSharedPointer<ZoinGallery::ImageSourceCancellation> cancellation)
-        : m_provider(std::move(provider))
-        , m_source(std::move(source))
-        , m_cancellation(std::move(cancellation))
-    {
-        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
-    }
-
-    bool isSequential() const override { return false; }
-
-    qint64 size() const override { return m_source.size; }
-
-    bool seek(qint64 position) override
-    {
-        if (position < 0 || (m_source.size >= 0 && position > m_source.size)) {
-            return false;
-        }
-        if (!QIODevice::seek(position)) {
-            return false;
-        }
-        if (position < m_prefetchOffset
-            || position >= m_prefetchOffset + m_prefetched.size()) {
-            clearPrefetch();
-        }
-        return true;
-    }
-
-protected:
-    qint64 readData(char *data, qint64 maxlen) override
-    {
-        if (!m_provider || maxlen <= 0) {
-            return 0;
-        }
-        if (m_cancellation && m_cancellation->isCanceled()) {
-            setErrorString(QStringLiteral("video source read cancelled"));
-            return -1;
-        }
-
-        const qint64 offset = pos();
-        if (offset < 0 || (m_source.size >= 0 && offset >= m_source.size)) {
-            return 0;
-        }
-        const qint64 prefetchEnd = m_prefetchOffset >= 0
-            ? m_prefetchOffset + m_prefetched.size() : -1;
-        if (m_prefetchOffset < 0 || offset < m_prefetchOffset
-            || offset >= prefetchEnd) {
-            if (m_prefetchEndOfFile && offset >= prefetchEnd) {
-                return 0;
-            }
-            const qint64 requested = std::min(
-                RangeSourceReadChunkSize, m_source.size - offset);
-            if (requested <= 0) {
-                return 0;
-            }
-
-            const ZoinGallery::ImageSourceReadResult result =
-                m_provider->readRange(m_source, offset, requested, m_cancellation);
-            if (!result.succeeded()) {
-                setErrorString(result.errorString);
-                return -1;
-            }
-            if (result.data.isEmpty()) {
-                if (result.endOfFile) {
-                    m_prefetchOffset = offset;
-                    m_prefetched.clear();
-                    m_prefetchEndOfFile = true;
-                    return 0;
-                }
-                setErrorString(QStringLiteral("video source returned no data"));
-                return -1;
-            }
-            m_prefetchOffset = offset;
-            m_prefetched = result.data;
-            m_prefetchEndOfFile = result.endOfFile;
-        }
-
-        const qint64 relative = offset - m_prefetchOffset;
-        const qint64 available = std::min<qint64>(
-            maxlen, static_cast<qint64>(m_prefetched.size()) - relative);
-        if (available <= 0) {
-            return 0;
-        }
-        std::memcpy(data, m_prefetched.constData() + relative,
-                    static_cast<size_t>(available));
-        return available;
-    }
-
-    qint64 writeData(const char *, qint64) override { return -1; }
-
-private:
-    void clearPrefetch()
-    {
-        m_prefetchOffset = -1;
-        m_prefetched.clear();
-        m_prefetchEndOfFile = false;
-    }
-
-    QSharedPointer<ZoinGallery::ImageSourceProvider> m_provider;
-    ZoinGallery::ImageSourceDescriptor m_source;
-    QSharedPointer<ZoinGallery::ImageSourceCancellation> m_cancellation;
-    QByteArray m_prefetched;
-    qint64 m_prefetchOffset = -1;
-    bool m_prefetchEndOfFile = false;
-};
 
 QImage composeContactSheet(const QList<QImage> &frames, const QSize &target) {
     const QSize canvasSize(qMax(2, target.width()), qMax(2, target.height()));
@@ -189,6 +60,31 @@ QImage composeContactSheet(const QList<QImage> &frames, const QSize &target) {
     return canvas;
 }
 
+QImage scaleVideoPoster(const QImage &image) {
+    if (image.isNull()) {
+        return image;
+    }
+    const QSize targetSize = VideoThumbnailRunner::posterSizeFor(image.size());
+    if (targetSize == image.size()) {
+        return image;
+    }
+    return image.scaled(targetSize, Qt::IgnoreAspectRatio,
+                        Qt::SmoothTransformation);
+}
+
+ImageDecodeRequest videoPosterRequestFor(const ImageDecodeRequest &request) {
+    ImageDecodeRequest poster = request;
+    poster.targetSize = QSize(VideoPosterMaxLongEdge, VideoPosterMaxLongEdge);
+    poster.viewerRequest = false;
+    poster.backgroundViewerRequest = false;
+    poster.panelThumbnailRequest = false;
+    poster.fitToViewerRequest = false;
+    poster.expandToCacheResolution = false;
+    poster.thumbnailTransformKey = QString::fromLatin1(VideoPosterTransform);
+    poster.videoPosterRequest = true;
+    return poster;
+}
+
 QVariantMap videoTraceFields(const ImageDecodeRequest &request) {
     QVariantMap fields = ZoinGallery::MediaTimingTrace::sourceFields(
         request.info.source);
@@ -213,6 +109,44 @@ QVector<qint64> VideoThumbnailRunner::thumbnailPositions(qint64 duration) {
             duration * 60 / 100, duration * 80 / 100};
 }
 
+QVector<qint64> VideoThumbnailRunner::capturePositions(qint64 duration) {
+    if (duration <= 0) {
+        return {};
+    }
+    QVector<qint64> positions{0};
+    positions += thumbnailPositions(duration);
+    return positions;
+}
+
+QSize VideoThumbnailRunner::posterSizeFor(const QSize &frameSize) {
+    if (frameSize.width() <= 0 || frameSize.height() <= 0
+        || qMax(frameSize.width(), frameSize.height())
+            <= VideoPosterMaxLongEdge) {
+        return frameSize;
+    }
+
+    // Pick a downscaled integer multiple of the reduced frame dimensions so
+    // the cached poster keeps the exact display aspect ratio. QSize::scaled()
+    // rounds each dimension independently and can otherwise shift the fit
+    // geometry by a pixel when the live frame replaces this poster.
+    const int divisor = std::gcd(frameSize.width(), frameSize.height());
+    const QSize aspectUnit(frameSize.width() / divisor,
+                           frameSize.height() / divisor);
+    const int scale = VideoPosterMaxLongEdge
+        / qMax(aspectUnit.width(), aspectUnit.height());
+    if (scale > 0) {
+        return QSize(aspectUnit.width() * scale,
+                     aspectUnit.height() * scale);
+    }
+
+    // Extremely unusual coprime dimensions cannot be reduced below the
+    // budget without changing their exact integer ratio. Keep the normal
+    // bounded-size fallback for those sources.
+    return frameSize.scaled(QSize(VideoPosterMaxLongEdge,
+                                  VideoPosterMaxLongEdge),
+                            Qt::KeepAspectRatio);
+}
+
 VideoThumbnailRunner::VideoThumbnailRunner(
     const ImageDecodeRequest &request,
     QSharedPointer<ZoinGallery::ImageSourceProvider> provider)
@@ -227,8 +161,28 @@ void VideoThumbnailRunner::run() {
     ZoinGallery::MediaTimingTrace::Span span(
         QStringLiteral("qt.gallery.video_thumbnail"), fields);
 
-    if (PersistentDerivedImageCache::waitForLookup(
-            _derivedLookupGate, _cancellation)) {
+    const bool sheetCacheHit = PersistentDerivedImageCache::waitForLookup(
+        _derivedLookupGate, _cancellation);
+    ImageDecodeRequest posterRequest = videoPosterRequestFor(_request);
+    QImage poster = PersistentImageCache::retrieveImage(posterRequest);
+    const bool posterCacheHit = !poster.isNull();
+    if (posterCacheHit) {
+        DecodedImageInfo posterInfo;
+        posterInfo.decoderUsed = QStringLiteral("PersistentImageCache");
+        posterInfo.previewUsed = QStringLiteral("video-first-frame-poster");
+        posterInfo.isFromCache = true;
+        posterInfo.isAuthoritativeDerivedCache =
+            posterRequest.info.source.isValid();
+        emit imageReady(posterRequest, poster, posterInfo);
+    }
+    const bool needPoster = !posterCacheHit;
+    const bool needSheet = !sheetCacheHit;
+    if (_cancellation->isCanceled() || isCanceled()) {
+        span.set(QStringLiteral("outcome"), QStringLiteral("cancelled"));
+        emit finished(this);
+        return;
+    }
+    if (!needPoster && !needSheet) {
         span.set(QStringLiteral("outcome"),
                  _request.info.source.isValid()
                      ? QStringLiteral("derived-cache-satisfied")
@@ -238,11 +192,12 @@ void VideoThumbnailRunner::run() {
     }
 
     QSharedPointer<ZoinGallery::ImageSourceLease> lease;
-    std::unique_ptr<RangeImageSourceDevice> rangeDevice;
+    std::unique_ptr<ZoinGallery::ImageSourceRangeDevice> rangeDevice;
     QString sourcePath = _request.info.path;
     if (_request.info.source.isValid()) {
-        if (canStreamSource(_request.info.source, _provider)) {
-            rangeDevice = std::make_unique<RangeImageSourceDevice>(
+        if (ZoinGallery::imageSourceSupportsRangeReads(
+                _request.info.source, _provider)) {
+            rangeDevice = std::make_unique<ZoinGallery::ImageSourceRangeDevice>(
                 _provider, _request.info.source, _cancellation);
             span.set(QStringLiteral("sourceMode"), QStringLiteral("range"));
         } else {
@@ -280,14 +235,23 @@ void VideoThumbnailRunner::run() {
     player.setVideoSink(&sink);
 
     QList<QImage> frames(VideoFrameCount);
-    QVector<qint64> positions;
+    struct Capture {
+        qint64 position = 0;
+        int sheetIndex = -1;
+        bool poster = false;
+    };
+    QVector<Capture> captures;
     qint64 duration = -1;
-    int currentFrame = -1;
+    int currentCapture = -1;
     quint64 frameSerial = 0;
     quint64 frameBaseline = 0;
     bool frameCaptured = false;
     bool captureStarted = false;
     bool completed = false;
+    bool posterCaptured = false;
+    QSize posterSourceFrameSize;
+    QRect posterViewport;
+    QSize posterFrameSize;
 
     const auto fail = [&]() {
         if (completed) {
@@ -334,8 +298,8 @@ void VideoThumbnailRunner::run() {
             fail();
             return;
         }
-        ++currentFrame;
-        if (currentFrame >= VideoFrameCount) {
+        ++currentCapture;
+        if (currentCapture >= captures.size()) {
             finish();
             return;
         }
@@ -343,25 +307,38 @@ void VideoThumbnailRunner::run() {
         frameCaptured = false;
         frameTimer.start(VideoFrameTimeoutMs);
         player.pause();
-        player.setPosition(positions.value(currentFrame));
+        player.setPosition(captures.at(currentCapture).position);
         player.play();
     };
 
     connect(&sink, &QVideoSink::videoFrameChanged, &eventLoop,
             [&](const QVideoFrame &videoFrame) {
-        if (completed || currentFrame < 0 || frameCaptured
+        if (completed || currentCapture < 0 || frameCaptured
             || frameSerial++ < frameBaseline
             || !videoFrame.isValid()) {
             return;
         }
-        const QImage image = videoFrame.toImage();
+        const Capture capture = captures.at(currentCapture);
+        const QImage image = capture.poster
+            ? ZoinGallery::VideoFrameGeometry::displayImage(videoFrame)
+            : videoFrame.toImage();
         if (image.isNull()) {
             return;
         }
         frameTimer.stop();
         player.pause();
         frameCaptured = true;
-        frames[currentFrame] = image;
+        if (capture.poster) {
+            posterSourceFrameSize = videoFrame.size();
+            posterViewport =
+                ZoinGallery::VideoFrameGeometry::visibleViewport(videoFrame);
+            posterFrameSize = image.size();
+            poster = scaleVideoPoster(image);
+            posterCaptured = !poster.isNull();
+        } else if (capture.sheetIndex >= 0
+                   && capture.sheetIndex < frames.size()) {
+            frames[capture.sheetIndex] = image;
+        }
         QTimer::singleShot(0, &eventLoop, captureNext);
     });
     connect(&frameTimer, &QTimer::timeout, &eventLoop, [&]() {
@@ -384,7 +361,15 @@ void VideoThumbnailRunner::run() {
         }
         duration = value;
         captureStarted = true;
-        positions = thumbnailPositions(duration);
+        const QVector<qint64> positions = capturePositions(duration);
+        if (needPoster && !positions.isEmpty()) {
+            captures.append({positions.constFirst(), -1, true});
+        }
+        if (needSheet && positions.size() >= VideoFrameCount + 1) {
+            for (int frame = 0; frame < VideoFrameCount; ++frame) {
+                captures.append({positions.at(frame + 1), frame, false});
+            }
+        }
         captureNext();
     });
     connect(&player, &QMediaPlayer::mediaStatusChanged, &eventLoop,
@@ -396,7 +381,9 @@ void VideoThumbnailRunner::run() {
 
     loadTimer.start(VideoLoadTimeoutMs);
     if (rangeDevice) {
-        player.setSourceDevice(rangeDevice.get(), sourceUrlHint(_request.info.source));
+        player.setSourceDevice(
+            rangeDevice.get(),
+            ZoinGallery::imageSourceUrlHint(_request.info.source));
     } else {
         player.setSource(QUrl::fromLocalFile(QFileInfo(sourcePath).absoluteFilePath()));
     }
@@ -415,46 +402,86 @@ void VideoThumbnailRunner::run() {
         frames.cbegin(), frames.cend(), [](const QImage &image) {
             return !image.isNull();
         }));
-    if (validFrames == 0) {
+    if (needPoster && posterCaptured) {
+        const qreal sourceAspect = posterFrameSize.height() > 0
+            ? qreal(posterFrameSize.width()) / posterFrameSize.height() : 0;
+        const qreal posterAspect = poster.height() > 0
+            ? qreal(poster.width()) / poster.height() : 0;
+        ZoinGallery::MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.video_thumbnail.poster"),
+            ZoinGallery::MediaTimingTrace::mergedFields(fields,
+                {{QStringLiteral("frameWidth"), posterSourceFrameSize.width()},
+                 {QStringLiteral("frameHeight"), posterSourceFrameSize.height()},
+                 {QStringLiteral("viewport"), posterViewport},
+                 {QStringLiteral("displayWidth"), posterFrameSize.width()},
+                 {QStringLiteral("displayHeight"), posterFrameSize.height()},
+                 {QStringLiteral("posterWidth"), poster.width()},
+                 {QStringLiteral("posterHeight"), poster.height()},
+                 {QStringLiteral("aspectDelta"),
+                  sourceAspect > 0
+                      ? qAbs(sourceAspect - posterAspect) / sourceAspect : 0}}));
+        DecodedImageInfo posterInfo;
+        posterInfo.decoderUsed = QStringLiteral("QtMultimedia/FFmpeg");
+        posterInfo.previewUsed = QStringLiteral("video-first-frame-poster");
+        emit imageReady(posterRequest, poster, posterInfo);
+        if (posterRequest.storeInPersistentCache) {
+            const QByteArray data = PersistentImageCache::createImageForCache(
+                posterRequest, poster);
+            if (!data.isEmpty()) {
+                emit storeInCache(posterRequest, data);
+            }
+        }
+    }
+    if (needSheet && validFrames == 0) {
         ImageDecodeRequest failed = _request;
         failed.sourceAccessFailed = _request.info.source.isValid();
         emit imageReadFailed(failed);
+        if (!posterCaptured) {
+            span.set(QStringLiteral("outcome"), QStringLiteral("no-frame"));
+            emit finished(this);
+            return;
+        }
+    }
+    if (!needSheet && !posterCaptured) {
         span.set(QStringLiteral("outcome"), QStringLiteral("no-frame"));
         emit finished(this);
         return;
     }
 
-    // Keep the sheet deterministic even for a short or partially damaged
-    // stream: repeat the nearest captured frame into missing cells.
-    QImage fallback;
-    for (const QImage &frame : std::as_const(frames)) {
-        if (!frame.isNull()) {
-            fallback = frame;
-            break;
+    if (needSheet) {
+        // Keep the sheet deterministic even for a short or partially damaged
+        // stream: repeat the nearest captured frame into missing cells.
+        QImage fallback;
+        for (const QImage &frame : std::as_const(frames)) {
+            if (!frame.isNull()) {
+                fallback = frame;
+                break;
+            }
         }
-    }
-    for (QImage &frame : frames) {
-        if (frame.isNull()) {
-            frame = fallback;
+        for (QImage &frame : frames) {
+            if (frame.isNull()) {
+                frame = fallback;
+            }
         }
-    }
-    const QImage sheet = composeContactSheet(frames, _request.targetSize);
-    DecodedImageInfo decodedInfo;
-    decodedInfo.decoderUsed = QStringLiteral("QtMultimedia/FFmpeg");
-    decodedInfo.previewUsed = QStringLiteral("video-contact-sheet-2x2");
-    emit imageReady(_request, sheet, decodedInfo);
-    if (_request.storeInPersistentCache) {
-        const QByteArray data = PersistentImageCache::createImageForCache(
-            _request, sheet);
-        if (!data.isEmpty()) {
-            emit storeInCache(_request, data);
+        const QImage sheet = composeContactSheet(frames, _request.targetSize);
+        DecodedImageInfo decodedInfo;
+        decodedInfo.decoderUsed = QStringLiteral("QtMultimedia/FFmpeg");
+        decodedInfo.previewUsed = QStringLiteral("video-contact-sheet-2x2");
+        emit imageReady(_request, sheet, decodedInfo);
+        if (_request.storeInPersistentCache) {
+            const QByteArray data = PersistentImageCache::createImageForCache(
+                _request, sheet);
+            if (!data.isEmpty()) {
+                emit storeInCache(_request, data);
+            }
         }
+        span.set(QStringLiteral("outputWidth"), sheet.width());
+        span.set(QStringLiteral("outputHeight"), sheet.height());
     }
     span.set(QStringLiteral("outcome"), QStringLiteral("ok"));
     span.set(QStringLiteral("durationMs"), duration);
     span.set(QStringLiteral("capturedFrames"), validFrames);
-    span.set(QStringLiteral("outputWidth"), sheet.width());
-    span.set(QStringLiteral("outputHeight"), sheet.height());
+    span.set(QStringLiteral("posterCaptured"), posterCaptured);
     emit finished(this);
 }
 

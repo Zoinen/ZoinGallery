@@ -5,6 +5,7 @@
 #include "ImageProbe.h"
 #include "DirectoryPreviewCache.h"
 #include <ZoinGallery/DirectoryPreviewProvider.h>
+#include <ZoinGallery/ImageSourceProvider.h>
 #include <QThreadPool>
 
 #include <QAbstractListModel>
@@ -91,6 +92,10 @@ public:
     QString entryNameAt(int row) const;
     QString localPathAt(int row) const;
     bool isImageAt(int row) const;
+    bool isVideoAt(int row) const;
+    QString videoThumbnailUrlAt(int row) const;
+    QString videoPosterUrlAt(int row) const;
+    ImageSourceDescriptor imageSourceAt(int row) const;
     bool isDirectoryAt(int row) const;
     int sourceIndexAt(int row) const;
     QSize imageOriginalSizeAt(int row) const;

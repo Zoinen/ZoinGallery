@@ -9,6 +9,7 @@ ViewerResampleEffect {
     // Only the final pass follows viewport geometry. Half-size levels remain
     // unchanged during pan/zoom and ShaderEffectSource caches their rendering.
     property var imageSource: null
+    property var videoFrameSource: null
     viewportSize: Qt.size(width, height)
     // Identity belongs to the selected texture, which may already be a half-
     // or quarter-size level. The final vertex stage resolves resting geometry
@@ -18,11 +19,13 @@ ViewerResampleEffect {
         && Math.abs(selectedPixelSize.width - viewportSize.width) < 0.01
         && Math.abs(selectedPixelSize.height - viewportSize.height) < 0.01
 
-    readonly property size imagePixelSize: imageSource
-        ? imageSource.sourceSize : Qt.size(0, 0)
-    readonly property string imageKey: imageSource
-        ? imageSource.source.toString() : ""
-    readonly property int requiredLevels: levelForSize(imagePixelSize,
+    readonly property size imagePixelSize: videoFrameSource
+        && videoFrameSource.hasFrame ? videoFrameSource.frameSize
+        : (imageSource ? imageSource.sourceSize : Qt.size(0, 0))
+    readonly property string imageKey: videoFrameSource
+        && videoFrameSource.hasFrame ? "video-frame-source"
+        : (imageSource ? imageSource.source.toString() : "")
+    readonly property int requiredLevels: nearestNeighbor ? 0 : levelForSize(imagePixelSize,
                                                        viewportSize)
     property int retainedLevels: 0
     property int pyramidRevision: 0
@@ -63,8 +66,12 @@ ViewerResampleEffect {
     onRequiredLevelsChanged: retainRequiredLevels()
     Component.onCompleted: retainRequiredLevels()
 
-    readonly property size selectedPixelSize: source && source !== imageSource
-        ? source.textureSize : imagePixelSize
+    readonly property size selectedPixelSize: {
+        const textureSize = source && source !== imageSource
+            ? source.textureSize : null
+        return textureSize && textureSize.width > 0 && textureSize.height > 0
+            ? textureSize : imagePixelSize
+    }
 
     source: {
         root.pyramidRevision
@@ -72,6 +79,8 @@ ViewerResampleEffect {
             ? pyramid.itemAt(requiredLevels - 1) : null
         return level ? level.texture : imageSource
     }
+    videoSource: requiredLevels > 0 || !videoFrameSource
+        || !videoFrameSource.hasFrame ? null : videoFrameSource
 
     Repeater {
         id: pyramid
@@ -98,7 +107,10 @@ ViewerResampleEffect {
             readonly property var inputTexture: {
                 root.pyramidRevision
                 const previous = index > 0 ? pyramid.itemAt(index - 1) : null
-                return previous ? previous.texture : root.imageSource
+                if (previous)
+                    return previous.texture
+                return root.videoFrameSource && root.videoFrameSource.hasFrame
+                    ? null : root.imageSource
             }
 
             ViewerResampleEffect {
@@ -106,6 +118,9 @@ ViewerResampleEffect {
                 width: level.pixelSize.width
                 height: level.pixelSize.height
                 source: level.inputTexture
+                videoSource: index === 0 && root.videoFrameSource
+                    && root.videoFrameSource.hasFrame
+                    ? root.videoFrameSource : null
                 viewportSize: level.pixelSize
                 // Preserve the exact two-source-pixel sampling grid on odd
                 // axes; the trailing source pixel is outside this half level.

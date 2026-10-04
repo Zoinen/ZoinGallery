@@ -19,6 +19,8 @@ class SelectedImagesModel;
 
 namespace ZoinGallery {
 
+class ThumbnailMemoryCache;
+
 // Adapts the standalone filesystem catalog to the windowless GallerySession
 // contract. The underlying models remain the single implementation of local
 // scanning, watching, sorting, selection persistence, and file operations.
@@ -31,6 +33,7 @@ public:
         const QString &thumbnailProviderName,
         const QString &asyncProviderName,
         const QSharedPointer<::ProviderImageStore> &store,
+        const QSharedPointer<ThumbnailMemoryCache> &thumbnailCache,
         ::DecodeManager *decodeManager,
         qint64 viewerFitCacheByteBudget,
         qint64 viewerNativeCacheByteBudget,
@@ -48,7 +51,11 @@ public:
     QString entryIdAt(int viewIndex) const;
     QString entryNameAt(int viewIndex) const;
     QString localPathAt(int viewIndex) const;
+    QString sourceVersionAt(int viewIndex) const;
     bool isImageAt(int viewIndex) const;
+    bool isVideoAt(int viewIndex) const;
+    QUrl videoThumbnailSourceAt(int viewIndex) const;
+    QUrl videoPosterSourceAt(int viewIndex) const;
     bool isDirectoryAt(int viewIndex) const;
     int sourceIndexAt(int viewIndex) const;
     QSize imageOriginalSizeAt(int viewIndex) const;
@@ -79,7 +86,9 @@ private:
     ImageFile *itemAt(int viewIndex) const;
 
     QString _sessionId;
+    QString _thumbnailProviderName;
     QString _currentPath;
+    QSharedPointer<ThumbnailMemoryCache> _thumbnailCache;
     FileListModel *_fileListModel = nullptr;
     GalleryViewModel *_galleryViewModel = nullptr;
     SelectedImagesModel *_selectedImagesModel = nullptr;

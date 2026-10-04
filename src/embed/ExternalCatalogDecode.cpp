@@ -523,6 +523,17 @@ void ExternalCatalogModel::publishThumbnailImage(
     if (!_thumbnailCache) {
         return;
     }
+    if (request.videoPosterRequest) {
+        _thumbnailCache->storeDecoded(
+            _sessionId, entry.sourceIdentity, entry.contentVersion,
+            entry.size, request.targetSize,
+            QStringLiteral("video-first-frame-poster-1024-display-v3"), image);
+        const int row = rowForEntryId(entry.id);
+        if (validRow(row)) {
+            emit viewerSourceAtChanged(row);
+        }
+        return;
+    }
     if (!entry.thumbnailRequestedSize.isValid()) {
         entry.thumbnailRequestedSize = request.targetSize;
         entry.thumbnailTransformKey = thumbnailTransformKey(request);

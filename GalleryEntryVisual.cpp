@@ -32,6 +32,7 @@ struct GalleryEntryVisual::SnapshotValues {
     int folderPreviewState = 0;
     quint64 folderPreviewRevision = 0;
     bool isImage = false;
+    bool isVideo = false;
     bool imageDimensionsKnown = false;
     bool isSelected = false;
     QString iconPath;
@@ -72,6 +73,8 @@ GalleryEntryVisual::SnapshotValues GalleryEntryVisual::parseSnapshot(
         .folderPreviewState = snapshot.value(QStringLiteral("folderPreviewState")).toInt(),
         .folderPreviewRevision = snapshot.value(QStringLiteral("folderPreviewRevision")).toULongLong(),
         .isImage = snapshot.value(QStringLiteral("isImage")).toBool(),
+        .isVideo = snapshot.value(QStringLiteral("thumbnailKind")).toString()
+                       .compare(QStringLiteral("video"), Qt::CaseInsensitive) == 0,
         .imageDimensionsKnown = snapshot.value(QStringLiteral("imageDimensionsKnown")).toBool(),
         .isSelected = snapshot.value(
             QStringLiteral("isSelected")).toBool(),
@@ -127,6 +130,7 @@ bool GalleryEntryVisual::applyMedia(const SnapshotValues &values) {
     changed |= assignChanged(_folderPreviewState, values.folderPreviewState);
     changed |= assignChanged(_folderPreviewRevision, values.folderPreviewRevision);
     changed |= assignChanged(_isImage, values.isImage);
+    changed |= assignChanged(_isVideo, values.isVideo);
     changed |= assignChanged(_imageDimensionsKnown, values.imageDimensionsKnown);
     changed |= assignChanged(_iconPath, values.iconPath);
     changed |= assignChanged(_iconKey, values.iconKey);
@@ -199,6 +203,7 @@ QString GalleryEntryVisual::localPath() const { return _localPath; }
 QString GalleryEntryVisual::text() const { return _text; }
 bool GalleryEntryVisual::isFolder() const { return _isFolder; }
 bool GalleryEntryVisual::isImage() const { return _isImage; }
+bool GalleryEntryVisual::isVideo() const { return _isVideo; }
 bool GalleryEntryVisual::isSelected() const { return _isSelected; }
 QString GalleryEntryVisual::iconPath() const { return _iconPath; }
 QString GalleryEntryVisual::iconKey() const { return _iconKey; }

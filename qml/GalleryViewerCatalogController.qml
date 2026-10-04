@@ -3,10 +3,20 @@ pragma ComponentBehavior: Bound
 import QtQuick
 
 QtObject {
+    id: controller
     required property Item viewer
     required property FlickableZoomable imageViewport
     required property Item frame
     required property GalleryViewerMotion motion
+
+    property Connections videoPlaybackAvailabilityConnection: Connections {
+        target: controller.viewer.session
+        ignoreUnknownSignals: true
+        function onVideoPlaybackAvailableChanged() {
+            controller.refreshCurrentSource(true,
+                                            controller.imageViewport.zoomFitView)
+        }
+    }
 
     function entryIdAt(index) {
         return viewer.session && index >= 0 ? viewer.session.entryIdAt(index) : ""
@@ -155,18 +165,64 @@ QtObject {
 
     function refreshCurrentSource(forceIndexChange, previousFitMode) {
         if (!viewer.session || viewer.presentedIndex < 0) {
+            viewer.currentIsVideoValue = false
             viewer.currentSourceValue = ""
             viewer.currentSourceLevelValue = -1
             viewer.currentSourcesValue = []
+            viewer.currentVideoThumbnailSourceValue = ""
+            viewer.currentVideoPosterSourceValue = ""
+            viewer.currentVideoIdentityValue = ""
             viewer.currentOriginalSizeValue = Qt.size(0, 0)
             viewer.appliedPresentedIndex = -1
             viewer.appliedTierSignature = ""
+            viewer.synchronizeVideoPlayback()
             viewer.refreshViewerRequestState()
             return
         }
 
         viewer.refreshViewerRequestState()
+        viewer.currentIsVideoValue = typeof viewer.session.isVideoAt === "function"
+                && viewer.session.videoPlaybackAvailable === true
+                && viewer.session.isVideoAt(viewer.presentedIndex)
+        if (viewer.currentIsVideoValue) {
+            viewer.currentSourcesValue = []
+            viewer.currentOriginalSizeValue = Qt.size(0, 0)
+            const videoSource = typeof viewer.session.videoSourceAt === "function"
+                    ? viewer.session.videoSourceAt(viewer.presentedIndex) : ({})
+            const thumbnailSource = videoSource.thumbnailSource || ""
+            const posterSource = videoSource.posterSource || ""
+            viewer.currentVideoPosterSourceValue = posterSource
+            viewer.currentVideoIdentityValue = videoSource.identity || ""
+            viewer.currentVideoThumbnailSourceValue = thumbnailSource
+            const previewSource = String(posterSource) !== ""
+                    ? posterSource : thumbnailSource
+            viewer.currentSourceValue = previewSource
+            viewer.currentSourceLevelValue = previewSource.toString() === ""
+                    ? -1 : 0
+            if (String(previewSource) !== "") {
+                imageViewport.setImage(previewSource, Qt.size(0, 0),
+                                       viewer.presentedIndex, 0)
+            } else {
+                imageViewport.resetViewerImages()
+            }
+            // A first-frame poster can finish decoding after the panel-to-
+            // viewer animation has begun. Upgrade its transition source and
+            // the viewport together so the contact sheet is never left as
+            // the moving image for the rest of the animation.
+            if (String(posterSource) !== ""
+                    && viewer.transitionHasGeometry
+                    && !viewer.completingClose
+                    && viewer.transitionProgress < 1)
+                viewer.captureTransitionTarget(true)
+            viewer.appliedPresentedIndex = viewer.presentedIndex
+            viewer.appliedTierSignature = "video:" + viewer.presentedEntryId
+            viewer.synchronizeVideoPlayback()
+            return
+        }
 
+        viewer.currentVideoThumbnailSourceValue = ""
+        viewer.currentVideoPosterSourceValue = ""
+        viewer.currentVideoIdentityValue = ""
         const sources = sourceTiersAt(viewer.presentedIndex)
         viewer.currentSourcesValue = sources
         viewer.currentOriginalSizeValue = originalSizeAt(viewer.presentedIndex)
@@ -178,6 +234,7 @@ QtObject {
             viewer.currentSourceValue = ""
             viewer.currentSourceLevelValue = -1
         }
+        viewer.synchronizeVideoPlayback()
 
         const indexChanged = forceIndexChange === true
                 || viewer.appliedPresentedIndex !== viewer.presentedIndex
@@ -265,6 +322,9 @@ QtObject {
         if (viewer.customContent || !viewer.session || index < 0
                 || viewer.width <= 0 || viewer.height <= 0)
             return
+        if (typeof viewer.session.isImageAt === "function"
+                && !viewer.session.isImageAt(index))
+            return
         const ratio = Math.max(1, scaleRatio === undefined ? 1 : scaleRatio)
         const requestedWidth = Math.ceil(viewer.width * viewer.devicePixelRatio * ratio)
         const requestedHeight = Math.ceil(viewer.height * viewer.devicePixelRatio * ratio)
@@ -277,7 +337,11 @@ QtObject {
     function requestImage() {
         if (viewer.customContent || !viewer.session || viewer.presentedIndex < 0)
             return
-        if (imageViewport.zoomFitView && !viewer.sphericViewerMode) {
+        if (typeof viewer.session.isImageAt === "function"
+                && !viewer.session.isImageAt(viewer.presentedIndex))
+            return
+        if (imageViewport.zoomFitView && !viewer.sphericViewerMode
+                && !viewer.nearestNeighbor) {
             requestIndex(viewer.presentedIndex, 1)
             viewer.refreshCurrentSource()
             return
@@ -362,6 +426,8 @@ QtObject {
     function adjacentIndex(fromIndex, direction) {
         if (!viewer.session || fromIndex < 0)
             return fromIndex
+        if (typeof viewer.session.adjacentViewableIndex === "function")
+            return viewer.session.adjacentViewableIndex(fromIndex, direction)
         return viewer.session.adjacentImageIndex(fromIndex, direction)
     }
 

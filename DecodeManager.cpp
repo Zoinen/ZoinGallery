@@ -501,6 +501,42 @@ void DecodeManager::probeImages(
     processQueue();
 }
 
+void DecodeManager::restoreCachedVideoPoster(
+    const ImageDecodeRequest &thumbnailRequest) {
+    if (!cacheReadsEnabled(_imageCacheMode)) {
+        return;
+    }
+    ImageDecodeRequest request = thumbnailRequest;
+    request.targetSize = QSize(1024, 1024);
+    request.viewerRequest = false;
+    request.backgroundViewerRequest = false;
+    request.panelThumbnailRequest = false;
+    request.info.panelThumbnailRequest = false;
+    request.fitToViewerRequest = false;
+    request.expandToCacheResolution = false;
+    request.videoPosterRequest = true;
+    request.thumbnailTransformKey = QStringLiteral(
+        "video-first-frame-poster-1024-display-v3");
+    const QString key = request.requestNamespace + QChar(0x1f)
+        + request.info.sourceIdentity() + QChar(0x1f)
+        + request.info.sourceVersionToken;
+    if (_pendingVideoPosterLookups.contains(key)) {
+        return;
+    }
+    _pendingVideoPosterLookups.insert(key);
+    // Restore only the disk artifact. This path must not open a video source
+    // or initialize Qt Multimedia when the panel contact sheet is a hit.
+    auto *runner = new CachedImageRetrieveRunner(request, true);
+    runner->connections.append(connect(
+        runner, &CachedImageRetrieveRunner::cachedThumbnailRetrieved,
+        this, &DecodeManager::onImageReady));
+    connect(runner, &QObject::destroyed, this, [this, key]() {
+        _pendingVideoPosterLookups.remove(key);
+    });
+    DecodeQueuePolicy::insertHighImageStageAheadOfMetadata(_taskQueue, runner);
+    processQueue();
+}
+
 void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
     QList<ImageDecodeRequest> queuedRequests = requests;
     for (ImageDecodeRequest &request : queuedRequests) {

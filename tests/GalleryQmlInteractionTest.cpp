@@ -6,6 +6,7 @@
 #include "ImageFile.h"
 
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QImage>
 #include <QQmlComponent>
@@ -13,9 +14,17 @@
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QSGRendererInterface>
+#include <QScreen>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <cstring>
+#ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+#include <QVideoFrame>
+#include <QVideoFrameFormat>
+#include <QVideoSink>
+#endif
 
 #include <cmath>
 
@@ -41,6 +50,69 @@ bool writeImage(const QString &path, const QSize &size, const QColor &color) {
     image.fill(color);
     return image.save(path);
 }
+
+#ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+QVideoFrame solidVideoFrame(const QSize &size, const QColor &color) {
+    QVideoFrame frame(QVideoFrameFormat(
+        size, QVideoFrameFormat::Format_BGRA8888));
+    if (!frame.map(QVideoFrame::WriteOnly))
+        return {};
+    for (int y = 0; y < size.height(); ++y) {
+        uchar *row = frame.bits(0) + y * frame.bytesPerLine(0);
+        for (int x = 0; x < size.width(); ++x) {
+            uchar *pixel = row + x * 4;
+            pixel[0] = static_cast<uchar>(color.blue());
+            pixel[1] = static_cast<uchar>(color.green());
+            pixel[2] = static_cast<uchar>(color.red());
+            pixel[3] = static_cast<uchar>(color.alpha());
+        }
+    }
+    frame.unmap();
+    return frame;
+}
+
+QVideoFrame neutralNv12VideoFrame(const QSize &size, uchar luma) {
+    QVideoFrameFormat format(size, QVideoFrameFormat::Format_NV12);
+    format.setColorSpace(QVideoFrameFormat::ColorSpace_BT709);
+    format.setColorRange(QVideoFrameFormat::ColorRange_Full);
+    format.setColorTransfer(QVideoFrameFormat::ColorTransfer_BT709);
+    QVideoFrame frame(format);
+    if (!frame.map(QVideoFrame::WriteOnly) || frame.planeCount() != 2)
+        return {};
+
+    for (int y = 0; y < size.height(); ++y) {
+        std::memset(frame.bits(0) + y * frame.bytesPerLine(0), luma,
+                    size.width());
+    }
+    for (int y = 0; y < size.height() / 2; ++y) {
+        std::memset(frame.bits(1) + y * frame.bytesPerLine(1), 128,
+                    frame.bytesPerLine(1));
+    }
+    frame.unmap();
+    return frame;
+}
+
+void selectScreenAtDpr(QQuickView &view, qreal requestedDpr) {
+    for (QScreen *screen : QGuiApplication::screens()) {
+        if (qAbs(screen->devicePixelRatio() - requestedDpr) < 0.001) {
+            view.setScreen(screen);
+            view.setPosition(screen->geometry().topLeft() + QPoint(40, 40));
+            return;
+        }
+    }
+}
+
+bool supportsRhiVideoRendering(const QQuickView &view) {
+    if (!view.rendererInterface())
+        return false;
+    const auto api = view.rendererInterface()->graphicsApi();
+    return api == QSGRendererInterface::OpenGL
+        || api == QSGRendererInterface::Direct3D11
+        || api == QSGRendererInterface::Vulkan
+        || api == QSGRendererInterface::Metal
+        || api == QSGRendererInterface::Direct3D12;
+}
+#endif
 
 QObject *createRoot(QQuickView &view, const QByteArray &qml,
                     const QString &name) {
@@ -69,6 +141,988 @@ class GalleryQmlInteractionTest : public QObject {
     Q_OBJECT
 
 private slots:
+#ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+    void videoSourceInitializationWaitsForViewerExpandAnimation();
+
+    void imageWheelZoomFrameTimingAt175Percent() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString imagePath = qEnvironmentVariable("ZOIN_ZOOM_TEST_IMAGE");
+        if (imagePath.isEmpty()) {
+            imagePath = directory.filePath(QStringLiteral("zoom.png"));
+            const int width = qMax(6000, qEnvironmentVariableIntValue("ZOIN_ZOOM_TEST_WIDTH"));
+            QVERIFY(writeImage(imagePath, QSize(width, width * 2 / 3), QColor(82, 134, 182)));
+        }
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(QStringLiteral("wheel-zoom-timing"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog({imageEntry(QStringLiteral("image"), 0, imagePath)}, 1));
+        QVERIFY(session->applyExternalState(QStringLiteral("image"), 0, {}, 1));
+        session->setViewerOpen(true);
+        view.engine()->rootContext()->setContextProperty(QStringLiteral("zoomSession"), session);
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 1920; height: 1000
+                GalleryViewer {
+                    objectName: "wheelZoomViewer"
+                    anchors.fill: parent
+                    session: zoomSession
+                    animationDuration: 250
+                }
+            }
+        )QML", QStringLiteral("ImageWheelZoomTiming.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        selectScreenAtDpr(view, 1.75);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        auto *viewer = root->findChild<QQuickItem *>(QStringLiteral("wheelZoomViewer"));
+        auto *viewport = root->findChild<QQuickItem *>(QStringLiteral("galleryViewerViewport"));
+        auto *native = root->findChild<QQuickItem *>(QStringLiteral("galleryViewerNativeImage"));
+        QVERIFY(viewer);
+        QVERIFY(viewport);
+        QVERIFY(native);
+        viewer->forceActiveFocus();
+        QTRY_VERIFY_WITH_TIMEOUT(viewport->property("originalSize").toSizeF().width() > 1, 10000);
+        QVERIFY(QMetaObject::invokeMethod(viewport, "zoomTo100", Q_ARG(QVariant, false)));
+        QTRY_COMPARE_WITH_TIMEOUT(native->property("status").toInt(), 1, 10000);
+        QTRY_VERIFY(!viewport->property("viewportAnimationRunning").toBool());
+        QVERIFY(QMetaObject::invokeMethod(viewport, "zoomTo100", Q_ARG(QVariant, false)));
+        QTRY_VERIFY(!viewport->property("viewportAnimationRunning").toBool());
+        QCOMPARE(viewport->property("zoomScale").toReal(), 1.0);
+        const QUrl nativeSource = native->property("source").toUrl();
+        QVERIFY(!nativeSource.isEmpty());
+        for (bool nearest : {false, true}) {
+            viewer->setProperty("nearestNeighbor", nearest);
+            QTest::qWait(150);
+            QElapsedTimer clock;
+            clock.start();
+            qint64 previous = 0;
+            qint64 worst = 0;
+            int count = 0;
+            bool previousActive = false;
+            qreal minimumZoom = 1;
+            const auto connection = connect(&view, &QQuickWindow::frameSwapped, &view, [&] {
+                const qint64 now = clock.elapsed();
+                const bool active = viewport->property("viewportAnimationRunning").toBool();
+                if (previousActive && active) {
+                    worst = qMax(worst, now - previous);
+                    if (now - previous > 50)
+                        qInfo() << "wheel active gap" << now - previous
+                                << "zoom" << viewport->property("zoomScale");
+                }
+                previousActive = active;
+                minimumZoom = qMin(minimumZoom, viewport->property("zoomScale").toReal());
+                previous = now;
+                ++count;
+            });
+            QTest::mouseMove(&view, QPoint(420, 320));
+            QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, QPoint(420, 320));
+            for (int direction : {-1, 1, -1, 1}) {
+                for (int tick = 0; tick < 13; ++tick) {
+                    QTest::wheelEvent(&view, QPointF(420, 320), QPoint(0, direction * 120));
+                    QTest::qWait(35);
+                }
+                QTest::qWait(300);
+            }
+            QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, QPoint(420, 320));
+            disconnect(connection);
+            qInfo() << "wheel zoom timing nearest" << nearest << "frames" << count
+                    << "max active gap ms" << worst << "min zoom" << minimumZoom
+                    << "final zoom" << viewport->property("zoomScale");
+            QCOMPARE(native->property("source").toUrl(), nativeSource);
+            QVERIFY2(worst < 100, "Animated zoom must not stall for a tenth of a second");
+            QVERIFY(minimumZoom < 0.05);
+            const QString capturePath = qEnvironmentVariable("ZOIN_ZOOM_TEST_CAPTURE");
+            if (!capturePath.isEmpty()) {
+                QVERIFY(view.grabWindow().save(capturePath + (nearest
+                    ? QStringLiteral("-nearest.png") : QStringLiteral("-normal.png"))));
+            }
+        }
+        runtime->shutdown();
+    }
+
+    void imageZoomFrameTimingAt175Percent() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath = directory.filePath(QStringLiteral("zoom.png"));
+        QVERIFY(writeImage(imagePath, QSize(6000, 4000), QColor(82, 134, 182)));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("zoomImageUrl"), QUrl::fromLocalFile(imagePath));
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                id: scene
+                width: 840; height: 640
+                property real zoom: 1
+                Image { id: pixels; source: zoomImageUrl; visible: false }
+                ViewerResample {
+                    id: effect
+                    objectName: "zoomEffect"
+                    width: 6000 / 1.75 * scene.zoom
+                    height: 4000 / 1.75 * scene.zoom
+                    imageSource: pixels
+                    viewportSize: Qt.size(width * 1.75, height * 1.75)
+                }
+                NumberAnimation {
+                    id: animation; target: scene; property: "zoom"
+                    duration: 650; easing.type: Easing.InOutQuad
+                }
+                function zoomTo(value) {
+                    animation.to = value
+                    animation.restart()
+                }
+            }
+        )QML", QStringLiteral("ImageZoomFrameTiming.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        selectScreenAtDpr(view, 1.75);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QCOMPARE(view.devicePixelRatio(), 1.75);
+        if (!supportsRhiVideoRendering(view))
+            QSKIP("zoom timing requires an RHI backend");
+        auto *effect = root->findChild<QObject *>(QStringLiteral("zoomEffect"));
+        QVERIFY(effect);
+        QTRY_COMPARE(effect->property("imagePixelSize").toSizeF(), QSizeF(6000, 4000));
+        QTest::qWait(250);
+
+        for (bool nearest : {false, true}) {
+            effect->setProperty("nearestNeighbor", nearest);
+            for (qreal target : {0.05, 1.0, 0.05, 1.0}) {
+                QElapsedTimer clock;
+                clock.start();
+                qint64 previous = 0;
+                qint64 worst = 0;
+                int count = 0;
+                const auto connection = connect(&view, &QQuickWindow::frameSwapped,
+                    &view, [&] {
+                        const qint64 now = clock.elapsed();
+                        worst = qMax(worst, now - previous);
+                        previous = now;
+                        ++count;
+                    });
+                QVERIFY(QMetaObject::invokeMethod(root, "zoomTo", Q_ARG(QVariant, target)));
+                QTest::qWait(800);
+                disconnect(connection);
+                qInfo() << "zoom timing nearest" << nearest << "target" << target
+                        << "frames" << count << "max gap ms" << worst
+                        << "retained levels" << effect->property("retainedLevels");
+            }
+        }
+    }
+
+    void videoResamplerMatchesImageFilterAt175Percent() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("resample-video.png"));
+        QImage sourceImage(QSize(24, 16), QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < sourceImage.height(); ++y) {
+            for (int x = 0; x < sourceImage.width(); ++x) {
+                sourceImage.setPixelColor(x, y, QColor((x * 37 + y * 11) % 256,
+                                                       (x * 13 + y * 53) % 256,
+                                                       (x * 71 + y * 7) % 256));
+            }
+        }
+        QVERIFY(sourceImage.save(path));
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("videoResampleImage"), QUrl::fromLocalFile(path));
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 340; height: 180
+                Image {
+                    id: source
+                    objectName: "videoResampleSource"
+                    source: videoResampleImage
+                    sourceSize: Qt.size(24, 16)
+                    width: 24; height: 16
+                    asynchronous: false
+                }
+                ViewerVideoFrameSource {
+                    id: frameSource
+                    objectName: "galleryVideoFrameSource"
+                }
+                ViewerResample {
+                    objectName: "imageResampleReference"
+                    x: 0; y: 8; width: 160; height: 160
+                    imageSource: source
+                    viewportSize: Qt.size(width * (Window.window ? Window.window.devicePixelRatio : 1),
+                                          height * (Window.window ? Window.window.devicePixelRatio : 1))
+                    sourceExtent: source.sourceSize
+                }
+                ViewerResample {
+                    objectName: "videoResampleEffect"
+                    x: 180; y: 8; width: 160; height: 160
+                    imageSource: source
+                    videoFrameSource: frameSource
+                    viewportSize: Qt.size(width * (Window.window ? Window.window.devicePixelRatio : 1),
+                                          height * (Window.window ? Window.window.devicePixelRatio : 1))
+                    sourceExtent: source.sourceSize
+                }
+            }
+        )QML", QStringLiteral("VideoResampler175.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        selectScreenAtDpr(view, 1.75);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        selectScreenAtDpr(view, 1.75);
+        QCOMPARE(view.devicePixelRatio(), 1.75);
+        if (!supportsRhiVideoRendering(view))
+            QSKIP("video resampler comparison requires an RHI backend");
+
+        auto *frameSource = root->findChild<QObject *>(
+            QStringLiteral("galleryVideoFrameSource"));
+        QVERIFY(frameSource);
+        auto *sink = qobject_cast<QVideoSink *>(
+            frameSource->property("sink").value<QObject *>());
+        QVERIFY(sink);
+        sink->setVideoFrame(QVideoFrame(sourceImage));
+        QTRY_VERIFY(frameSource->property("hasFrame").toBool());
+
+        auto *videoEffect = root->findChild<QQuickItem *>(
+            QStringLiteral("videoResampleEffect"));
+        QVERIFY(videoEffect);
+        const QPointF origin = videoEffect->mapToItem(view.contentItem(), QPointF());
+        const QPointF physicalOrigin = origin * view.devicePixelRatio();
+        QVERIFY2(qAbs(physicalOrigin.x() - qRound(physicalOrigin.x())) < 0.001
+                 && qAbs(physicalOrigin.y() - qRound(physicalOrigin.y())) < 0.001,
+                 qPrintable(QStringLiteral("video resampler origin is (%1, %2) physical px")
+                                .arg(physicalOrigin.x(), 0, 'f', 6)
+                                .arg(physicalOrigin.y(), 0, 'f', 6)));
+        QVERIFY(qAbs(videoEffect->width() * view.devicePixelRatio()
+                     - qRound(videoEffect->width() * view.devicePixelRatio())) < 0.001);
+        QVERIFY(qAbs(videoEffect->height() * view.devicePixelRatio()
+                     - qRound(videoEffect->height() * view.devicePixelRatio())) < 0.001);
+        const QPointF dx = videoEffect->mapToItem(view.contentItem(), QPointF(1, 0))
+                           - origin;
+        const QPointF dy = videoEffect->mapToItem(view.contentItem(), QPointF(0, 1))
+                           - origin;
+        QVERIFY(QLineF(dx, QPointF(1, 0)).length() < 0.0001);
+        QVERIFY(QLineF(dy, QPointF(0, 1)).length() < 0.0001);
+
+        QTest::qWait(100);
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        for (const QPointF point : {QPointF(40, 40), QPointF(80, 80),
+                                    QPointF(120, 120)}) {
+            const QPoint stillPixel(qRound(point.x() * view.devicePixelRatio()),
+                                    qRound((point.y() + 8) * view.devicePixelRatio()));
+            const QPoint videoPixel(qRound((point.x() + 180) * view.devicePixelRatio()),
+                                    stillPixel.y());
+            const QColor stillColor = capture.pixelColor(stillPixel);
+            const QColor videoColor = capture.pixelColor(videoPixel);
+            const QString diagnostic = QStringLiteral("still %1 versus video %2")
+                .arg(stillColor.name(QColor::HexArgb),
+                     videoColor.name(QColor::HexArgb));
+            QVERIFY2(qAbs(stillColor.red() - videoColor.red()) <= 3
+                     && qAbs(stillColor.green() - videoColor.green()) <= 3
+                     && qAbs(stillColor.blue() - videoColor.blue()) <= 3,
+                     qPrintable(diagnostic));
+        }
+        auto *imageEffect = root->findChild<QQuickItem *>(
+            QStringLiteral("imageResampleReference"));
+        QVERIFY(imageEffect);
+        QVERIFY(imageEffect->setProperty("nearestNeighbor", true));
+        QVERIFY(videoEffect->setProperty("nearestNeighbor", true));
+        QTest::qWait(100);
+        const QImage nearestCapture = view.grabWindow();
+        QVERIFY(!nearestCapture.isNull());
+        for (const QPoint outputPixel : {QPoint(33, 29), QPoint(97, 111), QPoint(201, 219)}) {
+            const QPoint sourcePixel(outputPixel.x() * 24 / 280,
+                                     outputPixel.y() * 16 / 280);
+            const QColor expected = sourceImage.pixelColor(sourcePixel);
+            for (const int left : {0, 315}) {
+                const QColor actual = nearestCapture.pixelColor(
+                    left + outputPixel.x(), 14 + outputPixel.y());
+                QVERIFY(qAbs(actual.red() - expected.red()) <= 3);
+                QVERIFY(qAbs(actual.green() - expected.green()) <= 3);
+                QVERIFY(qAbs(actual.blue() - expected.blue()) <= 3);
+            }
+        }
+    }
+
+    void videoIdentityBranchConvertsYuvAt175Percent() {
+        constexpr QSize frameSize(32, 18);
+        constexpr uchar luma = 160;
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 80; height: 60
+                ViewerVideoFrameSource {
+                    id: frameSource
+                    objectName: "identityVideoFrameSource"
+                }
+                ViewerResample {
+                    objectName: "identityVideoResampleEffect"
+                    width: 32 / (Window.window ? Window.window.devicePixelRatio : 1)
+                    height: 18 / (Window.window ? Window.window.devicePixelRatio : 1)
+                    viewportSize: Qt.size(32, 18)
+                    videoFrameSource: frameSource
+                    sourceExtent: Qt.size(32, 18)
+                    pixelAligned: true
+                }
+            }
+        )QML", QStringLiteral("VideoIdentityYuv175.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        selectScreenAtDpr(view, 1.75);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        selectScreenAtDpr(view, 1.75);
+        QCOMPARE(view.devicePixelRatio(), 1.75);
+        if (!supportsRhiVideoRendering(view))
+            QSKIP("video identity rendering requires an RHI backend");
+
+        auto *frameSource = root->findChild<QObject *>(
+            QStringLiteral("identityVideoFrameSource"));
+        auto *effect = root->findChild<QQuickItem *>(
+            QStringLiteral("identityVideoResampleEffect"));
+        QVERIFY(frameSource);
+        QVERIFY(effect);
+        auto *sink = qobject_cast<QVideoSink *>(
+            frameSource->property("sink").value<QObject *>());
+        QVERIFY(sink);
+
+        QVideoFrame frame = neutralNv12VideoFrame(frameSize, luma);
+        QVERIFY(frame.isValid());
+        const QImage expectedImage = frame.toImage();
+        QVERIFY(!expectedImage.isNull());
+        const QColor expected = expectedImage.pixelColor(frameSize.width() / 2,
+                                                          frameSize.height() / 2);
+        QVERIFY(qAbs(expected.red() - expected.green()) <= 8);
+        QVERIFY(qAbs(expected.green() - expected.blue()) <= 8);
+
+        sink->setVideoFrame(frame);
+        QTRY_VERIFY(frameSource->property("hasFrame").toBool());
+        QTRY_VERIFY(effect->property("pixelAlignedIdentity").toBool());
+        QCOMPARE(effect->property("requiredLevels").toInt(), 0);
+        QCOMPARE(effect->property("selectedPixelSize").toSize(), frameSize);
+
+        QTest::qWait(100);
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        const qreal dpr = view.devicePixelRatio();
+        const QPointF origin = effect->mapToItem(view.contentItem(), QPointF());
+        const QPoint sample(qRound(origin.x() * dpr) + frameSize.width() / 2,
+                            qRound(origin.y() * dpr) + frameSize.height() / 2);
+        const QColor actual = capture.pixelColor(sample);
+        const QString diagnostic = QStringLiteral(
+            "pixel-aligned video at 100% expected %1 from NV12, got %2")
+            .arg(expected.name(QColor::HexArgb), actual.name(QColor::HexArgb));
+        QVERIFY2(qAbs(actual.red() - expected.red()) <= 12
+                 && qAbs(actual.green() - expected.green()) <= 12
+                 && qAbs(actual.blue() - expected.blue()) <= 12,
+                 qPrintable(diagnostic));
+    }
+
+    void videoFrameOwnsViewerOverLateContactSheetAt175Percent() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        const QString posterAPath = directory.filePath(QStringLiteral("poster-a.png"));
+        const QString posterBPath = directory.filePath(QStringLiteral("poster-b.png"));
+        const QString contactAPath = directory.filePath(QStringLiteral("contact-a.png"));
+        const QString contactBPath = directory.filePath(QStringLiteral("contact-b.png"));
+        const QString iconPath = directory.filePath(QStringLiteral("icon.png"));
+        const QColor posterAColor(QStringLiteral("#174fc4"));
+        const QColor posterBColor(QStringLiteral("#d59a18"));
+        const QColor frameAColor(QStringLiteral("#2aaf58"));
+        const QColor frameBColor(QStringLiteral("#6851cc"));
+        const QColor backgroundColor(QStringLiteral("#18202a"));
+        const QColor contactAColor(QStringLiteral("#c01830"));
+        const QColor contactBColor(QStringLiteral("#d000d0"));
+
+        QVERIFY(writeImage(posterAPath, QSize(1020, 425), posterAColor));
+        QVERIFY(writeImage(posterBPath, QSize(1020, 425), posterBColor));
+        QImage contactA(QSize(32, 24), QImage::Format_ARGB32_Premultiplied);
+        QImage contactB(QSize(32, 24), QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < contactA.height(); ++y) {
+            for (int x = 0; x < contactA.width(); ++x) {
+                contactA.setPixelColor(x, y,
+                    x < contactA.width() / 2 && y < contactA.height() / 2
+                        ? contactAColor : QColor(QStringLiteral("#a6c21b")));
+                contactB.setPixelColor(x, y,
+                    x < contactB.width() / 2 && y < contactB.height() / 2
+                        ? contactBColor : QColor(QStringLiteral("#15a9b8")));
+            }
+        }
+        QVERIFY(contactA.save(contactAPath));
+        QVERIFY(contactB.save(contactBPath));
+        QVERIFY(writeImage(iconPath, QSize(16, 16), Qt::white));
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("initialContactSheet"), QUrl::fromLocalFile(contactAPath));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("videoControlIcon"), QUrl::fromLocalFile(iconPath));
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                id: root
+                width: 320; height: 240
+                property url contactSourceValue: initialContactSheet
+                property url posterSourceValue: ""
+                property string identityValue: "video-a"
+                readonly property bool contactSheetReady:
+                    viewport.viewerImageBase.status === Image.Ready
+                Rectangle {
+                    anchors.fill: parent
+                    color: "#18202a"
+                }
+                FlickableZoomable {
+                    id: viewport
+                    objectName: "sharedGalleryViewerViewport"
+                    anchors.fill: parent
+                    active: true
+                    devicePixelRatio: 1.75
+                    checkerboardEnabled: false
+                    videoMode: true
+                    videoFrameSource: videoSurface.presentedFrameSource
+                    videoPosterImage: videoSurface.posterImageSource
+                    videoDisplayFailed: videoSurface.playbackFailed
+                    onCloseRequested: root.closeRequests++
+                    onMiddleClickRequested: root.fullscreenRequests++
+                    Component.onCompleted:
+                        setImage(root.contactSourceValue, Qt.size(0, 0), 0, 0)
+                }
+                QtObject {
+                    id: videoController
+                    objectName: "testVideoController"
+                    property string state: "ready"
+                    property bool playing: false
+                    property bool muted: true
+                    property real volume: 1
+                    property int position: 0
+                    property int duration: 10000
+                    property string error: ""
+                    property var outputSink: null
+                    signal changed()
+                    function setOutputSink(value) { outputSink = value }
+                    function playPause() { playing = !playing; changed() }
+                    function seekTo(value) { position = value; changed() }
+                    function toggleMute() { muted = !muted; changed() }
+                    function adjustVolume(value) {
+                        volume = Math.max(0, Math.min(1, volume + value)); changed()
+                    }
+                    function publish() { changed() }
+                }
+                QtObject {
+                    id: videoSession
+                    property var videoPlaybackController: videoController
+                }
+                property int closeRequests: 0
+                property int fullscreenRequests: 0
+                GalleryVideoPlaybackSurface {
+                    id: videoSurface
+                    objectName: "videoSurfaceUnderTest"
+                    anchors.fill: parent
+                    controller: videoController
+                    devicePixelRatio: 1.75
+                    posterSource: root.posterSourceValue
+                    videoIdentity: root.identityValue
+                    previewVisible: viewport.imageTextureReady
+                    foregroundColor: "#f3f4f6"
+                    mutedColor: "#c7c9cc"
+                    iconSources: ({
+                        play: videoControlIcon,
+                        pause: videoControlIcon,
+                        muted: videoControlIcon,
+                        sound: videoControlIcon
+                    })
+                }
+                Connections {
+                    target: videoSurface
+                    function onDisplaySizeChanged() {
+                        if (videoSurface.displaySize.width > 1
+                                && videoSurface.displaySize.height > 1) {
+                            viewport.sourceSizeFallbackPending = false
+                            viewport.applyOriginalSize(Qt.size(
+                                videoSurface.displaySize.width / 1.75,
+                                videoSurface.displaySize.height / 1.75))
+                        }
+                    }
+                    function onVideoIdentityChanged() {
+                        Qt.callLater(() => {
+                            if (videoSurface.displaySize.width > 1
+                                    && videoSurface.displaySize.height > 1) {
+                                viewport.sourceSizeFallbackPending = false
+                                viewport.applyOriginalSize(Qt.size(
+                                    videoSurface.displaySize.width / 1.75,
+                                    videoSurface.displaySize.height / 1.75))
+                            }
+                        })
+                    }
+                }
+                Item {
+                    id: inputViewer
+                    objectName: "inputViewer"
+                    visible: false
+                    property bool currentIsVideo: true
+                    property var session: videoSession
+                    property bool customContent: false
+                    property bool zoomInPressed: false
+                    property bool zoomOutPressed: false
+                    property bool leftPressed: false
+                    property bool rightPressed: false
+                    property bool upPressed: false
+                    property bool downPressed: false
+                    property bool controlPressed: false
+                    function ownsKey(event) { return true }
+                    function updateHeldKeyMotion() {
+                        const speed = controlPressed ? 0.06 : 1
+                        viewport.startZoomScrollingAnimation(
+                            leftPressed ? speed : rightPressed ? -speed : 0,
+                            upPressed ? speed : downPressed ? -speed : 0,
+                            zoomInPressed ? speed : zoomOutPressed ? -speed : 0)
+                    }
+                    function finishShiftSelection() {}
+                }
+                GalleryViewerInput {
+                    id: videoInput
+                    viewer: inputViewer
+                    viewport: viewport
+                }
+                function dispatchVideoPress(key, modifiers) {
+                    const event = { key: key, modifiers: modifiers,
+                                    isAutoRepeat: false, accepted: false }
+                    const alt = Boolean(modifiers & Qt.AltModifier)
+                    const control = Boolean(modifiers & Qt.ControlModifier)
+                    if (videoInput.handleVideoControlPressed(event, alt, control))
+                        return "control"
+                    if (videoInput.handleMotionPressed(event))
+                        return "motion"
+                    return "navigation"
+                }
+                function dispatchVideoRelease(key, modifiers) {
+                    videoInput.handleReleased({ key: key, modifiers: modifiers,
+                                                isAutoRepeat: false,
+                                                accepted: false })
+                }
+            }
+        )QML", QStringLiteral("VideoFrameOwnsViewerAt175.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        selectScreenAtDpr(view, 1.75);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        selectScreenAtDpr(view, 1.75);
+        QCOMPARE(view.devicePixelRatio(), 1.75);
+        const bool canRenderVideoFrame = supportsRhiVideoRendering(view);
+
+        auto *surface = root->findChild<QQuickItem *>(
+            QStringLiteral("videoSurfaceUnderTest"));
+        auto *contactSheet = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerBaseImage"));
+        auto *viewport = root->findChild<QQuickItem *>(
+            QStringLiteral("sharedGalleryViewerViewport"));
+        auto *videoEffect = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryViewerImageShader"));
+        auto *frameSource = root->findChild<QObject *>(
+            QStringLiteral("galleryVideoFrameSource"));
+        auto *controller = root->findChild<QObject *>(
+            QStringLiteral("testVideoController"));
+        QVERIFY(surface);
+        QVERIFY(contactSheet);
+        QVERIFY(viewport);
+        QVERIFY(videoEffect);
+        QVERIFY(frameSource);
+        QVERIFY(controller);
+        QTRY_VERIFY(root->property("contactSheetReady").toBool());
+        auto *imageLayer = viewport->property("image").value<QObject *>();
+        QVERIFY(imageLayer);
+        const QSizeF originalSize = viewport->property("originalSize").toSizeF();
+        const QSizeF contactSourceSize = contactSheet->property("sourceSize").toSizeF();
+        const QString initialState = QStringLiteral(
+            "textureReady=%1 base=%2x%3 sourceSize=%4x%5 pending=%6 source=%7 original=%8x%9 layer=%10x%11 opacity=%12 shader=%13x%14")
+            .arg(viewport->property("imageTextureReady").toBool())
+            .arg(contactSheet->property("implicitWidth").toReal())
+            .arg(contactSheet->property("implicitHeight").toReal())
+            .arg(contactSourceSize.width()).arg(contactSourceSize.height())
+            .arg(viewport->property("sourceSizeFallbackPending").toBool())
+            .arg(imageLayer->property("source").toUrl().toString())
+            .arg(originalSize.width()).arg(originalSize.height())
+            .arg(imageLayer->property("width").toReal())
+            .arg(imageLayer->property("height").toReal())
+            .arg(imageLayer->property("opacity").toReal())
+            .arg(videoEffect->property("width").toReal())
+            .arg(videoEffect->property("height").toReal());
+        QVERIFY2(viewport->property("imageTextureReady").toBool(),
+                 qPrintable(initialState));
+        QVERIFY2(originalSize.width() > 1 && originalSize.height() > 1,
+                 qPrintable(initialState));
+        QVERIFY(!surface->property("displayReady").toBool());
+
+        auto *statusText = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryVideoStatusText"));
+        QVERIFY(statusText);
+        QVERIFY(surface->property("previewVisible").toBool());
+        QVERIFY(controller->setProperty("state", QStringLiteral("loading")));
+        QVERIFY(QMetaObject::invokeMethod(controller, "publish"));
+        QVERIFY(!statusText->property("visible").toBool());
+
+        const QPointF videoPoint(80, 60);
+        const QPointF letterboxPoint(160, 8);
+        const qreal dpr = view.devicePixelRatio();
+        const auto pixelAt = [&](const QImage &capture, const QPointF &logicalPoint) {
+            const QPoint pixel(qRound(logicalPoint.x() * dpr),
+                               qRound(logicalPoint.y() * dpr));
+            return capture.pixelColor(pixel);
+        };
+        const auto colorMismatch = [](const QColor &actual, const QColor &expected,
+                                      const QString &label) {
+            if (qAbs(actual.red() - expected.red()) <= 12
+                && qAbs(actual.green() - expected.green()) <= 12
+                && qAbs(actual.blue() - expected.blue()) <= 12) {
+                return QString();
+            }
+            return QStringLiteral("%1 expected %2 but got %3")
+                .arg(label, expected.name(QColor::HexArgb),
+                     actual.name(QColor::HexArgb));
+        };
+
+        QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        QString mismatch = colorMismatch(pixelAt(capture, videoPoint), contactAColor,
+                                         QStringLiteral("initial contact sheet"));
+        QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch + QStringLiteral("; ")
+                                                + initialState));
+
+        QVERIFY(root->setProperty("posterSourceValue",
+                                  QUrl::fromLocalFile(posterAPath)));
+        QTRY_VERIFY(surface->property("displayReady").toBool());
+        auto *posterImage = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryVideoPosterImage"));
+        QVERIFY(posterImage);
+        QTRY_VERIFY2(colorMismatch(pixelAt(view.grabWindow(), videoPoint),
+                                   posterAColor,
+                                   QStringLiteral("poster transition"))
+                         .isEmpty(),
+                     qPrintable(colorMismatch(pixelAt(view.grabWindow(), videoPoint),
+                                              posterAColor,
+                                              QStringLiteral("poster transition"))));
+        const QSizeF posterFitSize(imageLayer->property("width").toReal(),
+                                   imageLayer->property("height").toReal());
+
+        auto *sink = qobject_cast<QVideoSink *>(
+            frameSource->property("sink").value<QObject *>());
+        QVERIFY(sink);
+        const QVideoFrame decodedA = solidVideoFrame(QSize(1920, 800), frameAColor);
+        QVERIFY(decodedA.isValid());
+        sink->setVideoFrame(decodedA);
+        QTRY_VERIFY(surface->property("hasDecodedFrame").toBool());
+        const QSizeF frameFitSize(imageLayer->property("width").toReal(),
+                                  imageLayer->property("height").toReal());
+        QVERIFY2(qAbs(frameFitSize.width() - posterFitSize.width()) < 0.5
+                     && qAbs(frameFitSize.height() - posterFitSize.height()) < 0.5,
+                 qPrintable(QStringLiteral(
+                     "poster fit %1x%2 changed to frame fit %3x%4")
+                     .arg(posterFitSize.width()).arg(posterFitSize.height())
+                     .arg(frameFitSize.width()).arg(frameFitSize.height())));
+        if (canRenderVideoFrame) {
+            QTRY_VERIFY2(colorMismatch(pixelAt(view.grabWindow(), videoPoint),
+                                       frameAColor,
+                                       QStringLiteral("first video frame"))
+                             .isEmpty(),
+                         qPrintable(colorMismatch(pixelAt(view.grabWindow(), videoPoint),
+                                                  frameAColor,
+                                                  QStringLiteral("first video frame"))));
+        } else {
+            QVERIFY(videoEffect->property("videoFrameSource").value<QObject *>()
+                    == frameSource);
+        }
+
+        // A contact-sheet cache completion after the first decoded frame must
+        // not reveal itself through the now-owned video viewport.
+        const QUrl contactBUrl = QUrl::fromLocalFile(contactBPath);
+        QVERIFY(contactSheet->setProperty("source", contactBUrl));
+        QTRY_COMPARE(contactSheet->property("source").toUrl(), contactBUrl);
+        QTRY_VERIFY(root->property("contactSheetReady").toBool());
+        capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        if (canRenderVideoFrame) {
+            mismatch = colorMismatch(pixelAt(capture, videoPoint), frameAColor,
+                                     QStringLiteral("video after late contact sheet"));
+            QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+        } else {
+            QVERIFY(videoEffect->property("videoFrameSource").value<QObject *>()
+                    == frameSource);
+        }
+        mismatch = colorMismatch(pixelAt(capture, letterboxPoint), backgroundColor,
+                                 QStringLiteral("video letterbox background"));
+        QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+
+        // Pausing and reaching the end retain the last valid decoded frame.
+        QVERIFY(controller->setProperty("playing", false));
+        QVERIFY(controller->setProperty("state", QStringLiteral("ended")));
+        QVERIFY(QMetaObject::invokeMethod(controller, "publish"));
+        QVERIFY(surface->property("hasDecodedFrame").toBool());
+        capture = view.grabWindow();
+        if (canRenderVideoFrame) {
+            mismatch = colorMismatch(pixelAt(capture, videoPoint), frameAColor,
+                                     QStringLiteral("retained frame after pause/end"));
+            QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+        }
+
+        // The previous frame remains in the test sink, but changing identity
+        // makes it stale until a frame from the new source arrives.
+        QVERIFY(root->setProperty("posterSourceValue",
+                                  QUrl::fromLocalFile(posterBPath)));
+        QVERIFY(root->setProperty("identityValue", QStringLiteral("video-b")));
+        QVERIFY(!surface->property("hasDecodedFrame").toBool());
+        QTRY_VERIFY(colorMismatch(pixelAt(view.grabWindow(), videoPoint),
+                                  posterBColor, QStringLiteral("new-source poster"))
+                        .isEmpty());
+
+        const QVideoFrame decodedB = solidVideoFrame(QSize(1920, 800), frameBColor);
+        QVERIFY(decodedB.isValid());
+        sink->setVideoFrame(decodedB);
+        QTRY_VERIFY(surface->property("hasDecodedFrame").toBool());
+        if (canRenderVideoFrame) {
+            QTRY_VERIFY(colorMismatch(pixelAt(view.grabWindow(), videoPoint),
+                                      frameBColor, QStringLiteral("new-source frame"))
+                            .isEmpty());
+        } else {
+            QVERIFY(videoEffect->property("videoFrameSource").value<QObject *>()
+                    == frameSource);
+        }
+
+        // Video reuses the viewer's image layer and held-key transform. Plain
+        // Plus zooms; Ctrl+Plus adjusts playback volume.
+        QCOMPARE(viewport->property("viewerImageShader").value<QObject *>(),
+                 static_cast<QObject *>(videoEffect));
+        QVERIFY(videoEffect->property("videoFrameSource").value<QObject *>()
+                == frameSource);
+        QVariant dispatchResult;
+        QVERIFY(QMetaObject::invokeMethod(
+            root, "dispatchVideoPress", Q_RETURN_ARG(QVariant, dispatchResult),
+            Q_ARG(QVariant, int(Qt::Key_Left)),
+            Q_ARG(QVariant, int(Qt::NoModifier))));
+        QCOMPARE(dispatchResult.toString(), QStringLiteral("navigation"));
+        const qreal fitZoom = viewport->property("zoomScale").toReal();
+        auto *keyViewer = root->findChild<QQuickItem *>(QStringLiteral("inputViewer"));
+        auto *controlsTimeText = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryVideoTimeText"));
+        QVERIFY(keyViewer);
+        QVERIFY(controlsTimeText);
+        const QPointF controlsOrigin = controlsTimeText->mapToItem(
+            view.contentItem(), QPointF());
+        const qreal controlsWidth = controlsTimeText->width();
+        QVERIFY(QMetaObject::invokeMethod(
+            root, "dispatchVideoPress", Q_RETURN_ARG(QVariant, dispatchResult),
+            Q_ARG(QVariant, int(Qt::Key_Plus)),
+            Q_ARG(QVariant, int(Qt::NoModifier))));
+        QCOMPARE(dispatchResult.toString(), QStringLiteral("motion"));
+        QVERIFY(keyViewer->property("zoomInPressed").toBool());
+        QTest::qWait(150);
+        QVERIFY(viewport->property("zoomScale").toReal() > fitZoom);
+        QCOMPARE(controlsTimeText->width(), controlsWidth);
+        QVERIFY(QLineF(controlsTimeText->mapToItem(view.contentItem(), QPointF()),
+                       controlsOrigin).length() < 0.0001);
+        QVERIFY(QMetaObject::invokeMethod(
+            root, "dispatchVideoRelease", Q_ARG(QVariant, int(Qt::Key_Plus)),
+            Q_ARG(QVariant, int(Qt::NoModifier))));
+        QVERIFY(!keyViewer->property("zoomInPressed").toBool());
+        QVERIFY(QMetaObject::invokeMethod(
+            root, "dispatchVideoPress", Q_RETURN_ARG(QVariant, dispatchResult),
+            Q_ARG(QVariant, int(Qt::Key_Left)),
+            Q_ARG(QVariant, int(Qt::NoModifier))));
+        QCOMPARE(dispatchResult.toString(), QStringLiteral("motion"));
+        QVERIFY(keyViewer->property("leftPressed").toBool());
+        QVERIFY(QMetaObject::invokeMethod(
+            root, "dispatchVideoRelease", Q_ARG(QVariant, int(Qt::Key_Left)),
+            Q_ARG(QVariant, int(Qt::NoModifier))));
+        QVERIFY(!keyViewer->property("leftPressed").toBool());
+        QVERIFY(QMetaObject::invokeMethod(viewport, "zoomToFit",
+                                          Q_ARG(QVariant, true)));
+
+        QVERIFY(controller->setProperty("volume", 0.5));
+        QVERIFY(QMetaObject::invokeMethod(
+            root, "dispatchVideoPress", Q_RETURN_ARG(QVariant, dispatchResult),
+            Q_ARG(QVariant, int(Qt::Key_Plus)),
+            Q_ARG(QVariant, int(Qt::ControlModifier))));
+        QCOMPARE(dispatchResult.toString(), QStringLiteral("control"));
+        QVERIFY(!keyViewer->property("zoomInPressed").toBool());
+        QVERIFY(qAbs(controller->property("volume").toReal() - 0.55) < 0.001);
+        QVERIFY(QMetaObject::invokeMethod(
+            root, "dispatchVideoRelease", Q_ARG(QVariant, int(Qt::Key_Plus)),
+            Q_ARG(QVariant, int(Qt::ControlModifier))));
+
+        QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(80, 60));
+        QCOMPARE(root->property("closeRequests").toInt(), 0);
+        QTest::mouseDClick(&view, Qt::LeftButton, Qt::NoModifier,
+                           QPoint(80, 60));
+        QTRY_COMPARE(root->property("closeRequests").toInt(), 1);
+        QTest::mouseClick(&view, Qt::MiddleButton, Qt::NoModifier,
+                          QPoint(80, 60));
+        QTRY_COMPARE(root->property("fullscreenRequests").toInt(), 1);
+        QTRY_VERIFY(!viewport->property("viewportAnimationRunning").toBool());
+        QTRY_VERIFY(!viewport->property("zoomScrollingAnimationRunning").toBool());
+
+        // A failed new source owns the surface even without a poster/frame;
+        // a contact-sheet update must not hide the error behind its fallback.
+        QVERIFY(root->setProperty("posterSourceValue", QUrl()));
+        QVERIFY(root->setProperty("identityValue", QStringLiteral("video-c")));
+        QVERIFY(controller->setProperty("state", QStringLiteral("failed")));
+        QVERIFY(controller->setProperty("error", QStringLiteral("decoder failure")));
+        QVERIFY(QMetaObject::invokeMethod(controller, "publish"));
+        QTRY_VERIFY(surface->property("displayReady").toBool());
+        QTRY_VERIFY(statusText->property("visible").toBool());
+        QCOMPARE(statusText->property("text").toString(),
+                 QStringLiteral("decoder failure"));
+        QVERIFY(!surface->property("hasDecodedFrame").toBool());
+        QVERIFY(!viewport->property("imageTextureReady").toBool());
+        capture = view.grabWindow();
+        mismatch = colorMismatch(pixelAt(capture, letterboxPoint), backgroundColor,
+                                 QStringLiteral("failed video with late contact sheet"));
+        QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+
+        // Check the composed viewer leaves, including small text and raster
+        // controls, in scene-space physical pixels with an identity transform.
+        const QStringList visualLeaves{
+            QStringLiteral("galleryViewerImageShader"),
+            QStringLiteral("galleryVideoTimeText"),
+            QStringLiteral("galleryVideoPlayButtonIcon"),
+            QStringLiteral("galleryVideoMuteButtonIcon"),
+            QStringLiteral("galleryVideoSeekTrack"),
+            QStringLiteral("galleryVideoSeekProgress"),
+            QStringLiteral("galleryVideoSeekHandle"),
+            QStringLiteral("galleryVideoVolumeTrack"),
+            QStringLiteral("galleryVideoVolumeProgress"),
+            QStringLiteral("galleryVideoVolumeHandle"),
+            QStringLiteral("galleryVideoStatusText"),
+        };
+        for (const QString &name : visualLeaves) {
+            auto *item = root->findChild<QQuickItem *>(name);
+            QVERIFY2(item, qPrintable(QStringLiteral("missing visual leaf %1").arg(name)));
+            const QPointF origin = item->mapToItem(view.contentItem(), QPointF());
+            const QPointF physicalOrigin = origin * dpr;
+            const QString location = QStringLiteral(
+                "%1 scene origin (%2, %3) physical px")
+                .arg(name).arg(physicalOrigin.x(), 0, 'f', 6)
+                .arg(physicalOrigin.y(), 0, 'f', 6);
+            QVERIFY2(qAbs(physicalOrigin.x() - qRound(physicalOrigin.x())) < 0.001
+                     && qAbs(physicalOrigin.y() - qRound(physicalOrigin.y())) < 0.001,
+                     qPrintable(location));
+            const QPointF dx = item->mapToItem(view.contentItem(), QPointF(1, 0))
+                               - origin;
+            const QPointF dy = item->mapToItem(view.contentItem(), QPointF(0, 1))
+                               - origin;
+            QVERIFY2(QLineF(dx, QPointF(1, 0)).length() < 0.0001
+                     && QLineF(dy, QPointF(0, 1)).length() < 0.0001,
+                     qPrintable(QStringLiteral("%1 has a non-identity scene transform")
+                                    .arg(name)));
+            QVERIFY2(qAbs(item->width() * dpr - qRound(item->width() * dpr)) < 0.001
+                     && qAbs(item->height() * dpr - qRound(item->height() * dpr)) < 0.001,
+                     qPrintable(QStringLiteral("%1 extent is off the physical pixel grid")
+                                    .arg(name)));
+        }
+        QVERIFY(!capture.isNull());
+
+        auto *playIcon = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryVideoPlayButtonIcon"));
+        auto *muteIcon = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryVideoMuteButtonIcon"));
+        auto *timeText = root->findChild<QQuickItem *>(
+            QStringLiteral("galleryVideoTimeText"));
+        QVERIFY(playIcon);
+        QVERIFY(muteIcon);
+        QVERIFY(timeText);
+        QTRY_COMPARE(playIcon->property("status").toInt(), 1);
+        QTRY_COMPARE(muteIcon->property("status").toInt(), 1);
+        QCOMPARE(timeText->property("text").toString(),
+                 QStringLiteral("00:00 / 00:10"));
+
+        const auto itemCenterPixel = [&](QQuickItem *item) {
+            const QPointF sceneCenter = item->mapToItem(
+                view.contentItem(), QPointF(item->width() / 2, item->height() / 2));
+            return QPoint(qRound(sceneCenter.x() * dpr),
+                          qRound(sceneCenter.y() * dpr));
+        };
+        capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        const QColor playPixel = capture.pixelColor(itemCenterPixel(playIcon));
+        const QColor mutePixel = capture.pixelColor(itemCenterPixel(muteIcon));
+        QVERIFY2(playPixel.red() > 235 && playPixel.green() > 235
+                     && playPixel.blue() > 235,
+                 qPrintable(QStringLiteral("play icon rendered as %1")
+                                .arg(playPixel.name(QColor::HexArgb))));
+        QVERIFY2(mutePixel.red() > 235 && mutePixel.green() > 235
+                     && mutePixel.blue() > 235,
+                 qPrintable(QStringLiteral("mute icon rendered as %1")
+                                .arg(mutePixel.name(QColor::HexArgb))));
+
+        const QPointF timeOrigin = timeText->mapToItem(view.contentItem(), QPointF());
+        const QRect timePixels(qRound(timeOrigin.x() * dpr),
+                               qRound(timeOrigin.y() * dpr),
+                               qRound(timeText->width() * dpr),
+                               qRound(timeText->height() * dpr));
+        int renderedTimePixels = 0;
+        for (int y = timePixels.top(); y <= timePixels.bottom(); ++y) {
+            for (int x = timePixels.left(); x <= timePixels.right(); ++x) {
+                const QColor pixel = capture.pixelColor(x, y);
+                if (pixel.red() > 160 && pixel.green() > 160
+                    && pixel.blue() > 160) {
+                    ++renderedTimePixels;
+                }
+            }
+        }
+        QVERIFY2(renderedTimePixels > 2,
+                 "video time label did not render in the composed capture");
+
+        const QPointF errorOrigin = statusText->mapToItem(view.contentItem(), QPointF());
+        const QRect errorPixels(qRound(errorOrigin.x() * dpr),
+                               qRound(errorOrigin.y() * dpr),
+                               qRound(statusText->width() * dpr),
+                               qRound(statusText->height() * dpr));
+        int renderedErrorPixels = 0;
+        for (int y = errorPixels.top(); y <= errorPixels.bottom(); ++y) {
+            for (int x = errorPixels.left(); x <= errorPixels.right(); ++x) {
+                const QColor pixel = capture.pixelColor(x, y);
+                if (pixel.red() > 220 && pixel.green() > 220 && pixel.blue() > 220)
+                    ++renderedErrorPixels;
+            }
+        }
+        QVERIFY2(renderedErrorPixels > 2,
+                 "video decoder error text did not render in the composed capture");
+
+    }
+#endif
+
     void detailsZoom_data() {
         QTest::addColumn<bool>("geometryOnly");
         QTest::addColumn<bool>("separateExtensions");
@@ -170,8 +1224,13 @@ private slots:
             panel->setProperty("density", height);
             QTRY_COMPARE(panel->property("density").toInt(), height);
             QTest::qWait(150);
-            QCOMPARE(icon->height(), qRound((height - 2 * iconPadding) * 1.75) / 1.75);
-            QCOMPARE(slot->width(), qRound((height - 2 * iconPadding + 2) * 1.75) / 1.75);
+            QCOMPARE(icon->height(),
+                     qRound((height - 2 * iconPadding) * 1.75) / 1.75);
+            QCOMPARE(slot->width(), slot->height());
+            const qreal slotPhysicalSize = slot->width() * 1.75;
+            QVERIFY2(qAbs(slotPhysicalSize - qRound(slotPhysicalSize)) < 0.001,
+                     qPrintable(QStringLiteral("details icon slot has fractional physical size %1")
+                                    .arg(slotPhysicalSize, 0, 'f', 6)));
             auto *shortName = leaf(QStringLiteral("galleryBaseName-2"));
             QVERIFY(shortName);
             QCOMPARE(shortName->property("lineCount").toInt(), 1);
@@ -940,6 +1999,13 @@ private slots:
         QVERIFY(sourcePanel);
         QVERIFY(verticalScrollBar);
         QVERIFY(horizontalScrollBar);
+        viewer->forceActiveFocus();
+        QVERIFY(!viewer->property("nearestNeighbor").toBool());
+        QTest::keyClick(&view, Qt::Key_F9);
+        QTRY_VERIFY(viewer->property("nearestNeighbor").toBool());
+        QTRY_VERIFY(viewport->property("nearestNeighbor").toBool());
+        QTest::keyClick(&view, Qt::Key_F9);
+        QTRY_VERIFY(!viewport->property("nearestNeighbor").toBool());
         QCOMPARE(viewerBackground->property("color").value<QColor>().alphaF(),
                  0.0);
 
@@ -977,6 +2043,16 @@ private slots:
             qPrintable(textureDiagnostic()), 5000);
         viewer->forceActiveFocus();
 
+        QTest::keyClick(&view, Qt::Key_F9);
+        QTRY_VERIFY(viewer->property("nearestNeighbor").toBool());
+        QTRY_COMPARE_WITH_TIMEOUT(nativeImage->property("status").toInt(), 1, 5000);
+        auto *imageShader = viewport->findChild<QObject *>(
+            QStringLiteral("galleryViewerImageShader"));
+        QVERIFY(imageShader);
+        QTRY_COMPARE(imageShader->property("imageSource").value<QObject *>(), nativeImage);
+        QCOMPARE(imageShader->property("requiredLevels").toInt(), 0);
+        QTest::keyClick(&view, Qt::Key_F9);
+        QTRY_VERIFY(!viewer->property("nearestNeighbor").toBool());
         // A successfully decoded, fitted image is a steady presentation.
         // Decode completion and the opening transition may request bounded
         // frames, but the visible viewer must not retain an animation loop
@@ -2284,6 +3360,172 @@ private slots:
         runtime->shutdown();
     }
 
+    void videoThumbnailShowsCenteredPlayBadgeAt175Percent() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath =
+            directory.filePath(QStringLiteral("video-contact-sheet.png"));
+        QVERIFY(writeImage(imagePath, QSize(240, 135), QColor(46, 72, 96)));
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("video-thumbnail-play-badge"));
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(
+            {imageEntry(QStringLiteral("video-tile"), 0, imagePath)}, 1));
+        QVERIFY(session->applyExternalState(
+            QStringLiteral("video-tile"), 0, {}, 1));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("testSession"), session);
+
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 520
+                height: 360
+                GalleryPanel {
+                    id: panel
+                    objectName: "videoBadgePanel"
+                    anchors.fill: parent
+                    session: testSession
+                    devicePixelRatio: 1.75
+                }
+            }
+        )QML", QStringLiteral("GalleryVideoThumbnailBadge.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QCOMPARE(view.devicePixelRatio(), qreal(1.75));
+
+        auto leaf = [root](const QString &name) {
+            return root->findChild<QQuickItem *>(name);
+        };
+        QQuickItem *thumbnail = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (thumbnail = leaf(QStringLiteral("galleryThumbnail-0")))
+                && thumbnail->isVisible(), 5000);
+        QQuickItem *thumbnailImage =
+            leaf(QStringLiteral("galleryThumbnailImage-0"));
+        QVERIFY(thumbnailImage);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            thumbnailImage->property("status").toInt(), 1, 5000);
+        QQuickItem *preview = thumbnail->parentItem();
+        QVERIFY(preview);
+        QObject *entry = preview->property("entry").value<QObject *>();
+        QVERIFY(entry);
+        auto *visualModel = entry->property("visualModel").value<QObject *>();
+        QVERIFY(visualModel);
+
+        QQuickItem *badge = leaf(QStringLiteral("galleryVideoPlayBadge-0"));
+        QVERIFY(badge);
+        QVERIFY(!badge->isVisible());
+        QVariantMap row = entry->property("visualRow").toMap();
+        QVERIFY(!row.isEmpty());
+
+        row.insert(QStringLiteral("thumbnailKind"), QStringLiteral("video"));
+        QVERIFY(entry->setProperty("visualRow", row));
+        QTRY_VERIFY_WITH_TIMEOUT(visualModel->property("isVideo").toBool(),
+                                 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(badge->isVisible(), 3000);
+
+        QQuickItem *badgeCircle =
+            leaf(QStringLiteral("galleryVideoPlayBadgeCircle-0"));
+        QQuickItem *playIcon = leaf(QStringLiteral("galleryVideoPlayIcon-0"));
+        QVERIFY(badgeCircle);
+        QVERIFY(playIcon);
+        QTRY_COMPARE_WITH_TIMEOUT(playIcon->property("status").toInt(), 1,
+                                  3000);
+
+        QVERIFY(playIcon->property("smooth").toBool());
+        const qreal dpr = view.devicePixelRatio();
+        QCOMPARE(playIcon->property("sourceSize").toSize(),
+                 QSize(qRound(playIcon->width() * dpr),
+                       qRound(playIcon->height() * dpr)));
+        const QList<QQuickItem *> visualLeaves{badge, badgeCircle, playIcon};
+        for (QQuickItem *item : visualLeaves) {
+            const QPointF origin =
+                item->mapToItem(view.contentItem(), QPointF());
+            const QPointF physicalOrigin = origin * dpr;
+            const QString name = item->objectName();
+            QVERIFY2(qAbs(physicalOrigin.x() - qRound(physicalOrigin.x()))
+                         < 0.001
+                     && qAbs(physicalOrigin.y() - qRound(physicalOrigin.y()))
+                         < 0.001,
+                     qPrintable(QStringLiteral(
+                         "%1 scene origin is off the 1.75x pixel grid: %2, %3")
+                         .arg(name)
+                         .arg(physicalOrigin.x(), 0, 'f', 6)
+                         .arg(physicalOrigin.y(), 0, 'f', 6)));
+            const QPointF unitX = item->mapToItem(
+                view.contentItem(), QPointF(1, 0)) - origin;
+            const QPointF unitY = item->mapToItem(
+                view.contentItem(), QPointF(0, 1)) - origin;
+            QVERIFY(QLineF(unitX, QPointF(1, 0)).length() < 0.0001);
+            QVERIFY(QLineF(unitY, QPointF(0, 1)).length() < 0.0001);
+            QVERIFY(qAbs(item->width() * dpr
+                         - qRound(item->width() * dpr)) < 0.001);
+            QVERIFY(qAbs(item->height() * dpr
+                         - qRound(item->height() * dpr)) < 0.001);
+        }
+
+        const QPointF badgeCenter = badge->mapToItem(
+            view.contentItem(), QPointF(badge->width() / 2,
+                                        badge->height() / 2));
+        const QPointF thumbnailCenter = thumbnail->mapToItem(
+            view.contentItem(), QPointF(thumbnail->width() / 2,
+                                        thumbnail->height() / 2));
+        const QPointF centerDelta = (badgeCenter - thumbnailCenter) * dpr;
+        QVERIFY2(qAbs(centerDelta.x()) <= 0.501
+                     && qAbs(centerDelta.y()) <= 0.501,
+                 qPrintable(QStringLiteral(
+                     "video play badge is not centered over its thumbnail: "
+                     "%1, %2 physical pixels")
+                     .arg(centerDelta.x(), 0, 'f', 3)
+                     .arg(centerDelta.y(), 0, 'f', 3)));
+        const QPointF iconCenter = playIcon->mapToItem(
+            view.contentItem(), QPointF(playIcon->width() / 2,
+                                        playIcon->height() / 2));
+        const QPointF iconCenterDelta = (iconCenter - badgeCenter) * dpr;
+        QVERIFY2(qAbs(iconCenterDelta.x()) <= 0.501
+                     && qAbs(iconCenterDelta.y()) <= 0.501,
+                 qPrintable(QStringLiteral(
+                     "play glyph is not centered in its badge: %1, %2 "
+                     "physical pixels")
+                     .arg(iconCenterDelta.x(), 0, 'f', 3)
+                     .arg(iconCenterDelta.y(), 0, 'f', 3)));
+
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        const QColor glyphCenterPixel = capture.pixelColor(
+            qRound(iconCenter.x() * dpr), qRound(iconCenter.y() * dpr));
+        QVERIFY2(glyphCenterPixel.red() > 235
+                     && glyphCenterPixel.green() > 235
+                     && glyphCenterPixel.blue() > 235,
+                 "the thumbnail play glyph must have a filled white center");
+        if (!qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR").isEmpty()) {
+            const QDir captureDir(
+                qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR"));
+            QVERIFY(capture.save(captureDir.filePath(
+                QStringLiteral("video-thumbnail-play-badge.png"))));
+        }
+
+        row.remove(QStringLiteral("thumbnailKind"));
+        QVERIFY(entry->setProperty("visualRow", row));
+        QTRY_VERIFY_WITH_TIMEOUT(!visualModel->property("isVideo").toBool(),
+                                 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(!badge->isVisible(), 1000);
+
+        runtime->shutdown();
+    }
+
     void panelExposesTransitionTileAndSuppressesOnlyItsImage() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -2597,6 +3839,197 @@ private slots:
         runtime->shutdown();
     }
 };
+
+#ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+void GalleryQmlInteractionTest::videoSourceInitializationWaitsForViewerExpandAnimation() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString contactSheetPath = directory.filePath(
+            QStringLiteral("contact-sheet.png"));
+        const QString posterPath = directory.filePath(
+            QStringLiteral("poster-frame.png"));
+        QVERIFY(writeImage(contactSheetPath, QSize(12, 8), QColor("blue")));
+        QVERIFY(writeImage(posterPath, QSize(12, 8), QColor("green")));
+        const QUrl contactSheetUrl = QUrl::fromLocalFile(contactSheetPath);
+        const QUrl posterUrl = QUrl::fromLocalFile(posterPath);
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("deferredVideoContactSheetSource"), contactSheetUrl);
+        view.engine()->rootContext()->setContextProperty(
+            QStringLiteral("deferredVideoPosterSource"), posterUrl);
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 640; height: 420
+                QtObject {
+                    id: playback
+                    objectName: "deferredVideoPlaybackController"
+                    property string state: "idle"
+                    property string error: ""
+                    property int position: 0
+                    property int duration: 10000
+                    property bool playing: false
+                    property bool muted: true
+                    property real volume: 1
+                    property int openSourceCount: 0
+                    property string lastOpenedIdentity: ""
+                    property var outputSink: null
+                    signal changed()
+                    function setPresentationVisible(value) {}
+                    function setOutputSink(value) { outputSink = value }
+                    function openSource(source, mode) {
+                        ++openSourceCount
+                        lastOpenedIdentity = source.identity
+                        state = "loading"
+                        changed()
+                    }
+                    function stop() { state = "idle"; changed() }
+                    function playPause() {}
+                    function seekTo(value) {}
+                    function toggleMute() {}
+                    function adjustVolume(value) {}
+                }
+                QtObject {
+                    id: videoSession
+                    objectName: "deferredVideoSession"
+                    property int currentIndex: 0
+                    property string cursorEntryId: "video-a"
+                    property int catalogRevision: 1
+                    property bool videoPlaybackAvailable: true
+                    property url posterSourceValue: ""
+                    property var videoPlaybackController: playback
+                    signal viewerSourceAtChanged(int index)
+                    function entryIdAt(index) { return index === 0 ? "video-a" : "" }
+                    function indexForEntryId(entryId) { return entryId === "video-a" ? 0 : -1 }
+                    function isVideoAt(index) { return index === 0 }
+                    function isImageAt(index) { return false }
+                    function videoSourceAt(index) {
+                        return index === 0 ? {
+                            identity: "video-a",
+                            thumbnailSource: deferredVideoContactSheetSource,
+                            posterSource: videoSession.posterSourceValue
+                        } : ({})
+                    }
+                    function viewerRequestStateAt(index) { return "idle" }
+                }
+                Item {
+                    id: sourcePanel
+                    objectName: "deferredVideoSourcePanel"
+                    width: 300; height: 200
+                    property bool viewerTransitionActive: false
+                    property string viewerTransitionEntryId: ""
+                    function currentItemImageGeometry(targetItem) {
+                        const point = targetItem.mapFromItem(sourcePanel, 30, 40)
+                        return Qt.rect(point.x, point.y, 140, 90)
+                    }
+                    function currentItemImageSource() {
+                        return deferredVideoContactSheetSource
+                    }
+                }
+                GalleryViewer {
+                    id: viewer
+                    objectName: "deferredVideoViewer"
+                    anchors.fill: parent
+                    session: videoSession
+                    sourcePanel: sourcePanel
+                    animationDuration: 320
+                    autoFocus: false
+                    videoPlaybackMode: "manual"
+                    videoIconSources: ({
+                        play: "", pause: "", muted: "", sound: ""
+                    })
+                }
+            }
+        )QML", QStringLiteral("GalleryVideoPlaybackDeferred.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+
+        auto *viewer = root->findChild<QObject *>(
+            QStringLiteral("deferredVideoViewer"));
+        auto *playback = root->findChild<QObject *>(
+            QStringLiteral("deferredVideoPlaybackController"));
+        auto *videoSession = root->findChild<QObject *>(
+            QStringLiteral("deferredVideoSession"));
+        auto *animation = root->findChild<QObject *>(
+            QStringLiteral("galleryViewerTransitionAnimation"));
+        auto *videoLoader = root->findChild<QObject *>(
+            QStringLiteral("galleryVideoPlaybackLoader"));
+        auto *baseImage = root->findChild<QObject *>(
+            QStringLiteral("galleryViewerBaseImage"));
+        QVERIFY(viewer);
+        QVERIFY(videoSession);
+        auto *sourcePanel = root->findChild<QObject *>(
+            QStringLiteral("deferredVideoSourcePanel"));
+        QVERIFY(playback);
+        QVERIFY(animation);
+        QVERIFY(videoLoader);
+        QVERIFY(baseImage);
+        QVERIFY(!viewer->property(
+            "videoPlaybackInitializationAllowed").toBool());
+        QVERIFY(sourcePanel);
+        QVariant panelThumbnail;
+        QVERIFY(QMetaObject::invokeMethod(
+            sourcePanel, "currentItemImageSource",
+            Q_RETURN_ARG(QVariant, panelThumbnail)));
+        QCOMPARE(panelThumbnail.toUrl(), contactSheetUrl);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            viewer->property("transitionThumbnailSource").toUrl(),
+            contactSheetUrl, 1000);
+        QVERIFY(videoSession->setProperty("posterSourceValue", posterUrl));
+        QCOMPARE(videoSession->property("posterSourceValue").toUrl(),
+                 posterUrl);
+        QVariant videoSourceValue;
+        QVERIFY(QMetaObject::invokeMethod(
+            videoSession, "videoSourceAt", Qt::DirectConnection,
+            Q_RETURN_ARG(QVariant, videoSourceValue),
+            Q_ARG(QVariant, QVariant(0))));
+        QCOMPARE(videoSourceValue.toMap()
+                     .value(QStringLiteral("posterSource")).toUrl(),
+                 posterUrl);
+        QVERIFY(QMetaObject::invokeMethod(
+            videoSession, "viewerSourceAtChanged", Qt::DirectConnection,
+            Q_ARG(int, 0)));
+        QTRY_COMPARE_WITH_TIMEOUT(
+            viewer->property("currentVideoPosterSourceValue").toUrl(),
+            posterUrl, 1000);
+        QVERIFY(viewer->property("transitionHasGeometry").toBool());
+        QTRY_COMPARE_WITH_TIMEOUT(
+            viewer->property("transitionThumbnailSource").toUrl(),
+            posterUrl, 1000);
+        QCOMPARE(viewer->property("currentSourceValue").toUrl(),
+                 posterUrl);
+        QCOMPARE(baseImage->property("source").toUrl(), posterUrl);
+        QCOMPARE(sourcePanel->property("viewerTransitionActive").toBool(), true);
+        QVERIFY(!videoLoader->property("active").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(animation->property("running").toBool(), 1000);
+        QTest::qWait(100);
+        QVERIFY(animation->property("running").toBool());
+        QCOMPARE(playback->property("openSourceCount").toInt(), 0);
+        QCOMPARE(playback->property("state").toString(), QStringLiteral("idle"));
+
+        QTRY_VERIFY_WITH_TIMEOUT(!animation->property("running").toBool(), 1500);
+        QVERIFY(viewer->property(
+            "videoPlaybackInitializationAllowed").toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(videoLoader->property("active").toBool(), 1000);
+        QTRY_COMPARE_WITH_TIMEOUT(
+            playback->property("openSourceCount").toInt(), 1, 1000);
+        QCOMPARE(playback->property("lastOpenedIdentity").toString(),
+                 QStringLiteral("video-a"));
+        QCOMPARE(playback->property("state").toString(),
+                 QStringLiteral("loading"));
+        runtime->shutdown();
+    }
+#endif
 
 QTEST_MAIN(GalleryQmlInteractionTest)
 #include "GalleryQmlInteractionTest.moc"

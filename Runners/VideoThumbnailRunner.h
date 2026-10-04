@@ -5,6 +5,7 @@
 #include "PersistentDerivedImageCache.h"
 
 #include <QSharedPointer>
+#include <QSize>
 #include <QVector>
 
 class VideoThumbnailRunner final : public Runner {
@@ -19,6 +20,8 @@ public:
     // helper is exposed so the temporal policy remains unit-testable without
     // opening a media backend.
     static QVector<qint64> thumbnailPositions(qint64 duration);
+    static QVector<qint64> capturePositions(qint64 duration);
+    static QSize posterSizeFor(const QSize &frameSize);
 
     RunnerType type() override { return RunnerType::ImageRead; }
     void run() override;

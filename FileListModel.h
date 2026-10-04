@@ -264,6 +264,9 @@ signals:
     void viewerImageIdUrlChanged(const QString &imageId, int level); // 0 is thumbnail, 1 is viewer, 2 is full resolution
     void viewerImageCacheChanged(int index);
     void viewerRequestStateChanged(int index);
+    void videoPosterReady(const ImageDecodeRequest &request,
+                          const QImage &image,
+                          const DecodedImageInfo &decodedInfo);
     void viewerReset();
     void directOpenReady(int index);
     void directOpenFailed(const QString &path);

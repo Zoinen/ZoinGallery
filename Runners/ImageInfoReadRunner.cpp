@@ -5,6 +5,7 @@
 
 #include <ZoinGallery/MediaTimingTrace.h>
 
+#include <QFileInfo>
 #include <QThread>
 
 #include <utility>
@@ -68,6 +69,10 @@ void ImageInfoReadRunner::run() {
         if (_source.isValid()) {
             result.path = _source.runtimeIdentity();
             result.fileSize = _source.size;
+        } else {
+            const QFileInfo fileInfo(_path);
+            result.fileSize = fileInfo.size();
+            result.lastModified = fileInfo.lastModified();
         }
         result.thumbnailKind = QStringLiteral("video");
         result.fileFieldsRead = true;

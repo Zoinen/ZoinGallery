@@ -15,6 +15,7 @@ layout(std140, binding = 0) uniform buf {
     float borderRadius;
     bool intermediate;
     bool pixelAlignedIdentity;
+    bool nearestNeighbor;
     vec2 sourceExtent;
     bool pixelAligned;
     vec2 itemSize;

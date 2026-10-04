@@ -25,6 +25,45 @@ QString ExternalCatalogModel::bestViewerImageUrlAt(int row) const {
     return sources.isEmpty() ? QString() : sources.constLast().first;
 }
 
+QString ExternalCatalogModel::videoThumbnailUrlAt(int row) const {
+    if (!validRow(row) || !isVideoAt(row)) {
+        return {};
+    }
+    const Entry &entry = loadedEntry(row);
+    if (!entry.thumbnailProviderId.isEmpty()) {
+        return QStringLiteral("image://") + _thumbnailProviderName
+            + QLatin1Char('/') + entry.thumbnailProviderId;
+    }
+    ImageFile *item = ensureItem(row);
+    return item ? item->imageIdUrl() : QString();
+}
+
+QString ExternalCatalogModel::videoPosterUrlAt(int row) const {
+    constexpr auto VideoPosterTransform =
+        "video-first-frame-poster-1024-display-v3";
+    if (!validRow(row) || !isVideoAt(row) || !_thumbnailCache) {
+        return {};
+    }
+    const Entry &entry = loadedEntry(row);
+    const ThumbnailMemoryCache::Handle poster = _thumbnailCache->lookup(
+        entry.sourceIdentity, entry.contentVersion, entry.size, QSize(1, 1),
+        QString::fromLatin1(VideoPosterTransform));
+    if (!poster.isValid() && !_shutdown) {
+        ImageDecodeRequest request;
+        request.info = ensureItem(row)->info();
+        request.info.source = entry.source;
+        request.info.path = entry.sourceIdentity;
+        request.info.sourceVersionToken = entry.contentVersion;
+        request.requestNamespace = _sessionId;
+        request.info.requestNamespace = _sessionId;
+        _decodeManager->restoreCachedVideoPoster(request);
+    }
+    return poster.isValid()
+        ? QStringLiteral("image://") + _thumbnailProviderName
+            + QLatin1Char('/') + poster.providerId
+        : QString();
+}
+
 QList<QPair<QString, int>> ExternalCatalogModel::viewerImageSourcesAt(
     int row) const {
     if (!validRow(row)) {

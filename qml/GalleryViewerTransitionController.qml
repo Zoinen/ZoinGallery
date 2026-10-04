@@ -15,7 +15,7 @@ QtObject {
                 ? viewer.entryIdAt(viewer.presentedIndex) : ""
     }
 
-    function captureTransitionTarget() {
+    function captureTransitionTarget(useVideoPoster) {
         viewer.transitionSourceGeometry = Qt.rect(0, 0, 0, 0)
         viewer.transitionThumbnailSource = ""
         viewer.transitionHasGeometry = false
@@ -30,7 +30,13 @@ QtObject {
                 || typeof viewer.sourcePanel.currentItemImageSource !== "function")
             return false
         const geometry = viewer.sourcePanel.currentItemImageGeometry(viewer)
-        const source = viewer.sourcePanel.currentItemImageSource()
+        const panelSource = viewer.sourcePanel.currentItemImageSource()
+        // The panel tile uses the four-frame contact sheet. For the opening
+        // transition, a video already has a dedicated first-frame poster;
+        // animate that single frame while playback initialization is deferred.
+        const source = useVideoPoster === true && viewer.currentIsVideo
+                && viewer.currentVideoPosterSourceValue.toString() !== ""
+                ? viewer.currentVideoPosterSourceValue : panelSource
         if (!viewer.validGeometry(geometry) || source.toString() === "")
             return false
         viewer.transitionSourceGeometry = geometry
@@ -42,6 +48,11 @@ QtObject {
     function beginOpen() {
         if (viewer.customContent)
             return
+        // Starting a video source can synchronously enter the media backend
+        // and compete with the panel-to-viewer animation. Managed surfaces
+        // have no such transition inside GalleryViewer, so they can initialize
+        // immediately after applying their preview item.
+        viewer.videoPlaybackInitializationAllowed = viewer.managedPresentation
         if (viewer.session && viewer.presentedIndex < 0)
             viewer.presentedIndex = viewer.session.currentIndex
         viewer.refreshCurrentSource()
@@ -58,7 +69,7 @@ QtObject {
             viewer.transitionHasGeometry = false
             return
         }
-        captureTransitionTarget()
+        captureTransitionTarget(true)
         if (viewer.currentSourceValue.toString() === ""
                 && viewer.transitionThumbnailSource.toString() !== "") {
             imageViewport.setImage(viewer.transitionThumbnailSource,
@@ -85,6 +96,8 @@ QtObject {
         viewer.transitionThumbnailSource = ""
         viewer.transitionHasGeometry = false
         imageViewport.zoomToFit(true)
+        viewer.videoPlaybackInitializationAllowed = true
+        viewer.synchronizeVideoPlayback()
     }
 
     function finishClose() {

@@ -33,25 +33,18 @@ Item {
     Item {
         id: textRow
         x: content.entry.effectivePreviewRect.x
-           + content.entry.effectivePreviewRect.width + 6
-        width: Math.max(0, parent.width - x - 7)
+           + content.entry.effectivePreviewRect.width
+           + content.entry.panelRoot.detailsRowSpacing
+        width: Math.max(0, parent.width - x - content.entry.panelRoot.detailsRowInset)
         height: parent.height
-        readonly property real gap: 4
-        readonly property real sizeColumnWidth: 0
-        readonly property real extensionColumnWidth: {
-            if (!content.entry.panelRoot.separateFileExtensions)
-                return 0
-            const available = Math.max(0, width - sizeColumnWidth)
-            const preferred = Math.max(40, available * 0.28)
-            return Math.max(0, Math.min(112, preferred, available * 0.45))
-        }
-
-        Text {
-            id: extensionMeasurement
-            visible: false
-            text: extensionLabel.text
-            textFormat: extensionLabel.textFormat
+        readonly property real gap: content.entry.panelRoot.detailsRowInset * 2
+        GalleryExtensionMetrics {
+            id: extensionMetrics
             font: extensionLabel.font
+            minimumWidth: content.entry.panelRoot.detailsExtensionMinimumWidth
+            textWidth: extensionLabel.implicitWidth
+            maximumWidth: Math.min(112, Math.max(0, textRow.width) * 0.45)
+            devicePixelRatio: content.entry.renderDpr
         }
 
         Text {
@@ -83,7 +76,7 @@ Item {
                 ? Text.StyledText : Text.PlainText
             color: content.entry.itemTextColor
             verticalAlignment: Text.AlignVCenter
-            font.pixelSize: -1
+            font: content.entry.panelRoot.iconLabelFont
             transform: Translate {
                 x: baseNameLabel.pixelCorrection.x
                 y: baseNameLabel.pixelCorrection.y
@@ -100,21 +93,20 @@ Item {
             height: Math.ceil(implicitHeight * content.entry.renderDpr)
                     / content.entry.renderDpr
             y: (parent.height - height) / 2
-            width: Math.floor(textRow.extensionColumnWidth * content.entry.renderDpr) / content.entry.renderDpr
+            width: extensionMetrics.columnWidth
             text: content.entry.panelRoot.quickSearchFormatter.styledSuffix(
-                      content.entry.displayExtension !== ""
-                          ? "." + content.entry.displayExtension : "",
+                      content.entry.displayExtension,
                       content.entry.displayBaseName,
-                      content.entry.entryId, 0)
+                      content.entry.entryId, 1)
             textFormat:
                 content.entry.panelRoot.quickSearchFormatter.matchForEntry(
                     content.entry.entryId)
                 ? Text.StyledText : Text.PlainText
             color: content.entry.itemTextColor
-            horizontalAlignment: Text.AlignRight
+            horizontalAlignment: extensionMetrics.alignment
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideLeft
-            font.pixelSize: -1
+            font: content.entry.panelRoot.iconLabelFont
             transform: Translate {
                 x: extensionLabel.pixelCorrection.x
                 y: extensionLabel.pixelCorrection.y

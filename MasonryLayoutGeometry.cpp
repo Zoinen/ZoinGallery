@@ -25,6 +25,9 @@ ZoinGallery::GalleryPresentationMode enginePresentationMode(
 } // namespace
 
 qreal MasonryLayout::effectiveTargetExtent() const {
+    if (_presentationMode == Details || _presentationMode == Columns)
+        return qMax<qreal>(_density,
+            ZoinGallery::GalleryIconTextMeasurer(_iconLabelFont).lineHeight() + 6);
     return qMax<qreal>(1.0, _density);
 }
 

@@ -40,6 +40,7 @@
 #include <QTemporaryDir>
 #include <QUrlQuery>
 #include <QtTest>
+#include <QFontMetricsF>
 
 #include <algorithm>
 #include <cmath>
@@ -6273,6 +6274,81 @@ private slots:
         QVERIFY(external->metadataSubmittedBatchCount() <= 16);
     }
 
+    void detailsExtensionsReserveThreeCharacters_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<int>("columns");
+        QTest::newRow("details") << QString("details") << 2;
+        QTest::newRow("columns-2") << QString("columns") << 2;
+        QTest::newRow("columns-3") << QString("columns") << 3;
+    }
+
+    void detailsExtensionsReserveThreeCharacters() {
+        QFETCH(QString, mode);
+        QFETCH(int, columns);
+        const QStringList extensions{"c", "gz", "jpg", "iiii", "markdown", "verylongextension"};
+        QVariantList catalog;
+        for (int i = 0; i < extensions.size(); ++i) {
+            catalog.append(QVariantMap{{"entryId", QString::number(i)}, {"index", i},
+                {"name", "file." + extensions[i]}, {"displayBaseName", "file"},
+                {"displayExtension", extensions[i]}, {"isDir", false}, {"isImage", false}});
+        }
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession("details-extension-alignment");
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *panel = createPanel(view, session, "extensionAlignmentSession", mode);
+        QVERIFY(panel);
+        panel->setProperty("columnCount", columns);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("separateFileExtensions", true);
+        const qreal dpr = view.devicePixelRatio();
+        for (const int fontSize : {12, 18}) {
+            QVERIFY(setPanelObjectProperties(panel, "metrics", {
+                {"detailsSecondaryFontPixelSize", fontSize},
+                {"panelFontPixelSize", fontSize}}));
+            QTest::qWait(100);
+            QQuickItem *first = nullptr;
+            QTRY_VERIFY((first = panel->findChild<QQuickItem *>("galleryExtension-0")));
+            const QFontMetricsF metrics(first->property("font").value<QFont>());
+            const qreal expectedWidth = qRound(metrics.horizontalAdvance("MMM") * 57 / 67 * dpr) / dpr;
+            QVERIFY2(qAbs(first->width() - expectedWidth) <= 1 / dpr,
+                     qPrintable(QString("extension lane %1, expected %2; font %3")
+                         .arg(first->width()).arg(expectedWidth).arg(fontSize)));
+            const qreal left = first->mapToScene(QPointF()).x();
+            const qreal right = left + first->width();
+            if (mode == "details") {
+                auto *size = panel->findChild<QQuickItem *>("gallerySize-0");
+                QVERIFY(size);
+                const qreal inset = panel->property("detailsRowInset").toReal();
+                QVERIFY(qAbs(size->mapToScene(QPointF()).x() - right - inset * 2) <= 1 / dpr);
+            }
+            for (int i = 0; i < extensions.size(); ++i) {
+                auto *label = panel->findChild<QQuickItem *>(QString("galleryExtension-%1").arg(i));
+                QVERIFY(label);
+                QCOMPARE(label->property("text").toString(), extensions[i]);
+                const QPointF origin = label->mapToScene(QPointF());
+                auto *bounds = label->findChild<QQuickItem *>(QString("galleryExtensionBounds-%1").arg(i));
+                QVERIFY(!bounds);
+                const bool fits = metrics.horizontalAdvance(extensions[i]) <= first->width();
+                QCOMPARE(label->property("horizontalAlignment").toInt(),
+                         int(fits ? Qt::AlignLeft : Qt::AlignRight));
+                if (fits)
+                    QCOMPARE(origin.x(), left);
+                QVERIFY(qAbs(origin.x() + label->width() - right) < .01);
+                QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
+                QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+                QCOMPARE(label->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+                QCOMPARE(label->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+            }
+            QVERIFY(view.grabWindow().save(QDir::temp().filePath(
+                QString("f4-%1-%2-extensions-%3.png").arg(mode).arg(columns).arg(fontSize))));
+        }
+        runtime->shutdown();
+    }
+
     void separateExtensionsUseADedicatedRightAlignedField() {
         const QVariantList catalog{
             QVariantMap{
@@ -6368,15 +6444,16 @@ private slots:
                                   MasonryLayout::Columns, 3000);
         // A Loader releases the outgoing Details subtree with deleteLater().
         // During that event-loop turn QObject discovery can still see the
-        // detached object, so select the active Columns visual by its explicit
-        // right-aligned contract rather than by construction order.
+        // detached object. Wait for its disposal before looking up the new
+        // label: alignment is now shared by both presentation modes.
+        QTRY_COMPARE(panel->findChildren<QQuickItem *>(
+            QStringLiteral("galleryExtension-0")).size(), 1);
         extension0 = nullptr;
         const auto extensionCandidates =
             panel->findChildren<QQuickItem *>(
                 QStringLiteral("galleryExtension-0"));
         for (QQuickItem *candidate : extensionCandidates) {
-            if (candidate->property("horizontalAlignment").toInt()
-                == int(Qt::AlignRight)) {
+            if (candidate->isVisible()) {
                 extension0 = candidate;
                 break;
             }
@@ -6392,6 +6469,8 @@ private slots:
             }
         }
         QVERIFY(extension0);
+        QCOMPARE(extension0->property("text").toString(), QStringLiteral("gz"));
+        QCOMPARE(extension0->property("horizontalAlignment").toInt(), int(Qt::AlignLeft));
         QVERIFY(size0);
         QTRY_VERIFY_WITH_TIMEOUT(!size0->isVisible(), 3000);
         QTRY_VERIFY_WITH_TIMEOUT(extension0->parentItem(), 3000);
@@ -6728,6 +6807,33 @@ private slots:
                 QStringLiteral("galleryFileField-exif.iso-0"))) != nullptr,
             5000);
         verifyLeaf(QStringLiteral("galleryFileField-exif.iso-0"));
+        // Live padding changes must give every cell the same inner margins.
+        auto *presentation = panel->property("fileFieldPresentationHelper").value<QObject *>();
+        QVERIFY(presentation);
+        auto *extension = findVisualItem(panelItem, "galleryExtension-0");
+        QVERIFY(extension);
+        for (int padding : {0, 5, 13, 24}) {
+            const qreal snapped = qRound(padding * dpr) / dpr;
+            QVERIFY(setPanelObjectProperties(panel, "metrics", {{"columnPadding", snapped}}));
+            QTest::qWait(30);
+            QCOMPARE(iconSlot->x(), snapped);
+            for (int index : {1, 2}) {
+                QVariant x, width;
+                QVERIFY(QMetaObject::invokeMethod(presentation, "detailsColumnX",
+                    Q_RETURN_ARG(QVariant, x), Q_ARG(QVariant, index)));
+                QVERIFY(QMetaObject::invokeMethod(presentation, "detailsColumnWidth",
+                    Q_RETURN_ARG(QVariant, width), Q_ARG(QVariant, index)));
+                auto *leaf = index == 1 ? sizeText : fieldText;
+                QVERIFY(qAbs(leaf->x() - x.toReal() - snapped) < .001);
+                QVERIFY(qAbs(x.toReal() + width.toReal()
+                    - leaf->x() - leaf->width() - snapped) < .001);
+            }
+            QVERIFY(qAbs(sizeText->x() - extension->x() - extension->width()
+                - 2 * snapped) < .001);
+            for (const auto &name : {"galleryBaseName-0", "galleryExtension-0",
+                                     "gallerySize-0", "galleryFileField-exif.iso-0"})
+                verifyLeaf(QString::fromLatin1(name));
+        }
         const QImage capture = view.grabWindow();
         QVERIFY(!capture.isNull());
         QTemporaryDir directory;
@@ -8198,6 +8304,8 @@ private slots:
         QVERIFY(QTest::qWaitForWindowExposed(&view));
         for (int columns : {2, 3}) {
             layout->setColumnCount(columns);
+            QVERIFY(setPanelObjectProperties(panel, "metrics",
+                {{"columnPadding", qRound((columns == 2 ? 5 : 13) * dpr) / dpr}}));
             panel->setProperty("separateFileExtensions", columns == 3);
             item->setX(columns == 3 ? .375 : .25);
             item->setWidth(columns == 3 ? 631.5 : 640);
@@ -8745,6 +8853,68 @@ private slots:
             pageKey(Qt::Key_Home);
             QTest::qWait(250);
         }
+        runtime->shutdown();
+    }
+
+    void deferredFacadesFollowEntriesThroughIncrementalInserts_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::newRow("grid") << QStringLiteral("grid");
+        QTest::newRow("masonry") << QStringLiteral("masonry");
+    }
+
+    void deferredFacadesFollowEntriesThroughIncrementalInserts() {
+        QFETCH(QString, mode);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("deferred-inserts");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(8), 1));
+        QObject *panel = createPanel(view, session, "deferredInsertsSession", mode);
+        QVERIFY(panel);
+        panel->setProperty("width", 1280);
+        panel->setProperty("height", 900);
+        view.resize(1280, 900);
+        // Isolate facade scheduling from filesystem and decoder throughput.
+        session->setThumbnailsEnabled(false);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        layout->setDensity(60);
+        const auto readyVisibleRows = [&]() {
+            const QVariantList visible = layout->visibleIndexes();
+            if (visible.isEmpty()) return false;
+            for (const QVariant &value : visible) {
+                const int row = value.toInt();
+                const auto rect = layout->indexGeometry(row);
+                auto *slot = qobject_cast<BrickItem *>(layout->itemAt(
+                    rect.center().x(), rect.center().y()));
+                if (!slot || slot->viewIndex() != row
+                    || !slot->visualFacadeReady()) return false;
+                const auto *image = slot->property("model").value<ImageFile *>();
+                if (!image || image->fileName() != session->model()->index(row, 0)
+                    .data(ZoinGallery::ExternalCatalogModel::EntryNameRole)
+                    .toString()) return false;
+            }
+            return true;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(readyVisibleRows(), 3000);
+
+        const QVariantList finalCatalog = prefixedCatalog("incoming", 144);
+        const QVariantMap state{{"currentPath", "/incoming"}, {"metadataDeferred", true}};
+        // The cached snapshot and its refresh land before the first swap.
+        // Inserting the missing prefix shifts the same entries many times;
+        // that must not create a timer-sized delay per obsolete row identity.
+        QVERIFY(session->applyExternalCatalog(finalCatalog.mid(64, 64), 2, state));
+        QVERIFY(session->applyExternalCatalog(finalCatalog, 3, state));
+        session->setCurrentIndex(0);
+        layout->setContentY(0);
+        QVERIFY2(layout->visibleIndexes().size() >= 30,
+                 qPrintable(QString::number(layout->visibleIndexes().size())));
+        QElapsedTimer elapsed;
+        elapsed.start();
+        view.update();
+        QTRY_VERIFY_WITH_TIMEOUT(readyVisibleRows(), 750);
+        qInfo() << "Deferred facade convergence after prefix inserts ms" << elapsed.elapsed();
         runtime->shutdown();
     }
 

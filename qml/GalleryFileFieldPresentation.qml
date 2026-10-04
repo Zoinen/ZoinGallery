@@ -3,10 +3,61 @@ pragma ComponentBehavior: Bound
 import QtQuick
 
 QtObject {
+    id: presentation
     required property Item panelRoot
     required property var fileFieldDescriptors
     required property var columnSchema
     required property real devicePixelRatio
+    readonly property FontMetrics columnMetrics: FontMetrics {
+        font: Qt.font({
+            family: presentation.panelRoot.metrics.panelFontFamily,
+            pixelSize: presentation.panelRoot.metrics.detailsSecondaryFontPixelSize
+        })
+    }
+    // Evaluate once per schema/font/viewport change, not once per visible row.
+    readonly property var pixelWidths: {
+        const fontDependency = columnMetrics.font
+        const columns = columnSchema || []
+        const available = detailsContentWidth()
+        const totalWeight = columns.reduce((sum, column) =>
+            sum + Math.max(1, Number(column.width || 1)), 0)
+        const padding = panelRoot.metrics.columnPadding * 2
+        let nameIndex = -1
+        let widestDigit = "0"
+        for (let digit = 1; digit < 10; ++digit) {
+            if (columnMetrics.advanceWidth(String(digit))
+                    > columnMetrics.advanceWidth(widestDigit))
+                widestDigit = String(digit)
+        }
+        const sizeSample = Array(3).fill(widestDigit.repeat(3)).join(" ") + " B"
+        const widths = columns.map((column, index) => {
+            if (!column.autoWidth)
+                return available * Math.max(1, Number(column.width || 1)) / Math.max(1, totalWeight)
+            const role = String(column.role || column.id || "")
+            if (role === "name") {
+                nameIndex = index
+                return 0
+            }
+            const content = role === "size" ? columnMetrics.advanceWidth(sizeSample)
+                : columnMetrics.advanceWidth("0") * Math.max(1, Number(column.width || 1))
+            return Math.max(content, columnMetrics.advanceWidth(String(column.title || ""))) + padding
+        })
+        const used = widths.reduce((sum, width) => sum + width, 0)
+        if (nameIndex >= 0) {
+            const minimumName = Math.min(available / Math.max(1, columns.length),
+                                         columnMetrics.advanceWidth("MMMM") + padding)
+            if (used > available - minimumName && used > 0) {
+                const scale = Math.max(0, available - minimumName) / used
+                for (let index = 0; index < widths.length; ++index)
+                    widths[index] *= scale
+            }
+            widths[nameIndex] = Math.max(0, available - widths.reduce((sum, width) => sum + width, 0))
+        } else if (used > 0) {
+            for (let index = 0; index < widths.length; ++index)
+                widths[index] *= available / used
+        }
+        return widths
+    }
 
     function detailsFieldColumns() {
         const columns = columnSchema || []
@@ -108,8 +159,8 @@ QtObject {
     }
 
     function detailsRowContentInset() {
-        return detailsPixelExtent(Math.max(
-            0, Number(panelRoot.detailsRowInset || 0)))
+        // Column boundaries cover the row; padding belongs inside each cell.
+        return 0
     }
 
     function detailsContentWidth() {
@@ -124,17 +175,10 @@ QtObject {
     }
 
     function detailsColumnX(index) {
-        const columns = columnSchema || []
-        let total = 0
         let before = 0
-        for (let candidate = 0; candidate < columns.length; ++candidate) {
-            const extent = Math.max(1, Number(columns[candidate].width || 1))
-            total += extent
-            if (candidate < index)
-                before += extent
-        }
-        const local = Math.round(detailsContentWidth()
-                                 * before / Math.max(1, total))
+        for (let candidate = 0; candidate < index; ++candidate)
+            before += pixelWidths[candidate] || 0
+        const local = Math.round(before)
         return detailsPixelExtent(detailsRowContentInset() + local)
     }
 

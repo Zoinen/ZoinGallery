@@ -772,12 +772,20 @@ void MasonryLayout::enqueueDeferredDelegateMaterialization(int row) {
         return;
     }
     const QString entryId = brick->modelIdentity;
-    if (_delegateMaterializationEntries.value(row) == entryId
-        && _delegateMaterializationEntries.contains(row)) {
+    if (entryId.isEmpty()) {
         return;
     }
-    _delegateMaterializationEntries.insert(row, entryId);
-    _delegateMaterializationRows.append(qMakePair(row, entryId));
+    // An incremental catalog can move a visible entry through many row
+    // numbers before the first swap. Keep its place in the work queue and
+    // update only the destination; queuing every (row, ID) pair made warm
+    // reentry spend a second yielding over obsolete work.
+    auto queued = _delegateMaterializationEntries.find(entryId);
+    if (queued != _delegateMaterializationEntries.end()) {
+        *queued = row;
+        return;
+    }
+    _delegateMaterializationEntries.insert(entryId, row);
+    _delegateMaterializationRows.append(entryId);
 }
 
 void MasonryLayout::beginDeferredDelegateMaterialization(
@@ -806,31 +814,39 @@ void MasonryLayout::materializeDeferredDelegateBatch(
     QElapsedTimer budget;
     budget.start();
     int completed = 0;
+    int skipped = 0;
     QSet<int> thumbnailRows;
     while (_delegateMaterializationCursor
                < _delegateMaterializationRows.size()
            && completed < 4 && budget.nsecsElapsed() < 1'000'000) {
-        const auto [row, expectedEntryId] =
+        const QString expectedEntryId =
             _delegateMaterializationRows.at(
                 _delegateMaterializationCursor++);
         const auto queuedEntry = _delegateMaterializationEntries.constFind(
-            row);
-        if (queuedEntry != _delegateMaterializationEntries.cend()
-            && *queuedEntry == expectedEntryId) {
-            _delegateMaterializationEntries.remove(row);
+            expectedEntryId);
+        if (queuedEntry == _delegateMaterializationEntries.cend()) {
+            ++skipped;
+            continue;
         }
-        ++completed;
+        const int row = *queuedEntry;
+        _delegateMaterializationEntries.remove(expectedEntryId);
         MasonryBrick *brick = brickAt(row);
         if (!brick || !_activeBrickIndexes.contains(row)
             || brick->modelIdentity != expectedEntryId) {
+            ++skipped;
             continue;
         }
         BrickItem *item = brick->item;
         if (!item || item->viewIndex() != row
             || item->visualRow().value(
                 QStringLiteral("entryId")).toString() != expectedEntryId) {
+            ++skipped;
             continue;
         }
+        // Only current work spends the per-pass item budget. Stale entries
+        // still respect the wall-time budget, but do not add an 8 ms yield
+        // for every four obsolete positions.
+        ++completed;
         ImageFile *image = materializeImageForIndex(row);
         if (image && item->property("model").value<ImageFile *>() != image) {
             item->setProperty("model", QVariant::fromValue(image));
@@ -839,6 +855,18 @@ void MasonryLayout::materializeDeferredDelegateBatch(
         if (image && _overscanIndexSet.contains(row)) {
             thumbnailRows.insert(row);
         }
+    }
+    if (ZoinGallery::MediaTimingTrace::enabled()) {
+        ZoinGallery::MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.facade.batch"), {
+                {QStringLiteral("fix"), QStringLiteral("[FIX:facade-queue-identity]")},
+                {QStringLiteral("generation"), QVariant::fromValue(generation)},
+                {QStringLiteral("rows"), logicalBrickCount()},
+                {QStringLiteral("completed"), completed},
+                {QStringLiteral("skipped"), skipped},
+                {QStringLiteral("remaining"), _delegateMaterializationEntries.size()},
+                {QStringLiteral("durationNs"), budget.nsecsElapsed()},
+            });
     }
     if (!thumbnailRows.isEmpty()) {
         // Thumbnail planning was deliberately suppressed before the first

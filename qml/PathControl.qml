@@ -5,7 +5,6 @@ import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls
 import QtQuick.Controls.impl
-import QtQuick.Effects
 import "../ZGStyle" as ZGS
 
 Item {
@@ -33,8 +32,11 @@ Item {
     // Hosts may align breadcrumb labels with their ordinary UI typography
     // without changing the editable path field or standalone defaults.
     property real breadcrumbFontPixelSize: 14
+    property string breadcrumbFontFamily: Qt.application.font.family
     property alias breadcrumbFont: rootFolder.font
     property color pathBackgroundColor: Style.pathBackground
+    // Actual composited surface, for embedded hosts with translucent chrome.
+    property color pathSurfaceColor: pathBackgroundColor
     property color pathTextColor: Style.text
     property color pathHoveredColor: Style.pathBackgroundHovered
     property color pathItemHoveredColor: Style.pathItemHovered
@@ -48,10 +50,8 @@ Item {
     property real devicePixelRatio:
         pathRoot.Window.window && pathRoot.Window.window.screen
         ? pathRoot.Window.window.screen.devicePixelRatio : 1.0
-    // ShaderEffectSource currently drops the dynamic breadcrumb subtree when
-    // it contains images served by a QQuickImageProvider. Keep the original
-    // fade mask for resource icons, and use the clipped source directly for
-    // provider-backed icons until those temporary images are removed.
+    // Retained for host compatibility; fading is now per-label and does not
+    // require capturing the subtree (including image-provider icons).
     property bool breadcrumbMaskEnabled:
         !String(isNetworkDrive ? networkDriveIconSource
                                : localDriveIconSource).startsWith("image://")
@@ -90,6 +90,7 @@ Item {
     }
 
     onTextChanged: {
+        resetPathScroll()
         if (editMode) {
             updatePathField()
         }
@@ -208,12 +209,64 @@ Item {
     }
     readonly property real breadcrumbSeparatorSize: snap(12)
     readonly property real breadcrumbSeparatorHorizontalPadding: snap(6)
+    property bool compactBreadcrumbs: true
+    property bool debugPathLayout: false
+    FontMetrics { id: breadcrumbMetrics; font: rootFolder.font }
+    // Water-fill the labels: short names retain their natural width, while
+    // long names share the remaining space. Keep every ancestor addressable.
+    readonly property var breadcrumbWidths: {
+        const labels = breadcrumbs.slice(1)
+        const overhead = labels.map((_, i) => breadcrumbSeparatorHorizontalPadding
+            + (i < labels.length - 1
+               ? breadcrumbSeparatorHorizontalPadding + breadcrumbSeparatorSize : 0))
+        const natural = labels.map(label => Math.ceil(breadcrumbMetrics.advanceWidth(label)))
+        if (!compactBreadcrumbs)
+            return natural.map((width, i) => Math.ceil((width + overhead[i]) * dpr) / dpr)
+        const minimum = labels.map((label, i) => i === labels.length - 1
+            ? natural[i] : Math.min(natural[i],
+                Math.ceil(breadcrumbMetrics.advanceWidth(Array.from(label).slice(0, 3).join(""))) + 14))
+        const budget = Math.max(0, dynamicPart.width
+            - overhead.reduce((a, b) => a + b, 0))
+        let low = 0
+        let high = Math.max(0, ...natural)
+        for (let i = 0; i < 24; ++i) {
+            const cap = (low + high) / 2
+            if (natural.reduce((sum, value, i) => sum + Math.max(minimum[i], Math.min(value, cap)), 0) > budget)
+                high = cap
+            else
+                low = cap
+        }
+        return natural.map((value, i) =>
+            Math.ceil((Math.max(minimum[i], Math.min(value, low)) + overhead[i]) * dpr) / dpr)
+    }
+    readonly property real collapsedPathWidth: breadcrumbWidths.reduce((sum, value) => sum + value, 0)
+    onCollapsedPathWidthChanged: resetPathScroll()
+    Component.onCompleted: resetPathScroll()
+    function resetPathScroll() {
+        if (!dynamicPart)
+            return
+        // Row geometry settles during polish, not necessarily before callLater.
+        // Follow that geometry through the first frame of each new path.
+        dynamicPart.contentX = Qt.binding(function() {
+            return Math.max(0, dynamicPart.contentWidth - dynamicPart.width)
+        })
+        if (debugPathLayout)
+            console.debug("[FIX:breadcrumb-scroll] following path end",
+                          breadcrumbs.length, dynamicPart.width,
+                          dynamicPart.contentWidth)
+    }
+    function holdPathScroll() {
+        // Deliberately release the binding before hover expansion. Successors
+        // move right while the hovered breadcrumb stays in its original place.
+        dynamicPart.contentX = dynamicPart.contentX
+    }
     readonly property real driveIconLogicalSize: 18
     readonly property real driveIconSize: snap(driveIconLogicalSize)
     readonly property real breadcrumbGeometryRevision:
         alignmentRevision
         + fixedPart.x + fixedPart.y + fixedPart.width + fixedPart.height
         + dynamicPart.x + dynamicPart.y + dynamicPart.width + dynamicPart.height
+        + dynamicPart.contentX
         + collapsiblePart.x + collapsiblePart.y
         + collapsiblePart.width + collapsiblePart.height
 
@@ -223,6 +276,18 @@ Item {
         property alias font: folderText.font
         property bool needArrow: true
         property int splitIndex: -1
+        property real allocatedWidth: implicitWidth
+        readonly property real naturalWidth: pathRoot.snap(folderText.implicitWidth
+            + horizontalLeadingInset + horizontalTrailingInset
+            + (needArrow ? pathRoot.breadcrumbSeparatorHorizontalPadding
+                         + pathRoot.breadcrumbSeparatorSize : 0))
+        readonly property bool expanded: folderMouse.containsMouse
+        property real expansionProgress: expanded ? 1 : 0
+        readonly property real presentedWidth: allocatedWidth
+            + (naturalWidth - allocatedWidth) * expansionProgress
+        Behavior on expansionProgress {
+            NumberAnimation { duration: 240; easing.type: Easing.InOutCubic }
+        }
         readonly property real horizontalLeadingInset:
             Math.floor(pathRoot.breadcrumbSeparatorHorizontalPadding
                        * pathRoot.dpr / 2) / pathRoot.dpr
@@ -236,40 +301,56 @@ Item {
 
         signal clicked(index: int)
 
-        implicitWidth: pathRoot.snap(folder.implicitWidth
-                                     + horizontalLeadingInset
-                                     + horizontalTrailingInset)
+        implicitWidth: naturalWidth
         implicitHeight: parent.height
         // RowLayout is allowed to distribute rounding residue among children.
         // A breadcrumb's width must instead remain its exact snapped width so
         // adding the next segment cannot move already-rendered labels.
-        Layout.minimumWidth: implicitWidth
-        Layout.preferredWidth: implicitWidth
-        Layout.maximumWidth: implicitWidth
+        width: presentedWidth
+        Layout.minimumWidth: presentedWidth
+        Layout.preferredWidth: presentedWidth
+        Layout.maximumWidth: presentedWidth
+
+        Item {
+            id: visual
+            objectName: folderDelegate.objectName + "-visual"
+            // The delegate itself grows, so the row moves every successor.
+            width: folderDelegate.width
+            height: parent.height
 
         Rectangle {
-            anchors.centerIn: parent
+            anchors.verticalCenter: parent.verticalCenter
             width: parent.width
             height: pathRoot.snap(24)
-            color: folderMouse.containsMouse
-                   ? (folderMouse.pressed
+            color: folderDelegate.expanded
+                   ? Qt.tint(pathRoot.pathSurfaceColor, (folderMouse.pressed
                       ? pathRoot.pathItemPressedColor
-                      : pathRoot.pathItemHoveredColor)
+                      : pathRoot.pathItemHoveredColor))
                    : "transparent"
             radius: 4
         }
 
-        Row {
+        Item {
             id: folder
             x: folderDelegate.horizontalLeadingInset
-            y: pathRoot.snap((folderDelegate.height - height) / 2)
-            spacing: pathRoot.breadcrumbSeparatorHorizontalPadding
+            width: Math.max(0, visual.width - folderDelegate.horizontalLeadingInset
+                           - folderDelegate.horizontalTrailingInset)
+            height: folderDelegate.height
+
+            Item {
+                id: labelClip
+                width: Math.max(0, folder.width - (needArrow
+                    ? pathRoot.breadcrumbSeparatorSize + pathRoot.breadcrumbSeparatorHorizontalPadding : 0))
+                height: parent.height
+                clip: true
 
             Text {
                 id: folderText
+                y: pathRoot.snap((folderDelegate.height - height) / 2)
                 objectName: folderDelegate.objectName + "-text"
                 color: pathRoot.pathTextColor
                 font.pixelSize: pathRoot.breadcrumbFontPixelSize
+                font.family: pathRoot.breadcrumbFontFamily
                 transform: Translate {
                     x: pathRoot.visualPixelOffsetX(
                            folderText, folderDelegate.geometryRevision)
@@ -278,22 +359,67 @@ Item {
                 }
             }
 
+            Rectangle {
+                id: labelFade
+                objectName: folderDelegate.objectName + "-fade"
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                width: Math.min(pathRoot.snap(14), parent.width)
+                height: pathRoot.snap(24)
+                visible: folderText.implicitWidth > labelClip.width + 0.5
+                readonly property color fadeColor: folderDelegate.expanded
+                    ? Qt.tint(pathRoot.pathSurfaceColor,
+                        folderMouse.pressed ? pathRoot.pathItemPressedColor : pathRoot.pathItemHoveredColor)
+                    : pathRoot.pathSurfaceColor
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0; color: Qt.rgba(labelFade.fadeColor.r, labelFade.fadeColor.g, labelFade.fadeColor.b, 0) }
+                    GradientStop { position: 1; color: labelFade.fadeColor }
+                }
+            }
+            }
+
             Image {
                 id: separatorIcon
                 objectName: folderDelegate.objectName + "-separator"
                 // Snap both physical edges so the provider's physical raster
                 // is neither clipped nor resampled at fractional DPR.
-                y: pathRoot.snap((folderDelegate.height - height) / 2 + 1) - folder.y
+                x: labelClip.width + pathRoot.breadcrumbSeparatorHorizontalPadding
+                y: pathRoot.snap((folderDelegate.height - height) / 2 + 1)
                 width: pathRoot.breadcrumbSeparatorSize
                 height: pathRoot.breadcrumbSeparatorSize
                 smooth: false
-                visible: needArrow
+                readonly property bool rootSlash: folderDelegate.splitIndex === -1
+                        && pathRoot.normalizedText.startsWith("/")
+                        && !pathRoot.isNetworkDrive
+                visible: needArrow && !rootSlash
                 source: pathRoot.breadcrumbSeparatorIconSource
                 transform: Translate {
                     x: pathRoot.visualPixelOffsetX(
                            separatorIcon, folderDelegate.geometryRevision)
                     y: pathRoot.visualPixelOffsetY(
                            separatorIcon, folderDelegate.geometryRevision)
+                }
+            }
+            Text {
+                id: rootSlashText
+                objectName: folderDelegate.objectName + "-slash"
+                x: (folderDelegate.width - width) / 2 - folder.x
+                y: pathRoot.snap((folderDelegate.height - height) / 2)
+                width: separatorIcon.width
+                height: folderText.height
+                visible: needArrow && separatorIcon.rootSlash
+                text: "/"
+                font: folderText.font
+                color: pathRoot.pathTextColor
+                opacity: 0.5
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                transform: Translate {
+                    x: pathRoot.visualPixelOffsetX(
+                           rootSlashText, folderDelegate.geometryRevision)
+                    y: pathRoot.visualPixelOffsetY(
+                           rootSlashText, folderDelegate.geometryRevision)
                 }
             }
         }
@@ -303,7 +429,9 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
 
+            onEntered: pathRoot.holdPathScroll()
             onClicked: folderDelegate.clicked(folderDelegate.splitIndex)
+        }
         }
     }
 
@@ -354,23 +482,38 @@ Item {
         }
     }
 
-    Item {
+    Flickable {
         id: dynamicPart
         objectName: "pathDynamicPart"
         anchors.left: fixedPart.right
-        width: rectMaskSource.overflowIndicatorVisible ? pathRoot.width - fixedPart.width - 10 : collapsiblePart.implicitWidth
+        width: Math.max(0, pathRoot.width - fixedPart.width)
         height: parent.height
         clip: true
         visible: !editMode
+        contentWidth: collapsiblePart.width
+        contentHeight: height
+        boundsBehavior: Flickable.StopAtBounds
+        interactive: false
+        onWidthChanged: pathRoot.resetPathScroll()
 
-        RowLayout {
+        function scrollWheel(event) {
+                const delta = event.pixelDelta.x !== 0 ? event.pixelDelta.x
+                    : event.pixelDelta.y !== 0 ? event.pixelDelta.y
+                    : (event.angleDelta.x !== 0 ? event.angleDelta.x : event.angleDelta.y) / 3
+                dynamicPart.contentX = Math.max(0, Math.min(
+                    Math.max(0, dynamicPart.contentWidth - dynamicPart.width),
+                    dynamicPart.contentX - delta))
+                event.accepted = true
+        }
+
+        Row {
             id: collapsiblePart
             objectName: "pathCollapsiblePart"
             width: implicitWidth
             anchors {
                 top: parent.top
                 bottom: parent.bottom
-                right: parent.right
+                left: parent.left
             }
             spacing: 0
 
@@ -385,6 +528,7 @@ Item {
                     text: modelData
                     needArrow: index !== repeater.model.length - 1
                     splitIndex: index
+                    allocatedWidth: needArrow ? (pathRoot.breadcrumbWidths[index] || 0) : naturalWidth
 
                     onClicked: (index) => pathRoot.navigateTo(
                         pathRoot.canonicalFolderPath(
@@ -397,52 +541,43 @@ Item {
         }
     }
 
-    Item {
-        id: rectMaskSource
-        anchors.fill: dynamicPart
-
-        layer.enabled: true
-        visible: false
-        property bool overflowIndicatorVisible: !editMode && (pathRoot.width - fixedPart.width - 10 < collapsiblePart.width)
-
-        Rectangle {
-            id: overflowIndicator
-            anchors {
-                top: parent.top
-                bottom: parent.bottom
-            }
-            width: 20
-            gradient: Gradient {
-                orientation: Gradient.Horizontal
-                GradientStop { position: 0.0; color: rectMaskSource.overflowIndicatorVisible ? "transparent" : Qt.white }
-                GradientStop { position: 1.0; color: Qt.white }
-            }
-        }
-
-        Rectangle {
-            anchors {
-                left: overflowIndicator.right
-                right: parent.right
-                top: parent.top
-                bottom: parent.bottom
-            }
+    Rectangle {
+        objectName: "pathLeadingFade"
+        anchors.left: dynamicPart.left
+        anchors.top: dynamicPart.top
+        anchors.bottom: dynamicPart.bottom
+        width: Math.min(16, dynamicPart.width)
+        visible: !pathRoot.editMode && dynamicPart.contentX > 0.5
+        gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0; color: pathRoot.pathSurfaceColor }
+            GradientStop { position: 1; color: Qt.rgba(pathRoot.pathSurfaceColor.r, pathRoot.pathSurfaceColor.g, pathRoot.pathSurfaceColor.b, 0) }
         }
     }
-
-    MultiEffect {
-        anchors.fill: dynamicPart
-        source: ShaderEffectSource {
-            sourceItem: dynamicPart
-            hideSource: pathRoot.breadcrumbMaskEnabled
+    // Receive wheel/trackpad gestures in viewport coordinates, above the
+    // breadcrumb MouseAreas. No buttons are accepted, so clicks and hover
+    // continue to reach the breadcrumb underneath.
+    MouseArea {
+        objectName: "pathWheelArea"
+        anchors.fill: pathRoot
+        visible: !pathRoot.editMode
+        z: 10
+        acceptedButtons: Qt.NoButton
+        scrollGestureEnabled: true
+        onWheel: wheel => dynamicPart.scrollWheel(wheel)
+    }
+    Rectangle {
+        objectName: "pathTrailingFade"
+        anchors.right: dynamicPart.right
+        anchors.top: dynamicPart.top
+        anchors.bottom: dynamicPart.bottom
+        width: Math.min(16, dynamicPart.width)
+        visible: !pathRoot.editMode && dynamicPart.contentX + dynamicPart.width < dynamicPart.contentWidth - 0.5
+        gradient: Gradient {
+            orientation: Gradient.Horizontal
+            GradientStop { position: 0; color: Qt.rgba(pathRoot.pathSurfaceColor.r, pathRoot.pathSurfaceColor.g, pathRoot.pathSurfaceColor.b, 0) }
+            GradientStop { position: 1; color: pathRoot.pathSurfaceColor }
         }
-
-        maskEnabled: true
-        maskSource: rectMaskSource
-
-        maskThresholdMin: 0.5
-        maskSpreadAtMin: 1.0
-
-        visible: !editMode && pathRoot.breadcrumbMaskEnabled
     }
 
     ZGS.TextField {

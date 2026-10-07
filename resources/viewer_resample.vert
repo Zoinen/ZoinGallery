@@ -18,9 +18,18 @@ layout(std140, binding = 0) uniform buf {
     bool nearestNeighbor;
     vec2 sourceExtent;
     bool pixelAligned;
+    bool hardwareSampling;
     vec2 itemSize;
     vec4 framebufferRect;
     float framebufferYDirection;
+#ifdef ZOIN_VIDEO_SHADER
+    mat4 videoColorMatrix;
+    vec2 videoFrameSize;
+    vec4 videoViewport;
+    ivec4 videoPixelInfo;
+    ivec4 videoTextureFormats;
+    int videoEnabled;
+#endif
 } ubuf;
 
 vec2 framebufferPosition(vec4 clipPosition)

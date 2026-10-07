@@ -16,6 +16,8 @@ Item {
     // Host-owned transform values invalidate the final scene-space correction.
     property real pixelAlignmentRevision: 0
     property bool externalTransformMoving: false
+    // Presentation flights only; pan/zoom must retain the quality filter.
+    property bool hardwareSampling: false
     property bool sphericTextureMipmapsEnabled: false
     property real topInset: 0
     property bool checkerboardEnabled: false

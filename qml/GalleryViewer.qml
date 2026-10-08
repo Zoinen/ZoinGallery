@@ -173,10 +173,10 @@ FocusScope {
     property int shiftSelectionAnchorIndex: -1
     property int shiftSelectionTargetIndex: -1
     property bool shiftSelectionAdds: true
-    // The standalone viewer uses this to reveal its side chrome.  Embedded
-    // hosts intentionally omit that chrome, but the key remains local and the
-    // state is retained so the reusable component keeps ViewerMode's contract.
+    // Both standalone and embedded hosts use this to reveal viewer chrome.
     property bool panelsVisible: false
+    // Hosts supply the space occupied by their right-hand viewer chrome.
+    property real scrollBarsRightMargin: 0
     property bool sphericViewerMode: false
     onSphericViewerModeChanged: {
         if (sphericViewerMode)

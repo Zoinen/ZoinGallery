@@ -51,6 +51,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -517,6 +520,47 @@ private slots:
     void initTestCase() {
         QVERIFY(_cacheDirectory.isValid());
         QVERIFY(ZoinGallery::StorageLocations::configureCacheRoot(_cacheDirectory.path()));
+    }
+
+    void folderPreviewNaturalSortCanRunConcurrently() {
+        constexpr int workerCount = 16;
+        std::atomic_int ready{0};
+        std::atomic_bool start{false};
+        std::atomic_bool sortedCorrectly{true};
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount);
+        for (int worker = 0; worker < workerCount; ++worker) {
+            workers.emplace_back([&] {
+                ready.fetch_add(1, std::memory_order_release);
+                while (!start.load(std::memory_order_acquire)) {
+                    std::this_thread::yield();
+                }
+                const QStringList names{
+                    QStringLiteral("img10.jpg"), QStringLiteral("img2.jpg"),
+                    QStringLiteral("img1.jpg")};
+                const QStringList expected{
+                    QStringLiteral("img1.jpg"), QStringLiteral("img2.jpg"),
+                    QStringLiteral("img10.jpg")};
+                for (int iteration = 0; iteration < 32; ++iteration) {
+                    if (selectFolderPreviewNames(names) != expected) {
+                        sortedCorrectly.store(false, std::memory_order_relaxed);
+                        return;
+                    }
+                }
+            });
+        }
+        const auto readyDeadline = std::chrono::steady_clock::now()
+            + std::chrono::seconds(5);
+        while (ready.load(std::memory_order_acquire) != workerCount
+               && std::chrono::steady_clock::now() < readyDeadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        const bool allWorkersReady =
+            ready.load(std::memory_order_acquire) == workerCount;
+        start.store(true, std::memory_order_release);
+        for (auto &worker : workers) worker.join();
+        QVERIFY(allWorkersReady);
+        QVERIFY(sortedCorrectly.load(std::memory_order_relaxed));
     }
 
     void thumbnailsCanBeDisabledWithoutDroppingSession() {

@@ -1,12 +1,11 @@
 #include "GalleryViewModel.h"
+#include "NaturalSort.h"
 
 #include <QFileInfo>
 #include <QSettings>
 
 GalleryViewModel::GalleryViewModel(FileListModel *sourceModel, QObject *parent)
     : QSortFilterProxyModel(parent) {
-    _collator.setNumericMode(true);
-    _collator.setCaseSensitivity(Qt::CaseInsensitive);
 
     QSettings settings;
     _sortMode = normalizeSortMode(settings.value("gallerySortMode", NameAscending).toInt());
@@ -377,11 +376,7 @@ int GalleryViewModel::compareItems(const ImageFile *leftItem, const ImageFile *r
 }
 
 int GalleryViewModel::compareNatural(const QString &left, const QString &right) const {
-    const int comparison = _collator.compare(left, right);
-    if (comparison != 0) {
-        return comparison;
-    }
-    return QString::compare(left, right, Qt::CaseSensitive);
+    return naturalNameCompare(left, right);
 }
 
 int GalleryViewModel::compareDateTime(const QDateTime &left, const QDateTime &right) const {

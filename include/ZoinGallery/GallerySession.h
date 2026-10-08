@@ -169,6 +169,8 @@ public:
     Q_INVOKABLE QVariantMap highlightStyleAt(int index) const;
     Q_INVOKABLE int sourceIndexAt(int index) const;
     Q_INVOKABLE QSize imageOriginalSizeAt(int index) const;
+    Q_INVOKABLE QVariantList imageExifAt(int index) const;
+    Q_INVOKABLE void requestOsdThumbnailAt(int index, int width, int height);
     Q_INVOKABLE int adjacentImageIndex(int fromIndex, int direction) const;
     Q_INVOKABLE int adjacentViewableIndex(int fromIndex, int direction) const;
     Q_INVOKABLE QVariantMap videoSourceAt(int index) const;

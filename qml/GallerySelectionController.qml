@@ -227,7 +227,8 @@ QtObject {
                                      preserveHorizontalAnchor,
                                      deferCursorCommit,
                                      preserveVerticalAnchor,
-                                     keyboardRevealDirection) {
+                                     keyboardRevealDirection,
+                                     includeSelectionTarget) {
         if (!ready || layout.count === 0)
             return
         const previousIndex = controller.currentIndex
@@ -235,8 +236,15 @@ QtObject {
         if (togglePrevious)
             beginKeyboardShiftSelection(previousIndex)
         if (bounded === previousIndex) {
-            if (togglePrevious)
-                updateKeyboardShiftSelection(bounded)
+            if (togglePrevious) {
+                // Normal navigation paints the item being left. At a clamp
+                // that same item must still participate in the gesture.
+                updateKeyboardShiftSelection(bounded, true)
+                panel.traceBenchmarkStage("selection.boundary", {
+                    "index": bounded,
+                    "adds": keyboardShiftSelectionAdds
+                })
+            }
             if (!preserveHorizontalAnchor)
                 panel.resetCurrentItemCenterX(previousIndex)
             if (!preserveVerticalAnchor) {
@@ -248,8 +256,16 @@ QtObject {
         panel.moveCursor(bounded, togglePrevious, preserveHorizontalAnchor,
                          deferCursorCommit, preserveVerticalAnchor,
                          keyboardRevealDirection)
-        if (togglePrevious)
-            updateKeyboardShiftSelection(bounded)
+        if (togglePrevious) {
+            updateKeyboardShiftSelection(bounded, includeSelectionTarget)
+            if (includeSelectionTarget) {
+                panel.traceBenchmarkStage("selection.edge", {
+                    "fix": "[FIX:shift-home-end]",
+                    "index": bounded,
+                    "adds": keyboardShiftSelectionAdds
+                })
+            }
+        }
     }
 
     function beginKeyboardShiftSelection(anchorIndex, selectionAdds) {
@@ -266,13 +282,16 @@ QtObject {
         controller.beginSelectionGesture(keyboardShiftSelectionAdds)
     }
 
-    function updateKeyboardShiftSelection(targetIndex) {
+    function updateKeyboardShiftSelection(targetIndex, includeTarget) {
         if (!keyboardShiftSelectionActive || !ready)
             return
         const anchor = keyboardShiftSelectionAnchorIndex
         let first = -1
         let last = -1
-        if (targetIndex > anchor) {
+        if (includeTarget) {
+            first = Math.min(anchor, targetIndex)
+            last = Math.max(anchor, targetIndex)
+        } else if (targetIndex > anchor) {
             first = anchor
             last = targetIndex - 1
         } else if (targetIndex < anchor) {

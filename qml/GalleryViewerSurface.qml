@@ -108,6 +108,7 @@ Item {
                 topInset: 0
                 checkerboardEnabled: true
                 scrollBarTheme: root.viewer.theme
+                scrollBarsRightMargin: root.viewer.scrollBarsRightMargin
                 pinchZoomEnabled: !root.viewer.sphericViewerMode
                 hideVerticalScrollBar:
                     root.viewer.viewerNavigationActive

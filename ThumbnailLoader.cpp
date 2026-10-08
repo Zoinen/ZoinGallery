@@ -159,7 +159,7 @@ QImage ThumbnailLoader::normalizeToDisplayColorSpace(QImage image) {
 QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions) {
     if (dimensions.width() < image.width() ||
         dimensions.height() < image.height()) {
-        return image.scaled(dimensions, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        return image.scaled(dimensions, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
     return image;
 }

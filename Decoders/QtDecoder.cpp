@@ -61,7 +61,11 @@ QImage QtDecoder::decode(const QString& mimeType, const QByteArray &data, QSize 
     buf.open(QIODevice::ReadOnly);
 
     QImageReader reader(&buf);
-    reader.setScaledSize(targetSize);
+    if (targetSize.isValid()) {
+        // A requested thumbnail size is a bounding box, not permission to
+        // stretch the source (metadata may not have arrived at admission).
+        reader.setScaledSize(reader.size().scaled(targetSize, Qt::KeepAspectRatio));
+    }
 
     QImage img = reader.read();;
     if (img.isNull()) {

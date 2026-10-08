@@ -245,6 +245,29 @@ private slots:
         QVERIFY(info.previewUsed.contains(QStringLiteral("test-preview")));
     }
 
+    void thumbnailBoundsPreserveAspectWithoutMetadata() {
+        for (const QSize sourceSize : {QSize(144, 256), QSize(256, 144)}) {
+            QImage source(sourceSize, QImage::Format_RGB32);
+            source.fill(Qt::green);
+            QByteArray bytes;
+            QBuffer buffer(&bytes);
+            QVERIFY(buffer.open(QIODevice::WriteOnly));
+            QVERIFY(source.save(&buffer, "PNG"));
+            ImageDecodeRequest request;
+            request.targetSize = QSize(84, 64);
+            request.expandToCacheResolution = false;
+            // Deliberately leave imageSize unset: dimensions can arrive late.
+            ImageData data(request);
+            data.data = bytes;
+            data.mimeType = QStringLiteral("image/png");
+            DecodedImageInfo info;
+            const QImage decoded = ThumbnailLoader::decode(data, info);
+            QCOMPARE(decoded.size(), sourceSize.scaled(request.targetSize, Qt::KeepAspectRatio));
+            const QImage derived = ThumbnailLoader::createThumbnail(source, request.targetSize);
+            QCOMPARE(derived.size(), decoded.size());
+        }
+    }
+
     void runnerRoutesOnlyViewerThroughScaleAwareFilter() {
         QImage source(256, 128, QImage::Format_RGB32);
         for (int y = 0; y < source.height(); ++y) {

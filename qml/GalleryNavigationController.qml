@@ -589,7 +589,7 @@ QtObject {
                 return -1
             const movedViewport = Math.abs(
                         Number(targetNode.contentY) - plannedContentY) > 0.01
-            if (!movedViewport
+            if (!togglePrevious && !movedViewport
                     && Number(targetNode.targetIndex)
                         === controller.currentIndex)
                 return Number(targetNode.targetIndex)

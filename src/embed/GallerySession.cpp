@@ -2,6 +2,7 @@
 #include <ZoinGallery/MediaTimingTrace.h>
 
 #include "ExternalCatalogModel.h"
+#include "FileListModel.h"
 #include "GalleryViewModel.h"
 #include "ImageFile.h"
 #include "ImageModel.h"
@@ -29,6 +30,7 @@ public:
     SourceKind sourceKind = ExternalCatalogSource;
     QString thumbnailProviderName;
     ExternalCatalogModel *external = nullptr;
+    ImageModel *externalImageModel = nullptr;
     ::ZoinGallery::LocalFilesystemSource *local = nullptr;
     QString currentPath;
     QString stableCursorEntryId;
@@ -213,7 +215,12 @@ QObject *GallerySession::selectedImagesModel() const {
 }
 
 QObject *GallerySession::imageModel() const {
-    return d->local ? d->local->imageModel() : nullptr;
+    if (d->local) return d->local->imageModel();
+    // Create the filtering proxy only when viewer chrome is actually used.
+    // Pixels and metadata remain owned by the existing source catalog.
+    if (d->external && !d->externalImageModel)
+        d->externalImageModel = new ImageModel(d->external);
+    return d->externalImageModel;
 }
 
 QString GallerySession::currentPath() const {
@@ -883,6 +890,33 @@ QSize GallerySession::imageOriginalSizeAt(int index) const {
     return d->external ? d->external->imageOriginalSizeAt(index)
                        : d->local ? d->local->imageOriginalSizeAt(index)
                                   : QSize();
+}
+
+QVariantList GallerySession::imageExifAt(int row) const {
+    const auto *catalog = d->model();
+    if (!catalog || row < 0 || row >= catalog->rowCount()) return {};
+    const auto *image = catalog->index(row, 0)
+        .data(FileListModel::ImageFileRole).value<ImageFile *>();
+    return image ? image->exifList() : QVariantList{};
+}
+
+void GallerySession::requestOsdThumbnailAt(int row, int width, int height) {
+    if (d->shutdown || !isImageAt(row) || width <= 0 || height <= 0) return;
+    auto *catalog = d->model();
+    auto *source = dynamic_cast<GalleryCatalogSource *>(catalog);
+    if (!source) return;
+    auto *image = catalog->index(row, 0)
+        .data(FileListModel::ImageFileRole).value<ImageFile *>();
+    if (!image) return;
+    ImageDecodeRequest request;
+    request.info = image->info();
+    const QSize bounds(width, height);
+    const QSize original = image->fullSize();
+    request.targetSize = original.isValid()
+        ? original.scaled(bounds, Qt::KeepAspectRatio) : bounds;
+    request.checkCache = true;
+    request.highPriority = true;
+    source->decodeImages({request});
 }
 
 int GallerySession::adjacentImageIndex(

@@ -137,6 +137,10 @@ QtObject {
                 panel.moveCursorWithSelection(
                             index, shiftSelection, false,
                             true, false, direction)
+            } else if (shiftSelection) {
+                panel.moveCursorWithSelection(
+                            controller.currentIndex, true, false,
+                            true, false, direction)
             }
         } else {
             index = panel.navigateViewportPage(
@@ -152,7 +156,7 @@ QtObject {
         const index = panel.visibleNavigationIndex(rawIndex, !home)
         panel.moveCursorWithSelection(
                     index, shiftSelection, false, true, false,
-                    home ? -1 : 1)
+                    home ? -1 : 1, true)
         event.accepted = true
         return index
     }

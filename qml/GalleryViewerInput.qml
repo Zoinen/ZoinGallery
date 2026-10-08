@@ -166,7 +166,8 @@ QtObject {
                    || event.key === Qt.Key_0) {
             viewport.toggleZoomToFit()
         } else if (event.key === Qt.Key_Tab) {
-            viewer.panelsVisible = !viewer.panelsVisible
+            if (!event.isAutoRepeat)
+                viewer.panelsVisible = !viewer.panelsVisible
         } else if (viewer.isTildeKey(event)) {
             if (shiftModifier) {
                 viewer.togglePreviousImageLock(viewer.presentedIndex)

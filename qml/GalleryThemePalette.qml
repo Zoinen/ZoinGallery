@@ -28,6 +28,8 @@ QtObject {
         Qt.styleHints.colorScheme === Qt.Dark
             ? Qt.rgba(0, 0, 0, 0.3) : Qt.rgba(0, 0, 0, 0.2)
     property color dialogBackground: panelBackground
+    property color progressFill: scrollBarHandle
+    property color progressTrack: Qt.darker(progressFill, 1.6)
     property color separator: Qt.rgba(1, 1, 1, 0.12)
     property color headerText: text
     property color controlHover: Qt.lighter(panelBackground, 1.25)

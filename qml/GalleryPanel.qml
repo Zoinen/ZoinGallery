@@ -763,11 +763,12 @@ FocusScope {
                                      preserveHorizontalAnchor,
                                      deferCursorCommit,
                                      preserveVerticalAnchor,
-                                     keyboardRevealDirection) {
+                                     keyboardRevealDirection,
+                                     includeSelectionTarget) {
         selectionState.moveCursorWithSelection(
                     index, togglePrevious, preserveHorizontalAnchor,
                     deferCursorCommit, preserveVerticalAnchor,
-                    keyboardRevealDirection)
+                    keyboardRevealDirection, includeSelectionTarget)
     }
 
     function beginKeyboardShiftSelection(anchorIndex, selectionAdds) {

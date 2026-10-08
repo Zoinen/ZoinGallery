@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery as ZG
 
 import ZoinGallery.Native 1.0
 
@@ -148,7 +149,8 @@ BrickItem {
               ? highlightForeground : panelRoot.mutedColor))
     readonly property color highlightLabelBackground:
         (current && panelRoot.showCursor
-         ? visualModel.cursorBackground : visualModel.normalBackground)
+         ? (masonryMode ? ZG.Style.brickInfoPanelSelected : visualModel.cursorBackground)
+         : visualModel.normalBackground)
         || panelRoot.labelBackgroundColor
     readonly property rect effectivePreviewRect: {
         if (detailsMode || columnsMode) {

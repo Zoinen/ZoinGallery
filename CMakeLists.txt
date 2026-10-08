@@ -937,6 +937,7 @@ set(ZOIN_QML_FILES
     qml/GridEntryDelegate.qml
     qml/IconsEntryDelegate.qml
       qml/GalleryViewer.qml
+      qml/GalleryViewerOsd.qml
       qml/GalleryViewerCatalogController.qml
       qml/GalleryViewerInput.qml
       qml/GalleryViewerMotion.qml

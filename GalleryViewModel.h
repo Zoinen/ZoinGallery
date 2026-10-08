@@ -1,7 +1,6 @@
 #ifndef GALLERYVIEWMODEL_H
 #define GALLERYVIEWMODEL_H
 
-#include <QCollator>
 #include <QSortFilterProxyModel>
 #include <QVariantList>
 
@@ -75,7 +74,6 @@ private:
 
     bool _selectedOnly = false;
     SortMode _sortMode = NameAscending;
-    QCollator _collator;
 };
 
 #endif // GALLERYVIEWMODEL_H

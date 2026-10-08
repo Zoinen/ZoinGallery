@@ -25,6 +25,7 @@ Item {
                                    || viewport.zoomScrollingAnimationRunning
                                    || viewport.directManipulationActive
                                    || viewport.externalTransformMoving
+                                   || viewport.hardwareSampling
                                    || viewport.isRotating
     readonly property bool quarterTurn: Math.abs(viewport.rotationMode % 2) === 1
     readonly property bool centeredX: !viewport.isRotating && viewport.zoomScale <= 1
@@ -133,9 +134,11 @@ Item {
                 - Math.cos(radians) * height / 2
         const scene = scenePoint(parentItem, originX, originY)
         const center = scenePoint(parentItem, x + width / 2, y + height / 2)
-        const targetX = centerX ? scene.x + stableCenter(true) - center.x
+        const targetX = centerX && !root.viewport.hardwareSampling
+                                ? scene.x + stableCenter(true) - center.x
                                 : continuous ? scene.x : Math.round(scene.x * dpr) / dpr
-        const targetY = centerY ? scene.y + stableCenter(false) - center.y
+        const targetY = centerY && !root.viewport.hardwareSampling
+                                ? scene.y + stableCenter(false) - center.y
                                 : continuous ? scene.y : Math.round(scene.y * dpr) / dpr
         const corrected = parentItem.mapFromItem(null,
                                                  targetX, targetY)
@@ -248,6 +251,7 @@ Item {
                     ? baseImage : nativeImage
             }
             nearestNeighbor: root.viewport.nearestNeighbor
+            hardwareSampling: root.viewport.hardwareSampling
             videoFrameSource: root.viewport.videoMode
                 ? root.viewport.videoFrameSource : null
             sourceExtent: root.viewport.videoFrameSource
@@ -257,6 +261,8 @@ Item {
                 width * root.viewport.devicePixelRatio,
                 height * root.viewport.devicePixelRatio)
             pixelAligned: !root.moving
+            presentationGeometryRevision: root.alignmentEpoch + root.alignmentRevision
+            cacheVideoPresentation: !cropShader.visible
             showCheckerboard: root.viewport.checkerboardEnabled
                              && root.viewport.imageTextureReady
             checkerboardSize: 4 * root.viewport.devicePixelRatio
@@ -298,6 +304,7 @@ Item {
                 width: cropImage.width
                 height: cropImage.height
                 nearestNeighbor: root.viewport.nearestNeighbor
+                hardwareSampling: root.viewport.hardwareSampling
                 imageSource: cropImage
                 pixelAligned: !root.moving
                 viewportSize: Qt.size(width * root.dpr, height * root.dpr)

@@ -9,6 +9,8 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QImage>
+#include <QLineF>
+#include <QPainter>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -17,6 +19,7 @@
 #include <QSGRendererInterface>
 #include <QScreen>
 #include <QSignalSpy>
+#include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QtTest>
 #include <cstring>
@@ -141,6 +144,18 @@ class GalleryQmlInteractionTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase() {
+#ifdef Q_OS_LINUX
+        if (qgetenv("QSG_RHI_BACKEND") == "opengl") {
+            QSurfaceFormat format;
+            format.setVersion(3, 2);
+            format.setProfile(QSurfaceFormat::CoreProfile);
+            QSurfaceFormat::setDefaultFormat(format);
+            QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+        }
+#endif
+    }
+
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
     void videoSourceInitializationWaitsForViewerExpandAnimation();
 
@@ -1793,6 +1808,191 @@ private slots:
         runtime->shutdown();
     }
 
+    void viewerFlightKeepsInnerViewportStable_data() {
+        QTest::addColumn<QSize>("sourceSize");
+        QTest::addColumn<QRectF>("tile");
+        QTest::addColumn<int>("rotation");
+        QTest::newRow("landscape") << QSize(1200, 800)
+            << QRectF(36, 54, 140, 90) << 0;
+        QTest::newRow("portrait-wide-tile") << QSize(800, 1200)
+            << QRectF(23, 61, 170, 50) << 0;
+        QTest::newRow("quarter-turn") << QSize(1200, 800)
+            << QRectF(36, 54, 90, 140) << 1;
+        QTest::newRow("odd-source") << QSize(1201, 799)
+            << QRectF(23, 61, 170, 50) << 0;
+    }
+
+    void viewerFlightKeepsInnerViewportStable() {
+        QFETCH(QSize, sourceSize);
+        QFETCH(QRectF, tile);
+        QFETCH(int, rotation);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath = directory.filePath("flight.png");
+        QImage source(sourceSize, QImage::Format_ARGB32_Premultiplied);
+        source.fill(Qt::cyan);
+        {
+            QPainter paint(&source);
+            paint.fillRect(0, 0, sourceSize.width() / 3, sourceSize.height(), Qt::magenta);
+            paint.fillRect(sourceSize.width() / 2, 0, sourceSize.width() / 2,
+                           sourceSize.height() / 4, Qt::yellow);
+        }
+        QVERIFY(source.save(imagePath));
+
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession("qml-stable-flight");
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(
+            {imageEntry("image", 7, imagePath)}, 1));
+        QVERIFY(session->applyExternalState("image", 7, {}, 1));
+        session->setViewerOpen(true);
+        view.engine()->rootContext()->setContextProperty("flightSession", session);
+        view.engine()->rootContext()->setContextProperty("flightTile", tile);
+        view.engine()->rootContext()->setContextProperty("flightImage", QUrl::fromLocalFile(imagePath));
+        view.engine()->rootContext()->setContextProperty("flightDpr", view.devicePixelRatio());
+
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Rectangle {
+                width: 640; height: 420; color: "#334455"
+                Item {
+                    id: panel
+                    property bool viewerTransitionActive: false
+                    property string viewerTransitionEntryId: ""
+                    function currentItemImageGeometry(target) { return flightTile }
+                    function currentItemImageSource() { return flightImage }
+                }
+                GalleryViewer {
+                    objectName: "stableFlightViewer"
+                    anchors.fill: parent
+                    session: flightSession
+                    sourcePanel: panel
+                    animationDuration: 1
+                    devicePixelRatio: flightDpr
+                    theme: GalleryThemePalette { viewerBackground: "transparent" }
+                }
+            }
+        )QML", QStringLiteral("StableViewerFlight.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        auto *viewer = root->findChild<QQuickItem *>("stableFlightViewer");
+        auto *viewport = root->findChild<QQuickItem *>("galleryViewerViewport");
+        auto *animation = root->findChild<QObject *>("galleryViewerTransitionAnimation");
+        auto *shader = root->findChild<QQuickItem *>("galleryViewerImageShader");
+        QVERIFY(viewer);
+        QVERIFY(viewport);
+        QVERIFY(animation);
+        QVERIFY(shader);
+        view.show();
+        QTRY_VERIFY(view.isExposed());
+        QTRY_VERIFY(viewport->property("imageTextureReady").toBool());
+        QTRY_VERIFY(!viewer->property("transitioning").toBool());
+        viewport->setProperty("rotationMode", rotation);
+        QVERIFY(QMetaObject::invokeMethod(viewport, "zoomToFit", Q_ARG(QVariant, true)));
+        auto *image = viewport->property("image").value<QQuickItem *>();
+        QVERIFY(image);
+        QTest::qWait(100);
+        const QSizeF innerSize(viewport->width(), viewport->height());
+        const qreal fittedZoom = viewport->property("zoomScale").toReal();
+        const QImage before = view.grabWindow();
+        QVERIFY(!before.isNull());
+        // The software CTest run checks geometry; the hardware run must also
+        // prove that the image shader actually drew, not compare blank grabs.
+        if (view.rendererInterface()->graphicsApi() != QSGRendererInterface::Software) {
+            QVERIFY(before.pixelColor(before.width() / 2, before.height() / 2)
+                    != QColor("#334455"));
+        }
+        QSignalSpy widths(viewport, &QQuickItem::widthChanged);
+        QSignalSpy heights(viewport, &QQuickItem::heightChanged);
+        QSignalSpy zooms(viewport, SIGNAL(zoomScaleChanged()));
+        QVERIFY(zooms.isValid());
+        viewer->setProperty("animationDuration", 10000);
+        QVERIFY(QMetaObject::invokeMethod(viewer, "beginOpen"));
+        QVERIFY(QMetaObject::invokeMethod(animation, "stop"));
+        const QSizeF effective = viewport->property("effectiveOriginalSize").toSizeF();
+        QVERIFY(effective.width() > 1 && effective.height() > 1);
+        for (const qreal progress : {0.0, 0.25, 0.65, 0.85, 0.65, 0.25, 0.0, 1.0}) {
+            viewer->setProperty("transitionProgress", progress);
+            QCOMPARE(QSizeF(viewport->width(), viewport->height()), innerSize);
+            QCOMPARE(viewport->property("zoomScale").toReal(), fittedZoom);
+            const QRectF virtualViewport(tile.x() * (1 - progress),
+                tile.y() * (1 - progress),
+                tile.width() * (1 - progress) + innerSize.width() * progress,
+                tile.height() * (1 - progress) + innerSize.height() * progress);
+            const qreal fit = qMin(virtualViewport.width() / effective.width(),
+                                   virtualViewport.height() / effective.height());
+            const QSizeF extent = effective * fit;
+            const QRectF expected(virtualViewport.center() - QPointF(extent.width() / 2,
+                extent.height() / 2), extent);
+            const QRectF actual = image->mapRectToItem(viewer, image->boundingRect());
+            QVERIFY2(QLineF(actual.topLeft(), expected.topLeft()).length() < 0.001
+                && QLineF(actual.bottomRight(), expected.bottomRight()).length() < 0.001,
+                qPrintable(QString("progress=%1 actual=%2,%3 %4x%5 expected=%6,%7 %8x%9")
+                    .arg(progress).arg(actual.x()).arg(actual.y()).arg(actual.width()).arg(actual.height())
+                    .arg(expected.x()).arg(expected.y()).arg(expected.width()).arg(expected.height())));
+            if (progress < 1) {
+                const QRectF rendered = shader->mapRectToItem(viewer, shader->boundingRect());
+                const QString detail = QString("progress=%1 shader=%2,%3 %4x%5 expected=%6,%7 %8x%9")
+                    .arg(progress).arg(rendered.x()).arg(rendered.y()).arg(rendered.width()).arg(rendered.height())
+                    .arg(expected.x()).arg(expected.y()).arg(expected.width()).arg(expected.height());
+                QVERIFY2(QLineF(rendered.topLeft(), expected.topLeft()).length() < 0.001,
+                         qPrintable(detail));
+                QVERIFY2(QLineF(rendered.bottomRight(), expected.bottomRight()).length() < 0.001,
+                         qPrintable(detail));
+            }
+        }
+        QCOMPARE(widths.size(), 0);
+        QCOMPARE(heights.size(), 0);
+        QCOMPARE(zooms.size(), 0);
+        viewer->setProperty("transitionProgress", 0.65);
+        const QRectF openingRect = image->mapRectToItem(viewer, image->boundingRect());
+        QVERIFY(QMetaObject::invokeMethod(viewer, "requestClose"));
+        QVERIFY(QMetaObject::invokeMethod(animation, "stop"));
+        QCOMPARE(image->mapRectToItem(viewer, image->boundingRect()), openingRect);
+        QCOMPARE(QSizeF(viewport->width(), viewport->height()), innerSize);
+        QVERIFY(viewer->property("completingClose").toBool());
+        QVERIFY(QMetaObject::invokeMethod(viewer, "completeTransition"));
+        QVERIFY(!viewer->property("viewerContentVisible").toBool());
+        QVERIFY(QMetaObject::invokeMethod(viewer, "beginOpen"));
+        QVERIFY(QMetaObject::invokeMethod(animation, "stop"));
+        QVERIFY(QMetaObject::invokeMethod(viewer, "finishOpen"));
+        QTest::qWait(100);
+        const qreal dpr = view.devicePixelRatio();
+        for (const QString &name : {QStringLiteral("galleryViewerImageShader"),
+                                    QStringLiteral("galleryViewerCropShader")}) {
+            auto *leaf = root->findChild<QQuickItem *>(name);
+            QVERIFY(leaf);
+            const QPointF origin = leaf->mapToScene(QPointF());
+            const QString coordinates = QString("%1 physical origin=(%2,%3), DPR=%4")
+                .arg(name).arg(origin.x() * dpr, 0, 'f', 6)
+                .arg(origin.y() * dpr, 0, 'f', 6).arg(dpr);
+            QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.001,
+                     qPrintable(coordinates));
+            QVERIFY2(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.001,
+                     qPrintable(coordinates));
+            // Media rotation is deliberate; no extra flight scale/shear remains.
+            const qreal angle = rotation * M_PI / 2;
+            const QPointF basisX = leaf->mapToScene(QPointF(1, 0)) - origin;
+            const QPointF basisY = leaf->mapToScene(QPointF(0, 1)) - origin;
+            QVERIFY(QLineF(basisX, QPointF(std::cos(angle), std::sin(angle))).length() < 0.001);
+            QVERIFY(QLineF(basisY, QPointF(-std::sin(angle), std::cos(angle))).length() < 0.001);
+        }
+        const QImage after = view.grabWindow();
+        QCOMPARE(after, before);
+        const QString captureDir = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+        if (!captureDir.isEmpty())
+            QVERIFY(after.save(QDir(captureDir).filePath(
+                QString("flight-rest-%1.png").arg(QTest::currentDataTag()))));
+        runtime->shutdown();
+    }
+
     void interruptedViewerTransitionFinalizesExactlyOnce() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -1863,33 +2063,63 @@ private slots:
             QStringLiteral("galleryViewerTransitionAnimation"));
         QVERIFY(viewer);
         QVERIFY(animation);
+        const auto verifySampling = [&](bool enabled) {
+            auto *viewport = viewer->property("flickableArea").value<QQuickItem *>();
+            QVERIFY(viewport);
+            QCOMPARE(viewport->property("hardwareSampling").toBool(), enabled);
+            for (const QString &name : {QStringLiteral("galleryViewerImageShader"),
+                                        QStringLiteral("galleryViewerCropShader")}) {
+                auto *shader = rootObject->findChild<QQuickItem *>(name);
+                QVERIFY(shader);
+                QCOMPARE(shader->property("hardwareSampling").toBool(), enabled);
+            }
+        };
         QTRY_COMPARE_WITH_TIMEOUT(
             viewer->property("transitionProgress").toReal(), 1.0, 1500);
         QTRY_VERIFY(!viewer->property("transitioning").toBool());
+        verifySampling(false);
 
         QVERIFY(QMetaObject::invokeMethod(viewer, "beginOpen"));
         QTRY_VERIFY_WITH_TIMEOUT(animation->property("running").toBool(), 1000);
+        verifySampling(true);
         viewer->setProperty("transitionProgress", 0.25);
         QCOMPARE(viewer->property("transitionProgress").toReal(), 0.25);
         QVERIFY(QMetaObject::invokeMethod(animation, "stop"));
         QVERIFY(viewer->property("transitioning").toBool());
+        verifySampling(true);
         QTRY_COMPARE_WITH_TIMEOUT(
             viewer->property("transitionProgress").toReal(), 1.0, 1000);
         QTRY_VERIFY(!viewer->property("transitioning").toBool());
+        verifySampling(false);
 
         QVERIFY(QMetaObject::invokeMethod(viewer, "requestClose"));
         QTRY_VERIFY_WITH_TIMEOUT(animation->property("running").toBool(), 1000);
+        verifySampling(true);
         viewer->setProperty("transitionProgress", 0.75);
         QCOMPARE(viewer->property("transitionProgress").toReal(), 0.75);
         QVERIFY(QMetaObject::invokeMethod(animation, "stop"));
         QVERIFY(viewer->property("transitioning").toBool());
+        verifySampling(true);
         QTRY_COMPARE_WITH_TIMEOUT(rootObject->property("closeCount").toInt(),
                                   1, 1000);
         QCOMPARE(viewer->property("transitionProgress").toReal(), 0.0);
         QVERIFY(!viewer->property("viewerContentVisible").toBool());
         QTRY_VERIFY(!viewer->property("transitioning").toBool());
+        verifySampling(false);
         QTest::qWait(500);
         QCOMPARE(rootObject->property("closeCount").toInt(), 1);
+        QVERIFY(QMetaObject::invokeMethod(viewer, "beginOpen"));
+        QTRY_VERIFY(animation->property("running").toBool());
+        verifySampling(true);
+        QVERIFY(QMetaObject::invokeMethod(viewer, "requestImmediateClose"));
+        QTRY_COMPARE(rootObject->property("closeCount").toInt(), 2);
+        QTRY_VERIFY(!viewer->property("transitioning").toBool());
+        verifySampling(false);
+        QVERIFY(QMetaObject::invokeMethod(viewer, "beginOpen"));
+        QTRY_VERIFY(animation->property("running").toBool());
+        verifySampling(true);
+        QTRY_VERIFY(!viewer->property("transitioning").toBool());
+        verifySampling(false);
     }
 
     void viewerUsesOriginalHeldKeysPinchGeometryAndScrollBars() {
@@ -2244,16 +2474,18 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(rootObject, "resetViewer"));
         QTest::qWait(120);
 
-        // Ordinary close animates this same viewport container to the tile;
-        // there is no second thumbnail overlay that can cross-fade or blink.
+        // Ordinary close transforms this same image to the tile while its
+        // internal viewport stays fixed; no thumbnail overlay cross-fades.
         QVERIFY(QMetaObject::invokeMethod(rootObject, "closeOrdinary"));
         QVERIFY(viewer->property("transitionHasGeometry").toBool());
         QCOMPARE(viewer->property("transitionSourceGeometry").toRectF().width(),
                  120.0);
         QTest::qWait(25);
         QCOMPARE(rootObject->property("closeCount").toInt(), 0);
-        QTRY_VERIFY(viewport->width() < 640);
-        QVERIFY(viewport->width() > 120);
+        QCOMPARE(viewport->width(), 640.0);
+        QCOMPARE(viewport->height(), 420.0);
+        QTRY_VERIFY(viewport->mapRectToItem(viewer, viewport->boundingRect()).width() < 640);
+        QVERIFY(viewport->mapRectToItem(viewer, viewport->boundingRect()).width() > 120);
         QTRY_COMPARE_WITH_TIMEOUT(rootObject->property("closeCount").toInt(),
                                   1, 1000);
         QVERIFY(!viewer->property("viewerContentVisible").toBool());

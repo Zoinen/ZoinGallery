@@ -63,30 +63,43 @@ Item {
                 id: viewportItem
                 objectName: "galleryViewerViewport"
                 nearestNeighbor: root.viewer.nearestNeighbor
-                x: root.viewer.pinchCloseActive ? 0
-                   : root.viewer.transitionHasGeometry
-                     ? root.viewer.lerp(
-                           root.viewer.transitionSourceGeometry.x, 0,
-                           root.viewer.transitionProgress) : 0
-                y: root.viewer.pinchCloseActive ? 0
-                   : root.viewer.transitionHasGeometry
-                     ? root.viewer.lerp(
-                           root.viewer.transitionSourceGeometry.y, 0,
-                           root.viewer.transitionProgress) : 0
-                width: root.viewer.pinchCloseActive ? root.viewer.width
-                       : root.viewer.transitionHasGeometry
-                         ? root.viewer.lerp(
-                               root.viewer.transitionSourceGeometry.width,
-                               root.viewer.width,
-                               root.viewer.transitionProgress)
-                         : root.viewer.width
-                height: root.viewer.pinchCloseActive ? root.viewer.height
-                        : root.viewer.transitionHasGeometry
-                          ? root.viewer.lerp(
-                                root.viewer.transitionSourceGeometry.height,
-                                root.viewer.height,
-                                root.viewer.transitionProgress)
-                          : root.viewer.height
+                // Keep fit/crop/layout in the final viewport. A uniform scene
+                // transform fits its image into the flying rectangle without
+                // running resizeViewport()/zoomToFit() twice on every tick.
+                readonly property bool geometryFlight:
+                    root.viewer.transitionHasGeometry
+                    && !root.viewer.pinchCloseActive
+                    && root.viewer.transitionProgress < 1
+                    && image.width > 1 && image.height > 1
+                readonly property real flightWidth: root.viewer.lerp(
+                    root.viewer.transitionSourceGeometry.width, width,
+                    root.viewer.transitionProgress)
+                readonly property real flightHeight: root.viewer.lerp(
+                    root.viewer.transitionSourceGeometry.height, height,
+                    root.viewer.transitionProgress)
+                width: root.viewer.width
+                height: root.viewer.height
+                transformOrigin: Item.TopLeft
+                scale: geometryFlight
+                       ? Math.min(flightWidth / image.width,
+                                  flightHeight / image.height) : 1
+                x: geometryFlight
+                   ? root.viewer.lerp(root.viewer.transitionSourceGeometry.x, 0,
+                                      root.viewer.transitionProgress)
+                     + (flightWidth - image.width * scale) / 2 - image.x * scale
+                   : 0
+                y: geometryFlight
+                   ? root.viewer.lerp(root.viewer.transitionSourceGeometry.y, 0,
+                                      root.viewer.transitionProgress)
+                     + (flightHeight - image.height * scale) / 2 - image.y * scale
+                   : 0
+                onGeometryFlightChanged: {
+                    if (Qt.application.arguments.indexOf("--debug-viewer-transition") >= 0)
+                        console.debug("[FIX:viewer-flight] geometryFlight=", geometryFlight,
+                                      "innerViewport=", width, height,
+                                      "source=", root.viewer.transitionSourceGeometry,
+                                      "progress=", root.viewer.transitionProgress)
+                }
                 active: !root.viewer.customContent
                         && !root.viewer.completingClose
                 visible: !root.viewer.customContent
@@ -100,10 +113,13 @@ Item {
                 animationDuration: root.viewer.animationDuration
                 devicePixelRatio: root.viewer.devicePixelRatio
                 pixelAlignmentRevision: navigationTranslation.x
+                hardwareSampling: root.viewer.transitioning
+                    || root.viewer.externalPresentationMoving
                 externalTransformMoving:
                     root.viewer.viewerNavigationActive
                     || root.viewer.viewerNavigationAnimationRunning
                     || root.viewer.viewerNavigationCommitAfterAnimation
+                    || hardwareSampling
                 sphericTextureMipmapsEnabled: root.viewer.sphericViewerMode
                 topInset: 0
                 checkerboardEnabled: true
@@ -132,7 +148,8 @@ Item {
             Loader {
                 id: sphereLoader
                 objectName: "gallerySphericViewerLoader"
-                anchors.fill: viewportItem
+                parent: viewportItem
+                anchors.fill: parent
                 active: root.viewer.sphericViewerMode
                         && !root.viewer.currentIsVideo
                 opacity: root.viewer.transitionHasGeometry
@@ -157,7 +174,10 @@ Item {
             Loader {
                 id: videoPlaybackLoader
                 objectName: "galleryVideoPlaybackLoader"
-                anchors.fill: viewportItem
+                // Native text/icons must not inherit the image's flight scale.
+                anchors.fill: parent
+                opacity: root.viewer.transitionHasGeometry
+                         ? root.viewer.transitionProgress : 1
                 z: 2
                 active: !root.viewer.customContent
                         && root.viewer.currentIsVideo
@@ -165,6 +185,13 @@ Item {
                         && root.viewer.session
                         && root.viewer.session.videoPlaybackAvailable === true
                 source: active ? Qt.resolvedUrl("GalleryVideoPlaybackSurface.qml") : ""
+            }
+
+            Binding {
+                target: videoPlaybackLoader.item
+                property: "pixelAlignmentRevision"
+                value: navigationTranslation.x
+                when: videoPlaybackLoader.item !== null
             }
 
             Binding {

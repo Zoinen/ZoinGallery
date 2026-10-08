@@ -7,6 +7,9 @@ layout(binding = 1) uniform sampler2D source;
 #ifdef ZOIN_VIDEO_SHADER
 layout(binding = 2) uniform sampler2D videoPlane2;
 layout(binding = 3) uniform sampler2D videoPlane3;
+#if !defined(ZOIN_REFERENCE_SAMPLING) && !defined(ZOIN_LINEAR_VIDEO_PASS)
+layout(binding = 4) uniform sampler2D linearVideoSource;
+#endif
 #endif
 
 layout(std140, binding = 0) uniform buf {
@@ -22,6 +25,7 @@ layout(std140, binding = 0) uniform buf {
     bool nearestNeighbor;
     vec2 sourceExtent;
     bool pixelAligned;
+    bool hardwareSampling;
     vec2 itemSize;
     vec4 framebufferRect;
     float framebufferYDirection;
@@ -146,19 +150,8 @@ ivec2 displayToVideoPixel(ivec2 pixel, ivec2 displaySize, ivec2 visibleSize)
     return pixel;
 }
 
-vec4 videoTexel(ivec2 displayPixel)
+vec4 videoColor(vec2 uv, ivec2 pixel, ivec2 rawSize)
 {
-    ivec2 displaySize = ivec2(ubuf.videoFrameSize + 0.5);
-    ivec2 rawSize = ivec2(textureSize(source, 0));
-    ivec2 visibleSize = ivec2(ubuf.videoViewport.zw + 0.5);
-    if (any(lessThanEqual(visibleSize, ivec2(0))))
-        visibleSize = rawSize;
-    ivec2 viewportOrigin = ivec2(ubuf.videoViewport.xy + 0.5);
-    displayPixel = clamp(displayPixel, ivec2(0), displaySize - 1);
-    ivec2 pixel = displayToVideoPixel(displayPixel, displaySize, visibleSize)
-                  + viewportOrigin;
-    pixel = clamp(pixel, ivec2(0), rawSize - 1);
-    vec2 uv = (vec2(pixel) + 0.5) / vec2(rawSize);
     int format = ubuf.videoPixelInfo.x;
     vec4 sampleValue = textureLod(source, uv, 0.0);
 
@@ -232,6 +225,56 @@ vec4 videoTexel(ivec2 displayPixel)
 
     return clamp(ubuf.videoColorMatrix * vec4(y, chroma, 1.0), 0.0, 1.0);
 }
+
+vec4 videoTexel(ivec2 displayPixel)
+{
+    ivec2 displaySize = ivec2(ubuf.videoFrameSize + 0.5);
+    ivec2 rawSize = ivec2(textureSize(source, 0));
+    ivec2 visibleSize = ivec2(ubuf.videoViewport.zw + 0.5);
+    if (any(lessThanEqual(visibleSize, ivec2(0))))
+        visibleSize = rawSize;
+    ivec2 viewportOrigin = ivec2(ubuf.videoViewport.xy + 0.5);
+    displayPixel = clamp(displayPixel, ivec2(0), displaySize - 1);
+    ivec2 pixel = displayToVideoPixel(displayPixel, displaySize, visibleSize)
+                  + viewportOrigin;
+    pixel = clamp(pixel, ivec2(0), rawSize - 1);
+    return videoColor((vec2(pixel) + 0.5) / vec2(rawSize), pixel, rawSize);
+}
+
+vec4 videoBilinear(vec2 displayPixel)
+{
+    int format = ubuf.videoPixelInfo.x;
+    // Packed/interleaved components and straight-alpha conversion cannot be
+    // interpolated as raw planes. Four existing decoded samples suffice;
+    // ordinary RGB and planar YUV use the hardware sampler directly.
+    if (format == VideoFormatUyvy || format == VideoFormatYuyv
+            || format == VideoFormatImc2 || format == VideoFormatImc4
+            || format == VideoFormatArgb8888 || format == VideoFormatBgra8888
+            || format == VideoFormatAbgr8888 || format == VideoFormatRgba8888
+            || format == VideoFormatAyuv || format == VideoFormatAyuvPremultiplied) {
+        ivec2 base = ivec2(floor(displayPixel));
+        vec2 phase = fract(displayPixel);
+        return mix(mix(videoTexel(base), videoTexel(base + ivec2(1, 0)), phase.x),
+                   mix(videoTexel(base + ivec2(0, 1)), videoTexel(base + ivec2(1, 1)), phase.x),
+                   phase.y);
+    }
+    vec2 displaySize = ubuf.videoFrameSize;
+    ivec2 rawSize = textureSize(source, 0);
+    vec2 visibleSize = ubuf.videoViewport.zw;
+    if (any(lessThanEqual(visibleSize, vec2(0.0))))
+        visibleSize = vec2(rawSize);
+    vec2 pixel = clamp(displayPixel, vec2(0.0), displaySize - 1.0);
+    if (ubuf.videoTextureFormats.w != 0)
+        pixel.x = displaySize.x - 1.0 - pixel.x;
+    if (ubuf.videoPixelInfo.w == 90)
+        pixel = vec2(pixel.y, visibleSize.y - 1.0 - pixel.x);
+    else if (ubuf.videoPixelInfo.w == 180)
+        pixel = visibleSize - 1.0 - pixel;
+    else if (ubuf.videoPixelInfo.w == 270)
+        pixel = vec2(visibleSize.x - 1.0 - pixel.y, pixel.x);
+    pixel = clamp(pixel + ubuf.videoViewport.xy, vec2(0.0), vec2(rawSize) - 1.0);
+    return videoColor((pixel + 0.5) / vec2(rawSize), ivec2(floor(pixel)), rawSize);
+}
 #endif
 
 vec4 sourceTexel(ivec2 pixel)
@@ -246,6 +289,12 @@ vec4 sourceTexel(ivec2 pixel)
 
 vec4 linearSample(ivec2 pixel)
 {
+#if defined(ZOIN_VIDEO_SHADER) && !defined(ZOIN_REFERENCE_SAMPLING) && !defined(ZOIN_LINEAR_VIDEO_PASS)
+    // Full float32 premultiplied linear texels retain the exact per-source-
+    // pixel conversion. Only convolution/encoding remains in the final pass.
+    if (ubuf.videoEnabled == 2)
+        return texelFetch(linearVideoSource, pixel, 0);
+#endif
     vec4 color = sourceTexel(pixel);
     if (color.a <= 0.0)
         return vec4(0.0);
@@ -338,6 +387,15 @@ vec4 resample(vec2 uv)
     vec2 extent = all(greaterThan(ubuf.sourceExtent, vec2(0.0)))
         ? min(ubuf.sourceExtent, size) : size;
     vec2 sampleUv = uv * extent / size;
+    // Only short presentation flights opt into encoded hardware bilinear.
+    // Resting, panning and zooming retain the linear-light quality path below.
+    if (ubuf.hardwareSampling && !ubuf.nearestNeighbor) {
+#ifdef ZOIN_VIDEO_SHADER
+        if (ubuf.videoEnabled != 0)
+            return videoBilinear(sampleUv * size - 0.5);
+#endif
+        return textureLod(source, sampleUv, 0.0);
+    }
     if (ubuf.nearestNeighbor || (ubuf.pixelAlignedIdentity
             && (!ubuf.pixelAligned || pixelGridAligned != 0))) {
         ivec2 pixel = ivec2(clamp(floor(sampleUv * size), vec2(0.0),
@@ -348,8 +406,10 @@ vec4 resample(vec2 uv)
     // animated ancestor transform. viewportSize alone cannot describe those.
     vec2 derivativeX = dFdx(sampleUv) * size;
     vec2 derivativeY = dFdy(sampleUv) * size;
-    vec2 footprint = vec2(length(vec2(derivativeX.x, derivativeY.x)),
-                          length(vec2(derivativeX.y, derivativeY.y)));
+    vec2 footprint = pixelGridAligned != 0
+        ? extent / ubuf.viewportSize
+        : vec2(length(vec2(derivativeX.x, derivativeY.x)),
+               length(vec2(derivativeX.y, derivativeY.y)));
     if (max(footprint.x, footprint.y) <= 1.0001)
         return encodeFilteredColor(magnify(uv * extent - 0.5, size),
                                    uv * ubuf.viewportSize);
@@ -360,15 +420,37 @@ vec4 resample(vec2 uv)
     vec2 phase = position - base;
     vec4 total = vec4(0.0);
     float totalWeight = 0.0;
+#if defined(ZOIN_VIDEO_SHADER) && !defined(ZOIN_REFERENCE_SAMPLING)
+    // Horizontal coefficients are identical in every row. Compute them once,
+    // preserving the original expression and nonzero accumulation order.
+    float xWeights[8];
+    for (int x = -3; x <= 4; ++x) {
+        float dx = float(x) - phase.x;
+        xWeights[x + 3] = footprint.x <= 1.0001 ? max(0.0, 1.0 - abs(dx))
+                                               : kernel(dx * scale.x);
+    }
+#endif
     for (int y = -3; y <= 4; ++y) {
         float dy = float(y) - phase.y;
         float wy = footprint.y <= 1.0001 ? max(0.0, 1.0 - abs(dy))
                                          : kernel(dy * scale.y);
+#if defined(ZOIN_VIDEO_SHADER) && !defined(ZOIN_REFERENCE_SAMPLING)
+        if (wy == 0.0)
+            continue;
+#endif
         for (int x = -3; x <= 4; ++x) {
+#if defined(ZOIN_VIDEO_SHADER) && !defined(ZOIN_REFERENCE_SAMPLING)
+            float wx = xWeights[x + 3];
+#else
             float dx = float(x) - phase.x;
             float wx = footprint.x <= 1.0001 ? max(0.0, 1.0 - abs(dx))
                                              : kernel(dx * scale.x);
+#endif
             float weight = wy * wx;
+#if defined(ZOIN_VIDEO_SHADER) && !defined(ZOIN_REFERENCE_SAMPLING)
+            if (weight == 0.0)
+                continue;
+#endif
             vec2 pixel = clamp(base + vec2(x, y), vec2(0.0), size - 1.0);
             // Fetch before transfer decoding, without bilinear interpolation
             // in encoded values or an implicit mip selection.
@@ -382,8 +464,22 @@ vec4 resample(vec2 uv)
 
 void main()
 {
-    vec4 color = resample(qt_TexCoord0);
-    vec2 position = qt_TexCoord0 * ubuf.viewportSize;
+#ifdef ZOIN_LINEAR_VIDEO_PASS
+    // An offscreen source-data pass at exactly one texel per display pixel:
+    // no output transfer function, dithering, presentation fade or filtering.
+    ivec2 size = ivec2(ubuf.videoFrameSize + 0.5);
+    ivec2 pixel = clamp(ivec2(floor(qt_TexCoord0 * vec2(size))), ivec2(0), size - 1);
+    fragColor = linearSample(pixel);
+#else
+    // Aligned vertices guarantee an exact physical-pixel grid. Recover its
+    // centers instead of retaining projection-dependent interpolation noise;
+    // direct and cached passes must evaluate the same filter coordinates.
+    // Motion and intermediate passes keep their existing continuous sampling.
+    vec2 uv = pixelGridAligned != 0
+        ? (floor(qt_TexCoord0 * ubuf.viewportSize) + 0.5) / ubuf.viewportSize
+        : qt_TexCoord0;
+    vec4 color = resample(uv);
+    vec2 position = uv * ubuf.viewportSize;
     if (ubuf.showCheckerboard) {
         vec2 cell = floor((position + ubuf.checkerboardOffset)
                           / float(max(ubuf.checkerboardSize, 1)));
@@ -399,4 +495,5 @@ void main()
     }
     // Pyramid texels are image data, independent of presentation fades.
     fragColor = color * (ubuf.intermediate ? 1.0 : ubuf.qt_Opacity);
+#endif
 }

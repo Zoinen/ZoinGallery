@@ -2658,13 +2658,20 @@ void ViewerResampleGpuTest::decodedVideoReusesPresentation() {
 
 void ViewerResampleGpuTest::decodedVideoResampleBenchmark_data() {
     QTest::addColumn<QSize>("targetSize");
-    QTest::newRow("direct") << QSize(2560, 1440);
-    QTest::newRow("windowed-pyramid") << QSize(1538, 866);
-    QTest::newRow("quarter-pyramid") << QSize(960, 540);
+    QTest::addColumn<bool>("cachePresentation");
+    QTest::addColumn<int>("expectedLevels");
+    QTest::newRow("direct-cache") << QSize(2560, 1440) << true << 0;
+    QTest::newRow("direct-no-presentation-cache") << QSize(2560, 1440) << false << 0;
+    QTest::newRow("windowed-cache") << QSize(1538, 866) << true << 0;
+    QTest::newRow("windowed-no-presentation-cache") << QSize(1538, 866) << false << 0;
+    QTest::newRow("quarter-pyramid-cache") << QSize(960, 540) << true << 2;
+    QTest::newRow("quarter-pyramid-no-presentation-cache") << QSize(960, 540) << false << 2;
 }
 
 void ViewerResampleGpuTest::decodedVideoResampleBenchmark() {
     QFETCH(QSize, targetSize);
+    QFETCH(bool, cachePresentation);
+    QFETCH(int, expectedLevels);
     const QString path = qEnvironmentVariable("ZOIN_VIDEO_GPU_FILE");
     if (path.isEmpty())
         QSKIP("Set ZOIN_VIDEO_GPU_FILE to a 4K clip for fresh-frame resampling timings");
@@ -2703,6 +2710,7 @@ void ViewerResampleGpuTest::decodedVideoResampleBenchmark() {
     BenchmarkDrawTraceSilencer silenceDraws;
     qInfo() << "Fresh 4K video benchmark" << decoded.size() << "format" << decoded.pixelFormat()
             << "target" << targetSize << "DPR" << dpr
+            << "presentation cache" << cachePresentation
             << "warmup" << warmupCount << "samples" << sampleCount;
     for (const QByteArray &mode : {QByteArray("1"), QByteArray("0"), QByteArray()}) {
         ScopedEnvironmentVariable selection("F4_VIEWER_RESAMPLE_REFERENCE", mode);
@@ -2710,14 +2718,20 @@ void ViewerResampleGpuTest::decodedVideoResampleBenchmark() {
         GpuFixture fixture;
         QVERIFY2(fixture.initialize(fallback, targetSize, dpr), qPrintable(fixture.error));
         QVERIFY(fixture.filtered()->setProperty("pixelAligned", true));
+        QVERIFY(fixture.filtered()->setProperty("cacheVideoPresentation", cachePresentation));
         QVERIFY(fixture.filtered()->setProperty("videoFrameSource",
             QVariant::fromValue(static_cast<QObject *>(&source))));
         auto *sink = qobject_cast<QVideoSink *>(source.sink());
         QVERIFY(sink);
         // Settle scene construction and pipeline creation without consuming
-        // any of the measured revisions. The paused cache remains enabled.
+        // any of the measured revisions.
         sink->setVideoFrame(frames.front());
         QVERIFY2(!fixture.render().isNull(), qPrintable(fixture.error));
+        QCOMPARE(fixture.filtered()->property("presentationCacheEligible").toBool(),
+                 cachePresentation);
+        QCOMPARE(fixture.filtered()->property("preferDirectVideoSampling").toBool(),
+                 targetSize == QSize(1538, 866));
+        QCOMPARE(fixture.filtered()->property("requiredLevels").toInt(), expectedLevels);
         for (int index = 1; index < warmupCount; ++index) {
             const quint64 before = source.revision();
             sink->setVideoFrame(frames[index]);
@@ -2774,6 +2788,7 @@ void ViewerResampleGpuTest::decodedVideoResampleBenchmark() {
         const QByteArray label = mode == "1" ? QByteArray("reference=1")
             : (mode.isNull() ? QByteArray("optimized=unset") : QByteArray("optimized=0"));
         qInfo().noquote() << "Fresh 4K sync render+readback" << label
+                         << (cachePresentation ? "presentation-cache" : "direct-presentation")
                          << "device" << fixture.deviceName()
                          << "linear samples/revision" << (conversionExpected ? 1 : 0)
                          << "median ms" << summary.medianMs << "p95 ms" << summary.p95Ms

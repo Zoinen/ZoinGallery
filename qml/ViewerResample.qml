@@ -92,8 +92,19 @@ ViewerResampleEffect {
     readonly property string imageKey: videoFrameSource
         && videoFrameSource.hasFrame ? "video-frame-source"
         : (imageSource ? imageSource.source.toString() : "")
-    readonly property int requiredLevels: hardwareSampling || nearestNeighbor ? 0 : levelForSize(imagePixelSize,
-                                                       viewportSize)
+    readonly property int naturalLevels: levelForSize(imagePixelSize, viewportSize)
+    readonly property bool preferDirectVideoSampling: {
+        if (!videoFrameSource || !videoFrameSource.hasFrame || naturalLevels !== 1)
+            return false
+        // A single pyramid level adds a full render pass. For moderate video
+        // reductions a single wider filter is cheaper; retain pyramids for
+        // deeper reductions where they substantially shrink the filter footprint.
+        const scaleX = imagePixelSize.width / viewportSize.width
+        const scaleY = imagePixelSize.height / viewportSize.height
+        return scaleX <= 2.6 && scaleY <= 2.6
+    }
+    readonly property int requiredLevels: hardwareSampling || nearestNeighbor
+        || preferDirectVideoSampling ? 0 : naturalLevels
     property int retainedLevels: 0
     property int pyramidRevision: 0
 

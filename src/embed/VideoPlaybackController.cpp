@@ -44,6 +44,7 @@ public slots:
         // new player decoding audio buffers without sending them to the device.
         m_audio = new QAudioOutput(this);
         m_player = new QMediaPlayer(this);
+        m_player->setLoops(m_looping ? QMediaPlayer::Infinite : QMediaPlayer::Once);
         m_sink = new QVideoSink(this);
         m_player->setAudioOutput(m_audio);
         m_player->setVideoSink(m_sink);
@@ -250,6 +251,31 @@ public slots:
         m_player->setPosition(std::clamp(positionMs, qint64(0), m_duration));
     }
 
+    void setLooping(bool looping) {
+        m_looping = looping;
+        if (!m_player) {
+            return;
+        }
+        const bool ended = m_player->mediaStatus() == QMediaPlayer::EndOfMedia;
+        m_player->setLoops(looping ? QMediaPlayer::Infinite : QMediaPlayer::Once);
+        if (m_duration > 0) {
+            // A short clip can already be fully demuxed while it is still
+            // playing. Re-arm the decoder at the current position when the
+            // setting changes; subsequent boundaries use the native loop queue.
+            // This also drops prefetched repeats when looping is disabled.
+            m_player->setPosition(ended && looping ? 0 : m_player->position());
+        }
+        if (looping && ended) {
+            m_state = QStringLiteral("ready");
+            if (m_visible) {
+                m_player->play();
+            } else {
+                m_resumeWhenVisible = true;
+            }
+        }
+        publishSnapshot();
+    }
+
     void setMuted(bool muted) {
         m_muted = muted;
         if (m_audio) {
@@ -451,6 +477,7 @@ private:
     qint64 m_duration = 0;
     qreal m_volume = 1.0;
     bool m_playing = false;
+    bool m_looping = false;
     bool m_muted = true;
     bool m_visible = true;
     bool m_autoStart = false;
@@ -560,6 +587,15 @@ void VideoPlaybackController::seekTo(qint64 positionMs) {
         QMetaObject::invokeMethod(m_worker, "seekTo", Qt::QueuedConnection,
                                   Q_ARG(qint64, positionMs));
     }
+}
+
+void VideoPlaybackController::toggleLoop() {
+    m_looping = !m_looping;
+    if (m_worker) {
+        QMetaObject::invokeMethod(m_worker, "setLooping", Qt::QueuedConnection,
+                                  Q_ARG(bool, m_looping));
+    }
+    emit changed();
 }
 
 void VideoPlaybackController::toggleMute() {

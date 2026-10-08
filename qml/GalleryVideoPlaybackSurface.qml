@@ -183,7 +183,7 @@ Item {
                 root.alignedOrigin(controlsBar, root.snap(56), root.snap(2))
             x: alignedPosition.x
             y: alignedPosition.y
-            width: root.snap(Math.max(48, root.width - 192))
+            width: root.snap(Math.max(48, root.width - 234))
             height: root.snap(27)
             enabled: root.controller && root.controller.duration > 0
 
@@ -253,7 +253,7 @@ Item {
                 x: timeText.alignedPosition.x - timeText.x
                 y: timeText.alignedPosition.y - timeText.y
             }
-            width: root.snap(Math.max(48, root.width - 192))
+            width: root.snap(Math.max(48, root.width - 234))
             height: root.snap(18)
             text: root.formatTime(root.controller ? root.controller.position : 0)
                   + " / "
@@ -266,10 +266,49 @@ Item {
         }
 
         Rectangle {
+            id: loopButton
+            objectName: "galleryVideoLoopButton"
+            readonly property point alignedPosition:
+                root.alignedOrigin(controlsBar, root.snap(root.width - 46), root.snap(11))
+            x: alignedPosition.x
+            y: alignedPosition.y
+            width: root.snap(36)
+            height: root.snap(36)
+            radius: root.snap(5)
+            color: loopTap.pressed ? "#48515b"
+                   : root.controller && root.controller.looping ? "#285e87" : "#30343a"
+            Accessible.role: Accessible.CheckBox
+            Accessible.name: qsTr("Loop video")
+            Accessible.checked: root.controller ? root.controller.looping : false
+
+            TapHandler {
+                id: loopTap
+                objectName: "galleryVideoLoopTap"
+                onTapped: root.controller.toggleLoop()
+            }
+
+            Image {
+                objectName: "galleryVideoLoopButtonIcon"
+                readonly property point alignedPosition:
+                    root.alignedOrigin(loopButton,
+                        (loopButton.width - width) / 2,
+                        (loopButton.height - height) / 2)
+                x: alignedPosition.x
+                y: alignedPosition.y
+                width: root.snap(18)
+                height: root.snap(18)
+                source: root.iconSources && root.iconSources.loop ? root.iconSources.loop : ""
+                fillMode: Image.PreserveAspectFit
+                smooth: false
+                mipmap: false
+            }
+        }
+
+        Rectangle {
             id: muteButton
             objectName: "galleryVideoMuteButton"
             readonly property point alignedPosition:
-                root.alignedOrigin(controlsBar, root.snap(root.width - 130), root.snap(11))
+                root.alignedOrigin(controlsBar, root.snap(root.width - 172), root.snap(11))
             x: alignedPosition.x
             y: alignedPosition.y
             width: root.snap(36)
@@ -311,7 +350,7 @@ Item {
             id: volumeControl
             objectName: "galleryVideoVolumeControl"
             readonly property point alignedPosition:
-                root.alignedOrigin(controlsBar, root.snap(root.width - 88), root.snap(7))
+                root.alignedOrigin(controlsBar, root.snap(root.width - 130), root.snap(7))
             x: alignedPosition.x
             y: alignedPosition.y
             width: root.snap(78)

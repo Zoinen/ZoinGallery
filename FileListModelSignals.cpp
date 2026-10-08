@@ -10,7 +10,11 @@ void normalizeVideoImageInfo(ImageInfo &info, const ImageFile *item) {
     // cannot carry the decoder kind. Recover it from the stable local name so
     // a cache hit cannot route a video into ThumbnailLoader as a still image.
     info.thumbnailKind = QStringLiteral("video");
-    info.imageSize = QSize(16, 9);
+    if (!info.imageSize.isValid() || info.imageSize == QSize(16, 9)) {
+        const QSize knownSize = item->info().imageSize;
+        info.imageSize = knownSize.isValid() && knownSize != QSize(16, 9)
+            ? knownSize : QSize(16, 9);
+    }
     info.orientation = ExifOrientation::Horizontal;
 }
 
@@ -370,6 +374,20 @@ void FileListModel::connectImageReadySignal() {
         auto it = _fileToItem.find(request.info.path);
         if (it != _fileToItem.end()) {
             ImageFile *item = it.value();
+            if (item->isVideoThumbnail()
+                && isCurrentFileVersion(item, request.info)) {
+                ImageInfo info = request.info;
+                if (!info.imageSize.isValid() || info.imageSize == QSize(16, 9)) {
+                    const QSize knownSize = item->info().imageSize;
+                    info.imageSize = knownSize.isValid() && knownSize != QSize(16, 9)
+                        ? knownSize : image.size();
+                }
+                info.orientation = ExifOrientation::Horizontal;
+                item->setInfo(info);
+                item->setFullSize(info.imageSize);
+                emit dataChanged(index(item->index(), 0), index(item->index(), 0),
+                                 {ImageFullSizeRole});
+            }
             if (request.videoPosterRequest) {
                 if (!item->isVideoThumbnail()
                     || !isCurrentFileVersion(item, request.info)) {

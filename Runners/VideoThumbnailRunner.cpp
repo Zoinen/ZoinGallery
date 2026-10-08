@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QIODevice>
 #include <QMediaPlayer>
+#include <QMediaFormat>
 #include <QPainter>
 #include <QTimer>
 #include <QUrl>
@@ -18,6 +19,7 @@
 #include <QVideoSink>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <memory>
@@ -26,7 +28,7 @@
 
 namespace {
 
-constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-v3";
+constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-display-v4";
 constexpr auto VideoPosterTransform = "video-first-frame-poster-1024-display-v3";
 constexpr int VideoFrameCount = 4;
 constexpr int VideoPosterMaxLongEdge = 1024;
@@ -35,7 +37,12 @@ constexpr int VideoLoadTimeoutMs = 15000;
 constexpr qint64 RangeSourceReadChunkSize = 1024 * 1024;
 
 QImage composeContactSheet(const QList<QImage> &frames, const QSize &target) {
-    const QSize canvasSize(qMax(2, target.width()), qMax(2, target.height()));
+    const auto firstFrame = std::find_if(frames.cbegin(), frames.cend(),
+        [](const QImage &frame) { return !frame.isNull(); });
+    if (firstFrame == frames.cend())
+        return {};
+    const QSize fittedSize = firstFrame->size().scaled(target, Qt::KeepAspectRatio);
+    const QSize canvasSize(qMax(2, fittedSize.width()), qMax(2, fittedSize.height()));
     QImage canvas(canvasSize, QImage::Format_ARGB32_Premultiplied);
     canvas.fill(Qt::black);
 
@@ -101,6 +108,34 @@ QVariantMap videoTraceFields(const ImageDecodeRequest &request) {
 
 } // namespace
 
+QVariantMap VideoThumbnailRunner::fileFieldsForMetadata(
+    const QMediaMetaData &metadata, qint64 durationMs, qint64 fileSize) {
+    QVariantMap fields;
+    const auto number = [&](const QString &id, double value) {
+        if (std::isfinite(value) && value > 0) fields.insert(id, value);
+    };
+    if (durationMs > 0) {
+        number(QStringLiteral("media.duration"), double(durationMs) / 1000);
+        number(QStringLiteral("media.bitrate"), double(fileSize) * 8000 / durationMs);
+    }
+    number(QStringLiteral("video.bitrate"), metadata.value(QMediaMetaData::VideoBitRate).toDouble());
+    number(QStringLiteral("audio.bitrate"), metadata.value(QMediaMetaData::AudioBitRate).toDouble());
+    number(QStringLiteral("video.frame_rate"), metadata.value(QMediaMetaData::VideoFrameRate).toDouble());
+    for (const auto &entry : {std::pair{QMediaMetaData::FileFormat, "media.format"},
+                             std::pair{QMediaMetaData::VideoCodec, "video.codec"},
+                             std::pair{QMediaMetaData::AudioCodec, "audio.codec"}}) {
+        const auto value = metadata.value(entry.first);
+        const QString text = metadata.stringValue(entry.first).trimmed();
+        if (value.isValid() && value.toInt() >= 0 && !text.isEmpty())
+            fields.insert(QString::fromLatin1(entry.second), text);
+    }
+    const QSize resolution = metadata.value(QMediaMetaData::Resolution).toSize();
+    if (resolution.width() > 0 && resolution.height() > 0)
+        fields.insert(QStringLiteral("video.resolution"),
+                      QStringLiteral("%1×%2").arg(resolution.width()).arg(resolution.height()));
+    return fields;
+}
+
 QVector<qint64> VideoThumbnailRunner::thumbnailPositions(qint64 duration) {
     if (duration <= 0) {
         return {};
@@ -163,6 +198,8 @@ void VideoThumbnailRunner::run() {
 
     const bool sheetCacheHit = PersistentDerivedImageCache::waitForLookup(
         _derivedLookupGate, _cancellation);
+    if (_request.checkCache && !_request.info.fileFieldsRead)
+        PersistentDerivedImageCache::retrieveMetadata(_request.info);
     ImageDecodeRequest posterRequest = videoPosterRequestFor(_request);
     QImage poster = PersistentImageCache::retrieveImage(posterRequest);
     const bool posterCacheHit = !poster.isNull();
@@ -177,12 +214,13 @@ void VideoThumbnailRunner::run() {
     }
     const bool needPoster = !posterCacheHit;
     const bool needSheet = !sheetCacheHit;
+    const bool needMetadata = !_request.info.fileFieldsRead;
     if (_cancellation->isCanceled() || isCanceled()) {
         span.set(QStringLiteral("outcome"), QStringLiteral("cancelled"));
         emit finished(this);
         return;
     }
-    if (!needPoster && !needSheet) {
+    if (!needPoster && !needSheet && !needMetadata) {
         span.set(QStringLiteral("outcome"),
                  _request.info.source.isValid()
                      ? QStringLiteral("derived-cache-satisfied")
@@ -319,9 +357,7 @@ void VideoThumbnailRunner::run() {
             return;
         }
         const Capture capture = captures.at(currentCapture);
-        const QImage image = capture.poster
-            ? ZoinGallery::VideoFrameGeometry::displayImage(videoFrame)
-            : videoFrame.toImage();
+        const QImage image = ZoinGallery::VideoFrameGeometry::displayImage(videoFrame);
         if (image.isNull()) {
             return;
         }
@@ -333,6 +369,8 @@ void VideoThumbnailRunner::run() {
             posterViewport =
                 ZoinGallery::VideoFrameGeometry::visibleViewport(videoFrame);
             posterFrameSize = image.size();
+            posterRequest.info.imageSize = image.size();
+            posterRequest.info.orientation = ExifOrientation::Horizontal;
             poster = scaleVideoPoster(image);
             posterCaptured = !poster.isNull();
         } else if (capture.sheetIndex >= 0
@@ -402,6 +440,30 @@ void VideoThumbnailRunner::run() {
         frames.cbegin(), frames.cend(), [](const QImage &image) {
             return !image.isNull();
         }));
+    if (duration > 0) {
+        auto metadata = player.metaData();
+        const auto appendTrack = [&](const QList<QMediaMetaData> &tracks, int active) {
+            if (active < 0 && !tracks.isEmpty()) active = 0;
+            if (active < 0 || active >= tracks.size()) return;
+            for (const auto key : tracks.at(active).keys())
+                metadata.insert(key, tracks.at(active).value(key));
+        };
+        appendTrack(player.videoTracks(), player.activeVideoTrack());
+        appendTrack(player.audioTracks(), player.activeAudioTrack());
+        ImageInfo info = _request.info;
+        info.typedFileFields = fileFieldsForMetadata(metadata, duration,
+            info.source.isValid() ? info.source.size : QFileInfo(sourcePath).size());
+        const QSize resolution = metadata.value(QMediaMetaData::Resolution).toSize();
+        if (resolution.isValid()) info.imageSize = resolution;
+        else if (posterFrameSize.isValid()) info.imageSize = posterFrameSize;
+        info.fileFieldsRead = true;
+        if (_request.storeInPersistentCache) PersistentDerivedImageCache::storeMetadata(info);
+        emit imageInfoReady(info);
+        posterRequest.info.typedFileFields = info.typedFileFields;
+        posterRequest.info.fileFieldsRead = true;
+        _request.info.typedFileFields = info.typedFileFields;
+        _request.info.fileFieldsRead = true;
+    }
     if (needPoster && posterCaptured) {
         const qreal sourceAspect = posterFrameSize.height() > 0
             ? qreal(posterFrameSize.width()) / posterFrameSize.height() : 0;
@@ -464,15 +526,28 @@ void VideoThumbnailRunner::run() {
             }
         }
         const QImage sheet = composeContactSheet(frames, _request.targetSize);
+        ImageDecodeRequest sheetRequest = _request;
+        sheetRequest.info.imageSize = fallback.size();
+        sheetRequest.info.orientation = ExifOrientation::Horizontal;
+        if (_request.storeInPersistentCache)
+            PersistentDerivedImageCache::storeMetadata(sheetRequest.info);
+        ZoinGallery::MediaTimingTrace::event(
+            QStringLiteral("qt.gallery.video_thumbnail.aspect"),
+            ZoinGallery::MediaTimingTrace::mergedFields(fields,
+                {{QStringLiteral("fix"), QStringLiteral("[FIX:video-thumbnail-aspect]")},
+                 {QStringLiteral("displayWidth"), fallback.width()},
+                 {QStringLiteral("displayHeight"), fallback.height()},
+                 {QStringLiteral("outputWidth"), sheet.width()},
+                 {QStringLiteral("outputHeight"), sheet.height()}}));
         DecodedImageInfo decodedInfo;
         decodedInfo.decoderUsed = QStringLiteral("QtMultimedia/FFmpeg");
         decodedInfo.previewUsed = QStringLiteral("video-contact-sheet-2x2");
-        emit imageReady(_request, sheet, decodedInfo);
+        emit imageReady(sheetRequest, sheet, decodedInfo);
         if (_request.storeInPersistentCache) {
             const QByteArray data = PersistentImageCache::createImageForCache(
-                _request, sheet);
+                sheetRequest, sheet);
             if (!data.isEmpty()) {
-                emit storeInCache(_request, data);
+                emit storeInCache(sheetRequest, data);
             }
         }
         span.set(QStringLiteral("outputWidth"), sheet.width());

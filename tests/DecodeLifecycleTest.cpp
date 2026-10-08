@@ -6,6 +6,7 @@
 #include "ProviderImageStore.h"
 #if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
 #include "Runners/VideoThumbnailRunner.h"
+#include <QMediaFormat>
 #endif
 #include "SelectedImagesModel.h"
 #if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
@@ -96,6 +97,27 @@ class DecodeLifecycleTest : public QObject {
 
 private slots:
 #if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    void videoFileFieldsKeepTrackBitratesSeparate() {
+        QMediaMetaData metadata;
+        metadata.insert(QMediaMetaData::FileFormat, QVariant::fromValue(QMediaFormat::MPEG4));
+        metadata.insert(QMediaMetaData::VideoCodec, QVariant::fromValue(QMediaFormat::VideoCodec::H264));
+        metadata.insert(QMediaMetaData::AudioCodec, QVariant::fromValue(QMediaFormat::AudioCodec::AAC));
+        metadata.insert(QMediaMetaData::VideoBitRate, 1500000);
+        metadata.insert(QMediaMetaData::AudioBitRate, 128000);
+        metadata.insert(QMediaMetaData::Resolution, QSize(1920, 1080));
+        metadata.insert(QMediaMetaData::VideoFrameRate, 29.97);
+        const auto fields = VideoThumbnailRunner::fileFieldsForMetadata(metadata, 12500, 2500000);
+        QCOMPARE(fields.value("media.duration").toDouble(), 12.5);
+        QCOMPARE(fields.value("media.bitrate").toDouble(), 1600000.0);
+        QCOMPARE(fields.value("video.bitrate").toDouble(), 1500000.0);
+        QCOMPARE(fields.value("audio.bitrate").toDouble(), 128000.0);
+        QCOMPARE(fields.value("video.resolution").toString(), QString("1920×1080"));
+        QCOMPARE(fields.value("video.frame_rate").toDouble(), 29.97);
+        QVERIFY(!fields.value("video.codec").toString().isEmpty());
+        QVERIFY(!fields.value("audio.codec").toString().isEmpty());
+        QVERIFY(!fields.value("media.format").toString().isEmpty());
+        QVERIFY(VideoThumbnailRunner::fileFieldsForMetadata({}, 0, 0).isEmpty());
+    }
     void videoThumbnailPositionsUseInteriorQuintiles() {
         QCOMPARE(VideoThumbnailRunner::thumbnailPositions(10000),
                  QVector<qint64>({2000, 4000, 6000, 8000}));

@@ -3,6 +3,7 @@
 #include "Decoders/WebpCodec.h"
 #include "DisplayColorSpace.h"
 #include "StorageLocations.h"
+#include "FolderPreviewSelection.h"
 
 #include <QCryptographicHash>
 #include <QCache>
@@ -218,7 +219,8 @@ MetadataKey metadataKeyForInfo(const ImageInfo &info) {
         .authorityResourceId = hasSessionVersionStrength(info)
             ? info.source.resourceId : QString{},
         .sourceSize = info.source.size,
-        .schema = QString::fromLatin1(MetadataSchema),
+        .schema = isVideoPreviewFormat(info.formatHint())
+            ? QStringLiteral("video-metadata-v1") : QString::fromLatin1(MetadataSchema),
     };
 }
 
@@ -415,7 +417,7 @@ bool parseMetadataEntry(const QByteArray &entry, MetadataKey &key,
     if (stream.status() != QDataStream::Ok ||
         magic != MetadataFileMagic || version != MetadataFileVersion ||
         !key.isValid() ||
-        key.schema != QString::fromLatin1(MetadataSchema) ||
+        (key.schema != QString::fromLatin1(MetadataSchema) && key.schema != QStringLiteral("video-metadata-v1")) ||
         !imageSize.isValid() || imageSize.width() <= 0 ||
         imageSize.height() <= 0 ||
         orientationValue < ExifOrientation::Horizontal ||

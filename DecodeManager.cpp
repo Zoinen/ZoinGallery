@@ -627,6 +627,8 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
             auto *videoRunner = new VideoThumbnailRunner(
                 request, _imageSourceProvider);
             videoRunner->connections.append({
+                connect(videoRunner, &VideoThumbnailRunner::imageInfoReady,
+                        this, &DecodeManager::onImageInfoReady),
                 connect(videoRunner, &VideoThumbnailRunner::imageReady,
                         this, &DecodeManager::onImageReady),
                 connect(videoRunner, &VideoThumbnailRunner::imageReadFailed,

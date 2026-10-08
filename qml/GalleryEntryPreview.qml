@@ -299,9 +299,10 @@ Item {
             objectName: videoPlayBadge.visible
                         ? "galleryVideoPlayIcon-"
                           + preview.entry.viewIndex : ""
-            readonly property point pixelGridOffset:
-                preview.entry.iconPixelOffset(videoPlayGlyph)
-            anchors.centerIn: parent
+            x: Math.round((parent.width - width) * preview.entry.renderDpr / 2)
+               / preview.entry.renderDpr
+            y: Math.round((parent.height - height) * preview.entry.renderDpr / 2)
+               / preview.entry.renderDpr
             width: videoPlayBadge.glyphExtent
             height: width
             source: !videoPlayBadge.visible || !Window.window
@@ -314,10 +315,6 @@ Item {
             retainWhileLoading: true
             smooth: true
             mipmap: false
-            transform: Translate {
-                x: videoPlayGlyph.pixelGridOffset.x
-                y: videoPlayGlyph.pixelGridOffset.y
-            }
         }
     }
 }

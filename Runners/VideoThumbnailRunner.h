@@ -7,6 +7,7 @@
 #include <QSharedPointer>
 #include <QSize>
 #include <QVector>
+#include <QMediaMetaData>
 
 class VideoThumbnailRunner final : public Runner {
     Q_OBJECT
@@ -22,6 +23,8 @@ public:
     static QVector<qint64> thumbnailPositions(qint64 duration);
     static QVector<qint64> capturePositions(qint64 duration);
     static QSize posterSizeFor(const QSize &frameSize);
+    static QVariantMap fileFieldsForMetadata(const QMediaMetaData &metadata,
+                                            qint64 durationMs, qint64 fileSize);
 
     RunnerType type() override { return RunnerType::ImageRead; }
     void run() override;
@@ -46,6 +49,7 @@ public:
     const ImageDecodeRequest &request() const { return _request; }
 
 signals:
+    void imageInfoReady(const ImageInfo &info);
     void imageReady(const ImageDecodeRequest &request, const QImage &image,
                     const DecodedImageInfo &decodedInfo);
     void imageReadFailed(const ImageDecodeRequest &request);

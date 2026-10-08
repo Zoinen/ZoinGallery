@@ -18,6 +18,11 @@ void CachedImageRetrieveRunner::run() {
                                                  !img.isNull());
     // qDebug() << "XX REQ" << _request.info.path << img << _request.targetSize;
     if (!img.isNull()) {
+        // A video's cached pixels are display-sized previews. Restore native
+        // dimensions and fields before publishing them into the catalog.
+        if (_request.info.thumbnailKind == QStringLiteral("video")
+            && !_request.info.fileFieldsRead)
+            PersistentDerivedImageCache::retrieveMetadata(_request.info);
         emit cachedThumbnailRetrieved(
             _request, img,
             DecodedImageInfo{

@@ -40,6 +40,8 @@
 #include <QTimeZone>
 #include <QtTest>
 #if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+#include "src/embed/VideoPlaybackController.h"
+#include <QElapsedTimer>
 #include <QAudioBuffer>
 #include <QAudioBufferOutput>
 #include <QAudioOutput>
@@ -1242,6 +1244,122 @@ private slots:
         runtime->shutdown();
     }
 
+    void videoLoopKeepsPlaybackAndFramesContinuous_data() {
+        QTest::addColumn<bool>("enableDuringPlayback");
+        QTest::newRow("enabled-before-open") << false;
+        QTest::newRow("enabled-near-end-while-playing") << true;
+    }
+
+    void videoLoopKeepsPlaybackAndFramesContinuous() {
+        QFETCH(bool, enableDuringPlayback);
+        ZoinGallery::VideoPlaybackController playback({});
+        QTRY_VERIFY_WITH_TIMEOUT(playback.available(), 5000);
+        QVideoSink output;
+        playback.setOutputSink(&output);
+        QVERIFY(!playback.looping());
+        if (!enableDuringPlayback) {
+            playback.toggleLoop();
+            QVERIFY(playback.looping());
+        }
+        playback.openSource({{QStringLiteral("identity"), QStringLiteral("loop-fixture")},
+                             {QStringLiteral("path"), QStringLiteral(ZOIN_TEST_VIDEO_PATH)}},
+                            QStringLiteral("manual"));
+        QTRY_COMPARE_WITH_TIMEOUT(playback.state(), QStringLiteral("ready"), 10000);
+        QTRY_VERIFY(playback.duration() >= 1500);
+
+        QElapsedTimer clock;
+        clock.start();
+        qint64 lastFrameAt = -1;
+        qint64 largestGap = 0;
+        int frames = 0;
+        int blankFrames = 0;
+        int wraps = 0;
+        bool interrupted = false;
+        bool started = false;
+        qint64 previousPosition = 0;
+        connect(&output, &QVideoSink::videoFrameChanged, this,
+                [&](const QVideoFrame &frame) {
+            if (!frame.isValid()) {
+                if (frames > 0)
+                    ++blankFrames;
+                return;
+            }
+            const qint64 now = clock.elapsed();
+            if (lastFrameAt >= 0)
+                largestGap = std::max(largestGap, now - lastFrameAt);
+            lastFrameAt = now;
+            ++frames;
+        });
+        connect(&playback, &ZoinGallery::VideoPlaybackController::changed, this, [&] {
+            started |= playback.playing();
+            if (started && (!playback.playing() || playback.state() == QStringLiteral("ended")))
+                interrupted = true;
+            if (previousPosition > playback.duration() * 3 / 4
+                && playback.position() < playback.duration() / 4)
+                ++wraps;
+            previousPosition = playback.position();
+        });
+        const auto disconnectSignals = qScopeGuard([&] {
+            disconnect(&playback, nullptr, this, nullptr);
+            disconnect(&output, nullptr, this, nullptr);
+        });
+        playback.playPause();
+        if (enableDuringPlayback) {
+            QTRY_VERIFY_WITH_TIMEOUT(playback.position() >= playback.duration() - 350, 5000);
+            QVERIFY(playback.playing());
+            playback.toggleLoop();
+            QVERIFY(playback.looping());
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(wraps >= 3, 10000);
+        QVERIFY(!interrupted);
+        QCOMPARE(blankFrames, 0);
+        QVERIFY(frames >= 48);
+        // The fixture is 12 fps (83 ms/frame). A replay/reload stall or blank
+        // output at a boundary must not hide behind a still-playing state.
+        QVERIFY2(largestGap < 250, qPrintable(QStringLiteral("Frame gap: %1 ms").arg(largestGap)));
+        qInfo() << "Loop boundaries:" << wraps << "frames:" << frames
+                << "maximum frame gap (ms):" << largestGap;
+        disconnect(&playback, nullptr, this, nullptr);
+        disconnect(&output, nullptr, this, nullptr);
+        playback.toggleLoop();
+        QVERIFY(!playback.looping());
+        QTRY_COMPARE_WITH_TIMEOUT(playback.state(), QStringLiteral("ended"), 5000);
+        QVERIFY(!playback.playing());
+    }
+
+    void videoLoopToggleRespectsPausedPlaybackAndResumesEndedPlayback() {
+        ZoinGallery::VideoPlaybackController playback({});
+        QTRY_VERIFY_WITH_TIMEOUT(playback.available(), 5000);
+        playback.openSource({{QStringLiteral("identity"), QStringLiteral("loop-toggle-fixture")},
+                             {QStringLiteral("path"), QStringLiteral(ZOIN_TEST_VIDEO_PATH)}},
+                            QStringLiteral("manual"));
+        QTRY_COMPARE_WITH_TIMEOUT(playback.state(), QStringLiteral("ready"), 10000);
+        QTRY_VERIFY(playback.duration() >= 1500);
+        playback.playPause();
+        QTRY_VERIFY(playback.playing());
+        QTRY_VERIFY(playback.position() >= 250);
+        playback.playPause();
+        QTRY_VERIFY(!playback.playing());
+        const qint64 pausedPosition = playback.position();
+        playback.toggleLoop();
+        QVERIFY(playback.looping());
+        QTest::qWait(250);
+        QVERIFY(!playback.playing());
+        QVERIFY(qAbs(playback.position() - pausedPosition) <= 100);
+        playback.toggleLoop();
+        playback.playPause();
+        QTRY_COMPARE_WITH_TIMEOUT(playback.state(), QStringLiteral("ended"), 5000);
+        QVERIFY(!playback.playing());
+        playback.toggleLoop();
+        QTRY_VERIFY_WITH_TIMEOUT(playback.playing(), 5000);
+        QCOMPARE(playback.state(), QStringLiteral("ready"));
+        QTRY_VERIFY(playback.position() < playback.duration() / 2);
+        // The same selected source continues past another complete duration.
+        QTest::qWait(int(playback.duration()) + 250);
+        QVERIFY(playback.playing());
+        QCOMPARE(playback.state(), QStringLiteral("ready"));
+    }
+
     void videoPlaybackUsesLocalRangeAndMaterializedSources() {
         const QString fixturePath = QStringLiteral(ZOIN_TEST_VIDEO_PATH);
         QVERIFY(QFileInfo::exists(fixturePath));
@@ -1535,6 +1653,173 @@ private slots:
         QVERIFY(device.read(1).isEmpty());
         QCOMPARE(device.errorString(),
                  QStringLiteral("video source read cancelled"));
+    }
+#endif
+
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    void loadedVideoThumbnailsRemainStable() {
+        QTemporaryDir directory;
+        const QString sourceDirectory = qEnvironmentVariable("F4_THUMBNAIL_REPRO_DIR");
+        const QStringList names = sourceDirectory.isEmpty()
+            ? QStringList{"one.mp4", "two.mp4", "three.mp4"}
+            : QStringList{"IMG_20260529_175012.mp4", "IMG_20260529_175416.mp4", "IMG_20260529_180447.mp4"};
+        QVariantList catalog;
+        for (const QString &name : names) {
+            const QString path = QDir(sourceDirectory.isEmpty() ? directory.path() : sourceDirectory).filePath(name);
+            if (sourceDirectory.isEmpty()) {
+                QVERIFY(QFile::copy(QFINDTESTDATA("tests/data/gallery-video-playback.mp4"), path));
+            }
+            const QFileInfo file(path);
+            QVERIFY(file.isFile());
+            auto value = entry(name, catalog.size(), name);
+            value["localPath"] = path;
+            value["size"] = file.size();
+            value["mtimeNs"] = file.lastModified().toMSecsSinceEpoch()*1000000;
+            value["thumbnailKind"] = "video";
+            catalog.append(value);
+        }
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        const auto shutdown = qScopeGuard([&] { runtime->shutdown(); });
+        auto *session = runtime->createExternalSession("stable-loaded-videos");
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        engine.rootContext()->setContextProperty("stableVideoSession", session);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryPanel {
+                width: 900
+                height: 600
+                session: stableVideoSession
+            }
+        )QML", QUrl("inline:StableLoadedVideoPanel.qml"));
+        QTRY_VERIFY_WITH_TIMEOUT(component.status() != QQmlComponent::Loading, 5000);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> panel(component.create());
+        QVERIFY2(panel, qPrintable(component.errorString()));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        QList<ImageFile *> items;
+        for (int row=0; row<catalog.size(); ++row) {
+            auto *item = model->index(row,0).data(FileListModel::ImageFileRole).value<ImageFile *>();
+            QVERIFY(item);
+            QTRY_VERIFY_WITH_TIMEOUT(!item->imageIdUrl().isEmpty() && item->info().fileFieldsRead, 60000);
+            items.append(item);
+        }
+        QTest::qWait(1000);
+        QStringList urls;
+        for (auto *item : items) urls.append(item->imageIdUrl());
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        for (int tick=0; tick<30; ++tick) {
+            QTest::qWait(100);
+            for (int row=0; row<items.size(); ++row) {
+                QCOMPARE(items[row]->imageIdUrl(), urls[row]);
+                QVERIFY(items[row]->info().fileFieldsRead);
+            }
+        }
+        for (const auto &change : changes) {
+            const auto roles = change.at(2).value<QList<int>>();
+            QVERIFY(!roles.contains(FileListModel::ImageFullSizeRole));
+            QVERIFY(!roles.contains(FileListModel::ImageIdUrlRole));
+        }
+    }
+
+    void cachedVideoThumbnailKeepsCompletedMetadataAndGeometry() {
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("stable-video-thumbnail");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        auto video = entry("video", 0, "portrait.mp4");
+        video["thumbnailKind"] = "video";
+        video["contentVersion"] = "video-v1";
+        video["versionStrength"] = "strong";
+        video["sourceKey"] = "stable-video";
+        QVERIFY(session->applyExternalCatalog({video}, 1));
+        auto *item = model->index(0, 0).data(FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(item);
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        ImageDecodeRequest stale{.info = item->info(), .targetSize = QSize(90,160),
+            .requestNamespace = session->sessionId()};
+        stale.thumbnailTransformKey = "video-contact-sheet-2x2-display-v4";
+        ImageInfo complete = stale.info;
+        stale.info.imageSize = QSize(90,160);
+        complete.imageSize = QSize(1080,1920);
+        complete.fileFieldsRead = true;
+        complete.typedFileFields = {{"media.duration", 8.0}};
+        decoder->imageInfoReady(complete);
+        QVERIFY(item->info().fileFieldsRead);
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        QImage sheet(QSize(90,160), QImage::Format_ARGB32_Premultiplied);
+        sheet.fill(Qt::red);
+        decoder->imageReady(stale, sheet, {});
+        QVERIFY(item->info().fileFieldsRead);
+        QCOMPARE(item->info().typedFileFields, complete.typedFileFields);
+        QCOMPARE(item->fullSize(), complete.imageSize);
+        for (const auto &change : changes) {
+            const auto roles = change.at(2).value<QList<int>>();
+            QVERIFY(!roles.contains(FileListModel::ImageFullSizeRole));
+        }
+        // A delayed placeholder from the metadata worker must also leave the
+        // completed video fields and settled geometry intact.
+        changes.clear();
+        decoder->imageInfoReady(stale.info);
+        QVERIFY(item->info().fileFieldsRead);
+        QCOMPARE(item->info().typedFileFields, complete.typedFileFields);
+        QCOMPARE(changes.size(), 0);
+        runtime->shutdown();
+    }
+
+    void portraitVideoPosterGeometrySurvivesMetadataAndCatalogReset() {
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession("portrait-video-geometry");
+        QVERIFY(session);
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        auto video = entry("video", 0, "portrait.mp4");
+        video["thumbnailKind"] = "video";
+        video["contentVersion"] = "portrait-v1";
+        video["versionStrength"] = "strong";
+        video["sourceKey"] = "portrait-source";
+        QVERIFY(session->applyExternalCatalog({video}, 1));
+        auto *item = model->index(0, 0).data(FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(item);
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        ImageDecodeRequest request{
+            .info = item->info(),
+            .targetSize = QSize(1024, 1024),
+            .requestNamespace = session->sessionId(),
+        };
+        request.videoPosterRequest = true;
+        const QSize portraitSize(90, 160);
+        QImage poster(portraitSize, QImage::Format_ARGB32_Premultiplied);
+        poster.fill(Qt::red);
+        decoder->imageReady(request, poster, {});
+        QCOMPARE(model->imageOriginalSizeAt(0), portraitSize);
+        QCOMPARE(item->fullSize(), portraitSize);
+        QCOMPARE(model->index(0, 0).data(FileListModel::ImageFullSizeRole).toSize(),
+                 portraitSize);
+
+        QVERIFY(model->applyMetadata({video}));
+        QCOMPARE(model->imageOriginalSizeAt(0), portraitSize);
+        QCOMPARE(item->fullSize(), portraitSize);
+
+        QVERIFY(session->applyExternalCatalog({video}, 2));
+        item = model->index(0, 0).data(FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(item);
+        QCOMPARE(model->imageOriginalSizeAt(0), portraitSize);
+        QCOMPARE(item->fullSize(), portraitSize);
+        runtime->shutdown();
     }
 #endif
 

@@ -735,13 +735,7 @@ Item {
             }
             const point = galleryLayout.mapFromItem(pointerLayer, x, y)
             const index = galleryLayout.indexAtViewport(point.x, point.y)
-            if (index >= 0) {
-                viewportRoot.panelRoot.handlePointerPress(index, button,
-                                                          modifiers)
-            } else {
-                viewportRoot.panelRoot.forceActiveFocus()
-                viewportRoot.panelRoot.activateRequested()
-            }
+            viewportRoot.panelRoot.handlePointerPress(index, button, modifiers)
         }
         onPrimaryDragged: (x, y) => {
             const point = pointerLayer.mapToItem(

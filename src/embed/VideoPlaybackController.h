@@ -27,6 +27,7 @@ class VideoPlaybackController final : public QObject {
     Q_PROPERTY(qint64 position READ position NOTIFY changed)
     Q_PROPERTY(qint64 duration READ duration NOTIFY changed)
     Q_PROPERTY(bool playing READ playing NOTIFY changed)
+    Q_PROPERTY(bool looping READ looping NOTIFY changed)
     Q_PROPERTY(bool muted READ muted NOTIFY changed)
     Q_PROPERTY(qreal volume READ volume NOTIFY changed)
 
@@ -42,6 +43,7 @@ public:
     qint64 position() const { return m_position; }
     qint64 duration() const { return m_duration; }
     bool playing() const { return m_playing; }
+    bool looping() const { return m_looping; }
     bool muted() const { return m_muted; }
     qreal volume() const { return m_volume; }
 
@@ -51,6 +53,7 @@ public:
     Q_INVOKABLE void playPause();
     Q_INVOKABLE void seekBy(qint64 deltaMs);
     Q_INVOKABLE void seekTo(qint64 positionMs);
+    Q_INVOKABLE void toggleLoop();
     Q_INVOKABLE void toggleMute();
     Q_INVOKABLE void adjustVolume(qreal delta);
     Q_INVOKABLE void setPresentationVisible(bool visible);
@@ -97,6 +100,7 @@ private:
     qint64 m_position = 0;
     qint64 m_duration = 0;
     bool m_playing = false;
+    bool m_looping = false;
     bool m_muted = true;
     bool m_muteOverridden = false;
     qreal m_volume = 1.0;

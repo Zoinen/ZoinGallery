@@ -75,7 +75,8 @@ void ImageInfoReadRunner::run() {
             result.lastModified = fileInfo.lastModified();
         }
         result.thumbnailKind = QStringLiteral("video");
-        result.fileFieldsRead = true;
+        // The thumbnail player's metadata pass supplies the real video fields.
+        result.fileFieldsRead = false;
         result.imageSize = QSize(16, 9);
         result.orientation = ExifOrientation::Horizontal;
         timingSpan.set(QStringLiteral("outcome"),

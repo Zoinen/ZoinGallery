@@ -203,6 +203,26 @@ bool ExternalCatalogModel::applyImageInfoToRow(
         return false;
     }
     ImageInfo currentInfo = info;
+    if (entry.thumbnailKind == QStringLiteral("video")
+        && currentInfo.imageSize == QSize(16, 9)
+        && entry.imageInfo.imageSize.isValid())
+        currentInfo.imageSize = entry.imageInfo.imageSize;
+    // Cache lookups and metadata workers can complete after the video player
+    // has supplied fields for this same source version. An incomplete result
+    // cannot invalidate that completed read or cause another thumbnail decode.
+    if (!currentInfo.fileFieldsRead && entry.imageInfo.fileFieldsRead) {
+        if (entry.thumbnailKind == QStringLiteral("video")) {
+            currentInfo.imageSize = entry.imageInfo.imageSize;
+            currentInfo.orientation = entry.imageInfo.orientation;
+        }
+        currentInfo.fileFieldsRead = true;
+        currentInfo.typedFileFields = entry.imageInfo.typedFileFields;
+    }
+    const QSize originalSize = rotateToOrientation(
+        currentInfo.imageSize, currentInfo.orientation);
+    const bool geometryChanged = !entry.metadataSettled
+        || entry.originalSize != originalSize
+        || entry.imageInfo.orientation != currentInfo.orientation;
     if (entry.mtimeNs != 0) {
         currentInfo.lastModified = QDateTime::fromMSecsSinceEpoch(
             entry.mtimeNs / 1000000, QTimeZone::UTC);
@@ -215,8 +235,7 @@ bool ExternalCatalogModel::applyImageInfoToRow(
     }
     entry.imageInfo = currentInfo;
     entry.metadataSettled = true;
-    entry.originalSize = rotateToOrientation(
-        currentInfo.imageSize, currentInfo.orientation);
+    entry.originalSize = originalSize;
     MediaTimingTrace::event(
         QStringLiteral("qt.gallery.metadata.applied"), {
             {QStringLiteral("sessionId"), _sessionId},
@@ -228,6 +247,11 @@ bool ExternalCatalogModel::applyImageInfoToRow(
     if (entry.item) {
         entry.item->setInfo(entry.imageInfo);
         entry.item->setFullSize(entry.originalSize);
+    }
+    // Repeated metadata with identical geometry must not invalidate the
+    // committed thumbnail layout or send it through another rewrap pass.
+    if (!geometryChanged) {
+        return true;
     }
     state.allChangedMetadataCached =
         state.allChangedMetadataCached && currentInfo.isCached;
@@ -336,6 +360,18 @@ void ExternalCatalogModel::handleImageReady(
         authorityRows, request);
     if (decodedRows.isEmpty()) {
         return;
+    }
+    if (request.info.thumbnailKind == QStringLiteral("video")) {
+        ImageInfo info = request.info;
+        if (!info.imageSize.isValid() || info.imageSize == QSize(16, 9)) {
+            const QSize knownSize = loadedEntry(decodedRows.constFirst()).imageInfo.imageSize;
+            info.imageSize = knownSize.isValid() && knownSize != QSize(16, 9)
+                ? knownSize : image.size();
+        }
+        info.orientation = ExifOrientation::Horizontal;
+        info.requestNamespace = _sessionId;
+        info.isLast = true;
+        handleImageInfo(info);
     }
     if (request.viewerRequest) {
         publishViewerImage(decodedRows, request, image, decodedInfo);

@@ -517,6 +517,41 @@ private slots:
     }
 
 #if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    void portraitVideoContactSheetKeepsDisplayAspectRatio() {
+        const QString fixture = QFINDTESTDATA("data/video-thumbnail-portrait.mp4");
+        QVERIFY(!fixture.isEmpty());
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("portrait.mp4");
+        QVERIFY(QFile::copy(fixture, path));
+        ImageDecodeRequest request;
+        request.info.path = path;
+        request.info.lastModified = QFileInfo(path).lastModified();
+        request.info.fileSize = QFileInfo(path).size();
+        request.info.imageSize = QSize(16, 9);
+        request.info.thumbnailKind = QStringLiteral("video");
+        request.targetSize = QSize(320, 180);
+        request.checkCache = false;
+        request.storeInPersistentCache = false;
+        VideoThumbnailRunner runner(request);
+        QImage sheet;
+        connect(&runner, &VideoThumbnailRunner::imageReady, this,
+                [&](const ImageDecodeRequest &ready, const QImage &image,
+                    const DecodedImageInfo &) {
+            if (!ready.videoPosterRequest)
+                sheet = image;
+        });
+        runner.run();
+        QVERIFY(!sheet.isNull());
+        QVERIFY2(qAbs(qreal(sheet.width()) / sheet.height() - 9.0 / 16.0)
+                     < 0.01, qPrintable(QStringLiteral("sheet is %1x%2")
+                         .arg(sheet.width()).arg(sheet.height())));
+        QVERIFY(sheet.width() <= 320 && sheet.height() <= 180);
+        // A solid frame must reach both edges of each cell, without bars.
+        QVERIFY(sheet.pixelColor(0, 0).red() > 200);
+        QVERIFY(sheet.pixelColor(sheet.width() - 1, sheet.height() - 1).red() > 200);
+    }
+
     void decodedVideoPosterSizeIsIndependentOfPanelSize() {
         const QString fixture = QFINDTESTDATA("data/video-poster-1280x720.mp4");
         QVERIFY(!fixture.isEmpty());
@@ -569,6 +604,88 @@ private slots:
             cachedPosterExpected = true;
         }
     }
+
+    void videoFieldsArePublishedWithThumbnailAndCached() {
+        const QString path = QFINDTESTDATA("data/video-fields-av.mp4");
+        QVERIFY(!path.isEmpty());
+        ImageDecodeRequest request;
+        request.info.path = path;
+        request.info.thumbnailKind = "video";
+        request.info.imageSize = QSize(16, 9);
+        request.info.source = {.resourceId="video-fields-resource", .sourceKey="video-fields/sample.mp4",
+            .contentVersion="video-fields-v2", .versionStrength="strong", .storageClass="network",
+            .displayName="sample.mp4", .size=QFileInfo(path).size()};
+        request.info.sourceVersionToken = request.info.source.contentVersion;
+        request.targetSize = QSize(160, 160);
+        request.thumbnailTransformKey = "video-contact-sheet-2x2-display-v4";
+        request.checkCache = true;
+        request.storeInPersistentCache = true;
+        auto provider = QSharedPointer<MetadataSourceProvider>::create(path);
+        CachedImageRetrieveRunner firstLookup(request, true);
+        VideoThumbnailRunner runner(request, provider);
+        firstLookup.run();
+        ImageInfo metadata;
+        connect(&runner, &VideoThumbnailRunner::imageInfoReady, this,
+                [&](const ImageInfo &info) { metadata = info; });
+        connect(&runner, &VideoThumbnailRunner::storeInCache, this,
+                [](const ImageDecodeRequest &ready, const QByteArray &bytes) {
+            PersistentImageCache::storeImage(ready, bytes);
+        });
+        runner.run();
+        QVERIFY(metadata.fileFieldsRead);
+        const auto fields = metadata.typedFileFields;
+        for (const auto *key : {"media.duration", "media.bitrate", "media.format",
+                               "video.codec", "video.resolution", "video.frame_rate",
+                               "video.bitrate", "audio.codec", "audio.bitrate"})
+            QVERIFY2(fields.contains(key), key);
+        QCOMPARE(fields.value("video.resolution").toString(), QString("320×240"));
+        QCOMPARE(fields.value("video.frame_rate").toDouble(), 24.0);
+        QVERIFY(qAbs(fields.value("media.duration").toDouble() - 1.0) < 0.1);
+        QCOMPARE(provider->materializations.load(), 1);
+        PersistentDerivedImageCache::clearMemoryMetadata();
+        ImageInfo restored;
+        restored.source = metadata.source;
+        restored.sourceVersionToken = metadata.sourceVersionToken;
+        QVERIFY(PersistentDerivedImageCache::retrieveMetadata(restored));
+        QCOMPARE(restored.typedFileFields, fields);
+        QVERIFY(restored.fileFieldsRead);
+        request.info = restored;
+        request.info.thumbnailKind = "video";
+        request.info.imageSize = QSize(16,9);
+        request.info.fileFieldsRead = false;
+        request.info.typedFileFields.clear();
+        CachedImageRetrieveRunner warmLookup(request, true);
+        VideoThumbnailRunner warm(request, provider);
+        ImageInfo cachedVideoInfo;
+        connect(&warmLookup, &CachedImageRetrieveRunner::cachedThumbnailRetrieved, this,
+                [&](const ImageDecodeRequest &ready, const QImage &, const DecodedImageInfo &) {
+            cachedVideoInfo = ready.info;
+        });
+        warmLookup.run();
+        QCOMPARE(cachedVideoInfo.imageSize, metadata.imageSize);
+        QCOMPARE(cachedVideoInfo.typedFileFields, fields);
+        QVERIFY(cachedVideoInfo.fileFieldsRead);
+        warm.run();
+        QCOMPARE(provider->materializations.load(), 1);
+        // If metadata was evicted while pixels survive, reuse the existing
+        // player pass without rebuilding the cached sheet or poster.
+        ImageInfo missingMetadata = metadata;
+        missingMetadata.fileFieldsRead = false;
+        missingMetadata.typedFileFields.clear();
+        PersistentDerivedImageCache::storeMetadata(missingMetadata);
+        request.info.fileFieldsRead = false;
+        request.info.typedFileFields.clear();
+        CachedImageRetrieveRunner missingLookup(request, true);
+        VideoThumbnailRunner missing(request, provider);
+        missingLookup.run();
+        ImageInfo reloaded;
+        connect(&missing, &VideoThumbnailRunner::imageInfoReady, this,
+                [&](const ImageInfo &info) { reloaded = info; });
+        missing.run();
+        QVERIFY(reloaded.fileFieldsRead);
+        QCOMPARE(reloaded.typedFileFields, fields);
+        QCOMPARE(provider->materializations.load(), 2);
+    }
 #endif
 
     void firstVideoFramePosterUsesSeparateStatValidatedCacheArtifact() {
@@ -591,7 +708,7 @@ private slots:
         sheet.targetSize = QSize(384, 216);
         sheet.checkCache = true;
         sheet.thumbnailTransformKey = QStringLiteral(
-            "video-contact-sheet-2x2-v3");
+            "video-contact-sheet-2x2-display-v4");
         const QImage sheetImage = testImage(sheet.targetSize, qRgb(30, 60, 90));
         const QByteArray sheetBytes = PersistentImageCache::createImageForCache(
             sheet, sheetImage);

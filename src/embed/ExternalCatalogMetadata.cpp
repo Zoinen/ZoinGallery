@@ -291,7 +291,8 @@ void ExternalCatalogMetadataTransaction::updateImageInfo(
     imageInfo.fileSize = entry.size;
     imageInfo.thumbnailKind = entry.thumbnailKind;
     if (entry.image && entry.thumbnailKind == QStringLiteral("video")) {
-        imageInfo.imageSize = QSize(16, 9);
+        if (!imageInfo.imageSize.isValid())
+            imageInfo.imageSize = QSize(16, 9);
         entry.originalSize = imageInfo.imageSize;
         entry.metadataSettled = true;
     }

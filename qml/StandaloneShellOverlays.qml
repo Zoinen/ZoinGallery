@@ -21,6 +21,7 @@ Item {
         anchors.centerIn: parent
         width: Math.min(420, parent.width - 40)
         modal: true
+        dim: false
         focus: true
         closePolicy: Popup.CloseOnEscape
         padding: 18
@@ -102,6 +103,7 @@ Item {
         anchors.centerIn: parent
         width: Math.min(460, parent.width - 40)
         modal: true
+        dim: false
         focus: true
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         padding: 18

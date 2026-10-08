@@ -6986,6 +6986,83 @@ private slots:
         runtime->shutdown();
     }
 
+    void videoFieldColumnsStaySharpAt175Percent() {
+        QQuickView view;
+        if (qAbs(view.devicePixelRatio() - 1.75) > .001) QSKIP("Requires 175% scale");
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("video-field-columns");
+        const QStringList ids{"media.duration", "media.bitrate", "media.format", "video.codec",
+            "video.bitrate", "video.resolution", "video.frame_rate", "audio.codec", "audio.bitrate"};
+        const QStringList titles{"Duration", "Overall bitrate", "Container", "Video codec", "Video bitrate",
+            "Resolution", "Frame rate", "Audio codec", "Audio bitrate"};
+        const QStringList expected{"12.5 s", "1.6 Mb/s", "MPEG-4", "H.264", "1.5 Mb/s",
+            "1920×1080", "29.97 fps", "AAC", "128 kb/s"};
+        const QVariantList values{12.5, 1600000.0, "MPEG-4", "H.264", 1500000.0,
+            "1920×1080", 29.97, "AAC", 128000.0};
+        QVariantMap fields;
+        QVariantList descriptors;
+        QVariantList columns{
+            QVariantMap{{"id", "name"}, {"role", "name"}, {"title", "Name"}, {"width", 20}},
+            QVariantMap{{"id", "size"}, {"role", "size"}, {"title", "Size"}, {"width", 16}}};
+        for (int i = 0; i < ids.size(); ++i) {
+            fields.insert(ids[i], values[i]);
+            const bool numeric = i == 0 || i == 1 || i == 4 || i == 6 || i == 8;
+            descriptors.append(QVariantMap{{"id", ids[i]}, {"kind", numeric ? "number" : "text"},
+                {"format", i == 0 ? "duration" : i == 1 || i == 4 || i == 8 ? "bitrate" : i == 6 ? "quantity" : "text"},
+                {"unit", i == 0 ? "s" : i == 6 ? "fps" : ""}, {"precision", 3}});
+            columns.append(QVariantMap{{"id", ids[i]}, {"role", ids[i]}, {"title", titles[i]}, {"width", 16}});
+        }
+        auto catalog = plainCatalog(96);
+        for (auto &row : catalog) {
+            auto entry = row.toMap();
+            entry["displayFields"] = fields;
+            row = entry;
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "videoFieldSession", "details"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("animateLayoutChanges", false);
+        panel->setProperty("fileFieldDescriptors", descriptors);
+        panel->setProperty("columnSchema", columns);
+        view.setResizeMode(QQuickView::SizeRootObjectToView);
+        view.resize(1900, 650);
+        view.show();
+        QTest::qWait(150);
+        const auto verify = [&] {
+            for (int i = 0; i < ids.size(); ++i) {
+                auto *leaf = findVisualItem(panel, QString("galleryFileField-%1-0").arg(ids[i]));
+                QVERIFY(leaf && leaf->isVisible());
+                QCOMPARE(leaf->property("text").toString(), expected[i]);
+            }
+            int leaves = 0;
+            const auto walk = [&](auto &&self, QQuickItem *item) -> void {
+                if (item->isVisible() && item->property("renderType").isValid()) {
+                    ++leaves;
+                    QVERIFY(!item->objectName().isEmpty());
+                    const auto origin = item->mapToItem(view.contentItem(), QPointF());
+                    for (qreal value : {origin.x(), origin.y()})
+                        QVERIFY2(qAbs(value*1.75-qRound(value*1.75)) < .001,
+                            qPrintable(QString("%1 physical=%2").arg(item->objectName()).arg(value*1.75,0,'f',6)));
+                    QCOMPARE(item->mapToItem(view.contentItem(), {1,0})-origin, QPointF(1,0));
+                    QCOMPARE(item->mapToItem(view.contentItem(), {0,1})-origin, QPointF(0,1));
+                }
+                for (auto *child : item->childItems()) self(self, child);
+            };
+            walk(walk, panel);
+            QVERIFY(leaves >= 20);
+        };
+        verify();
+        QTemporaryDir directory;
+        QVERIFY(view.grabWindow().save(visualCapturePath("gallery-video-fields-175.png", directory.filePath("video-fields.png"))));
+        view.resize(1800, 600);
+        QTest::qWait(150);
+        verify();
+        runtime->shutdown();
+    }
+
     void detailsFileFieldLeavesStayOnPhysicalPixelGridAt175Percent() {
         QQuickView view;
         if (qAbs(view.devicePixelRatio() - 1.75) > 0.001) {

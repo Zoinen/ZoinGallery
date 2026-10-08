@@ -485,7 +485,9 @@ bool ExternalCatalogModel::catalogMatches(
 }
 
 void ExternalCatalogModel::restoreCachedMetadata(Entry &entry) {
-    if (!entry.image || entry.originalSize.isValid()
+    const bool videoPlaceholder = entry.thumbnailKind == QStringLiteral("video")
+        && entry.originalSize == QSize(16, 9);
+    if (!entry.image || (entry.originalSize.isValid() && !videoPlaceholder)
         || !cacheReadsEnabled(_decodeManager->imageCacheMode())
         || !PersistentDerivedImageCache::retrieveMemoryMetadata(entry.imageInfo)) return;
     entry.originalSize = rotateToOrientation(entry.imageInfo.imageSize, entry.imageInfo.orientation);

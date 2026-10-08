@@ -53,10 +53,14 @@ void ExternalCatalogThumbnailPlanner::configureRequest(
     request.info.source = entry.source;
     request.info.path = entry.sourceIdentity;
     request.info.sourceVersionToken = entry.contentVersion;
+    request.info.typedFileFields = entry.imageInfo.typedFileFields;
+    request.info.fileFieldsRead = entry.imageInfo.fileFieldsRead;
     request.checkCache = true;
     request.expandToCacheResolution = false;
     request.storeInPersistentCache = true;
-    request.thumbnailTransformKey = thumbnailTransformKey(request);
+    request.thumbnailTransformKey = entry.thumbnailKind == QStringLiteral("video")
+        ? QStringLiteral("video-contact-sheet-2x2-display-v4")
+        : thumbnailTransformKey(request);
     // Video entries expose a 16x9 placeholder until Qt Multimedia opens the
     // stream.  Do not pass that placeholder as a native pixel size: the
     // stable-tier policy would clamp every video request to 16x9.
@@ -134,6 +138,8 @@ void ExternalCatalogThumbnailPlanner::admitRequest(
         m_model.attachThumbnail(row, cached.handle.providerId);
         if (entry->thumbnailKind == QStringLiteral("video"))
             m_model.videoPosterUrlAt(row);
+        if (entry->thumbnailKind == QStringLiteral("video") && !entry->imageInfo.fileFieldsRead)
+            m_submitted.append(request);
         return;
     }
     m_model._pendingThumbnailRequests.insert(

@@ -133,6 +133,19 @@ QtObject {
         if (!Number.isFinite(number) || number <= 0
                 || (kind === "integer" && Math.trunc(number) !== number))
             return ""
+        if (format === "duration") {
+            const ms = Math.round(number * 1000)
+            if (ms < 60000)
+                return formattedFieldNumber(ms / 1000, 3, true) + " s"
+            const pad = (value, digits) => String(value).padStart(digits, "0")
+            return pad(Math.floor(ms / 3600000), 2) + ":"
+                + pad(Math.floor(ms / 60000) % 60, 2) + ":"
+                + pad(Math.floor(ms / 1000) % 60, 2) + "." + pad(ms % 1000, 3)
+        }
+        if (format === "bitrate")
+            return number >= 1000000
+                ? formattedFieldNumber(number / 1000000, 2, true) + " Mb/s"
+                : formattedFieldNumber(number / 1000, 1, true) + " kb/s"
         if (format === "exposure") {
             if (number < 1) {
                 const reciprocal = 1 / number

@@ -294,7 +294,8 @@ void ExternalCatalogResetTransaction::updateMaterializedItem(
         : QDateTime{};
     info.fileSize = entry.size;
     if (entry.image && entry.thumbnailKind == QStringLiteral("video")) {
-        info.imageSize = QSize(16, 9);
+        if (!info.imageSize.isValid())
+            info.imageSize = QSize(16, 9);
         entry.originalSize = info.imageSize;
         entry.metadataSettled = true;
     }

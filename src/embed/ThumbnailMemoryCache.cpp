@@ -88,8 +88,16 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::compatibleFrameLocked(
     const QList<QString> candidates = _sourceFrames.values(sourceKeyValue);
     for (const QString &candidateKey : candidates) {
         const auto it = _frames.constFind(candidateKey);
-        if (it == _frames.constEnd() ||
-            !decodedFrameCovers(it->decodedSize, targetSize)) {
+        if (it == _frames.constEnd()) {
+            continue;
+        }
+        // Video decode requests are bounds before the first frame reveals
+        // its display aspect. Reuse the frame that fits those same bounds.
+        const QSize requiredSize = sourceKeyValue.endsWith(
+            QStringLiteral("video-contact-sheet-2x2-display-v4"))
+            ? it->decodedSize.scaled(targetSize, Qt::KeepAspectRatio)
+            : targetSize;
+        if (!decodedFrameCovers(it->decodedSize, requiredSize)) {
             continue;
         }
         const qint64 area = qint64(it->decodedSize.width()) *

@@ -161,6 +161,7 @@ Rectangle {
         x: Math.round((panel.width - width) / 2)
         y: Math.round((panel.height - height) / 2)
         modal: true
+        dim: false
         focus: true
         padding: 14
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -214,6 +215,7 @@ Rectangle {
         x: Math.round((panel.width - width) / 2)
         y: Math.round((panel.height - height) / 2)
         modal: true
+        dim: false
         focus: true
         padding: 14
         closePolicy: Popup.CloseOnEscape
@@ -279,6 +281,7 @@ Rectangle {
         x: Math.round((panel.width - width) / 2)
         y: Math.round((panel.height - height) / 2)
         modal: true
+        dim: false
         focus: true
         padding: 14
         closePolicy: Popup.CloseOnEscape

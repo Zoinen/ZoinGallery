@@ -109,13 +109,14 @@ Item {
     }
 
     Rectangle {
+        objectName: "pathBackground"
         anchors {
             left: parent.left
             right: parent.right
             verticalCenter: parent.verticalCenter
         }
         height: 32
-        color: pathMouse.containsMouse
+        color: pathRoot.editMode || pathMouse.containsMouse
                ? pathRoot.pathHoveredColor
                : (backgroundOnHoverOnly ? "transparent"
                                         : pathRoot.pathBackgroundColor)
@@ -284,7 +285,7 @@ Item {
         readonly property bool expanded: folderMouse.containsMouse
         property real expansionProgress: expanded ? 1 : 0
         readonly property real presentedWidth: allocatedWidth
-            + (naturalWidth - allocatedWidth) * expansionProgress
+            + Math.max(0, naturalWidth - allocatedWidth) * expansionProgress
         Behavior on expansionProgress {
             NumberAnimation { duration: 240; easing.type: Easing.InOutCubic }
         }
@@ -441,6 +442,7 @@ Item {
         width: implicitWidth
         anchors {
             left: parent.left
+            leftMargin: pathRoot.showDriveIcon ? 0 : pathRoot.snap(pathRoot.leadingInset)
             top: parent.top
             bottom: parent.bottom
         }
@@ -486,7 +488,7 @@ Item {
         id: dynamicPart
         objectName: "pathDynamicPart"
         anchors.left: fixedPart.right
-        width: Math.max(0, pathRoot.width - fixedPart.width)
+        width: Math.max(0, pathRoot.width - fixedPart.x - fixedPart.width)
         height: parent.height
         clip: true
         visible: !editMode

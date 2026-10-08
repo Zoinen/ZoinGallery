@@ -2521,6 +2521,102 @@ private slots:
         runtime->shutdown();
     }
 
+    void rightDragSelectionStartsInEmptyPanelSpace_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<bool>("initiallySelected");
+        for (const auto &mode : {QString("details"), QString("columns"), QString("icons"), QString("grid"), QString("masonry")}) {
+            QTest::newRow(qPrintable(mode + "-add")) << mode << false;
+            QTest::newRow(qPrintable(mode + "-remove")) << mode << true;
+        }
+    }
+
+    void rightDragSelectionStartsInEmptyPanelSpace() {
+        QFETCH(QString, mode);
+        QFETCH(bool, initiallySelected);
+        QVariantList entries;
+        for (int index = 0; index < 4; ++index)
+            entries.append(QVariantMap{{"entryId", QString("entry-%1").arg(index)},
+                {"index", index}, {"name", QString("folder-%1").arg(index)},
+                {"isDir", true}, {"isImage", false}});
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession("empty-space-drag");
+        QVERIFY(session);
+        QVERIFY(session->applyExternalCatalog(entries, 1));
+        QStringList selected{"entry-3"};
+        if (initiallySelected)
+            selected.append({"entry-1", "entry-2"});
+        QVERIFY(session->applyExternalState("entry-0", 0, selected, 1));
+        view.engine()->rootContext()->setContextProperty("testSession", session);
+        auto *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryPanel {
+                width: 360; height: 720
+                thumbnailHeight: 55
+                liveSelectionUpdates: true
+                showDetailsHeader: false
+                session: testSession
+            }
+        )QML", "EmptySpaceRightDrag.qml");
+        QVERIFY(root);
+        QVERIFY(root->setProperty("presentationMode", mode));
+        view.show();
+        auto *layout = root->findChild<QQuickItem *>("galleryViewportItem");
+        QVERIFY(layout);
+        QTRY_COMPARE(layout->property("count").toInt(), 4);
+        QTest::qWait(80);
+        auto indexAt = [layout](QPointF point) {
+            int index = -2;
+            QMetaObject::invokeMethod(layout, "indexAtViewport", Q_RETURN_ARG(int, index),
+                Q_ARG(qreal, point.x()), Q_ARG(qreal, point.y()));
+            return index;
+        };
+        const QPointF emptyLocal(layout->width()/2, layout->height()-20);
+        QCOMPARE(indexAt(emptyLocal), -1);
+        const auto empty = layout->mapToScene(emptyLocal).toPoint();
+        QSignalSpy requests(root, SIGNAL(selectionTransactionRequested(QVariant,QString,int)));
+        QVERIFY(requests.isValid());
+        QTest::mouseClick(&view, Qt::RightButton, Qt::NoModifier, empty);
+        QCOMPARE(requests.size(), 0);
+        QVERIFY(!root->property("dragCursorActive").toBool());
+        QCOMPARE(session->currentIndex(), 0);
+        QTest::mousePress(&view, Qt::RightButton, Qt::NoModifier, empty);
+        QVERIFY(root->property("dragCursorActive").toBool());
+        QCOMPARE(requests.size(), 0);
+        auto effectiveSelected = [root, session](int index) {
+            QVariant result;
+            QMetaObject::invokeMethod(root, "effectiveEntrySelected", Q_RETURN_ARG(QVariant, result),
+                Q_ARG(QVariant, QString("entry-%1").arg(index)),
+                Q_ARG(QVariant, session->isSelectedAt(index)));
+            return result.toBool();
+        };
+        QPoint target;
+        for (int index : {1, 2}) {
+            QRectF geometry;
+            QVERIFY(QMetaObject::invokeMethod(layout, "indexGeometry", Q_RETURN_ARG(QRectF, geometry), Q_ARG(int, index)));
+            const auto local = geometry.center() - QPointF(layout->property("contentX").toReal(), layout->property("contentY").toReal());
+            QCOMPARE(indexAt(local), index);
+            target = layout->mapToScene(local).toPoint();
+            QTest::mouseMove(&view, target);
+            QTRY_COMPARE(effectiveSelected(index), !initiallySelected);
+        }
+        QTest::mouseRelease(&view, Qt::RightButton, Qt::NoModifier, target);
+        QVERIFY(!root->property("dragCursorActive").toBool());
+        QVERIFY(!root->property("keyboardShiftSelectionActive").toBool());
+        QVERIFY(!requests.isEmpty());
+        QCOMPARE(effectiveSelected(0), false);
+        QCOMPARE(effectiveSelected(1), !initiallySelected);
+        QCOMPARE(effectiveSelected(2), !initiallySelected);
+        QCOMPARE(effectiveSelected(3), true);
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, empty);
+        QVERIFY(!root->property("dragCursorActive").toBool());
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, empty);
+        runtime->shutdown();
+    }
+
     void panelPointerSelectionRevealsPartiallyVisibleTile() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -3360,12 +3456,20 @@ private slots:
         runtime->shutdown();
     }
 
+    void videoThumbnailShowsCenteredPlayBadgeAt175Percent_data() {
+        QTest::addColumn<QSize>("imageSize");
+        QTest::newRow("landscape") << QSize(240, 135);
+        QTest::newRow("portrait") << QSize(90, 160);
+        QTest::newRow("square") << QSize(160, 160);
+    }
+
     void videoThumbnailShowsCenteredPlayBadgeAt175Percent() {
+        QFETCH(QSize, imageSize);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString imagePath =
             directory.filePath(QStringLiteral("video-contact-sheet.png"));
-        QVERIFY(writeImage(imagePath, QSize(240, 135), QColor(46, 72, 96)));
+        QVERIFY(writeImage(imagePath, imageSize, QColor(46, 72, 96)));
 
         QQuickView view;
         view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
@@ -3449,7 +3553,25 @@ private slots:
         QCOMPARE(playIcon->property("sourceSize").toSize(),
                  QSize(qRound(playIcon->width() * dpr),
                        qRound(playIcon->height() * dpr)));
-        const QList<QQuickItem *> visualLeaves{badge, badgeCircle, playIcon};
+        QVERIFY(thumbnailImage->height() > 0);
+        const qreal sourceAspect = qreal(imageSize.width()) / imageSize.height();
+        const qreal physicalHeight = thumbnailImage->height() * dpr;
+        QVERIFY2(qAbs(thumbnailImage->width() * dpr
+                      - physicalHeight * sourceAspect) <= 1 + sourceAspect,
+                 "thumbnail image geometry must keep its source aspect ratio");
+        QList<QQuickItem *> visualLeaves{thumbnailImage, badge, badgeCircle, playIcon};
+        if (QQuickItem *shader = leaf(QStringLiteral("galleryThumbnailShader-0"));
+            shader && shader->isVisible())
+            visualLeaves.append(shader);
+        for (const QString &name : {QStringLiteral("galleryMasonryLabel-0"),
+                                    QStringLiteral("galleryGridLabel-0"),
+                                    QStringLiteral("galleryIconsLabel-0"),
+                                    QStringLiteral("galleryBaseName-0"),
+                                    QStringLiteral("galleryExtension-0"),
+                                    QStringLiteral("gallerySize-0")}) {
+            if (QQuickItem *caption = leaf(name); caption && caption->isVisible())
+                visualLeaves.append(caption);
+        }
         for (QQuickItem *item : visualLeaves) {
             const QPointF origin =
                 item->mapToItem(view.contentItem(), QPointF());
@@ -3514,7 +3636,8 @@ private slots:
             const QDir captureDir(
                 qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR"));
             QVERIFY(capture.save(captureDir.filePath(
-                QStringLiteral("video-thumbnail-play-badge.png"))));
+                QStringLiteral("video-thumbnail-play-badge-%1.png")
+                    .arg(QString::fromLatin1(QTest::currentDataTag())))));
         }
 
         row.remove(QStringLiteral("thumbnailKind"));

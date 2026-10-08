@@ -29,6 +29,7 @@ QtObject {
     property int selectionAnchorIndex: -1
     property bool dragCursorActive: false
     property int dragCursorLastIndex: -1
+    property bool dragSelectionPending: false
 
     // Hover belongs to the stable viewport, never to recycled delegates.
     property int hoveredIndex: -1
@@ -108,6 +109,22 @@ QtObject {
     }
 
     function handlePointerPress(viewIndex, button, modifiers) {
+        if (viewIndex < 0) {
+            panel.forceActiveFocus()
+            panel.activateRequested()
+            if (ready && (button & Qt.RightButton) !== 0) {
+                if (keyboardShiftSelectionActive || keyboardToggleSelectionActive)
+                    finishKeyboardSelectionGesture()
+                panel.cancelCursorChromeTransition()
+                if (panel.scrollingMode)
+                    pointerLayer.endAutoScroll()
+                dragCursorActive = true
+                dragCursorLastIndex = -1
+                dragSelectionPending = true
+                hoveredIndex = -1
+            }
+            return
+        }
         if (!ready || viewIndex < 0 || viewIndex >= layout.count)
             return
 
@@ -133,6 +150,7 @@ QtObject {
         if (keyboardShiftSelectionActive || keyboardToggleSelectionActive)
             finishKeyboardSelectionGesture()
         dragCursorActive = (button & (Qt.LeftButton | Qt.RightButton)) !== 0
+        dragSelectionPending = false
         dragCursorLastIndex = dragCursorActive ? viewIndex : -1
         hoveredIndex = -1
 
@@ -193,11 +211,21 @@ QtObject {
             return
         updateHoveredIndexAt(panelX, panelY)
         const point = layout.mapFromItem(panel, panelX, panelY)
+        // An empty-space press has no anchor or selection direction yet.
+        // Wait for a real item before clamping motion at the viewport edges.
+        if (dragSelectionPending && (point.x < 0 || point.y < 0
+                || point.x >= layout.width || point.y >= layout.height))
+            return
         const clampedX = Math.max(0, Math.min(layout.width - 0.01, point.x))
         const clampedY = Math.max(0, Math.min(layout.height - 0.01, point.y))
         const index = layout.indexAtViewport(clampedX, clampedY)
         if (index < 0)
             return
+        if (dragSelectionPending) {
+            dragSelectionPending = false
+            selectionAnchorIndex = index
+            beginKeyboardShiftSelection(index)
+        }
         const indexChanged = index !== dragCursorLastIndex
         if (dragCursorActive && indexChanged) {
             dragCursorLastIndex = index
@@ -216,6 +244,7 @@ QtObject {
     function endPointerDrag() {
         const commitCursor = dragCursorActive && panel.cursorCommitPending
         dragCursorActive = false
+        dragSelectionPending = false
         if (keyboardShiftSelectionActive)
             finishKeyboardShiftSelection()
         if (commitCursor)
@@ -328,6 +357,7 @@ QtObject {
     }
 
     function clearPendingKeyboardSelection() {
+        dragSelectionPending = false
         liveSelectionTimer.stop()
         controller.cancelSelectionGesture()
         keyboardShiftSelectionActive = false

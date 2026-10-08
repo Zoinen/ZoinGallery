@@ -1036,6 +1036,8 @@ private slots:
                     property color foregroundColor: "white"
                     property real surfaceProgress: 1
                     property bool transitionHasGeometry: false
+                    property bool transitioning: false
+                    property bool externalPresentationMoving: false
                     property real transitionProgress: 1
                     property bool pinchCloseActive: false
                     property bool completingClose: false

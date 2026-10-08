@@ -660,6 +660,11 @@ if(BUILD_TESTING)
     target_link_libraries(ViewerResampleGpuTests PRIVATE
         ZoinGallery::Qml Qt${QT_VERSION_MAJOR}::GuiPrivate
         Qt${QT_VERSION_MAJOR}::Test)
+    if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        target_compile_definitions(ViewerResampleGpuTests PRIVATE ZOIN_ENABLE_VIDEO_PLAYBACK)
+        target_link_libraries(ViewerResampleGpuTests PRIVATE
+            Qt${QT_VERSION_MAJOR}::Multimedia Qt${QT_VERSION_MAJOR}::QuickPrivate)
+    endif()
     add_test(NAME ViewerResampleGpuTest COMMAND ViewerResampleGpuTests)
     set_tests_properties(ViewerResampleGpuTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;QT_QUICK_CONTROLS_STYLE=Basic"
@@ -1019,8 +1024,24 @@ if(ZOIN_ENABLE_VIDEO_PLAYBACK)
         BATCHABLE
         ${SHADER_GLSL_FLAGS}
         PREFIX "/ZoinGallery"
-        OUTPUTS "resources/viewer_resample_video.frag.qsb"
+        OUTPUTS "resources/viewer_resample_video.vert.qsb"
+                "resources/viewer_resample_video.frag.qsb"
         DEFINES ZOIN_VIDEO_SHADER=1
+        FILES "resources/viewer_resample.vert" "resources/viewer_resample.frag")
+    # Retain the original sampling path for numerical A/B regressions and
+    # opt-in diagnostics. It shares the production vertex/uniform interface.
+    qt_add_shaders(ZoinGalleryQml zoin_gallery_video_reference_shader
+        ${SHADER_GLSL_FLAGS}
+        PREFIX "/ZoinGallery"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUTS "resources/viewer_resample_video_reference.frag.qsb"
+        DEFINES ZOIN_VIDEO_SHADER=1 ZOIN_REFERENCE_SAMPLING=1
+        FILES "resources/viewer_resample.frag")
+    qt_add_shaders(ZoinGalleryQml zoin_gallery_video_linear_shader
+        ${SHADER_GLSL_FLAGS}
+        PREFIX "/ZoinGallery"
+        OUTPUTS "resources/viewer_video_linear.frag.qsb"
+        DEFINES ZOIN_VIDEO_SHADER=1 ZOIN_LINEAR_VIDEO_PASS=1
         FILES "resources/viewer_resample.frag")
 endif()
 
@@ -1096,6 +1117,8 @@ endif()
 set(ZOIN_QML_CPP_SOURCES ViewerResampleEffect.h ViewerResampleEffect.cpp)
 if(ZOIN_ENABLE_VIDEO_PLAYBACK)
     list(APPEND ZOIN_QML_CPP_SOURCES
+        ViewerLinearVideoTexture.h
+        ViewerLinearVideoTexture.cpp
         ViewerVideoFrameSource.h
         ViewerVideoFrameSource.cpp)
 endif()

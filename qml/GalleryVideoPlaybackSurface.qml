@@ -13,6 +13,7 @@ Item {
     property bool previewVisible: false
     property var frameRevisionAtIdentityChange: 0
     property real devicePixelRatio: 1.0
+    property real pixelAlignmentRevision: 0
     property color foregroundColor: "#f3f4f6"
     property color mutedColor: "#c7c9cc"
 
@@ -44,6 +45,14 @@ Item {
         return Math.round(value * dpr) / dpr
     }
     function alignedOrigin(parentItem, x, y) {
+        // mapToItem itself does not notify when an ancestor moves. Include
+        // those dependencies, and the host's non-notifying Translate list.
+        let dependency = pixelAlignmentRevision
+        for (let ancestor = parentItem; ancestor; ancestor = ancestor.parent)
+            dependency += ancestor.x + ancestor.y + ancestor.width + ancestor.height
+                    + ancestor.scale + ancestor.rotation
+        if (!Number.isFinite(dependency))
+            return Qt.point(0, 0)
         const dpr = Math.max(0.5, devicePixelRatio)
         const scenePoint = parentItem.mapToItem(null, x, y)
         const snappedPoint = Qt.point(Math.round(scenePoint.x * dpr) / dpr,

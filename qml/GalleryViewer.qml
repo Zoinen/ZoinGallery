@@ -9,6 +9,7 @@ FocusScope {
     id: root
     // Embedders can own presentation geometry without replacing the session.
     property bool managedPresentation: false
+    property bool externalPresentationMoving: false
     property var playbackSession: null
     property string previewEntryId: ""
     property var hostKeyHandler: null

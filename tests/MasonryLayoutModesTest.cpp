@@ -1212,7 +1212,7 @@ private slots:
             QCOMPARE(displayed, cells);
         }
         QCOMPARE(title->property("horizontalAlignment").toInt(), int(Qt::AlignHCenter));
-        QCOMPARE(title->property("maximumLineCount").toInt(), 2);
+        QCOMPARE(title->property("maximumLineCount").toInt(), mode == "grid" ? 3 : 2);
         QCOMPARE(title->property("elide").toInt(), int(Qt::ElideRight));
         QCOMPARE(title->property("wrapMode").toInt(), 4); // Text.Wrap
         auto *folderFill = findVisualItem(preview, "folderPreviewFill");
@@ -2978,13 +2978,68 @@ private slots:
                  layout->indexGeometry(layout->count() - 1).bottom()
                      + layout->paddingBottom());
 
-        // Grid remains the equal-height, one-line presentation.
+        // Grid remains equal-height even with wrapped labels.
         panel->setProperty("presentationMode", QStringLiteral("grid"));
         QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
                                   MasonryLayout::Grid, 3000);
         QCOMPARE(layout->indexGeometry(0).height(), layout->density());
         QCOMPARE(layout->indexGeometry(2).height(), layout->density());
 
+        runtime->shutdown();
+    }
+
+    void gridLabelsWrapWithinPaddedCells() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession("grid-wrapped-labels");
+        QVariantList catalog = plainCatalog(8);
+        QVariantMap entry = catalog[0].toMap();
+        entry["name"] = QStringLiteral("A long descriptive filename with enough words "
+                                       "to fill more than three lines and still need elision.txt");
+        catalog[0] = entry;
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        QObject *panel = createPanel(view, session, "gridWrappedSession", "grid");
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("density", 160.0);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QTRY_COMPARE(layout->count(), 8);
+        QQuickItem *label = nullptr;
+        QTRY_VERIFY((label = panel->findChild<QQuickItem *>("galleryGridLabel-0")));
+        QTRY_COMPARE(label->property("maximumLineCount").toInt(), 3);
+        QTRY_COMPARE(label->property("lineCount").toInt(), 3);
+        QVERIFY(label->property("truncated").toBool());
+        const QRectF cell = layout->indexGeometry(0);
+        const QRectF preview = layout->indexPreviewGeometry(0);
+        QVERIFY(preview.top() - cell.top() >= 8);
+        QVERIFY(label->height() >= label->implicitHeight() - 0.6);
+        QVERIFY(label->y() + label->height() <= label->parentItem()->height());
+        QVERIFY(label->parentItem()->height() - label->y() - label->height()
+                <= 8 + 1 / view.devicePixelRatio());
+        for (const int index : {0, 1}) {
+            QQuickItem *leaf = panel->findChild<QQuickItem *>(
+                QStringLiteral("galleryGridLabel-%1").arg(index));
+            QVERIFY(leaf);
+            const QPointF origin = leaf->mapToScene(QPointF());
+            const qreal dpr = view.devicePixelRatio();
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.01);
+            QCOMPARE(leaf->mapToScene(QPointF(1, 1)) - origin, QPointF(1, 1));
+        }
+        QTemporaryDir capture;
+        QVERIFY(view.grabWindow().save(visualCapturePath(
+            "gallery-grid-wrapped-labels.png", capture.filePath("grid.png"))));
+        QFont largerFont = layout->iconLabelFont();
+        largerFont.setPixelSize(24);
+        layout->setIconLabelFont(largerFont);
+        QTRY_VERIFY(layout->indexPreviewGeometry(0).height() < preview.height());
+        QCOMPARE(layout->indexGeometry(0), cell);
+        QTRY_COMPARE(label->property("lineCount").toInt(), 3);
+        QVERIFY(label->height() >= label->implicitHeight() - 0.6);
         runtime->shutdown();
     }
 

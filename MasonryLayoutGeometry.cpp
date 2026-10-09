@@ -43,6 +43,10 @@ ZoinGallery::GalleryLayoutRequest MasonryLayout::layoutRequest() const {
     };
     request.density = effectiveTargetExtent();
     request.spacing = _spacing;
+    if (_presentationMode == Grid) {
+        request.gridLabelLineHeight =
+            ZoinGallery::GalleryIconTextMeasurer(_iconLabelFont).lineHeight();
+    }
     request.columnCount = _columnCount;
     request.devicePixelRatio = devicePixelRatio();
     request.groupHeaderHeight = _groupHeaderHeight;
@@ -406,6 +410,9 @@ QRectF MasonryLayout::groupedFixedPreviewGeometry(int index) const
             ZoinGallery::GalleryIconTextMeasurer(_iconLabelFont).lineHeight();
         return QRectF(geometry.x(), geometry.y(), geometry.width(),
                       qMax<qreal>(1, geometry.width() - 3 - lineHeight - 3));
+    }
+    if (_presentationMode == Grid) {
+        return fixedLayoutPlan().previewGeometryForRect(geometry);
     }
     return geometry.adjusted(_spacing / 2.0, _spacing / 2.0,
                              -_spacing / 2.0, -_spacing / 2.0);

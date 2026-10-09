@@ -243,7 +243,7 @@ void MasonryLayout::setIconLabelFont(const QFont &font) {
     }
     _iconLabelFont = font;
     emit iconLabelFontChanged();
-    if (_presentationMode == Icons || _presentationMode == Details
+    if (_presentationMode == Icons || _presentationMode == Grid || _presentationMode == Details
         || _presentationMode == Columns) {
         rewrap(false);
     }

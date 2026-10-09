@@ -17,6 +17,7 @@ private slots:
     void analyticalRangeIsBoundedByViewport();
     void groupedDetailsReserveHeaderRows();
     void groupedGridStartsEachBlockOnANewRow();
+    void gridReservesFontSizedLabelsAndTopPadding();
     void groupedColumnsReserveAHeaderAcrossTheirBlock();
     void groupedIconsUseTheirVirtualRowHeight();
     void iconsGrowOnlyRowsThatNeedWrappedLabels();
@@ -136,6 +137,25 @@ void GalleryLayoutEngineTest::groupedGridStartsEachBlockOnANewRow() {
     QCOMPARE(plan.geometryFor(5).top(), 120.0);
     QVERIFY(plan.indexesIntersecting(101, 119).isEmpty());
     QCOMPARE(plan.contentExtent, 220.0);
+}
+
+void GalleryLayoutEngineTest::gridReservesFontSizedLabelsAndTopPadding() {
+    GalleryLayoutRequest request;
+    request.mode = GalleryPresentationMode::Grid;
+    request.viewportSize = QSizeF(640, 400);
+    request.density = 160;
+    request.spacing = 8;
+    for (const qreal lineHeight : {16.0, 28.0}) {
+        request.gridLabelLineHeight = lineHeight;
+        const auto plan = GalleryLayoutEngine::fixedPlan(request, 12);
+        const QRectF cell = plan.geometryFor(0);
+        const QRectF preview = plan.previewGeometryFor(0);
+        QCOMPARE(cell.height(), 160.0);
+        QCOMPARE(preview.top() - cell.top(), 12.0);
+        QCOMPARE(cell.bottom() - preview.bottom(), 3 * lineHeight + 11);
+        QCOMPARE(plan.previewGeometryFor(4).size(), preview.size());
+        QVERIFY(cell.contains(preview));
+    }
 }
 
 void GalleryLayoutEngineTest::groupedColumnsReserveAHeaderAcrossTheirBlock() {

@@ -42,7 +42,8 @@ Item {
         id: content
         opacity: preview.hasUsablePreview ? 1 : 0
         x: preview.snap(preview.sceneOrigin.x + preview.contentMargin) - preview.sceneOrigin.x
-        y: preview.snap(preview.sceneOrigin.y + preview.contentMargin) - preview.sceneOrigin.y
+        y: preview.snap(preview.sceneOrigin.y + preview.contentMargin
+                        + (preview.entry.gridMode ? 8 : 0)) - preview.sceneOrigin.y
         width: Math.max(0, preview.snap(preview.width - x - preview.contentMargin))
         height: Math.max(0, preview.snap(preview.height - y - preview.contentMargin))
         Rectangle {
@@ -82,8 +83,9 @@ Item {
                 ? preview.panelRoot.quickSearchFormatter.styledText(preview.entry.effectiveDisplayName, preview.entry.entryId, 0) : ""
             textFormat: preview.panelRoot.quickSearchFormatter.matchForEntry(preview.entry.entryId) ? Text.StyledText : Text.PlainText
             color: preview.entry.itemTextColor
+            font: preview.entry.gridMode ? preview.panelRoot.iconLabelFont : Qt.application.font
             horizontalAlignment: Text.AlignHCenter
-            maximumLineCount: 2
+            maximumLineCount: preview.entry.gridMode ? 3 : 2
             wrapMode: Text.Wrap
             elide: Text.ElideRight
             verticalAlignment: Text.AlignTop

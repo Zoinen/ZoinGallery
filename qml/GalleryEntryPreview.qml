@@ -104,8 +104,7 @@ Item {
         height: width
         // Qt applies the window DPR to sourceSize before requesting provider
         // pixels. Supplying physical dimensions here applies DPR twice.
-        sourceSize: Qt.size(Math.round(width * preview.entry.renderDpr),
-                                Math.round(height * preview.entry.renderDpr))
+        sourceSize: Qt.size(Math.round(width), Math.round(height))
         color: effectiveIconColor
         fillMode: Image.PreserveAspectFit
         smooth: false

@@ -103,25 +103,29 @@ void ExternalCatalogResetTransaction::rebuildRows() {
 
         Entry old = m_previous.take(entry.id);
         const bool sourceChanged = adoptPreviousState(entry, old);
-        QList<int> roles;
-        if (sourceChanged) {
-            roles = {FileListModel::ImageIdUrlRole, FileListModel::ImageFullSizeRole,
-                     FileListModel::IsImageRole, ExternalCatalogModel::KnownImageSizeRole,
-                     ExternalCatalogModel::VersionTokenRole, ExternalCatalogModel::LocalPathRole};
-        }
-        if (old.name != entry.name) roles.append(ExternalCatalogModel::EntryNameRole);
-        if (old.sourceIndex != entry.sourceIndex) roles.append(ExternalCatalogModel::SourceIndexRole);
-        if (old.directory != entry.directory) roles.append(FileListModel::FolderRole);
-        if (!(old.directorySource == entry.directorySource)
-            || old.directoryPreviewState != entry.directoryPreviewState)
-            roles.append(FileListModel::FolderViewRole);
-        if (old.selected != entry.selected) roles.append(FileListModel::SelectedRole);
-        if (old.size != entry.size) roles.append(FileListModel::FileSizeRole);
-        if (old.mtimeNs != entry.mtimeNs) roles.append(FileListModel::LastModifiedRole);
-        if (!roles.isEmpty() || old.displayFields != entry.displayFields
-            || old.highlightStyle != map.value(QStringLiteral("highlightStyle"), old.highlightStyle).toMap()) {
-            roles.append(ExternalCatalogModel::VisualSnapshotRole);
-            m_changedRoles.insert(entry.id, roles);
+        // A full reset invalidates every role together. Per-row change lists
+        // are only consumed by incremental reconciliation.
+        if (m_incremental) {
+            QList<int> roles;
+            if (sourceChanged) {
+                roles = {FileListModel::ImageIdUrlRole, FileListModel::ImageFullSizeRole,
+                         FileListModel::IsImageRole, ExternalCatalogModel::KnownImageSizeRole,
+                         ExternalCatalogModel::VersionTokenRole, ExternalCatalogModel::LocalPathRole};
+            }
+            if (old.name != entry.name) roles.append(ExternalCatalogModel::EntryNameRole);
+            if (old.sourceIndex != entry.sourceIndex) roles.append(ExternalCatalogModel::SourceIndexRole);
+            if (old.directory != entry.directory) roles.append(FileListModel::FolderRole);
+            if (!(old.directorySource == entry.directorySource)
+                || old.directoryPreviewState != entry.directoryPreviewState)
+                roles.append(FileListModel::FolderViewRole);
+            if (old.selected != entry.selected) roles.append(FileListModel::SelectedRole);
+            if (old.size != entry.size) roles.append(FileListModel::FileSizeRole);
+            if (old.mtimeNs != entry.mtimeNs) roles.append(FileListModel::LastModifiedRole);
+            if (!roles.isEmpty() || old.displayFields != entry.displayFields
+                || old.highlightStyle != map.value(QStringLiteral("highlightStyle"), old.highlightStyle).toMap()) {
+                roles.append(ExternalCatalogModel::VisualSnapshotRole);
+                m_changedRoles.insert(entry.id, roles);
+            }
         }
         updateMaterializedItem(entry, map, row, sourceChanged);
         indexRow(entry, row);
@@ -268,15 +272,6 @@ bool ExternalCatalogResetTransaction::adoptPreviousState(
 
 void ExternalCatalogResetTransaction::updateMaterializedItem(
     Entry &entry, const QVariantMap &map, int row, bool sourceChanged) {
-    QString folder;
-    QString fileName = entry.name;
-    if (!entry.localPath.isEmpty()) {
-        const QFileInfo pathInfo(entry.localPath);
-        folder = pathInfo.absolutePath();
-        if (fileName.isEmpty()) {
-            fileName = pathInfo.fileName();
-        }
-    }
     if (map.contains(QStringLiteral("highlightStyle"))) {
         entry.highlightStyle = map.value(
             QStringLiteral("highlightStyle")).toMap();
@@ -306,6 +301,17 @@ void ExternalCatalogResetTransaction::updateMaterializedItem(
         return;
     }
 
+    // Only materialized facades need split display paths. Avoid resolving
+    // hundreds of offscreen paths during the synchronous catalog commit.
+    QString folder;
+    QString fileName = entry.name;
+    if (!entry.localPath.isEmpty()) {
+        const QFileInfo pathInfo(entry.localPath);
+        folder = pathInfo.absolutePath();
+        if (fileName.isEmpty()) {
+            fileName = pathInfo.fileName();
+        }
+    }
     entry.item->setFolderPath(folder);
     entry.item->setFileName(fileName);
     entry.item->setIndex(row);

@@ -1,5 +1,6 @@
 #include "PersistentDerivedImageCache.h"
 #include "PersistentImageCache.h"
+#include "DisplayColorSpace.h"
 #include "Decoders/ImageDecoderInterface.h"
 #include "Decoders/RawDecoder.h"
 #include "Runners/CacheImageRunners.h"
@@ -27,6 +28,23 @@
 #include <utility>
 
 namespace {
+
+class ScopedDisplayColorSpace final {
+public:
+    explicit ScopedDisplayColorSpace(const QColorSpace &target)
+        : previous(DisplayColorSpace::current()),
+          conversionEnabled(DisplayColorSpace::conversionEnabled()) {
+        DisplayColorSpace::setCurrent(target);
+        DisplayColorSpace::setConversionEnabled(true);
+    }
+    ~ScopedDisplayColorSpace() {
+        DisplayColorSpace::setCurrent(previous);
+        DisplayColorSpace::setConversionEnabled(conversionEnabled);
+    }
+private:
+    QColorSpace previous;
+    bool conversionEnabled;
+};
 
 class TypedExifFieldReader final : public ImageDecoderInterface {
 public:
@@ -388,7 +406,15 @@ private slots:
         QVERIFY(!PersistentImageCache::retrieveImage(request).isNull());
     }
 
+    void viewerFitCachePreservesEncodedPixels_data() {
+        QTest::addColumn<QColorSpace>("displayTarget");
+        QTest::newRow("sRGB-lossless") << QColorSpace(QColorSpace::SRgb);
+        QTest::newRow("P3-display-conversion") << QColorSpace(QColorSpace::DisplayP3);
+    }
+
     void viewerFitCachePreservesEncodedPixels() {
+        QFETCH(QColorSpace, displayTarget);
+        const ScopedDisplayColorSpace display(displayTarget);
         auto request = requestFor(QStringLiteral("strong"));
         request.viewerRequest = true;
         request.fitToViewerRequest = true;
@@ -405,14 +431,18 @@ private slots:
             }
         }
         persist(request, image);
+        // Lossless sRGB cache pixels must survive unchanged. Retrieval then
+        // applies the display profile, just as a freshly decoded frame does.
+        const QImage expected = image.convertedToColorSpace(displayTarget)
+                                    .convertToFormat(QImage::Format_RGBA8888);
         const QImage cached = PersistentImageCache::retrieveImage(request, true)
                                   .convertToFormat(QImage::Format_RGBA8888);
         QCOMPARE(cached.size(), image.size());
-        QCOMPARE(cached.colorSpace(), image.colorSpace());
+        QCOMPARE(cached.colorSpace(), displayTarget);
         int changedPixels = 0;
         for (int y = 0; y < image.height(); ++y) {
             for (int x = 0; x < image.width(); ++x) {
-                changedPixels += cached.pixel(x, y) != image.pixel(x, y);
+                changedPixels += cached.pixel(x, y) != expected.pixel(x, y);
             }
         }
         QCOMPARE(changedPixels, 0);
@@ -688,7 +718,15 @@ private slots:
     }
 #endif
 
+    void firstVideoFramePosterUsesSeparateStatValidatedCacheArtifact_data() {
+        QTest::addColumn<QColorSpace>("displayTarget");
+        QTest::newRow("sRGB") << QColorSpace(QColorSpace::SRgb);
+        QTest::newRow("DisplayP3") << QColorSpace(QColorSpace::DisplayP3);
+    }
+
     void firstVideoFramePosterUsesSeparateStatValidatedCacheArtifact() {
+        QFETCH(QColorSpace, displayTarget);
+        const ScopedDisplayColorSpace display(displayTarget);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString path = directory.filePath(
@@ -726,13 +764,17 @@ private slots:
         QVERIFY(!posterBytes.isEmpty());
         PersistentDerivedImageCache::storeImage(poster, posterBytes);
 
-        const auto verifiesCachedColor = [](const QImage &actual,
+        const auto verifiesCachedColor = [displayTarget](const QImage &actual,
                                             const QImage &expected) {
-            if (actual.isNull() || actual.size() != expected.size()) {
+            if (actual.isNull() || actual.size() != expected.size()
+                || actual.colorSpace() != displayTarget) {
                 return false;
             }
+            QImage expectedDisplay = expected;
+            expectedDisplay.setColorSpace(QColorSpace(QColorSpace::SRgb));
+            expectedDisplay = expectedDisplay.convertedToColorSpace(displayTarget);
             const QColor actualColor = actual.pixelColor(0, 0);
-            const QColor expectedColor = expected.pixelColor(0, 0);
+            const QColor expectedColor = expectedDisplay.pixelColor(0, 0);
             return qAbs(actualColor.red() - expectedColor.red()) <= 12
                 && qAbs(actualColor.green() - expectedColor.green()) <= 12
                 && qAbs(actualColor.blue() - expectedColor.blue()) <= 12;

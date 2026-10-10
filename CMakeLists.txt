@@ -195,6 +195,8 @@ set(ZOIN_CORE_SOURCES
     QmlAsyncImageProvider.h
     QmlAsyncImageProvider.cpp
     GalleryPixelGrid.h
+    GalleryNativeTextMetrics.h
+    GalleryNativeTextMetrics.cpp
     GalleryLayoutEngine.h
     GalleryLayoutEngine.cpp
     GalleryGroupIndex.h
@@ -224,6 +226,7 @@ set(ZOIN_CORE_SOURCES
     MasonryLayoutNavigation.cpp
     MasonryLayoutNavigationPaging.cpp
     MasonryLayoutProperties.cpp
+    MasonryLayoutViewportProperties.cpp
     MasonryLayoutRewrap.cpp
     MasonryLayoutThumbnails.cpp
     MasonryLayoutQuickSearch.h
@@ -251,6 +254,7 @@ set(ZOIN_CORE_SOURCES
     PersistentFolderCache.h
     DecodeManager.h
     DecodeManager.cpp
+    DecodeManagerCancellation.cpp
     ImageProbe.h
     Runners/ImageProbeRunner.h
     Runners/ImageProbeRunner.cpp
@@ -899,6 +903,8 @@ if(ZOIN_BUILD_BENCHMARKS)
 endif()
 
 set(ZOIN_QML_FILES
+    qml/GalleryPanelFacade.qml
+    qml/ViewerViewportGestures.qml
     qml/ViewerResample.qml
     qml/AutoScrollController.qml
     qml/GalleryPanel.qml

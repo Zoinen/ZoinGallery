@@ -64,11 +64,9 @@ QString ThumbnailMemoryCache::frameKey(
 
 bool ThumbnailMemoryCache::decodedFrameCovers(
     const QSize &available, const QSize &requested) {
-    // MasonryLayout resolves fit/crop policy into an exact, source-aspect
-    // decoded QSize before submitting work. Transform keys isolate genuinely
-    // different pixel-processing families; presentation-only crop versus fit
-    // shares thumbnail-aspect-v1. Both dimensions must cover the requested
-    // pixel tier.
+    // The caller resolves aspect-preserving bounds into a required pixel tier.
+    // Both decoded dimensions must cover that tier; request metadata alone
+    // never proves that enough pixels are retained.
     return available.isValid() && requested.isValid() &&
         available.width() >= requested.width() &&
         available.height() >= requested.height();
@@ -91,10 +89,16 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::compatibleFrameLocked(
         if (it == _frames.constEnd()) {
             continue;
         }
-        // Video decode requests are bounds before the first frame reveals
-        // its display aspect. Reuse the frame that fits those same bounds.
-        const QSize requiredSize = sourceKeyValue.endsWith(
-            QStringLiteral("video-contact-sheet-2x2-display-v4"))
+        // Aspect-preserving requests are bounding boxes, even when external
+        // callers have not resolved the source aspect into a pixel tier.
+        // Compare against the fitted pixels, not the unused part of the box.
+        // Scaling up still rejects a frame whose limiting dimension is too
+        // small. Other transform families retain exact pixel requirements.
+        const bool aspectPreserved = sourceKeyValue.endsWith(
+            QChar(0x1f) + QString::fromLatin1(DefaultTransformKey)) ||
+            sourceKeyValue.endsWith(
+                QChar(0x1f) + QStringLiteral("video-contact-sheet-2x2-display-v4"));
+        const QSize requiredSize = aspectPreserved
             ? it->decodedSize.scaled(targetSize, Qt::KeepAspectRatio)
             : targetSize;
         if (!decodedFrameCovers(it->decodedSize, requiredSize)) {

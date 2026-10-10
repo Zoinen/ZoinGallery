@@ -1667,7 +1667,7 @@ private slots:
         for (const QString &name : names) {
             const QString path = QDir(sourceDirectory.isEmpty() ? directory.path() : sourceDirectory).filePath(name);
             if (sourceDirectory.isEmpty()) {
-                QVERIFY(QFile::copy(QFINDTESTDATA("tests/data/gallery-video-playback.mp4"), path));
+                QVERIFY(QFile::copy(QFINDTESTDATA("data/gallery-video-playback.mp4"), path));
             }
             const QFileInfo file(path);
             QVERIFY(file.isFile());
@@ -1957,6 +1957,46 @@ private slots:
         QCOMPARE(persistent.row(),40);
         QCOMPARE(model->materializedRows().size(),2);
         QCOMPARE(model->data(model->index(40,0),role),before);
+    }
+
+    void sparseToDenseDeltaRetainsFacadesWithoutReset_data() {
+        QTest::addColumn<bool>("rowsDeferredAtPromotion");
+        QTest::newRow("completed") << false;
+        QTest::newRow("fully-materialized-deferred") << true;
+    }
+
+    void sparseToDenseDeltaRetainsFacadesWithoutReset() {
+        QFETCH(bool, rowsDeferredAtPromotion);
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession(QStringLiteral("paging-threshold"));
+        const QVariantList catalog{entry("a", 0, "a.txt"), entry("b", 1, "b.txt"), entry("c", 2, "c.txt")};
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        QAbstractItemModelTester tester(model, QAbstractItemModelTester::FailureReportingMode::QtTest);
+        const QVariant survivor = model->data(model->index(2), FileListModel::ImageFileRole);
+        QPersistentModelIndex persistent(model->index(2));
+        QSignalSpy resets(model, &QAbstractItemModel::modelReset);
+        QSignalSpy ready(session, &ZoinGallery::GallerySession::catalogReadyChanged);
+        QVariantMap state{{"catalogRowsDeferred", true}, {"totalCount", 100000},
+            {"catalogDelta", QVariantMap{{"baseCatalogRevision", 1}, {"oldTotalCount", 3},
+                {"ranges", QVariantList{QVariantMap{{"oldIndex", 0}, {"index", 1}, {"count", 3}}}}}}};
+        QVERIFY(session->applyExternalCatalog({entry("new", 0, "new.txt")}, 2, state));
+        QCOMPARE(resets.size(), 0);
+        QCOMPARE(persistent.row(), 3);
+        QCOMPARE(model->data(model->index(3), FileListModel::ImageFileRole), survivor);
+        state["catalogRowsDeferred"] = rowsDeferredAtPromotion;
+        state["totalCount"] = catalog.size();
+        state["catalogDelta"] = QVariantMap{{"baseCatalogRevision", 2}, {"oldTotalCount", 100000},
+            {"ranges", QVariantList{QVariantMap{{"oldIndex", 1}, {"index", 0}, {"count", 3}}}}};
+        QVERIFY(session->applyExternalCatalog(catalog, 3, state));
+        QCOMPARE(resets.size(), 0);
+        QCOMPARE(ready.size(), 0);
+        QVERIFY(!model->sparseCatalog());
+        QCOMPARE(model->rowCount(), 3);
+        QCOMPARE(persistent.row(), 2);
+        QCOMPARE(model->data(model->index(2), FileListModel::ImageFileRole), survivor);
     }
 
     void sameFolderCatalogReconcilesRowsWithoutReset() {
@@ -4587,11 +4627,26 @@ private slots:
         runtime->shutdown();
     }
 
+    void externalThumbnailUsesExactTargetAndDeduplicates_data() {
+        QTest::addColumn<QSize>("sourceSize");
+        QTest::addColumn<QSize>("targetSize");
+        QTest::addColumn<QSize>("expectedPixelSize");
+        QTest::newRow("landscape-width-limited")
+            << QSize(1600, 900) << QSize(123, 77) << QSize(123, 69);
+        QTest::newRow("landscape-height-limited")
+            << QSize(1600, 900) << QSize(123, 40) << QSize(71, 40);
+        QTest::newRow("portrait-height-limited")
+            << QSize(900, 1600) << QSize(123, 77) << QSize(43, 77);
+    }
+
     void externalThumbnailUsesExactTargetAndDeduplicates() {
+        QFETCH(QSize, sourceSize);
+        QFETCH(QSize, targetSize);
+        QFETCH(QSize, expectedPixelSize);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString path = directory.filePath(QStringLiteral("large.png"));
-        QImage source(1600, 900, QImage::Format_ARGB32_Premultiplied);
+        QImage source(sourceSize, QImage::Format_ARGB32_Premultiplied);
         source.fill(QColor(32, 96, 160));
         QVERIFY(source.save(path));
         const QFileInfo file(path);
@@ -4645,7 +4700,6 @@ private slots:
                     }
                 });
 
-        const QSize targetSize(123, 77);
         const ImageDecodeRequest request{
             .info = imageFile->info(),
             .targetSize = targetSize,
@@ -4656,13 +4710,25 @@ private slots:
         QVERIFY(deliveredRequest.checkCache);
         QVERIFY(!deliveredRequest.expandToCacheResolution);
         QVERIFY(deliveredRequest.storeInPersistentCache);
-        QCOMPARE(deliveredImage.size(), targetSize);
+        // Target metadata describes the physical tile envelope, not stretched
+        // pixels. The decoder preserves the source aspect ratio within it.
+        QCOMPARE(deliveredImage.size(), expectedPixelSize);
+        QCOMPARE(sourceSize.scaled(targetSize, Qt::KeepAspectRatio), expectedPixelSize);
 
         // The published frame already covers the same physical tile, so an
         // identical later layout pass must not enqueue another decode.
         model->decodeImages({request});
         QTest::qWait(100);
         QCOMPARE(readyCount, 1);
+
+        // Reuse must not accept undersized pixels for a larger physical tile.
+        ImageDecodeRequest largerRequest = request;
+        largerRequest.targetSize = targetSize * 2;
+        model->decodeImages({largerRequest});
+        QTRY_COMPARE_WITH_TIMEOUT(readyCount, 2, 5000);
+        QCOMPARE(deliveredRequest.targetSize, largerRequest.targetSize);
+        QCOMPARE(deliveredImage.size(),
+                 sourceSize.scaled(largerRequest.targetSize, Qt::KeepAspectRatio));
 
         runtime->shutdown();
     }

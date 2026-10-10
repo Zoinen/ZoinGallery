@@ -76,6 +76,7 @@ public:
                       int totalCount = -1);
     bool reconcileSparseCatalog(const QVariantList &values, bool metadataDeferred,
                                 int totalCount, const QVariantMap &delta);
+    bool promoteSparseCatalog();
     bool applyCatalogRows(const QVariantList &entries,
                           bool metadataDeferred = false);
     bool appendCatalog(const QVariantList &entries,

@@ -3,8 +3,27 @@
 #include "ExternalCatalogRowsTransaction.h"
 #include "ExternalCatalogSparseExtension.h"
 #include "ExternalDirectoryPreviews.h"
+#include <algorithm>
 
 namespace ZoinGallery {
+
+bool ExternalCatalogModel::promoteSparseCatalog() {
+    if (_shutdown || _virtualRowCount < 0
+        || _entries.size() != _virtualRowCount
+        || _sparseRowToOffset.size() != _virtualRowCount) {
+        return false;
+    }
+    // Logical rows already have their final identities. Only the storage
+    // representation changes; neither facades nor persistent indexes move.
+    emit layoutAboutToBeChanged();
+    std::sort(_entries.begin(), _entries.end(), [](const Entry &a, const Entry &b) {
+        return a.sourceIndex < b.sourceIndex;
+    });
+    _virtualRowCount = -1;
+    _sparseRowToOffset.clear();
+    emit layoutChanged();
+    return true;
+}
 
 bool ExternalCatalogModel::tryExtendSparseCatalog(
     const QVariantList &values, bool metadataDeferred, int totalCount) {

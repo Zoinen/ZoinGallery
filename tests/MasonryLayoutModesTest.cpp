@@ -290,6 +290,8 @@ private slots:
         QTest::newRow("physical-raster") << false << true << QString("Folders") << false;
         QTest::newRow("descender-center") << false << false << QString("Alpha") << false;
         QTest::newRow("collapsed-center") << false << false << QString("No data") << true;
+        QTest::newRow("uppercase-center") << false << false << QString("FOLDERS") << false;
+        QTest::newRow("deep-descender-center") << false << false << QString("gypq") << true;
     }
 
     void groupHeaderPixelGridAndSpacing() {
@@ -385,12 +387,17 @@ private slots:
                         }
                     }
                 }
+                if (bottom < top)
+                    return std::numeric_limits<qreal>::quiet_NaN();
                 return (top + bottom) / 2.0;
             };
             const qreal iconCenter = inkCenter(chevron);
             for (const auto &suffix : {"title", "count"}) {
                 auto *text = findVisualItem(panel, QString("galleryGroupHeader-gallery-alpha-%1").arg(suffix));
                 const qreal textCenter = inkCenter(text);
+                qInfo() << "[FIX:header-ink]" << suffix << "DPR" << dpr
+                        << "origin" << text->mapToItem(view.contentItem(), QPointF()) * dpr
+                        << "rendered center" << textCenter << "chevron" << iconCenter;
                 QVERIFY2(qAbs(textCenter - iconCenter) <= 1.0,
                     qPrintable(QString("%1 ink center %2, chevron %3 (physical pixels)")
                         .arg(suffix).arg(textCenter).arg(iconCenter)));
@@ -478,11 +485,11 @@ private slots:
 
         const QString headerName = QStringLiteral(
             "galleryGroupHeader-gallery-alpha");
-        auto *header = findVisualItem(panel, headerName);
+        QPointer<QQuickItem> header = findVisualItem(panel, headerName);
         QTRY_VERIFY_WITH_TIMEOUT(header && header->isVisible(), 3000);
         QCOMPARE(header->property("backgroundColor").value<QColor>(),
                  panel->property("headerColor").value<QColor>());
-        auto *separator = findVisualItem(
+        QPointer<QQuickItem> separator = findVisualItem(
             panel, headerName + QStringLiteral("-separator"));
         QVERIFY(separator);
         QVERIFY2(!header->property("currentSticky").toBool(),
@@ -520,11 +527,18 @@ private slots:
                  qPrintable(QStringLiteral("sticky header y=%1, separator offset=%2")
                      .arg(pinnedTop, 0, 'f', 3)
                      .arg(topSpacing, 0, 'f', 3)));
-        QTRY_VERIFY_WITH_TIMEOUT(!separator->isVisible(), 3000);
+        // A contentY notification rebuilds the Repeater's QVariantList model.
+        // Never retain a raw delegate pointer across QTRY's event processing.
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            header = findVisualItem(panel, headerName);
+            separator = findVisualItem(panel, headerName + QStringLiteral("-separator"));
+            return header && header->property("currentSticky").toBool()
+                && separator && !separator->isVisible();
+        }(), 3000);
 
-        auto *background = header->findChild<QQuickItem *>(
+        QPointer<QQuickItem> background = header->findChild<QQuickItem *>(
             headerName + QStringLiteral("-background"));
-        auto *hoverBackground = header->findChild<QQuickItem *>(
+        QPointer<QQuickItem> hoverBackground = header->findChild<QQuickItem *>(
             headerName + QStringLiteral("-hover"));
         QVERIFY(background);
         QVERIFY2(!header->findChild<QObject *>(
@@ -553,12 +567,21 @@ private slots:
         QCOMPARE(hoverBackground->property("color").value<QColor>(),
                  headerHoverColor);
         QCOMPARE(hoverBackground->y(), topSpacing);
-        auto *title = findVisualItem(panel, headerName + QStringLiteral("-title"));
-        auto *chevron = findVisualItem(panel, headerName + QStringLiteral("-chevron"));
-        auto *count = findVisualItem(panel, headerName + QStringLiteral("-count"));
+        QPointer<QQuickItem> title = findVisualItem(panel, headerName + QStringLiteral("-title"));
+        QPointer<QQuickItem> chevron = findVisualItem(panel, headerName + QStringLiteral("-chevron"));
+        QPointer<QQuickItem> count = findVisualItem(panel, headerName + QStringLiteral("-count"));
         QVERIFY(title);
         QVERIFY(chevron);
         QVERIFY(count);
+        for (const auto &leaf : {title, chevron, count}) {
+            const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+            for (qreal coordinate : {origin.x() * dpr, origin.y() * dpr})
+                QVERIFY2(qAbs(coordinate - qRound(coordinate)) < 0.01,
+                         qPrintable(QString("sticky %1 physical coordinate %2")
+                             .arg(leaf->objectName()).arg(coordinate)));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - origin, QPointF(0, 1));
+        }
         const qreal textBandBottom = std::max({
             title->mapToItem(header, QPointF(0, title->height())).y(),
             chevron->mapToItem(header, QPointF(0, chevron->height())).y(),
@@ -571,13 +594,15 @@ private slots:
         QTest::qWait(50);
         const QImage underlay = view.grabWindow();
         QVERIFY(!underlay.isNull());
+        QVERIFY(header);
         header->setVisible(true);
         panel->setProperty("hoverPointerInside", false);
         QTest::mouseMove(&view, QPoint(view.width() - 2, view.height() - 2));
         QVERIFY(!header->property("pointerHovered").toBool());
-        QTRY_VERIFY_WITH_TIMEOUT(!hoverBackground->isVisible(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(hoverBackground && !hoverBackground->isVisible(), 3000);
         view.requestUpdate();
         QTest::qWait(50);
+        QVERIFY(header && title && count);
         QVERIFY(header->property("currentSticky").toBool());
         QVERIFY2(qAbs(layout->contentY() - (sectionOffset + topSpacing))
                      < physicalPixel / 4,
@@ -690,7 +715,7 @@ private slots:
         QTest::mouseMove(&view, header->mapToItem(
             view.contentItem(), QPointF(clearSampleX, header->height() / 2))
                                      .toPoint());
-        QTRY_VERIFY_WITH_TIMEOUT(hoverBackground->isVisible(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(hoverBackground && hoverBackground->isVisible(), 3000);
         view.requestUpdate();
         QTest::qWait(50);
         const QImage hoverCapture = view.grabWindow();
@@ -1197,6 +1222,9 @@ private slots:
             grid->setTargetHeight(width);
             const int cells = width < 80 ? 1 : width < 150 ? 4 : width < 300 ? 9 : 16;
             QTest::qWait(150);
+            QTRY_COMPARE(grid->visibleIndexes().size(), cells);
+            for (int index = 0; index < cells; ++index)
+                QVERIFY(grid->visibleIndexes().contains(index));
             int displayed = 0;
             for (int i = 0; i < 16; ++i) {
                 auto *leaf = findVisualItem(preview, QStringLiteral("folderPreviewImage-%1").arg(i));
@@ -1882,8 +1910,10 @@ private slots:
             !layout->indexGeometry(entryCount - 1).isEmpty(), 3000);
         QTRY_VERIFY_WITH_TIMEOUT(
             indexIntersectsViewport(layout, entryCount - 1), 3000);
-        QCOMPARE(layout->windowTopIndex(),
-                 layout->windowTopIndexForIndex(entryCount - 1));
+        // Continuous Columns reveal only the missing edge, not a whole page.
+        const QRectF topColumn = layout->indexGeometry(layout->windowTopIndex());
+        QVERIFY(topColumn.left() <= layout->contentY() + 0.51);
+        QVERIFY(topColumn.right() > layout->contentY() - 0.51);
         session->setCurrentIndex(37);
         QVERIFY(invokeEnsureCurrentVisible(panel));
         QTRY_COMPARE_WITH_TIMEOUT(layout->currentIndex(), 37, 3000);
@@ -2223,8 +2253,8 @@ private slots:
             QVERIFY(title);
             QVERIFY2(title->x() < toggleIcon->x(),
                      "group title must precede the expand/collapse icon");
-            QVERIFY2(toggleIcon->x() <= title->x()
-                         + title->property("implicitWidth").toReal() + 7,
+            QVERIFY2(qAbs(toggleIcon->x() - title->x() - title->width()
+                          - qRound(6 * dpr) / dpr) < 0.01,
                      "group chevron must follow the text, not the panel edge");
             const QPointF separatorInHeader = separator->mapToItem(header, QPointF());
             QVERIFY2(separatorInHeader.y() >= 7.5,
@@ -6483,7 +6513,9 @@ private slots:
                 size0->x() + 0.51,
             3000);
         QTRY_VERIFY_WITH_TIMEOUT(
-            qAbs(extension0->x() + extension0->width() + 8
+            qAbs(extension0->x() + extension0->width()
+                 + panel->property("detailsRowInset").toReal()
+                 + panel->property("detailsHeaderCellInset").toReal()
                  - size0->x()) <= 0.51,
             3000);
         QVERIFY(qAbs(extension0->x() - extension1->x()) <= 0.51);
@@ -7955,7 +7987,8 @@ private slots:
             + (iconSlot0->width() - fileIcon->width()) / 2;
         QCOMPARE(iconPosition.x(), expectedIconX);
         QCOMPARE(fileIcon->width(),
-                 qMin(iconSlot0->width(), row0->height() - 6.0));
+                 qMin(qMin(iconSlot0->width(), row0->height() - 6.0),
+                      panel->property("detailsIconSize").toReal()));
         QVERIFY(QString::fromLatin1(base0->metaObject()->className())
                     .contains(QStringLiteral("QQuickText")));
         QCOMPARE(base0->height(), base0->implicitHeight());
@@ -7970,9 +8003,10 @@ private slots:
         QCOMPARE(extension0->width(), 40.0);
         // Configurable Details columns now share the header schema, including
         // its size column, instead of reserving a separate fixed 96px lane.
-        QCOMPARE(size0->width(), headerCell1->width());
+        const qreal cellInset = panel->property("detailsHeaderCellInset").toReal();
+        QCOMPARE(size0->width(), headerCell1->width() - 2 * cellInset);
         QCOMPARE(size0->mapToItem(row0, QPointF()).x() + size0->width(),
-                 headerCell1->x() + headerCell1->width());
+                 headerCell1->x() + headerCell1->width() - cellInset);
         QCOMPARE(base0->property("color").value<QColor>(),
                  QColor(QStringLiteral("#c4cbd3")));
         QCOMPARE(folderBase->property("color").value<QColor>(),
@@ -7987,6 +8021,7 @@ private slots:
         QCOMPARE(folderBasePosition.x(), folderIconSlot->mapToItem(
                      row1, QPointF(folderIconSlot->width() + 8.0, 0)).x());
         QCOMPARE(folderBase->width(), folderSizePosition.x() - 8.0
+                                      - panel->property("detailsHeaderCellInset").toReal()
                                       - folderBasePosition.x());
         QCOMPARE(fileIcon->property("effectiveIconColor").value<QColor>(),
                  QColor(QStringLiteral("#9aa7b5")));
@@ -8332,10 +8367,12 @@ private slots:
         QObject *panel = createPanel(
             view, session, QStringLiteral("thumbnailOffSession"), mode);
         QVERIFY(panel);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
         auto *layout = panel->findChild<MasonryLayout *>(
             QStringLiteral("galleryViewportItem"));
         QVERIFY(layout);
         panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        QTRY_COMPARE(layout->devicePixelRatio(), view.devicePixelRatio());
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 1, 3000);
         auto *file = session->model()->index(0, 0)
             .data(FileListModel::ImageFileRole).value<ImageFile *>();
@@ -8347,6 +8384,11 @@ private slots:
         QTRY_VERIFY(thumbnail && fallback);
         QTRY_VERIFY(fallback->isVisible());
         QVERIFY(thumbnail->property("source").toUrl().isEmpty());
+        const auto expectedMode = mode == QStringLiteral("grid") ? MasonryLayout::Grid
+            : mode == QStringLiteral("icons") ? MasonryLayout::Icons
+            : mode == QStringLiteral("details") ? MasonryLayout::Details
+            : MasonryLayout::Columns;
+        QTRY_COMPARE(layout->presentationMode(), expectedMode);
         const QRectF fixedGeometry = layout->indexGeometry(0);
         panel->setProperty("presentationMode", QStringLiteral("masonry"));
         QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
@@ -10243,6 +10285,9 @@ private slots:
         auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
         QVERIFY(layout && model);
         QVERIFY(model->sparseCatalog());
+        QSignalSpy resets(model, &QAbstractItemModel::modelReset);
+        const QVariant survivor = model->data(model->index(0), FileListModel::ImageFileRole);
+        QPersistentModelIndex persistent(model->index(0));
         state[QStringLiteral("catalogRowsDeferred")] = false;
         state[QStringLiteral("catalogDelta")] = QVariantMap{
             {QStringLiteral("baseCatalogRevision"), 1},
@@ -10253,6 +10298,9 @@ private slots:
             }}},
         };
         QVERIFY(session->applyExternalCatalog(catalog, 2, state));
+        QCOMPARE(resets.size(), 0);
+        QCOMPARE(persistent.row(), 0);
+        QCOMPARE(model->data(model->index(0), FileListModel::ImageFileRole), survivor);
         QVERIFY2(!model->sparseCatalog(), "completed catalog must stop using uniform sparse geometry");
         auto *decoder = runtime->findChild<DecodeManager *>();
         QVERIFY(decoder);
@@ -10547,8 +10595,9 @@ private slots:
         const qreal tileEdge = panelItem->width() - layout->paddingRight()
             - layout->spacing() / 2.0;
         const qreal gapCenter = (tileEdge + panelItem->width()) / 2;
-        QVERIFY(qAbs(scrollBar->x() + scrollBar->width() / 2 - gapCenter)
-                <= 0.5 / view.devicePixelRatio());
+        const qreal expectedScrollX = qRound((gapCenter - scrollBar->width() / 2)
+                                             * view.devicePixelRatio()) / view.devicePixelRatio();
+        QTRY_VERIFY_WITH_TIMEOUT(qAbs(scrollBar->x() - expectedScrollX) < 0.0001, 3000);
         view.show();
         QVERIFY(QTest::qWaitForWindowExposed(&view));
         QTest::qWait(100);

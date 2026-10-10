@@ -6,7 +6,7 @@ import QtQuick.Controls.impl
 
 import ZoinGallery.Native 1.0
 
-FocusScope {
+GalleryPanelFacade {
     id: root
     // Delegates recycle beyond the viewport; the host owns trailing clipping.
     clip: false
@@ -171,15 +171,6 @@ FocusScope {
         cursorCommitTimer: root.cursorCommitTimerObject
     }
 
-    function updateHoveredIndexAt(panelX, panelY) {
-        return selectionState.updateHoveredIndexAt(panelX, panelY)
-    }
-    function refreshHoveredIndex() {
-        return selectionState.refreshHoveredIndex()
-    }
-    function clearHoveredIndex() {
-        selectionState.clearHoveredIndex()
-    }
 
     readonly property GalleryViewportController viewportController:
         viewportState
@@ -340,9 +331,6 @@ FocusScope {
         layoutRetargetTimer: root.cursorChromeRetargetTimerObject
     }
 
-    function alignViewportItemRectToDevicePixels(item, rect) {
-        return cursorState.alignViewportItemRectToDevicePixels(item, rect)
-    }
 
     // The full-area viewer sets these while its image is animating to or from
     // the active tile.  Only the tile image is suppressed; panel chrome,
@@ -567,83 +555,23 @@ FocusScope {
     readonly property real detailsScrollBarWidth:
         fileFieldPresentation.detailsPixelExtent(metrics.detailsScrollBarWidth)
 
-    function noteDensityChanged(finalChange) {
-        viewportState.noteDensityChanged(finalChange)
-    }
 
     function sourceIndex(viewIndex) {
         return controller ? controller.sourceIndexAt(viewIndex) : -1
     }
 
-    function currentTransitionItem() {
-        return viewerTransitionState.currentItem()
-    }
 
-    function currentItemImageGeometry(targetItem) {
-        return viewerTransitionState.imageGeometry(targetItem)
-    }
 
-    function currentItemImageSource() {
-        return viewerTransitionState.imageSource()
-    }
 
-    function handlePointerPress(viewIndex, button, modifiers) {
-        selectionState.handlePointerPress(viewIndex, button, modifiers)
-    }
 
-    function invertPanelSelection() {
-        selectionState.invertPanelSelection()
-    }
 
-    function handlePointerDrag(panelX, panelY) {
-        selectionState.handlePointerDrag(panelX, panelY)
-    }
 
-    function endPointerDrag() {
-        selectionState.endPointerDrag()
-    }
 
     // Fixed compact modes use two different coordinate systems for their
     // content. Columns delegates are pixel-snapped by BrickItem, while
     // Details deliberately keeps its fractional row pitch. A keyboard reveal
     // therefore has to land on the corresponding visual lattice; a raw
     // minimal reveal leaves a half-pixel phase behind after every boundary.
-    function handlePanelMiddlePress(x, y, modifiers) {
-        viewportState.handlePanelMiddlePress(x, y, modifiers)
-    }
-    function stepDensity(zoomIn) {
-        viewportState.stepDensity(zoomIn)
-    }
-    function resetDensity(value) {
-        viewportState.resetDensity(value)
-    }
-    function handlePanelMiddleRelease(x, y, modifiers) {
-        viewportState.handlePanelMiddleRelease(x, y, modifiers)
-    }
-    function handlePanelWheel(pixelDeltaY, angleDeltaY, modifiers,
-                              pixelDeltaX, angleDeltaX) {
-        return viewportState.handlePanelWheel(
-                    pixelDeltaY, angleDeltaY, modifiers,
-                    pixelDeltaX, angleDeltaX)
-    }
-    function beginThumbnailPinch() {
-        viewportState.beginThumbnailPinch()
-    }
-    function updateThumbnailPinch(scale) {
-        viewportState.updateThumbnailPinch(scale)
-    }
-    function finishThumbnailPinch() {
-        viewportState.finishThumbnailPinch()
-    }
-    function setPanelContentY(value, persist) {
-        viewportState.setPanelContentY(value, persist)
-    }
-    function beginPresentationSwitch() {
-        viewportState.beginPresentationSwitch()
-    }
-    function beginPresentationStateUpdate(switchingMode) {
-        viewportState.beginPresentationStateUpdate(switchingMode)
-    }
 
     function applyPresentationMode(requestedMode) {
         const value = String(requestedMode || "masonry")
@@ -662,202 +590,32 @@ FocusScope {
                     galleryLayout.presentationMode !== nativeMode,
                     normalized)
     }
-    function endPresentationStateUpdate(publishVisibleRange) {
-        viewportState.endPresentationStateUpdate(publishVisibleRange)
-    }
-    function restoreScrollOffset() {
-        return viewportState.restoreScrollOffset()
-    }
-    function restoreScrollOrEnsureCursor() {
-        viewportState.restoreScrollOrEnsureCursor()
-    }
-    function centerCurrentForPathChange() {
-        return viewportState.centerCurrentForPathChange()
-    }
-    function restoreRememberedViewportForPathChange() {
-        return viewportState.restoreRememberedViewportForPathChange()
-    }
-    function placeViewportForPathChange() {
-        return viewportState.placeViewportForPathChange()
-    }
-    function schedulePathViewportPlacement(reason) {
-        viewportState.schedulePathViewportPlacement(reason)
-    }
 
-    function scheduleViewportUpdate(ensureCursor) {
-        viewportState.scheduleViewportUpdate(ensureCursor)
-    }
 
-    function selectIndex(viewIndex, openItem, deferCursorCommit,
-                         autoRepeat) {
-        navigationState.selectIndex(viewIndex, openItem, deferCursorCommit,
-                                    autoRepeat)
-    }
-    function commitPendingCursor() {
-        navigationState.commitPendingCursor()
-    }
-    function refreshPendingCursorCommit() {
-        navigationState.refreshPendingCursorCommit()
-    }
-    function resetCurrentItemCenterX(index) {
-        navigationState.resetCurrentItemCenterX(index)
-    }
-    function resetCurrentItemCenterY(index) {
-        navigationState.resetCurrentItemCenterY(index)
-    }
-    function resetCurrentItemCenter(index) {
-        navigationState.resetCurrentItemCenter(index)
-    }
 
-    function indexIntersectsViewport(index) {
-        return cursorState.indexIntersectsViewport(index)
-    }
-    function nearestVisibleCursor(targetIndex) {
-        return cursorState.nearestVisibleCursor(targetIndex)
-    }
-    function cursorAtViewportAnchor() {
-        return cursorState.cursorAtViewportAnchor()
-    }
-    function updateVisualCursorForViewport() {
-        cursorState.updateVisualCursorForViewport()
-    }
-    function cursorChromeNavigationSnapshot() {
-        return cursorState.cursorChromeNavigationSnapshot()
-    }
-    function cursorChromeRectForIndex(index, plannedContentY) {
-        return cursorState.cursorChromeRectForIndex(index, plannedContentY)
-    }
-    function startCursorChromeGeometry(startRect, targetRect, targetIndex) {
-        return cursorState.startCursorChromeGeometry(
-                    startRect, targetRect, targetIndex)
-    }
-    function startCursorChromeForNavigation(snapshot, targetIndex) {
-        return cursorState.startCursorChromeForNavigation(snapshot, targetIndex)
-    }
-    function retargetCursorChromeAfterLayoutReset() {
-        cursorState.retargetCursorChromeAfterLayoutReset()
-    }
-    function cancelCursorChromeTransition() {
-        cursorState.cancelCursorChromeTransition()
-    }
-    function finishCursorChromeTransition() {
-        cursorState.finishCursorChromeTransition()
-    }
-    function coordinateVisualCursor(targetIndex, previousIndex) {
-        cursorState.coordinateVisualCursor(targetIndex, previousIndex)
-    }
 
-    function navigationTargetForKey(key, page) {
-        return navigationState.navigationTargetForKey(key, page)
-    }
-    function moveCursor(index, preserveSelectionAnchor,
-                        preserveHorizontalAnchor, deferCursorCommit,
-                        preserveVerticalAnchor, keyboardRevealDirection) {
-        navigationState.moveCursor(
-                    index, preserveSelectionAnchor,
-                    preserveHorizontalAnchor, deferCursorCommit,
-                    preserveVerticalAnchor, keyboardRevealDirection)
-    }
 
-    function moveCursorWithSelection(index, togglePrevious,
-                                     preserveHorizontalAnchor,
-                                     deferCursorCommit,
-                                     preserveVerticalAnchor,
-                                     keyboardRevealDirection,
-                                     includeSelectionTarget) {
-        selectionState.moveCursorWithSelection(
-                    index, togglePrevious, preserveHorizontalAnchor,
-                    deferCursorCommit, preserveVerticalAnchor,
-                    keyboardRevealDirection, includeSelectionTarget)
-    }
 
-    function beginKeyboardShiftSelection(anchorIndex, selectionAdds) {
-        selectionState.beginKeyboardShiftSelection(anchorIndex, selectionAdds)
-    }
 
-    function togglePendingKeyboardSelection(index) {
-        selectionState.togglePendingKeyboardSelection(index)
-    }
 
-    function effectiveEntrySelected(entryId, authoritativeSelected) {
-        return selectionState.effectiveEntrySelected(entryId,
-                                                     authoritativeSelected)
-    }
 
-    function reconcileAcknowledgedKeyboardSelection() {
-        selectionState.reconcileAcknowledgedKeyboardSelection()
-    }
 
-    function clearPendingKeyboardSelection() {
-        selectionState.clearPendingKeyboardSelection()
-    }
 
-    function finishKeyboardShiftSelection() {
-        return selectionState.finishKeyboardShiftSelection()
-    }
 
-    function beginKeyboardToggleSelection(key) {
-        selectionState.beginKeyboardToggleSelection(key)
-    }
 
-    function finishKeyboardToggleSelection() {
-        return selectionState.finishKeyboardToggleSelection()
-    }
 
-    function finishKeyboardSelectionGesture() {
-        return selectionState.finishKeyboardSelectionGesture()
-    }
 
-    function commitCursorAfterNavigation() {
-        navigationState.commitCursorAfterNavigation()
-    }
 
-    function resetGridPageLattice() {
-        navigationState.resetGridPageLattice()
-    }
 
-    function resetMasonryPageSequence() {
-        navigationState.resetMasonryPageSequence()
-    }
 
-    function invalidateMasonryPageGeometry() {
-        navigationState.invalidateMasonryPageGeometry()
-    }
 
-    function navigateViewportPage(direction, togglePrevious,
-                                  deferCursorCommit) {
-        return navigationState.navigateViewportPage(
-                    direction, togglePrevious, deferCursorCommit)
-    }
 
-    function ensureCurrentVisible(animateScroll, keyboardRevealDirection) {
-        navigationState.ensureCurrentVisible(
-                    animateScroll, keyboardRevealDirection)
-    }
 
-    function ownsKey(event) {
-        return inputState.ownsKey(event)
-    }
 
-    function ensureSessionPreviews() {
-        reconciliationState.ensureSessionPreviews()
-    }
 
-    function handleLocalQuickSearchKey(event) {
-        return inputState.handleLocalQuickSearchKey(event)
-    }
 
-    function resetControllerState() {
-        reconciliationState.resetControllerState()
-    }
 
-    function scheduleCursorChromeLayoutRetarget() {
-        motionState.cursorRetargetTimer.restart()
-    }
 
-    function scheduleThumbnailResizeDecode() {
-        motionState.thumbnailResizeTimer.restart()
-    }
 
     GalleryViewport {
         id: galleryViewport

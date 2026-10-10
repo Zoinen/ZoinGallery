@@ -220,12 +220,13 @@ Item {
         const overhead = labels.map((_, i) => breadcrumbSeparatorHorizontalPadding
             + (i < labels.length - 1
                ? breadcrumbSeparatorHorizontalPadding + breadcrumbSeparatorSize : 0))
-        const natural = labels.map(label => Math.ceil(breadcrumbMetrics.advanceWidth(label)))
+        const natural = labels.map(label =>
+            Math.ceil(breadcrumbMetrics.advanceWidth(label) * dpr) / dpr)
         if (!compactBreadcrumbs)
             return natural.map((width, i) => Math.ceil((width + overhead[i]) * dpr) / dpr)
         const minimum = labels.map((label, i) => i === labels.length - 1
             ? natural[i] : Math.min(natural[i],
-                Math.ceil(breadcrumbMetrics.advanceWidth(Array.from(label).slice(0, 3).join(""))) + 14))
+                Math.ceil(breadcrumbMetrics.advanceWidth(Array.from(label).slice(0, 3).join("")) * dpr) / dpr + 14))
         const budget = Math.max(0, dynamicPart.width
             - overhead.reduce((a, b) => a + b, 0))
         let low = 0
@@ -347,6 +348,7 @@ Item {
 
             Text {
                 id: folderText
+                width: pathRoot.snap(implicitWidth)
                 y: pathRoot.snap((folderDelegate.height - height) / 2)
                 objectName: folderDelegate.objectName + "-text"
                 color: pathRoot.pathTextColor

@@ -705,6 +705,26 @@ void comparePixels(const QImage &actual, const QImage &expected, int tolerance) 
 }
 
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+// Policy oracle independent of the QML binding: floor-rounded half levels,
+// with a direct filter for a single moderate (at most 2.6x) video reduction.
+int expectedVideoLevels(QSize input, QSize output) {
+    QSize levelSize = input;
+    int levels = 0;
+    while (levelSize.width() > 1 || levelSize.height() > 1) {
+        const QSize next(qMax(1, levelSize.width() / 2),
+                         qMax(1, levelSize.height() / 2));
+        if ((levelSize.width() > 1 && next.width() < output.width())
+            || (levelSize.height() > 1 && next.height() < output.height()))
+            break;
+        levelSize = next;
+        ++levels;
+    }
+    if (levels == 1 && qreal(input.width()) / output.width() <= 2.6
+        && qreal(input.height()) / output.height() <= 2.6)
+        return 0;
+    return levels;
+}
+
 QVideoFrame syntheticVideoFrame(QSize size, bool yuv, int revision,
                                 QtVideo::Rotation rotation = QtVideo::Rotation::None,
                                 bool mirrored = false) {
@@ -1462,10 +1482,7 @@ void ViewerResampleGpuTest::videoResampleMatchesReference() {
         QVERIFY(fixture.filtered()->property("linearVideoCacheRequested").isValid());
         QCOMPARE(fixture.filtered()->property("referenceSampling").toBool(), mode == "1");
         const bool deviceSupported = fixture.rhiSupportsLinearVideoCache();
-        const int expectedLevels = sourceSize.width() >= targetSize.width() * 4
-            && sourceSize.height() >= targetSize.height() * 4 ? 2
-            : (sourceSize.width() >= targetSize.width() * 2
-               && sourceSize.height() >= targetSize.height() * 2 ? 1 : 0);
+        const int expectedLevels = expectedVideoLevels(sourceSize, targetSize);
         QCOMPARE(fixture.filtered()->property("requiredLevels").toInt(), expectedLevels);
         const QPointF origin = fixture.scenePoint();
         QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.001);
@@ -1520,7 +1537,9 @@ void ViewerResampleGpuTest::videoResampleMatchesReference() {
             if (mode == "1")
                 reference.push_back(actual);
             else {
-                comparePixels(actual, reference[index], 0);
+                // YUV matrix conversion and RGBA32F cache sampling can round
+                // across adjacent 8-bit bins; BGRA remains bit-exact.
+                comparePixels(actual, reference[index], yuv ? 1 : 0);
                 if (QTest::currentTestFailed()) {
                     qInfo() << "Video reference mismatch: mode"
                             << (mode.isNull() ? QByteArray("unset") : mode)
@@ -1542,7 +1561,7 @@ void ViewerResampleGpuTest::videoResampleMatchesReference() {
                 QVERIFY(draws.count() > 0);
                 QCOMPARE(draws.linearCount(), 0);
                 QCOMPARE(source.revision(), revision);
-                comparePixels(raw, actual, 0);
+                comparePixels(raw, actual, yuv ? 1 : 0);
                 QVERIFY(fixture.filtered()->setProperty("cacheVideoConversion", true));
                 draws.reset();
                 const QImage restored = fixture.render();
@@ -1967,7 +1986,8 @@ void ViewerResampleGpuTest::videoConversionInputs() {
             if (mode == "1")
                 reference[index - 1] = actual;
             else
-                comparePixels(actual, reference[index - 1], 0);
+                comparePixels(actual, reference[index - 1],
+                              pixelFormat == int(QVideoFrameFormat::Format_BGRA8888) ? 0 : 1);
             if (eligible && index == 1) {
                 QVERIFY(fixture.filtered()->setProperty("cacheVideoConversion", false));
                 draws.reset();
@@ -1977,7 +1997,8 @@ void ViewerResampleGpuTest::videoConversionInputs() {
                 QVERIFY(!fixture.filtered()->property("linearVideoCacheRequested").toBool());
                 QVERIFY(!fixture.linearVideoConsumer()->property("linearVideoCacheSupported").toBool());
                 QCOMPARE(draws.linearCount(), 0);
-                comparePixels(raw, actual, 0);
+                comparePixels(raw, actual,
+                              pixelFormat == int(QVideoFrameFormat::Format_BGRA8888) ? 0 : 1);
                 QVERIFY(fixture.filtered()->setProperty("cacheVideoConversion", true));
                 draws.reset();
                 const QImage restored = fixture.render();
@@ -2031,7 +2052,9 @@ void ViewerResampleGpuTest::videoConversionSurvivesPyramidResize() {
     QFETCH(QList<QSize>, sizes);
     ScopedEnvironmentVariable enableConversion("F4_VIEWER_DISABLE_LINEAR_VIDEO_CACHE", QByteArray());
     const qreal dpr = 1.75;
-    const QList<int> levels{0, 1, 2, 1, 0};
+    QList<int> levels;
+    for (const QSize &size : sizes)
+        levels.append(expectedVideoLevels(sourceSize, size));
     QCOMPARE(sizes.size(), levels.size());
     const std::array<QVideoFrame, 2> frames{
         syntheticVideoFrame(sourceSize, true, 0),
@@ -2083,7 +2106,7 @@ void ViewerResampleGpuTest::videoConversionSurvivesPyramidResize() {
                 QCOMPARE(draws.conversionCount(), 0);
                 QCOMPARE(draws.linearCount(), 0);
             } else {
-                comparePixels(actual, reference[index], 0);
+                comparePixels(actual, reference[index], 1);
                 if (eligible) {
                     QVERIFY(fixture.linearVideoConsumer());
                     QVERIFY(fixture.linearVideoConsumer()->property("linearVideoCacheSupported").toBool());
@@ -2104,7 +2127,13 @@ void ViewerResampleGpuTest::videoConversionSurvivesPyramidResize() {
                     }
                     // Changing the admitting consumer may rebuild its producer
                     // once; an unchanged pass and paused rendering never do.
-                    QCOMPARE(draws.conversionCount(), index == 0 || fresh || handoff || grows ? 1 : 0);
+                    if (handoff && levels[index] == 0 && levels[index - 1] == 0) {
+                        // A resized direct pass may retain its admitted producer
+                        // or transfer admission when presentation caching changes.
+                        QVERIFY(draws.conversionCount() <= 1);
+                    } else {
+                        QCOMPARE(draws.conversionCount(), index == 0 || fresh || handoff || grows ? 1 : 0);
+                    }
                     if (draws.conversionCount())
                         QCOMPARE(draws.conversionRevision(), revision);
                 }
@@ -2464,8 +2493,10 @@ void ViewerResampleGpuTest::videoFramesRenderAndUpdate_data() {
     QTest::addColumn<qreal>("dpr");
     QTest::newRow("direct") << QSize(56, 42) << qreal(1);
     QTest::newRow("direct-dpr175") << QSize(56, 42) << qreal(1.75);
-    QTest::newRow("pyramid") << QSize(112, 84) << qreal(1);
-    QTest::newRow("pyramid-dpr175") << QSize(112, 84) << qreal(1.75);
+    QTest::newRow("half-direct") << QSize(112, 84) << qreal(1);
+    QTest::newRow("pyramid") << QSize(224, 168) << qreal(1);
+    QTest::newRow("half-direct-dpr175") << QSize(112, 84) << qreal(1.75);
+    QTest::newRow("pyramid-dpr175") << QSize(224, 168) << qreal(1.75);
 }
 
 void ViewerResampleGpuTest::videoFramesRenderAndUpdate() {
@@ -2513,7 +2544,7 @@ void ViewerResampleGpuTest::videoFramesRenderAndUpdate() {
         QCOMPARE(source.revision(), quint64(revision));
         const QImage actual = fixture.render();
         QVERIFY2(!actual.isNull(), qPrintable(fixture.error));
-        const int levels = sourceSize == targetSize ? 0 : 1;
+        const int levels = expectedVideoLevels(sourceSize, targetSize);
         QCOMPARE(fixture.filtered()->property("requiredLevels").toInt(), levels);
         if (!levels)
             QCOMPARE(fixture.filtered()->property("videoSource").value<QObject *>(), &source);
@@ -2522,7 +2553,7 @@ void ViewerResampleGpuTest::videoFramesRenderAndUpdate() {
             QVERIFY(selected);
             QCOMPARE(selected->property("textureSize").toSize(), targetSize);
         }
-        comparePixels(actual, levels ? ZoinGallery::ViewerResampler::downsample(reference, targetSize)
+        comparePixels(actual, sourceSize != targetSize ? ZoinGallery::ViewerResampler::downsample(reference, targetSize)
                                      : reference, 2);
         if (dpr == 1.75 && revision == 2) {
             const QString capture = qEnvironmentVariable("ZOIN_VIDEO_GPU_CAPTURE");

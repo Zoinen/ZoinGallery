@@ -13,6 +13,7 @@
 #include "CacheViewer.h"
 #include "DecodeManager.h"
 #include "MasonryLayout.h"
+#include "GalleryNativeTextMetrics.h"
 #include "ProviderImageStore.h"
 #include "QmlAsyncImageProvider.h"
 #include "QmlImageProvider.h"
@@ -112,6 +113,8 @@ void GalleryRuntime::registerTypes() {
         // the plugin-owned namespace.
         qmlRegisterType<MasonryLayout>(NativeModuleUri, 1, 0,
                                        "GalleryViewportItem");
+        qmlRegisterType<GalleryNativeTextMetrics>(NativeModuleUri, 1, 0,
+                                                "GalleryNativeTextMetrics");
         qmlRegisterType<BrickItem>(NativeModuleUri, 1, 0, "BrickItem");
         qmlRegisterType<ViewerWheelArea>(NativeModuleUri, 1, 0,
                                         "ViewerWheelArea");

@@ -159,14 +159,7 @@ void ExternalCatalogModel::applyImageInfoResult(
     _backgroundMetadataRetries.remove(retryKey);
     const bool unusableMetadata = !info.imageSize.isValid();
     if (unusableMetadata) {
-        QList<int> pendingRows;
-        for (const int row : std::as_const(authorityRows)) {
-            if (viewerRequestStateAt(row) ==
-                QStringLiteral("pending")) {
-                pendingRows.append(row);
-            }
-        }
-        setViewerRequestState(pendingRows, QStringLiteral("failed"));
+        markViewerDecodeFailed(authorityRows);
     }
     if (_catalogFitWaitingMetadata.remove(sourceIdentity)
         && !_catalogFitResolvedSources.contains(sourceIdentity)) {
@@ -339,21 +332,10 @@ void ExternalCatalogModel::handleImageReady(
         if (!request.viewerRequest) {
             releaseFailedThumbnailRequest(request);
         }
-        // A null decode after a successful direct-local read is authoritative:
-        // the bytes are corrupt or unsupported, so repeating it only burns
-        // CPU and keeps the loading animation alive. Expensive/materialized
-        // sources retain their bounded transport-recovery retries.
-        if (request.info.source.isValid()
-            && expensiveSource(request.info.source)
-            && scheduleSourceDecodeRetry(request)) {
-            if (request.viewerRequest) {
-                setViewerRequestState(authorityRows,
-                                      QStringLiteral("pending"));
-            }
-        } else if (request.viewerRequest) {
-            setViewerRequestState(authorityRows,
-                                  QStringLiteral("failed"));
-        }
+        // A successful source read followed by a null pixel decode is a
+        // content failure, regardless of whether its bytes came from a VFS.
+        // Transport failures are reported separately by imageReadFailed.
+        markViewerDecodeFailed(authorityRows);
         return;
     }
     const QList<int> decodedRows = validatedDecodedRows(
@@ -523,7 +505,14 @@ void ExternalCatalogModel::publishViewerImage(
     const ViewerImageCache::StoredImage stored =
         _viewerImageCache.storeDecodedImage(request, image, decodedInfo);
     if (stored.presentable) {
-        setViewerRequestState(rows, QStringLiteral("ready"));
+        QList<int> readyRows;
+        for (const int row : rows) {
+            const auto plan = _viewerPlans.constFind(loadedEntry(row).id);
+            const int requiredLevel = plan != _viewerPlans.cend()
+                && plan->viewportSize.isEmpty() ? 2 : 1;
+            if (stored.level >= requiredLevel) readyRows.append(row);
+        }
+        setViewerRequestState(readyRows, QStringLiteral("ready"));
     }
     MediaTimingTrace::event(
         QStringLiteral("qt.gallery.viewer_image.stored"), {
@@ -547,6 +536,8 @@ void ExternalCatalogModel::publishViewerImage(
         }
         if (activeViewerChanged) {
             notifyViewerImageUrlChanged();
+            // Expand the bounded neighbor plan only after publishing current.
+            QTimer::singleShot(0, this, [this] { scheduleViewerDecode(); });
         }
     }
     if (request.fitToViewerRequest) {
@@ -613,13 +604,14 @@ void ExternalCatalogModel::handleImageReadFailed(
         }
         else {
             completeCatalogFitRequest(request);
-            setViewerRequestState(authorityRows,
-                                  QStringLiteral("failed"));
+            markViewerDecodeFailed(authorityRows);
         }
         return;
     }
 
     releaseFailedThumbnailRequest(request);
+    if (!request.sourceAccessFailed)
+        markViewerDecodeFailed(decodeAuthorityRows(request));
     // External/VFS reads can fail transiently while the media transport is
     // reconnecting. A normal thumbnail must get the same bounded retry as a
     // visible/high-priority request; otherwise one timeout leaves its card
@@ -1078,6 +1070,8 @@ void ExternalCatalogModel::pumpProbeRequests() {
 
     ProbeBatch batch;
     batch.available = probeRequestLimit() - _probePendingVersions.size();
+    batch.available = qMax(batch.available,
+        _probeUrgentRows.size() + _probeVisibleRows.size());
     if (batch.available <= 0) {
         return;
     }
@@ -1090,6 +1084,8 @@ void ExternalCatalogModel::pumpProbeRequests() {
 
     drainProbeRows(batch, _probeUrgentRows, true, false);
     drainProbeRows(batch, _probeVisibleRows, true, true);
+    batch.available = qMin(batch.available,
+        probeRequestLimit() - _probePendingVersions.size());
     drainProbeRows(batch, _probeOverscanRows, false, true);
     collectCatalogProbeRows(batch);
     submitProbeBatch(batch.highRequests, true);

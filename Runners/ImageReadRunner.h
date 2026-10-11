@@ -17,6 +17,7 @@ public:
 
     QString path() const override;
     bool isViewerRequest() const override;
+    bool isViewerFitRequest() const override { return _request.fitToViewerRequest; }
     bool isPanelThumbnailRequest() const override {
         return _request.panelThumbnailRequest;
     }

@@ -180,6 +180,7 @@ public:
     // row.  Consumers must use this instead of treating an empty URL as
     // proof that work is still running.
     Q_INVOKABLE QString viewerRequestStateAt(int index) const;
+    Q_INVOKABLE bool viewerDecodeFailedAt(int index) const;
     Q_INVOKABLE void activateIndex(int index);
     Q_INVOKABLE void ensurePreviews();
     Q_INVOKABLE void requestViewer(int width, int height);

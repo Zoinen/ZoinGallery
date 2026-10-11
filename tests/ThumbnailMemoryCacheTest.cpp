@@ -120,6 +120,26 @@ private slots:
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
     }
 
+    void completedAspectBoundsAreReusedWithoutCoveringDifferentTiers() {
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        ZoinGallery::ThumbnailMemoryCache cache(store, 4 * 1024 * 1024);
+        const QString source = QStringLiteral("network/rounded-aspect.jpg");
+        const QString transform = QStringLiteral("thumbnail-aspect-v1");
+        QCOMPARE(cache.acquire("owner", source, "v1", 100, QSize(123, 77), transform).state,
+                 ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
+        const auto decoded = cache.storeDecoded("owner", source, "v1", 100,
+            QSize(123, 77), transform, frame(QSize(123, 69)));
+        QVERIFY(decoded.isValid());
+        const auto repeated = cache.acquire("other", source, "v1", 100,
+            QSize(123, 77), transform);
+        QCOMPARE(repeated.state, ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
+        QCOMPARE(repeated.handle.providerId, decoded.providerId);
+        QCOMPARE(cache.acquire("other", source, "v1", 100, QSize(123, 78), transform).state,
+                 ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
+        QCOMPARE(cache.acquire("other", source, "v2", 100, QSize(123, 77), transform).state,
+                 ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
+    }
+
     void largerGridTierIsReusedByIconsAndMasonry() {
         const auto store = QSharedPointer<ProviderImageStore>::create();
         ZoinGallery::ThumbnailMemoryCache cache(store, 4 * 1024 * 1024);

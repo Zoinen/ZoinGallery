@@ -1,3 +1,4 @@
+#include <QScopeGuard>
 #include "ExternalCatalogModelPrivate.h"
 #include "ExternalCatalogResetTransaction.h"
 #include "ExternalCatalogRowsTransaction.h"
@@ -18,6 +19,7 @@ bool ExternalCatalogModel::tryExtendSparseCatalog(
 bool ExternalCatalogModel::reconcileSparseCatalog(
     const QVariantList &values, bool metadataDeferred, int totalCount,
     const QVariantMap &delta) {
+    const auto failureScope = qScopeGuard([this] { pruneViewerDecodeFailures(); });
     if (_directoryPreviews) _directoryPreviews->invalidateSources(values, false);
     prepareDirectoryPreviewStates(values);
     const int oldCount = logicalRowCount();
@@ -171,6 +173,8 @@ bool ExternalCatalogModel::reconcileSparseCatalog(
     // Planner row coordinates belong to the old revision; source-keyed work
     // remains valid and its in-flight results are resolved through new indexes.
     _metadataVisibleRows.clear(); _metadataLastVisibleRows.clear();
+    _metadataLastOverscanRows.clear();
+    _decodeManager->setViewportDemand(_sessionId, {});
     _metadataOverscanRows.clear(); _metadataUrgentRows.clear(); _metadataAdHocRows.clear();
     _probeVisibleRows.clear(); _probeOverscanRows.clear(); _probeUrgentRows.clear();
     _catalogMetadataCursor = 0; _catalogProbeCursor = 0;
@@ -337,6 +341,8 @@ bool ExternalCatalogModel::applySparseCatalog(
         // or recreate work for retained files.
         _metadataVisibleRows.clear();
         _metadataLastVisibleRows.clear();
+        _metadataLastOverscanRows.clear();
+        _decodeManager->setViewportDemand(_sessionId, {});
         _metadataOverscanRows.clear();
         _metadataUrgentRows.clear();
         _metadataAdHocRows.clear();
@@ -404,6 +410,7 @@ bool ExternalCatalogModel::applySparseCatalog(
 
 bool ExternalCatalogModel::applyCatalogRows(
     const QVariantList &values, bool metadataDeferred) {
+    const auto failureScope = qScopeGuard([this] { pruneViewerDecodeFailures(); });
     if (_directoryPreviews) _directoryPreviews->invalidateSources(values, false);
     prepareDirectoryPreviewStates(values);
     ExternalCatalogRowsTransaction transaction(
@@ -414,6 +421,7 @@ bool ExternalCatalogModel::applyCatalogRows(
 bool ExternalCatalogModel::applyCatalog(
     const QVariantList &values, bool metadataDeferred,
     bool checkEquivalentCatalog, int totalCount) {
+    const auto failureScope = qScopeGuard([this] { pruneViewerDecodeFailures(); });
     if (_directoryPreviews) _directoryPreviews->invalidateSources(values, !checkEquivalentCatalog);
     prepareDirectoryPreviewStates(values);
     MediaTimingTrace::Span timingSpan(
@@ -745,6 +753,8 @@ void ExternalCatalogModel::setThumbnailsEnabled(bool enabled) {
         _metadataVisibleRows.clear();
         _metadataOverscanRows.clear();
         _metadataLastVisibleRows.clear();
+        _metadataLastOverscanRows.clear();
+        _decodeManager->setViewportDemand(_sessionId, {});
         _catalogMetadataRequested = false;
         _catalogMetadataCursor = 0;
         _catalogProbeRequested = false;

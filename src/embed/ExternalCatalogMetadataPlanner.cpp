@@ -42,6 +42,14 @@ bool ExternalCatalogMetadataPlanner::prepareCapacity() {
         return false;
     }
     m_available = ExternalCatalogModel::metadataRequestLimit() - pending;
+    if (foregroundWaiting) {
+        qsizetype foreground = 0;
+        for (const int row : m_model._metadataUrgentRows)
+            foreground += rowNeedsMetadata(row);
+        for (const int row : m_model._metadataVisibleRows)
+            foreground += rowNeedsMetadata(row);
+        m_available = qMax(m_available, foreground);
+    }
     if (m_available <= 0) {
         return false;
     }
@@ -82,11 +90,14 @@ void ExternalCatalogMetadataPlanner::drainRows(
 
 void ExternalCatalogMetadataPlanner::drainCurrentViewer(
     QList<int> &rows, QList<Request> &requests) {
+    const QList<int> viewerRows = m_model.viewerCandidateRows(
+        m_model.rowForEntryId(m_model._viewerEntryId),
+        m_model._viewerViewportSize.isEmpty() ? 1 : 16);
     int candidates = rows.size();
     while (m_available > 0 && candidates-- > 0 && !rows.isEmpty()) {
         const int row = rows.takeFirst();
         if (!m_model.validRow(row)
-            || m_model.loadedEntry(row).id != m_model._viewerEntryId
+            || !viewerRows.contains(row)
             || !m_model.probeResolvedFor(m_model.loadedEntry(row))) {
             rows.append(row);
             continue;
@@ -100,11 +111,20 @@ bool ExternalCatalogMetadataPlanner::serviceProbeBarrier() {
         return false;
     }
     drainCurrentViewer(m_model._metadataUrgentRows, m_highRequests);
-    if (!m_highRequests.isEmpty()) {
-        ++m_model._metadataSubmittedBatches;
-        m_model._decodeManager->readVersionedImagesInfo(
-            m_highRequests, false, true, m_model._sessionId);
+    // A visible image depends on its own probe, not every offscreen probe in
+    // a masonry catalog. Retain only rows whose individual probe is pending.
+    int candidates = m_model._metadataVisibleRows.size();
+    while (m_available > 0 && candidates-- > 0
+           && !m_model._metadataVisibleRows.isEmpty()) {
+        const int row = m_model._metadataVisibleRows.takeFirst();
+        if (m_model.validRow(row)
+            && m_model.probeResolvedFor(m_model.loadedEntry(row))) {
+            appendRow(row, m_highRequests, true);
+        } else {
+            m_model._metadataVisibleRows.append(row);
+        }
     }
+    submitRequests();
     return true;
 }
 
@@ -116,6 +136,11 @@ void ExternalCatalogMetadataPlanner::collectCatalogRows() {
            && m_model._catalogMetadataCursor < m_model._entries.size()) {
         const int row = m_model._entries.at(
             m_model._catalogMetadataCursor++).sourceIndex;
+        const auto &entry = m_model.loadedEntry(row);
+        if (m_model._hasViewportDemand && expensiveSource(entry.source)
+            && !m_model._metadataLastVisibleRows.contains(row)
+            && !m_model._metadataLastOverscanRows.contains(row)
+            && entry.id != m_model._viewerEntryId) continue;
         appendRow(row, m_backgroundRequests, true);
     }
 }
@@ -157,6 +182,9 @@ void ExternalCatalogMetadataPlanner::run() {
     }
     drainRows(m_model._metadataUrgentRows, m_highRequests, false);
     drainRows(m_model._metadataVisibleRows, m_highRequests, true);
+    m_available = qMin(m_available,
+        ExternalCatalogModel::metadataRequestLimit()
+            - m_model._metadataPendingVersions.size());
     drainRows(m_model._metadataAdHocRows, m_backgroundRequests, false);
     drainRows(m_model._metadataOverscanRows, m_backgroundRequests, true);
     collectCatalogRows();

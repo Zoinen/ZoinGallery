@@ -345,8 +345,19 @@ void MasonryLayout::planViewportThumbnails(
     // Fixed layouts request metadata only for visible cells and bounded
     // overscan. Justified masonry additionally maintains one background
     // aspect-ratio lease because every preceding row affects later geometry.
-    requestModel->requestImageMetadata(windowPlan.visible, true, false);
-    requestModel->requestImageMetadata(windowPlan.background, false, false);
+    // A model delta plans pixels only for its dirty rows. Metadata demand is
+    // the complete viewport lease; replacing it with those rows would demote
+    // and cancel other images which are still visible.
+    QList<int> visibleDemand(_visibleIndexSet.cbegin(), _visibleIndexSet.cend());
+    QList<int> backgroundDemand;
+    backgroundDemand.reserve(_overscanIndexSet.size());
+    for (const int index : _overscanIndexSet) {
+        if (!_visibleIndexSet.contains(index)) backgroundDemand.append(index);
+    }
+    std::sort(visibleDemand.begin(), visibleDemand.end());
+    std::sort(backgroundDemand.begin(), backgroundDemand.end());
+    requestModel->requestImageMetadata(visibleDemand, true, false);
+    requestModel->requestImageMetadata(backgroundDemand, false, false);
     if (windowPlan.catalogWideMetadata && !_containedPreview) {
         requestModel->requestImageMetadata({}, false, true);
     }

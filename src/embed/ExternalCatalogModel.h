@@ -110,6 +110,7 @@ public:
     QString bestViewerImageUrlAt(int row) const;
     QList<QPair<QString, int>> viewerImageSourcesAt(int row) const;
     QString viewerRequestStateAt(int row) const;
+    bool viewerDecodeFailedAt(int row) const;
     void requestViewer(int row, const QSize &viewportSize);
     void requestViewerAt(int row, const QSize &viewportSize);
     void setViewerIndex(int row);
@@ -191,6 +192,7 @@ private:
     void prepareDirectoryPreviewStates(const QVariantList &values);
     bool _previewReadsSuspended = false;
     bool _thumbnailsEnabled = true;
+    bool _hasViewportDemand = false;
 
     struct Entry {
         QString id;
@@ -316,6 +318,8 @@ private:
                                const ImageDecodeRequest &request,
                                const QImage &image);
     void handleImageReadFailed(const ImageDecodeRequest &request);
+    void markViewerDecodeFailed(const QList<int> &rows);
+    void pruneViewerDecodeFailures();
     void handleThumbnailFrameAvailable(const QString &sourceIdentity,
                                        const QString &versionToken,
                                        qint64 sourceFileSize,
@@ -412,6 +416,9 @@ private:
     QSharedPointer<ThumbnailMemoryCache> _thumbnailCache;
     DecodeManager *_decodeManager = nullptr; // owned by GalleryRuntime
     ViewerImageCache _viewerImageCache;
+    // Pixel/format failures are immutable only for this content revision.
+    QHash<QString, QString> _viewerDecodeFailedVersions;
+    bool _viewerDecodeReplanScheduled = false;
     QList<Entry> _entries;
     // In paged mode _entries contains only materialized viewport rows.
     // QAbstractItemModel still exposes _virtualRowCount rows; this compact
@@ -432,6 +439,7 @@ private:
     QSet<QString> _metadataResolvedPaths;
     QList<int> _metadataVisibleRows;
     QSet<int> _metadataLastVisibleRows;
+    QSet<int> _metadataLastOverscanRows;
     QList<int> _metadataOverscanRows;
     QList<int> _metadataUrgentRows;
     QList<int> _metadataAdHocRows;

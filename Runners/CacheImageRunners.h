@@ -59,6 +59,7 @@ public:
         return _request.viewerRequest &&
             !_request.backgroundViewerRequest;
     }
+    bool isViewerFitRequest() const override { return _request.fitToViewerRequest; }
     bool isPanelThumbnailRequest() const override {
         return _request.panelThumbnailRequest;
     }

@@ -32,6 +32,8 @@
 using namespace std::chrono_literals;
 
 namespace {
+constexpr int InteractiveSourcePriority = 1000;
+constexpr int ViewerFitPriority = 100;
 enum class QueuePriority {
     Background,
     High,
@@ -537,6 +539,164 @@ void DecodeManager::restoreCachedVideoPoster(
     processQueue();
 }
 
+void DecodeManager::setViewportDemand(
+    const QString &requestNamespace, const QSet<QString> &visibleSources) {
+    if (_visibleSources.contains(requestNamespace)
+        && _visibleSources.value(requestNamespace) == visibleSources) return;
+    _visibleSources.insert(requestNamespace, visibleSources);
+    if (!visibleSources.isEmpty()) preemptSourceReads(requestNamespace);
+    ZoinGallery::MediaTimingTrace::event(QStringLiteral("qt.gallery.demand.viewport"), {
+        {QStringLiteral("requestNamespace"), requestNamespace},
+        {QStringLiteral("visibleSources"), visibleSources.size()},
+    });
+    processQueue();
+}
+
+void DecodeManager::setViewerDemand(const QString &requestNamespace,
+                                    const QStringList &orderedSources) {
+    QHash<QString, int> ranks;
+    for (int index = 0; index < qMin(orderedSources.size(), qsizetype(16)); ++index)
+        ranks.insert(orderedSources[index], index);
+    if (_viewerSourceRanks.value(requestNamespace) == ranks) return;
+    if (ranks.isEmpty()) _viewerSourceRanks.remove(requestNamespace);
+    else _viewerSourceRanks.insert(requestNamespace, ranks);
+    processQueue();
+}
+
+void DecodeManager::preemptSourceReads(const QString &requestNamespace,
+                                       bool interactiveDemand) {
+    for (const WorkerInfo &worker : std::as_const(_workers)) {
+        Runner *runner = worker.runner;
+        if (!runner || runner->isCanceled()) continue;
+        if (interactiveDemand) {
+            if (priorityForRunner(runner) >= InteractiveSourcePriority) continue;
+        } else if (runner->requestNamespace() != requestNamespace
+                   || runner->isViewerRequest()
+                   || priorityForRunner(runner) != 0) {
+            continue;
+        }
+        Runner *replacement = nullptr;
+        const auto expensive = [](const ZoinGallery::ImageSourceDescriptor &source) {
+            return source.isValid()
+                && (source.accessProfile != QStringLiteral("directLocal")
+                    || (!source.storageClass.isEmpty()
+                        && source.storageClass != QStringLiteral("local")));
+        };
+        if (auto *probe = qobject_cast<ImageProbeRunner *>(runner);
+            probe && expensive(probe->_request.source)) {
+            auto *next = new ImageProbeRunner(probe->_request, _imageSourceProvider);
+            next->connections.append(connect(next, &ImageProbeRunner::imageProbeReady,
+                                              this, &DecodeManager::imageProbeReady));
+            replacement = next;
+        } else if (auto *info = qobject_cast<ImageInfoReadRunner *>(runner);
+                   info && expensive(info->_source)) {
+            auto *next = new ImageInfoReadRunner(
+                info->_path, info->_isLast, info->_isFromEmbeddedView,
+                info->_isFromScanner, info->_directOpenGeneration,
+                info->_highPriority, info->_requestNamespace, info->_sourceVersionToken,
+                info->_source, _imageSourceProvider, info->_readDerivedMetadataCache,
+                info->_writeDerivedMetadataCache, info->_panelThumbnailRequest);
+            next->connections.append(connect(next, &ImageInfoReadRunner::imageInfoReady,
+                                              this, &DecodeManager::onImageInfoReady));
+            replacement = next;
+        } else if (auto *read = qobject_cast<ImageReadRunner *>(runner);
+                   read && expensive(read->_request.info.source)) {
+            auto *next = new ImageReadRunner(read->_request, _imageSourceProvider);
+            next->connections.append({
+                connect(next, &ImageReadRunner::imageReadReady,
+                        this, &DecodeManager::onImageReadReady),
+                connect(next, &ImageReadRunner::imageReadFailed,
+                        this, &DecodeManager::onImageReadFailed),
+            });
+            replacement = next;
+        }
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+        if (!replacement) {
+            if (auto *video = qobject_cast<VideoThumbnailRunner *>(runner);
+                video && expensive(video->request().info.source)) {
+                auto *next = new VideoThumbnailRunner(video->request(), _imageSourceProvider);
+                next->connections.append({
+                    connect(next, &VideoThumbnailRunner::imageInfoReady,
+                            this, &DecodeManager::onImageInfoReady),
+                    connect(next, &VideoThumbnailRunner::imageReady,
+                            this, &DecodeManager::onImageReady),
+                    connect(next, &VideoThumbnailRunner::imageReadFailed,
+                            this, &DecodeManager::onImageReadFailed),
+                    connect(next, &VideoThumbnailRunner::storeInCache,
+                            this, &DecodeManager::onStoreInCache),
+                });
+                replacement = next;
+            }
+        }
+#endif
+        if (!replacement) continue;
+        // Keep the catalog/cache owner pending. The canceled attempt publishes
+        // no failure, and its replacement resumes at the latest demand priority.
+        runner->cancel();
+        _taskQueue.append(replacement);
+    }
+}
+
+void DecodeManager::setInteractiveSource(
+    const QString &requestNamespace, const QString &sourceIdentity,
+    const QString &resourceId) {
+    if (sourceIdentity.isEmpty() && _interactiveNamespace != requestNamespace) return;
+    if (_interactiveNamespace == requestNamespace
+        && _interactiveSource == sourceIdentity) return;
+    _interactiveNamespace = sourceIdentity.isEmpty() ? QString() : requestNamespace;
+    _interactiveSource = sourceIdentity;
+    _imageSourceProvider->setInteractiveResource(resourceId);
+    // Queue promotion cannot displace a network read already occupying a
+    // worker. On each viewer handoff, release lower-priority transport lanes
+    // across panels and older viewer requests, retaining their pending owners.
+    if (!_interactiveSource.isEmpty()) preemptSourceReads(requestNamespace, true);
+    ZoinGallery::MediaTimingTrace::event(QStringLiteral("qt.gallery.demand.interactive"), {
+        {QStringLiteral("requestNamespace"), requestNamespace},
+        {QStringLiteral("sourceIdentity"), sourceIdentity},
+    });
+    processQueue();
+}
+
+int DecodeManager::priorityForRunner(Runner *runner) const {
+    if (const auto *lookup = qobject_cast<CachedImageInfoRunner *>(runner)) {
+        int priority = 0;
+        const auto ranks = _viewerSourceRanks.constFind(runner->requestNamespace());
+        for (const ImageInfo &candidate : lookup->_versionedCandidates) {
+            const QString source = candidate.sourceIdentity();
+            if (runner->requestNamespace() == _interactiveNamespace
+                && !_interactiveSource.isEmpty() && source == _interactiveSource)
+                return InteractiveSourcePriority;
+            if (ranks != _viewerSourceRanks.cend()) {
+                const auto rank = ranks->constFind(source);
+                if (rank != ranks->cend()) priority = qMax(priority, ViewerFitPriority - *rank);
+            }
+        }
+        if (priority > 0) return priority;
+    }
+    if (!_interactiveSource.isEmpty()
+        && runner->requestNamespace() == _interactiveNamespace
+        && runner->path() == _interactiveSource) return InteractiveSourcePriority;
+    const auto viewer = _viewerSourceRanks.constFind(runner->requestNamespace());
+    if (viewer != _viewerSourceRanks.cend()
+        && ((runner->isViewerRequest() && runner->isViewerFitRequest())
+            || runner->type() == RunnerType::ImageProbe
+            || runner->type() == RunnerType::ImageInfoRead)) {
+        const auto rank = viewer->constFind(runner->path());
+        // Live ranks also reorder owners retained from older viewer plans.
+        // Fit neighbors precede panel thumbnails and native neighbor prefetch.
+        if (rank != viewer->cend()) return ViewerFitPriority - *rank;
+    }
+    const auto demand = _visibleSources.constFind(runner->requestNamespace());
+    if (demand != _visibleSources.cend()
+        && (runner->isPanelThumbnailRequest()
+            || runner->type() == RunnerType::ImageProbe
+            || runner->type() == RunnerType::ImageInfoRead)) {
+        return demand->contains(runner->path()) ? 2 : 0;
+    }
+    if (runner->isViewerRequest()) return 1;
+    return runner->isHighPriority() ? 1 : 0;
+}
+
 void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
     QList<ImageDecodeRequest> queuedRequests = requests;
     for (ImageDecodeRequest &request : queuedRequests) {
@@ -905,6 +1065,13 @@ void DecodeManager::cancelRequests(const QString &requestNamespace) {
     if (requestNamespace.isEmpty()) {
         return;
     }
+    _visibleSources.remove(requestNamespace);
+    _viewerSourceRanks.remove(requestNamespace);
+    if (_interactiveNamespace == requestNamespace) {
+        _interactiveNamespace.clear();
+        _interactiveSource.clear();
+        _imageSourceProvider->setInteractiveResource({});
+    }
 
     for (WorkerInfo &worker : _workers) {
         Runner *runner = worker.runner;
@@ -1158,6 +1325,15 @@ void DecodeManager::processQueue() {
     // potentially large request queue for every candidate read.
     const int compressedPayloadCount = compressedPayloadRunnerCount();
     const qint64 compressedPayloadByteCount = compressedPayloadBytes();
+    QList<int> priorities;
+    QHash<QString, QSet<QString>> cancelingSources;
+    for (const WorkerInfo &worker : std::as_const(_workers)) {
+        if (worker.runner && worker.runner->isCanceled())
+            cancelingSources[worker.runner->requestNamespace()].insert(worker.runner->path());
+    }
+    priorities.reserve(_taskQueue.size());
+    for (Runner *runner : std::as_const(_taskQueue))
+        priorities.append(priorityForRunner(runner));
     for (int workerIndex = 0; workerIndex < _workers.size(); workerIndex++) {
         if (!_workers[workerIndex].runner) {
             if (_taskQueue.isEmpty()) {
@@ -1165,26 +1341,44 @@ void DecodeManager::processQueue() {
                 return;
             }
             Runner *runner = nullptr;
-            bool blockedEarlierImageRead = false;
+            int bestIndex = -1;
+            int bestPriority = -1;
             for (int taskIndex = 0; taskIndex < _taskQueue.size(); taskIndex++) {
                 Runner *candidate = _taskQueue.at(taskIndex);
+                const int priority = priorities.at(taskIndex);
+                // Let the canceled transport release its shared flight before
+                // admitting the replacement for the same immutable source.
+                const auto canceling = cancelingSources.constFind(candidate->requestNamespace());
+                if (canceling != cancelingSources.cend()
+                    && canceling->contains(candidate->path())) continue;
+                // Cache metadata lookups can resolve the current image's
+                // prerequisites. New source I/O and heavy pixel/cache work
+                // wait until that image is ready; running work is retained.
+                if (!_interactiveSource.isEmpty() && priority < InteractiveSourcePriority
+                    && (candidate->type() == RunnerType::ImageProbe
+                        || candidate->type() == RunnerType::ImageInfoRead
+                        || candidate->type() == RunnerType::ImageRead
+                        || candidate->type() == RunnerType::ImageDecode
+                        || candidate->type() == RunnerType::CachedImageStore)) continue;
                 if (!isRunnerTypeMatchesThreadType(candidate, workerIndex)) {
                     continue;
                 }
                 if (candidate->type() == RunnerType::ImageRead) {
-                    if (blockedEarlierImageRead ||
-                        !canStartRunner(candidate, compressedPayloadCount,
+                    if (!canStartRunner(candidate, compressedPayloadCount,
                                         compressedPayloadByteCount)) {
-                        blockedEarlierImageRead = true;
                         continue;
                     }
                 }
-                runner = _taskQueue.takeAt(taskIndex);
-                break;
+                if (priority > bestPriority) {
+                    bestIndex = taskIndex;
+                    bestPriority = priority;
+                }
             }
-            if (!runner) {
+            if (bestIndex < 0) {
                 continue;
             }
+            runner = _taskQueue.takeAt(bestIndex);
+            priorities.removeAt(bestIndex);
 
             // qDebug() << "RUNNING" << runner->type() << "on thread" << workerIndex;
             _workers[workerIndex].runner = runner;
@@ -1366,11 +1560,13 @@ bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType
     if (runner->type() == RunnerType::ImageProbe) {
         // Two bounded range probes per runtime hide network latency without
         // allowing full-file materialization to fan out. Keep the dedicated
-        // source-read lane free: an explicit current image is allowed to
-        // materialize after its own probe even while another catalog probe is
-        // blocked on a slow backend. The probe lanes still execute normal
+        // source-read lane available to current viewport/viewer demand. Its
+        // metadata/payload stage must not wait behind offscreen probes after
+        // its own probe completes. The probe lanes still execute normal
         // decode/cache work whenever no probe is queued.
-        return threadType == static_cast<int>(SpecialThreads::Cache) ||
+        return (priorityForRunner(runner) >= 2
+                && threadType == static_cast<int>(SpecialThreads::Read)) ||
+            threadType == static_cast<int>(SpecialThreads::Cache) ||
             threadType == static_cast<int>(SpecialThreads::Probe);
     }
 
@@ -1382,7 +1578,11 @@ bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType
     if (runner->type() == RunnerType::ImageInfoRead) {
         const auto *info = static_cast<const ImageInfoReadRunner *>(runner);
         if (info->_source.isValid()) {
-            return threadType == static_cast<int>(SpecialThreads::Read) ||
+            const bool expensive = info->_source.accessProfile != QStringLiteral("directLocal")
+                || (!info->_source.storageClass.isEmpty()
+                    && info->_source.storageClass != QStringLiteral("local"));
+            return ((!expensive || priorityForRunner(runner) >= 2)
+                    && threadType == static_cast<int>(SpecialThreads::Read)) ||
                 threadType == static_cast<int>(SpecialThreads::Cache) ||
                 threadType == static_cast<int>(SpecialThreads::Probe);
         }
@@ -1401,7 +1601,11 @@ bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType
         request = &read->_request;
 #endif
         if (request->info.source.isValid()) {
-            return threadType == static_cast<int>(SpecialThreads::Read) ||
+            const bool expensive = request->info.source.accessProfile != QStringLiteral("directLocal")
+                || (!request->info.source.storageClass.isEmpty()
+                    && request->info.source.storageClass != QStringLiteral("local"));
+            return ((!expensive || priorityForRunner(runner) >= 2)
+                    && threadType == static_cast<int>(SpecialThreads::Read)) ||
                 threadType == static_cast<int>(SpecialThreads::Cache) ||
                 threadType == static_cast<int>(SpecialThreads::Probe);
         }
@@ -1465,9 +1669,9 @@ qint64 DecodeManager::compressedPayloadBytes() const {
 
 int DecodeManager::viewerCompressedPayloadRunnerCount() const {
     int count = 0;
-    const auto addViewerPayload = [&count](Runner *runner) {
+    const auto addViewerPayload = [this, &count](Runner *runner) {
         if (runner && runner->type() == RunnerType::ImageDecode &&
-            runner->isViewerRequest()) {
+            (runner->isViewerRequest() || priorityForRunner(runner) == 3)) {
             ++count;
         }
     };
@@ -1482,9 +1686,9 @@ int DecodeManager::viewerCompressedPayloadRunnerCount() const {
 
 qint64 DecodeManager::viewerCompressedPayloadBytes() const {
     qint64 bytes = 0;
-    const auto addViewerPayload = [&bytes](Runner *runner) {
+    const auto addViewerPayload = [this, &bytes](Runner *runner) {
         if (!runner || runner->type() != RunnerType::ImageDecode ||
-            !runner->isViewerRequest()) {
+            (!runner->isViewerRequest() && priorityForRunner(runner) != 3)) {
             return;
         }
         const auto *decodeRunner =
@@ -1555,7 +1759,7 @@ bool DecodeManager::canStartRunner(
         return true;
     }
 
-    if (!runner->isViewerRequest()) {
+    if (!runner->isViewerRequest() && priorityForRunner(runner) != 3) {
         return false;
     }
 

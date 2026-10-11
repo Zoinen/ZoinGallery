@@ -137,6 +137,21 @@ immediately; the fit-first dwell remains in place for neighboring native
 prefetch, so a blocked neighbor cannot leave the current 100% image stretched
 from its fit preview.
 
+The embedded viewer prioritizes the current image, then prepares up to 16
+window-resolution frames in the order next, previous, next + 1, previous - 1,
+and outward. Non-image entries and confirmed undecodable images are skipped
+independently in each direction. A failed candidate is replaced by a farther
+candidate, so failures do not consume the 16 usable-frame slots. Failure state
+belongs to the current source revision; changed files can be decoded again.
+Forward/back navigation continues past newly discovered decode failures in the
+requested direction, while directly opening an undecodable file shows its error.
+Live source ranks promote pending metadata, cache lookup, read, and decode
+stages ahead of panel thumbnails and native neighbor prefetch. Each Fit
+neighbor depends only on its own probe; unrelated catalog probes do not hold
+the viewer window. Navigation replaces those ranks and preempts lower-priority
+network reads while retaining their owners for later resumption. Existing Fit
+and native memory budgets still govern retention.
+
 Filtering decodes the sRGB transfer function before combining samples and
 encodes it again after each stage. Intermediate levels use RGBA8 with ordered
 dither. Existing ICC profile conversion and tagging are unchanged. Negative

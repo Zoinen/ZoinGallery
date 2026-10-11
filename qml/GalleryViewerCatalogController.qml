@@ -9,6 +9,61 @@ QtObject {
     required property Item frame
     required property GalleryViewerMotion motion
 
+    property string navigationEntryId: ""
+    property string navigationOriginEntryId: ""
+    property int navigationDirection: 0
+
+    property var navigationSession: viewer.session
+    onNavigationSessionChanged: {
+        navigationEntryId = ""
+        navigationOriginEntryId = ""
+        navigationDirection = 0
+    }
+
+    property Connections viewerFailureConnection: Connections {
+        target: controller.navigationSession
+        ignoreUnknownSignals: true
+        function onViewerRequestStateAtChanged(index) {
+            if (index === controller.viewer.presentedIndex)
+                controller.continueFailedNavigation()
+        }
+    }
+
+    function continueFailedNavigation() {
+        const failedEntryId = navigationEntryId
+        if (navigationDirection === 0 || failedEntryId === ""
+                || viewer.presentedEntryId !== failedEntryId
+                || !viewer.session
+                || typeof viewer.session.viewerDecodeFailedAt !== "function"
+                || !viewer.session.viewerDecodeFailedAt(viewer.presentedIndex))
+            return
+        // Failure can arrive synchronously while requestImage is publishing
+        // a navigation intent. Finish that intent before advancing again.
+        Qt.callLater(function() {
+            if (controller.navigationEntryId !== failedEntryId
+                    || controller.viewer.presentedEntryId !== failedEntryId)
+                return
+            const next = controller.adjacentIndex(
+                        controller.viewer.presentedIndex,
+                        controller.navigationDirection)
+            if (next >= 0 && next !== controller.viewer.presentedIndex) {
+                controller.emitNavigation(next)
+                return
+            }
+            const origin = controller.indexForEntryId(
+                        controller.navigationOriginEntryId)
+            controller.navigationDirection = 0
+            controller.navigationEntryId = ""
+            controller.navigationOriginEntryId = ""
+            if (origin >= 0 && origin !== controller.viewer.presentedIndex
+                    && !controller.viewer.session.viewerDecodeFailedAt(origin))
+                controller.emitNavigation(origin)
+            controller.navigationDirection = 0
+            controller.navigationEntryId = ""
+            controller.navigationOriginEntryId = ""
+        })
+    }
+
     property Connections videoPlaybackAvailabilityConnection: Connections {
         target: controller.viewer.session
         ignoreUnknownSignals: true
@@ -363,6 +418,11 @@ QtObject {
         const nextEntryId = entryIdAt(index)
         if (nextEntryId === "")
             return false
+        if (!awaitAuthority && nextEntryId !== navigationEntryId) {
+            navigationEntryId = ""
+            navigationOriginEntryId = ""
+            navigationDirection = 0
+        }
         const previousIndex = viewer.presentedIndex
         const sameIdentity = viewer.presentedEntryId !== ""
                 && viewer.presentedEntryId === nextEntryId
@@ -377,6 +437,7 @@ QtObject {
         viewer.presentedEntryId = nextEntryId
         refreshCurrentSource(indexChanged, previousFitMode)
         requestImage()
+        continueFailedNavigation()
         if (awaitAuthority) {
             viewer.pendingAuthorityIndex = index
             viewer.pendingAuthorityEntryId = nextEntryId
@@ -416,6 +477,16 @@ QtObject {
         const sourceIndex = viewer.session.sourceIndexAt(index)
         if (entryId === "" || sourceIndex < 0)
             return false
+        if (viewer.presentedIndex !== index) {
+            navigationDirection = index > viewer.presentedIndex ? 1 : -1
+            if ((typeof viewer.session.viewerDecodeFailedAt !== "function"
+                    || !viewer.session.viewerDecodeFailedAt(viewer.presentedIndex))
+                    && (viewer.currentViewerRequestState === "ready"
+                        || viewer.currentIsVideoValue
+                        || viewer.currentSourcesValue.length > 0))
+                navigationOriginEntryId = viewer.presentedEntryId
+            navigationEntryId = entryId
+        }
         recordPresentedTransition(viewer.presentedEntryId, entryId,
                                   preservePendingViewport === true)
         setPresentedIndex(index, true)

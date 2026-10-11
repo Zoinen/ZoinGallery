@@ -81,27 +81,21 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
 
     QList<ImageFile *> plannedItems;
     plannedItems.reserve(qMax(0, prefetchCount));
-    int imagesChecked = 0;
-    bool hitStart = false;
-    bool hitEnd = false;
-    for (int counter = 0;
-         imagesChecked < prefetchCount && !(hitStart && hitEnd); ++counter) {
-        const int index = counter % 2 == 0
-            ? currentIndex + counter / 2
-            : currentIndex - (counter + 1) / 2;
-        if (index < 0) {
-            hitStart = true;
+    if (prefetchCount > 0) plannedItems.append(items[currentIndex]);
+    int next = currentIndex + 1;
+    int previous = currentIndex - 1;
+    bool forward = true;
+    while (plannedItems.size() < prefetchCount
+           && (next < items.size() || previous >= 0)) {
+        int &cursor = forward ? next : previous;
+        const int step = forward ? 1 : -1;
+        while (cursor >= 0 && cursor < items.size()
+               && (!items[cursor] || !items[cursor]->isViewerImage())) cursor += step;
+        if (cursor >= 0 && cursor < items.size()) {
+            plannedItems.append(items[cursor]);
+            cursor += step;
         }
-        if (index >= items.size()) {
-            hitEnd = true;
-        }
-        if (index < 0 || index >= items.size() || !items[index]
-            || !items[index]->isViewerImage()) {
-            continue;
-        }
-
-        ++imagesChecked;
-        plannedItems.append(items[index]);
+        forward = !forward;
     }
 
     QList<QString> plannedPaths;

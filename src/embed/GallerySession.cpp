@@ -579,6 +579,9 @@ bool GallerySession::applySameExternalCatalogRevision(
         || revision == 0) {
         return false;
     }
+    if (context.catalogRowsDeferred != d->external->sparseCatalog()
+        || (context.catalogRowsDeferred
+            && context.totalCount != d->external->rowCount())) return false;
     const bool alreadyCompleted = context.metadataDeferred
         && context.metadataRevision == d->metadataRevision
         && d->metadataCompleted;
@@ -928,7 +931,7 @@ int GallerySession::adjacentImageIndex(
     }
     const int step = direction < 0 ? -1 : 1;
     for (int row = fromIndex + step; row >= 0 && row < count; row += step) {
-        if (isImageAt(row)) {
+        if (isImageAt(row) && !viewerDecodeFailedAt(row)) {
             return row;
         }
     }
@@ -944,7 +947,7 @@ int GallerySession::adjacentViewableIndex(
     }
     const int step = direction < 0 ? -1 : 1;
     for (int row = fromIndex + step; row >= 0 && row < count; row += step) {
-        if (isViewableAt(row)) {
+        if (isViewableAt(row) && !viewerDecodeFailedAt(row)) {
             return row;
         }
     }
@@ -1175,6 +1178,10 @@ void GallerySession::requestToggleSelection(int index) {
     }
     emit actionRequested(QStringLiteral("panel.toggleSelection"),
                          actionPayload(this, d->currentIndex));
+}
+
+bool GallerySession::viewerDecodeFailedAt(int index) const {
+    return d->external && d->external->viewerDecodeFailedAt(index);
 }
 
 QString GallerySession::viewerRequestStateAt(int index) const {

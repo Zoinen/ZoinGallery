@@ -3,6 +3,8 @@
 #include <ZoinGallery/GalleryPreferences.h>
 
 #include "DecodeManager.h"
+#include "MasonryLayout.h"
+#include "ViewerImageCache.h"
 #include "Decoders/HeicDecoder.h"
 #include "Decoders/RawBitmapPreview.h"
 #include "FileListModel.h"
@@ -78,11 +80,14 @@ QVariantMap entry(const QString &id, int index, const QString &name,
 
 class TestSourceLease final : public ZoinGallery::ImageSourceLease {
 public:
-    explicit TestSourceLease(QString path) : _path(std::move(path)) {}
+    explicit TestSourceLease(QString path, qint64 retainedBytes = -1)
+        : _path(std::move(path)), _retainedBytes(retainedBytes) {}
     QString localPath() const override { return _path; }
+    qint64 retainedBytes() const override { return _retainedBytes; }
 
 private:
     QString _path;
+    qint64 _retainedBytes;
 };
 
 class MaterializingTestProvider final
@@ -462,6 +467,112 @@ private:
     QString _blockedSourceKey;
 };
 
+class PriorityTestProvider final : public ZoinGallery::ImageSourceProvider {
+public:
+    PriorityTestProvider(QString path, bool blockProbes)
+        : path(std::move(path)), blockProbes(blockProbes) {}
+
+    ZoinGallery::ImageSourceReadResult readRange(
+        const ZoinGallery::ImageSourceDescriptor &, qint64, qint64,
+        const QSharedPointer<ZoinGallery::ImageSourceCancellation> &) override {
+        return {.errorString = QStringLiteral("unexpected range read")};
+    }
+
+    ZoinGallery::ImageSourceProbeResult probeEmbedded(
+        const ZoinGallery::ImageSourceDescriptor &source,
+        const QSharedPointer<ZoinGallery::ImageSourceCancellation> &cancel) override {
+        const int row = source.resourceId.section('-', -1).toInt();
+        if (blockProbes && row < 2) {
+            ++blocked;
+            while (!(releaseMask.load() & (1 << row))) {
+                if (cancel && cancel->isCanceled())
+                    return {.status = ZoinGallery::ImageSourceProbeStatus::Failed};
+                QThread::msleep(2);
+            }
+        } else if (row >= 2) {
+            int unset = -1;
+            firstUnblocked.compare_exchange_strong(unset, row);
+        }
+        ++completed;
+        return {.status = ZoinGallery::ImageSourceProbeStatus::NotFound};
+    }
+
+    QSharedPointer<ZoinGallery::ImageSourceLease> materialize(
+        const ZoinGallery::ImageSourceDescriptor &source,
+        const QSharedPointer<ZoinGallery::ImageSourceCancellation> &cancel) override {
+        if (cancel && cancel->isCanceled()) return {};
+        const int call = ++materializations;
+        if (blockBackgroundMaterializations
+            && source.resourceId.section('-', -1).toInt() < 2) {
+            ++blockedMaterializations;
+            while (!releaseBackgroundMaterializations.load()) {
+                if (cancel && cancel->isCanceled()) {
+                    ++canceledMaterializations;
+                    return {};
+                }
+                QThread::msleep(2);
+            }
+        }
+        if (blockViewerFit && call > 1) {
+            fitEntered.store(true);
+            while (!releaseFit.load()) {
+                if (cancel && cancel->isCanceled()) return {};
+                QThread::msleep(2);
+            }
+        }
+        QMutexLocker lock(&mutex);
+        materialized.insert(source.resourceId.section('-', -1).toInt());
+        return QSharedPointer<TestSourceLease>::create(
+            failedRows.contains(source.resourceId.section('-', -1).toInt()) ? failurePath : path,
+            blockViewerFit ? qint64(2) * 1024 * 1024 * 1024 : -1);
+    }
+
+    QSet<int> materializedRows() {
+        QMutexLocker lock(&mutex);
+        return materialized;
+    }
+
+    QString path;
+    QString failurePath;
+    QSet<int> failedRows;
+    bool blockProbes;
+    bool blockViewerFit = false;
+    bool blockBackgroundMaterializations = false;
+    std::atomic_int blockedMaterializations{0};
+    std::atomic_int canceledMaterializations{0};
+    std::atomic_bool releaseBackgroundMaterializations{false};
+    std::atomic_int materializations{0};
+    std::atomic_bool fitEntered{false};
+    std::atomic_bool releaseFit{false};
+    std::atomic_int blocked{0};
+    std::atomic_int completed{0};
+    std::atomic_int releaseMask{0};
+    std::atomic_int firstUnblocked{-1};
+    QMutex mutex;
+    QSet<int> materialized;
+};
+
+QVariantList priorityCatalog(const QString &path, int count) {
+    QVariantList result;
+    for (int row = 0; row < count; ++row) {
+        result.append(QVariantMap{
+            {QStringLiteral("entryId"), QStringLiteral("priority-%1").arg(row)},
+            {QStringLiteral("index"), row},
+            {QStringLiteral("name"), QStringLiteral("priority-%1.png").arg(row)},
+            {QStringLiteral("isImage"), true},
+            {QStringLiteral("resourceId"), QStringLiteral("resource-%1").arg(row)},
+            {QStringLiteral("sourceKey"), QStringLiteral("network/priority/%1").arg(row)},
+            {QStringLiteral("contentVersion"), QStringLiteral("v1")},
+            {QStringLiteral("versionStrength"), QStringLiteral("strong")},
+            {QStringLiteral("storageClass"), QStringLiteral("network")},
+            {QStringLiteral("accessProfile"), QStringLiteral("materializeOnce")},
+            {QStringLiteral("mimeType"), QStringLiteral("image/png")},
+            {QStringLiteral("size"), QFileInfo(path).size()},
+        });
+    }
+    return result;
+}
+
 class FailFirstPerSourceProvider final
     : public ZoinGallery::ImageSourceProvider {
 public:
@@ -509,6 +620,30 @@ private:
     QString _path;
     QMutex _mutex;
     QHash<QString, int> _calls;
+};
+
+class ViewportRecordingModel final : public QStandardItemModel,
+                                     public ZoinGallery::GalleryCatalogSource {
+public:
+    QHash<int, QByteArray> roleNames() const override {
+        return {{Qt::UserRole + 1000, "entryId"},
+                {Qt::UserRole + 1001, "sourceIndex"},
+                {Qt::UserRole + 1002, "localPath"},
+                {Qt::UserRole + 1003, "entryName"},
+                {Qt::UserRole + 1004, "knownImageSize"}};
+    }
+    QList<int> visibleDemand;
+    int calls = 0;
+    void requestImageMetadata(const QList<int> &rows, bool highPriority,
+                              bool = false) override {
+        if (highPriority) {
+            visibleDemand = rows;
+            ++calls;
+        }
+    }
+    void decodeImages(const QList<ImageDecodeRequest> &) override {}
+    void cancelAllRunners() override {}
+    void cancelAllDecodeRunners() override {}
 };
 
 } // namespace
@@ -2188,7 +2323,482 @@ private slots:
         runtime->shutdown();
     }
 
-    void viewerPrefetchWaitsForCatalogProbeBarrier() {
+    void openingImagePromotesOnePendingCatalogFitDecode() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("fit.png");
+        QImage image(800, 600, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, false);
+        provider->blockViewerFit = true;
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("priority-fit-single-flight");
+        QVERIFY(session->applyExternalCatalog(priorityCatalog(path, 1), 1));
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        QSignalSpy decoded(decoder, &DecodeManager::imageReady);
+        session->ensurePreviews();
+        QTRY_VERIFY_WITH_TIMEOUT(provider->fitEntered.load(), 3000);
+        session->setViewerOpen(true);
+        for (int repeat = 0; repeat < 10; ++repeat) session->requestViewer(1920, 1080);
+        provider->releaseFit.store(true);
+        QTRY_COMPARE_WITH_TIMEOUT(session->viewerRequestStateAt(0), QString("ready"), 3000);
+        QTest::qWait(250);
+        int viewerDecodes = 0;
+        for (const auto &result : decoded) {
+            const auto request = qvariant_cast<ImageDecodeRequest>(result.at(0));
+            if (request.viewerRequest && !qvariant_cast<QImage>(result.at(1)).isNull())
+                ++viewerDecodes;
+        }
+        QCOMPARE(viewerDecodes, 1);
+        runtime->shutdown();
+    }
+
+    void viewerFitPlanPrefersNextThenPreviousForSixteenImages() {
+        QList<ImageFile *> items;
+        QList<std::shared_ptr<ImageFile>> owned;
+        for (int row = 0; row < 25; ++row) {
+            auto item = std::make_shared<ImageFile>();
+            item->setFolderPath("/virtual");
+            item->setFileName(QString("fit-%1.png").arg(row));
+            item->setIsImage(true);
+            item->setFullSize(QSize(800, 600));
+            ImageInfo info;
+            info.path = item->fullPath();
+            info.imageSize = QSize(800, 600);
+            item->setInfo(info);
+            owned.append(item);
+            items.append(item.get());
+        }
+        ViewerImageCache cache("fit-order", QSharedPointer<ProviderImageStore>::create(),
+                               "thumb", "async", -1);
+        const auto plan = cache.planRequest(items, 12, QSize(160, 120), 16);
+        QCOMPARE(plan.decodeRequests.size(), 16);
+        for (int ordinal = 0; ordinal < 16; ++ordinal) {
+            const int row = ordinal % 2 ? 12 + (ordinal + 1) / 2 : 12 - ordinal / 2;
+            QCOMPARE(plan.decodeRequests[ordinal].info.path, items[row]->fullPath());
+            QVERIFY(plan.decodeRequests[ordinal].fitToViewerRequest);
+            QCOMPARE(plan.decodeRequests[ordinal].targetSize, QSize(160, 120));
+        }
+        // A non-image between neighbors must not put previous ahead of next.
+        items[13] = nullptr;
+        const auto gapPlan = cache.planRequest(items, 12, QSize(160, 120), 16);
+        QCOMPARE(gapPlan.decodeRequests.size(), 16);
+        QCOMPARE(gapPlan.decodeRequests[1].info.path, items[14]->fullPath());
+        QCOMPARE(gapPlan.decodeRequests[2].info.path, items[11]->fullPath());
+    }
+
+    void viewerFitDemandReordersPendingOwnersAheadOfPanelThumbnails() {
+        DecodeManager manager(nullptr, 4);
+        manager.setImageCacheMode(CacheUsageMode::Off);
+        manager.setInteractiveSource("fit-order", "hold-admission");
+        QStringList ordered;
+        QList<ImageDecodeRequest> requests;
+        for (int ordinal = 15; ordinal >= 0; --ordinal) {
+            ImageDecodeRequest request;
+            request.requestNamespace = "fit-order";
+            request.info.path = QString("/missing-fit-demand-%1.png").arg(ordinal);
+            request.viewerRequest = true;
+            request.fitToViewerRequest = true;
+            request.targetSize = QSize(160, 120);
+            requests.append(request);
+            ordered.prepend(request.info.sourceIdentity());
+        }
+        ImageDecodeRequest panel = requests.last();
+        panel.info.path = "/missing-panel-demand.png";
+        panel.viewerRequest = false;
+        panel.fitToViewerRequest = false;
+        panel.panelThumbnailRequest = true;
+        manager.setViewportDemand("fit-order", {panel.info.sourceIdentity()});
+        requests.prepend(panel);
+        QSignalSpy failed(&manager, &DecodeManager::imageReadFailed);
+        manager.decodeImages(requests);
+        // Pending owners must follow live ranks rather than old batch order.
+        manager.setViewerDemand("fit-order", ordered);
+        manager.setInteractiveSource("fit-order", {});
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 17, 3000);
+        for (int ordinal = 0; ordinal < 16; ++ordinal)
+            QCOMPARE(qvariant_cast<ImageDecodeRequest>(failed[ordinal][0]).info.path,
+                     ordered[ordinal]);
+        QCOMPARE(qvariant_cast<ImageDecodeRequest>(failed[16][0]).info.path, panel.info.path);
+        manager.prepareToClose();
+    }
+
+    void remoteViewerPrefetchesSixteenFitImages() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("fit.png");
+        QImage image(800, 600, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, false);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("fit-sixteen");
+        QVERIFY(session->applyExternalCatalog(priorityCatalog(path, 25), 1));
+        QVERIFY(session->applyExternalState("priority-12", 12, {}, 1));
+        session->setViewerOpen(true);
+        session->requestViewer(160, 120);
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        QTRY_COMPARE_WITH_TIMEOUT(model->viewerFitFrameCount(), qsizetype(16), 3000);
+        runtime->shutdown();
+    }
+
+    void viewerPrefetchRefillsFailedCandidates_data() {
+        QTest::addColumn<bool>("validMetadata");
+        QTest::newRow("metadata-failure") << false;
+        QTest::newRow("pixel-failure") << true;
+    }
+
+    void viewerPrefetchRefillsFailedCandidates() {
+        QFETCH(bool, validMetadata);
+        QTemporaryDir directory;
+        const QString path = directory.filePath("good.png");
+        QImage image(800, 600, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        const QString broken = directory.filePath("no-preview.dng");
+        QFile file(broken);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        if (validMetadata) {
+            QFile good(path);
+            QVERIFY(good.open(QIODevice::ReadOnly));
+            QByteArray encoded = good.readAll();
+            const int pixels = encoded.indexOf("IDAT") + 4;
+            QVERIFY(pixels >= 4);
+            encoded[pixels] = char(encoded[pixels] ^ 0xff);
+            file.write(encoded); // Valid dimensions, corrupt compressed pixels.
+        } else {
+            file.write("unsupported raw image without embedded preview");
+        }
+        file.close();
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, false);
+        provider->failurePath = broken;
+        provider->failedRows = {11, 13, 14, 15, 16, 17};
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("fit-failure-refill");
+        QVERIFY(session->applyExternalCatalog(priorityCatalog(path, 35), 1));
+        QVERIFY(session->applyExternalState("priority-12", 12, {}, 1));
+        session->setViewerOpen(true);
+        session->requestViewer(160, 120);
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        QTRY_COMPARE_WITH_TIMEOUT(model->viewerFitFrameCount(), qsizetype(16), 5000);
+        for (const int row : provider->failedRows) {
+            QVERIFY(model->viewerDecodeFailedAt(row));
+            QCOMPARE(model->imageOriginalSizeAt(row).isValid(), validMetadata);
+        }
+        QVERIFY(!model->viewerDecodeFailedAt(12));
+        QCOMPARE(session->adjacentImageIndex(12, 1), 18);
+        QCOMPARE(session->adjacentImageIndex(12, -1), 10);
+        QCOMPARE(session->adjacentViewableIndex(12, 1), 18);
+        QCOMPARE(session->adjacentViewableIndex(12, -1), 10);
+        model->clearViewer();
+        QVERIFY(model->viewerDecodeFailedAt(13));
+        QVariantList revised = priorityCatalog(path, 35);
+        QVariantMap changed = revised[13].toMap();
+        changed.insert("contentVersion", "v2");
+        revised[13] = changed;
+        QVERIFY(session->applyExternalCatalog(revised, 2));
+        QVERIFY(!model->viewerDecodeFailedAt(13));
+        QVERIFY(model->viewerDecodeFailedAt(11));
+        QVERIFY(QFile::remove(broken));
+        QVERIFY(QFile::copy(path, broken));
+        QVERIFY(session->applyExternalState("priority-13", 13, {}, 2));
+        session->requestViewer(160, 120);
+        QTRY_COMPARE_WITH_TIMEOUT(session->viewerRequestStateAt(13), QString("ready"), 5000);
+        QVERIFY(!session->viewerDecodeFailedAt(13));
+        runtime->shutdown();
+    }
+
+    void viewerNavigationPreemptsOlderViewerAndOtherPanelReads() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("priority.png");
+        QImage image(160, 120, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, false);
+        provider->blockBackgroundMaterializations = true;
+        DecodeManager manager(nullptr, 4, provider);
+        manager.setImageCacheMode(CacheUsageMode::Off);
+        QList<ImageDecodeRequest> requests;
+        for (int row = 0; row < 3; ++row) {
+            ImageDecodeRequest request;
+            request.requestNamespace = row == 1 ? "other-panel" : "viewer";
+            request.viewerRequest = row != 1;
+            request.panelThumbnailRequest = row == 1;
+            request.info.path = QString("image-%1.png").arg(row);
+            request.info.source = {
+                .resourceId = QString("resource-%1").arg(row),
+                .sourceKey = QString("viewer-priority-%1").arg(row),
+                .contentVersion = "v1",
+                .storageClass = "network",
+                .accessProfile = "materializeOnce",
+            };
+            request.targetSize = QSize(96, 64);
+            requests.append(request);
+        }
+        manager.setViewportDemand("other-panel", {requests[1].info.sourceIdentity()});
+        QSignalSpy ready(&manager, &DecodeManager::imageReady);
+        QSignalSpy failed(&manager, &DecodeManager::imageReadFailed);
+        manager.decodeImages({requests[0], requests[1]});
+        QTRY_COMPARE_WITH_TIMEOUT(provider->blockedMaterializations.load(), 2, 2000);
+        manager.setInteractiveSource("viewer", requests[2].info.sourceIdentity(), "resource-2");
+        manager.decodeImages({requests[2]});
+        QTRY_COMPARE_WITH_TIMEOUT(provider->canceledMaterializations.load(), 2, 2000);
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 1, 2000);
+        QCOMPARE(qvariant_cast<ImageDecodeRequest>(ready[0][0]).info.source.resourceId,
+                 QString("resource-2"));
+        QCOMPARE(failed.size(), 0);
+        // Retained owners resume when the viewer stops waiting for its image.
+        provider->releaseBackgroundMaterializations.store(true);
+        manager.setInteractiveSource("viewer", {});
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 3, 2000);
+        QCOMPARE(failed.size(), 0);
+        manager.prepareToClose();
+    }
+
+    void openingImageBypassesOccupiedBackgroundProbeLanes() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("priority.png");
+        QImage image(160, 120, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, true);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 4;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("priority-open");
+        QVERIFY(session->applyExternalCatalog(priorityCatalog(path, 5), 1));
+        session->ensurePreviews();
+        QTRY_COMPARE_WITH_TIMEOUT(provider->blocked.load(), 2, 2000);
+        QVERIFY(session->applyExternalState("priority-2", 2, {}, 1));
+        session->setViewerOpen(true);
+        session->requestViewer(160, 120);
+        QTRY_COMPARE_WITH_TIMEOUT(session->viewerRequestStateAt(2), QString("ready"), 1500);
+        QCOMPARE(provider->releaseMask.load(), 0);
+        session->setViewerOpen(false);
+        provider->releaseMask.store(3);
+        QTRY_COMPARE_WITH_TIMEOUT(provider->completed.load(), 5, 2000);
+        runtime->shutdown();
+    }
+
+    void scrollingPromotesAnAlreadyPendingBackgroundProbe() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("priority.png");
+        QImage image(160, 120, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, true);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 4;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("priority-scroll");
+        QVERIFY(session->applyExternalCatalog(priorityCatalog(path, 5), 1));
+        session->ensurePreviews();
+        QTRY_COMPARE_WITH_TIMEOUT(provider->blocked.load(), 2, 2000);
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        model->requestImageMetadata({3}, true);
+        model->requestImageMetadata({}, false);
+        provider->releaseMask.store(1);
+        QTRY_VERIFY_WITH_TIMEOUT(provider->firstUnblocked.load() >= 0, 2000);
+        QCOMPARE(provider->firstUnblocked.load(), 3);
+        provider->releaseMask.store(3);
+        runtime->shutdown();
+    }
+
+    void incrementalLayoutUpdateRetainsFullViewportDemand() {
+        QQmlEngine engine;
+        ViewportRecordingModel model;
+        model.setRowCount(100);
+        model.setColumnCount(1);
+        for (int row = 0; row < model.rowCount(); ++row) {
+            const auto index = model.index(row, 0);
+            model.setData(index, QString::number(row), Qt::UserRole + 1000);
+            model.setData(index, row, Qt::UserRole + 1001);
+            model.setData(index, QStringLiteral("/photo-%1.jpg").arg(row), Qt::UserRole + 1002);
+            model.setData(index, QStringLiteral("photo-%1.jpg").arg(row), Qt::UserRole + 1003);
+            model.setData(index, QSize(80, 60), Qt::UserRole + 1004);
+        }
+        MasonryLayout layout;
+        QQmlEngine::setContextForObject(&layout, engine.rootContext());
+        layout.setSize(QSizeF(600, 400));
+        layout.setPresentationMode(MasonryLayout::Grid);
+        layout.setModel(&model);
+        layout.componentComplete();
+        QTRY_VERIFY_WITH_TIMEOUT(model.visibleDemand.size() > 2, 2000);
+        const QList<int> viewport = model.visibleDemand;
+        const int calls = model.calls;
+        model.setData(model.index(viewport.constFirst(), 0), QSize(80, 60),
+                      FileListModel::ImageFullSizeRole);
+        QTRY_VERIFY_WITH_TIMEOUT(model.calls > calls, 2000);
+        QCOMPARE(model.visibleDemand, viewport);
+    }
+
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+    void scrollingCancelsOffscreenVideoTransport() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("priority.png");
+        QImage image(160, 120, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, false);
+        provider->blockBackgroundMaterializations = true;
+        DecodeManager manager(nullptr, 4, provider);
+        manager.setImageCacheMode(CacheUsageMode::Off);
+        QList<ImageDecodeRequest> requests;
+        for (int row = 0; row < 2; ++row) {
+            ImageDecodeRequest request;
+            request.requestNamespace = "video-viewport-preempt";
+            request.panelThumbnailRequest = true;
+            request.info.path = QString("video-%1.mp4").arg(row);
+            request.info.thumbnailKind = "video";
+            request.info.source = {
+                .resourceId = QString("resource-%1").arg(row),
+                .sourceKey = QString("video-priority-%1").arg(row),
+                .contentVersion = "v1",
+                .storageClass = "network",
+                .accessProfile = "materializeOnce",
+            };
+            request.targetSize = QSize(96, 64);
+            requests.append(request);
+        }
+        QSignalSpy failed(&manager, &DecodeManager::imageReadFailed);
+        manager.decodeImages(requests);
+        QTRY_COMPARE_WITH_TIMEOUT(provider->blockedMaterializations.load(), 2, 2000);
+        manager.setViewportDemand("video-viewport-preempt", {"new-visible-source"});
+        QTRY_COMPARE_WITH_TIMEOUT(provider->canceledMaterializations.load(), 2, 2000);
+        QCOMPARE(failed.size(), 0);
+        manager.cancelRequests("video-viewport-preempt");
+        manager.prepareToClose();
+    }
+#endif
+
+    void scrollingDoesNotWaitForOffscreenNetworkReads() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("priority.png");
+        QImage image(160, 120, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, true);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 4;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("priority-scroll-preempt");
+        QVERIFY(session->applyExternalCatalog(priorityCatalog(path, 50), 1));
+        session->ensurePreviews();
+        QTRY_COMPARE_WITH_TIMEOUT(provider->blocked.load(), 2, 2000);
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        model->requestImageMetadata({49}, true); // End
+        for (int page = 1; page <= 10; ++page)
+            model->requestImageMetadata({49 - page * 3}, true);
+        model->requestImageMetadata({}, false);
+        QTRY_VERIFY_WITH_TIMEOUT(provider->materializedRows().contains(19), 2000);
+        QCOMPARE(provider->releaseMask.load(), 0);
+        // Cancellation must retain the owner so returning can complete it.
+        provider->releaseMask.store(3);
+        model->requestImageMetadata({0}, true);
+        QTRY_VERIFY_WITH_TIMEOUT(provider->materializedRows().contains(0), 2000);
+        runtime->shutdown();
+    }
+
+    void scrollingPreemptsOffscreenMaterialization() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("priority.png");
+        QImage image(160, 120, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, false);
+        provider->blockBackgroundMaterializations = true;
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.maxDecodeThreads = 4;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("priority-scroll-materialize");
+        QVERIFY(session->applyExternalCatalog(priorityCatalog(path, 50), 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        model->requestImageMetadata({0, 1}, true);
+        QTRY_VERIFY_WITH_TIMEOUT(provider->blockedMaterializations.load() >= 2, 2000);
+        model->requestImageMetadata({49}, true);
+        for (int page = 1; page <= 10; ++page)
+            model->requestImageMetadata({49 - page * 3}, true);
+        model->requestImageMetadata({}, false);
+        QTRY_VERIFY_WITH_TIMEOUT(provider->materializedRows().contains(19), 2000);
+        QVERIFY(!provider->releaseBackgroundMaterializations.load());
+        provider->releaseBackgroundMaterializations.store(true);
+        model->requestImageMetadata({0}, true);
+        QTRY_VERIFY_WITH_TIMEOUT(provider->materializedRows().contains(0), 2000);
+        runtime->shutdown();
+    }
+
+    void viewportDemandDoesNotMaterializeOffscreenCatalog() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("priority.png");
+        QImage image(160, 120, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, false);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("priority-bounded");
+        QVERIFY(session->applyExternalCatalog(priorityCatalog(path, 5), 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        model->requestImageMetadata({0}, true);
+        model->requestImageMetadata({}, false);
+        model->requestImageMetadata({}, false, true);
+        QTRY_COMPARE_WITH_TIMEOUT(provider->completed.load(), 5, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(provider->materializedRows().contains(0), 3000);
+        QTest::qWait(300);
+        QCOMPARE(provider->materializedRows(), QSet<int>{0});
+        runtime->shutdown();
+    }
+
+    void sameRevisionCompletionPromotesProvisionalCatalogToSparse() {
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession("priority-sparse-completion");
+        const QVariantList rows{entry("first", 0, "first.txt")};
+        QVERIFY(session->applyExternalCatalog(rows, 1, {
+            {QStringLiteral("currentPath"), QStringLiteral("/camera")},
+            {QStringLiteral("catalogProvisional"), true},
+        }));
+        QCOMPARE(session->model()->rowCount(), 1);
+        QVERIFY(session->applyExternalCatalog(rows, 1, {
+            {QStringLiteral("currentPath"), QStringLiteral("/camera")},
+            {QStringLiteral("catalogProvisional"), false},
+            {QStringLiteral("catalogRowsDeferred"), true},
+            {QStringLiteral("totalCount"), 6275},
+        }));
+        QCOMPARE(session->model()->rowCount(), 6275);
+        runtime->shutdown();
+    }
+
+    void viewerFitPrefetchBypassesCatalogProbeBarrier() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString backing = directory.filePath(
@@ -2257,12 +2867,10 @@ private slots:
 
         session->setViewerOpen(true);
         session->requestViewer(160, 120);
-        QTRY_COMPARE_WITH_TIMEOUT(provider->materializations.load(), 1, 5000);
-        QTest::qWait(300);
-        // Explicit current may bypass pass 1 after its own probe. Neighbor
-        // prefetch must not consume full-source bandwidth while one bounded
-        // catalog probe is still outstanding.
-        QCOMPARE(provider->materializations.load(), 1);
+        // Fit neighbors proceed while an unrelated catalog probe is blocked.
+        QTRY_COMPARE_WITH_TIMEOUT(model->viewerFitFrameCount(),
+                                  qsizetype(CatalogSize - 1), 5000);
+        QCOMPARE(provider->materializations.load(), CatalogSize - 1);
 
         session->requestViewer(0, 0);
         QTRY_COMPARE_WITH_TIMEOUT(
@@ -2270,13 +2878,13 @@ private slots:
         QTest::qWait(500);
         // The blocked neighbor still prevents native prefetch, but it must not
         // hold the selected image's 100% texture behind the same barrier.
-        QCOMPARE(provider->completedProbes.load(), CatalogSize - 1);
+        QVERIFY(!provider->releaseBlockedProbe.load());
         QCOMPARE(model->viewerNativeFrameCount(), qsizetype(1));
 
         provider->releaseBlockedProbe.store(true,
                                              std::memory_order_release);
-        QTRY_COMPARE_WITH_TIMEOUT(
-            provider->completedProbes.load(), CatalogSize, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            provider->completedProbes.load() >= CatalogSize, 5000);
         QTest::qWait(250);
         // Metadata completion replays the retained viewer plan. It must stay
         // current-only until the Fit window has completed its 450 ms dwell.
@@ -4656,7 +5264,8 @@ private slots:
         QVERIFY(deliveredRequest.checkCache);
         QVERIFY(!deliveredRequest.expandToCacheResolution);
         QVERIFY(deliveredRequest.storeInPersistentCache);
-        QCOMPARE(deliveredImage.size(), targetSize);
+        // Decoder output preserves source aspect inside the requested bounds.
+        QCOMPARE(deliveredImage.size(), QSize(123, 69));
 
         // The published frame already covers the same physical tile, so an
         // identical later layout pass must not enqueue another decode.
@@ -5451,26 +6060,10 @@ private slots:
             session->imageOriginalSizeAt(centerRow), QSize(640, 480),
             5000);
 
-        QSet<int> expectedRows;
-        bool hitStart = false;
-        bool hitEnd = false;
-        for (int counter = 0;
-             expectedRows.size() < 16 && !(hitStart && hitEnd);
-             ++counter) {
-            const int row = counter % 2 == 0
-                ? centerRow + counter / 2
-                : centerRow - (counter + 1) / 2;
-            if (row < 0) {
-                hitStart = true;
-            }
-            if (row >= catalog.size()) {
-                hitEnd = true;
-            }
-            if (row >= 0 && row < catalog.size() &&
-                session->isImageAt(row)) {
-                expectedRows.insert(row);
-            }
-        }
+        // Current 8, next 10, previous 7, then 11/6, 13/5, etc.
+        // Rows 9 and 12 are non-images; the sixteenth image is next-side 18.
+        const QSet<int> expectedRows{1, 2, 3, 4, 5, 6, 7, 8,
+                                    10, 11, 13, 14, 15, 16, 17, 18};
         QCOMPARE(cachedViewerRows(), expectedRows);
 
         QList<int> outsideRows;

@@ -21,6 +21,10 @@ public:
     explicit SharedImageSourceProvider(
         QSharedPointer<ImageSourceProvider> provider);
 
+    void setInteractiveResource(const QString &resourceId) override {
+        if (_provider) _provider->setInteractiveResource(resourceId);
+    }
+
     ImageSourceReadResult readRange(
         const ImageSourceDescriptor &source, qint64 offset, qint64 length,
         const QSharedPointer<ImageSourceCancellation> &cancellation) override;

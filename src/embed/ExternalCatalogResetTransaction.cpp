@@ -633,6 +633,8 @@ void ExternalCatalogResetTransaction::pruneDecodeRetryState() {
 void ExternalCatalogResetTransaction::resetPipelinePlanners() {
     m_model._metadataVisibleRows.clear();
     m_model._metadataLastVisibleRows.clear();
+    m_model._metadataLastOverscanRows.clear();
+    m_model._decodeManager->setViewportDemand(m_model._sessionId, {});
     m_model._metadataOverscanRows.clear();
     m_model._metadataUrgentRows.clear();
     m_model._metadataAdHocRows.clear();

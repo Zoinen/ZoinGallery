@@ -97,7 +97,8 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::compatibleFrameLocked(
             QStringLiteral("video-contact-sheet-2x2-display-v4"))
             ? it->decodedSize.scaled(targetSize, Qt::KeepAspectRatio)
             : targetSize;
-        if (!decodedFrameCovers(it->decodedSize, requiredSize)) {
+        if (!decodedFrameCovers(it->decodedSize, requiredSize)
+            && !it->completedRequests.contains(targetSize)) {
             continue;
         }
         const qint64 area = qint64(it->decodedSize.width()) *
@@ -288,6 +289,8 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::storeDecoded(
         // in flight. Reuse it rather than retaining a redundant tier.
         result = compatibleFrameLocked(
             sourceKeyValue, image.size(), true);
+        if (result.isValid() && !decodedFrameCovers(result.decodedSize, image.size()))
+            result = {};
         if (!result.isValid()) {
             const QString exactKey = frameKey(sourceKeyValue, image.size());
             auto existing = _frames.find(exactKey);
@@ -330,6 +333,12 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::storeDecoded(
                 evicted = pruneLocked();
             }
         }
+        // A completed decoder request can preserve aspect or native size
+        // inside its bounds. Repeating that exact immutable request cannot
+        // improve its pixels; different tiers still need actual coverage.
+        const auto completed = _frames.find(frameKey(sourceKeyValue, result.decodedSize));
+        if (completed != _frames.end())
+            completed->completedRequests.insert(completedRequestedSize);
     }
 
     removeProviderIds(evicted, true);

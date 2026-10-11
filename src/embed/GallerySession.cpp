@@ -479,10 +479,11 @@ bool GallerySession::applyExternalCatalog(
         return true;
     }
     const QVariantMap delta = options.value(QStringLiteral("catalogDelta")).toMap();
-    // A completed dense catalog must leave sparse mode even when it carries
-    // an identity delta. Sparse reconciliation retains the uniform placeholder
-    // geometry, so natural image dimensions would never reach Masonry.
-    const bool densePromotion = !context.catalogRowsDeferred && d->external->sparseCatalog();
+    const bool wantsSparseCatalog = context.catalogRowsDeferred
+        && context.totalCount != entries.size();
+    // Reconcile identities first, then leave sparse storage without resetting
+    // surviving facades. Dense storage restores natural image dimensions.
+    const bool densePromotion = !wantsSparseCatalog && d->external->sparseCatalog();
     if (densePromotion) {
         MediaTimingTrace::event(QStringLiteral("qt.gallery.catalog.dense_promotion"), {
             {QStringLiteral("fix"), QStringLiteral("[FIX:masonry-dense-promotion]")},
@@ -492,12 +493,17 @@ bool GallerySession::applyExternalCatalog(
         });
     }
     const bool canReconcile = !context.pathChanged
-        && context.catalogRowsDeferred && !delta.isEmpty()
+        && (wantsSparseCatalog || d->external->sparseCatalog())
+        && !delta.isEmpty()
         && delta.value(QStringLiteral("baseCatalogRevision")).toULongLong() == d->catalogRevision;
-    const bool applied = canReconcile
+    bool applied = canReconcile
         ? d->external->reconcileSparseCatalog(entries, context.metadataDeferred,
               context.catalogRowsDeferred ? context.totalCount : entries.size(), delta)
         : d->external->applyCatalog(entries, context.metadataDeferred, !context.pathChanged && d->catalogRevision > 0, context.totalCount);
+    if (applied && canReconcile && !wantsSparseCatalog) {
+        applied = d->external->promoteSparseCatalog()
+            && d->external->applyCatalog(entries, context.metadataDeferred, true);
+    }
     if (!applied) {
         return false;
     }

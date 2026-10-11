@@ -22,7 +22,7 @@ Item {
         width: Math.max(0, Math.round((parent.width - 8)
                                       * content.entry.renderDpr)
                               / content.entry.renderDpr)
-        height: Math.max(0, Math.ceil((parent.height - y - 3)
+        height: Math.max(0, Math.floor((parent.height - y - 4 - content.entry.panelRoot.itemSpacing / 2)
                                       * content.entry.renderDpr)
                                / content.entry.renderDpr)
         text: quickSearchMatch
@@ -38,12 +38,12 @@ Item {
                          content.entry.itemTextColor.b,
                          content.entry.itemTextColor.a * 0.5)
                : content.entry.itemTextColor
-        elide: Text.ElideMiddle
-        wrapMode: Text.NoWrap
-        maximumLineCount: 1
+        elide: Text.ElideRight
+        wrapMode: Text.Wrap
+        maximumLineCount: 3
         clip: true
         horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignTop
+        verticalAlignment: Text.AlignVCenter
         transform: Translate {
             x: label.pixelCorrection.x
             y: label.pixelCorrection.y

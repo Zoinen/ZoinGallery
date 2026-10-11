@@ -56,6 +56,7 @@ struct GalleryLayoutRequest {
     qreal devicePixelRatio = 1;
     qreal groupHeaderHeight = 0;
     qreal iconRowHeight = 0;
+    qreal gridLabelLineHeight = 16;
     QVector<GalleryLayoutGroup> groups;
     bool lastRowMatchesPrevious = false;
     bool singleRow = false;
@@ -105,12 +106,14 @@ struct GalleryFixedLayoutPlan {
     qreal contentExtent = 0;
     GalleryInsets insets;
     qreal spacing = 0;
+    qreal gridLabelLineHeight = 16;
     QVector<GalleryLayoutSection> sections;
     QVector<GalleryGroupHeader> groupHeaders;
 
     [[nodiscard]] bool horizontal() const;
     [[nodiscard]] QRectF geometryFor(int index) const;
     [[nodiscard]] QRectF previewGeometryFor(int index) const;
+    [[nodiscard]] QRectF previewGeometryForRect(const QRectF &geometry) const;
     [[nodiscard]] int rowFor(int index) const;
     [[nodiscard]] int columnFor(int index) const;
     [[nodiscard]] int sectionIndexFor(int index) const;

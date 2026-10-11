@@ -30,6 +30,8 @@ Item {
         controller.dragEnabled || controller.directoryDropEnabled
         || controller.canRemoveEntries
 
+    GalleryNativeTextMetrics { id: nativeTextMetrics }
+
     function nativePresentationMode(mode) {
         switch (mode) {
         case "columns": return GalleryViewportItem.Columns
@@ -85,6 +87,17 @@ Item {
                              "layoutWidth": galleryLayout.width})
         } finally {
             panel.endPresentationStateUpdate(true)
+        }
+    }
+
+    Connections {
+        target: viewportRoot.panelRoot
+
+        function onDevicePixelRatioChanged() {
+            // Insets are assigned atomically with presentation state rather
+            // than bound individually. Recommit their physical extents when
+            // the embedding window moves to another pixel grid.
+            viewportRoot.applyPresentationState(false)
         }
     }
 
@@ -590,12 +603,18 @@ Item {
                             groupHeaderCount.x - groupHeaderChevron.width
                                 - groupHeader.snapLogical(14)))
                         height: implicitHeight
-                        readonly property rect inkBounds: titleMetrics.tightBoundingRect(text)
-                        y: groupHeader.snapLogical(parent.height / 2 - baselineOffset
-                                                   - inkBounds.y - inkBounds.height / 2)
-                        FontMetrics {
+                        readonly property real nativeInkCenter: nativeTextMetrics.inkCenter(
+                            font, titleMetrics.elidedText, groupHeader.hostDpr)
+                        y: groupHeader.snapLogical(parent.height / 2
+                            - Math.round(baselineOffset * groupHeader.hostDpr) / groupHeader.hostDpr
+                            - nativeInkCenter)
+                        TextMetrics {
                             id: titleMetrics
                             font: groupHeaderTitle.font
+                            text: groupHeaderTitle.text
+                            renderType: Text.NativeRendering
+                            elide: Text.ElideRight
+                            elideWidth: groupHeaderTitle.width
                         }
                         text: String(modelData.title || "")
                         color: viewportRoot.panelRoot.headerTextColor
@@ -632,13 +651,11 @@ Item {
                         anchors.rightMargin: groupHeader.snapLogical(4)
                         width: Math.ceil(implicitWidth * groupHeader.hostDpr) / groupHeader.hostDpr
                         height: implicitHeight
-                        readonly property rect inkBounds: countMetrics.tightBoundingRect(text)
-                        y: groupHeader.snapLogical(parent.height / 2 - baselineOffset
-                                                   - inkBounds.y - inkBounds.height / 2)
-                        FontMetrics {
-                            id: countMetrics
-                            font: groupHeaderCount.font
-                        }
+                        readonly property real nativeInkCenter: nativeTextMetrics.inkCenter(
+                            font, text, groupHeader.hostDpr)
+                        y: groupHeader.snapLogical(parent.height / 2
+                            - Math.round(baselineOffset * groupHeader.hostDpr) / groupHeader.hostDpr
+                            - nativeInkCenter)
                         text: String(modelData.count || 0)
                         color: viewportRoot.panelRoot.mutedColor
                         horizontalAlignment: Text.AlignLeft

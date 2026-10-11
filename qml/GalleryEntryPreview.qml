@@ -18,11 +18,11 @@ Item {
     // Cached metadata establishes the image's geometry before its pixels (or
     // even its lazy ImageFile facade) arrive. Suppress icons from that point.
     readonly property bool thumbnailExpected:
-        entry.panelRoot.controller.thumbnailsEnabled
-        && (entry.imageIdUrl !== "" || (entry.isImage
+        entry.panelRoot.controller.thumbnailsEnabled === true
+        && (entry.imageIdUrl !== "" || (entry.isImage === true
             && (entry.visualModel.imageDimensionsKnown
                 || (entry.model && entry.model.fullSize
-                    && entry.model.fullSize.width > 0 && entry.model.fullSize.height > 0))))
+                    && entry.model.fullSize.width > 0 && entry.model.fullSize.height > 0))) === true)
         && (!thumbnailHasSource || !previewContent.item
             || previewContent.item.sourceStatus !== Image.Error)
     readonly property bool videoThumbnailReady:
@@ -95,7 +95,10 @@ Item {
         anchors.centerIn: parent
         readonly property real nominalIconSize:
             preview.entry.detailsMode || preview.entry.columnsMode
-            ? Math.max(0, Math.min(parent.width, preview.entry.height
+            ? Math.max(0, Math.min(parent.width,
+                       lucideSource && preview.entry.panelRoot.density <= 30
+                           ? preview.entry.panelRoot.detailsIconSize : Infinity,
+                       preview.entry.height
                        - 2 * preview.entry.panelRoot.metrics.detailsIconVerticalPadding))
             : preview.entry.iconsMode
             ? Math.max(0, Math.min(parent.width, parent.height))

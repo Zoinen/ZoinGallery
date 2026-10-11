@@ -307,7 +307,10 @@ QRectF GalleryFixedLayoutPlan::geometryFor(int index) const {
 }
 
 QRectF GalleryFixedLayoutPlan::previewGeometryFor(int index) const {
-    const QRectF geometry = geometryFor(index);
+    return previewGeometryForRect(geometryFor(index));
+}
+
+QRectF GalleryFixedLayoutPlan::previewGeometryForRect(const QRectF &geometry) const {
     if (geometry.isEmpty()) {
         return {};
     }
@@ -315,10 +318,12 @@ QRectF GalleryFixedLayoutPlan::previewGeometryFor(int index) const {
     if (mode == GalleryPresentationMode::Grid) {
         const QRectF inner = geometry.adjusted(
             halfSpacing, halfSpacing, -halfSpacing, -halfSpacing);
-        const qreal labelHeight = qMin<qreal>(
-            34, qMax<qreal>(18, extent * 0.20));
-        return QRectF(inner.left(), inner.top(), inner.width(),
-                      qMax<qreal>(1, inner.height() - labelHeight));
+        // Three font-sized lines, a preview/text gap, and bottom padding.
+        // Keep row pitch uniform; filenames never cause per-entry relayout.
+        const qreal labelHeight = 3 * gridLabelLineHeight + 3 + 4;
+        const qreal topPadding = qMin<qreal>(8, qMax<qreal>(0, inner.height() - 1));
+        return QRectF(inner.left(), inner.top() + topPadding, inner.width(),
+                      qMax<qreal>(1, inner.height() - topPadding - labelHeight));
     }
     const qreal side = qMax<qreal>(
         1, qMin(geometry.height() - spacing,
@@ -507,6 +512,7 @@ GalleryFixedLayoutPlan UniformGridStrategy::analyticalPlan(
     const GalleryLayoutRequest &request, int entryCount) {
     GalleryFixedLayoutPlan result;
     result.mode = request.mode;
+    result.gridLabelLineHeight = qMax<qreal>(1, request.gridLabelLineHeight);
     result.entryCount = qMax(0, entryCount);
     result.columns = uniformColumnCount(request);
     result.rowsPerColumn = 1;

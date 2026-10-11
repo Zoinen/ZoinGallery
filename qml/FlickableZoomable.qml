@@ -7,6 +7,13 @@ import QtQuick.Controls
 Item {
     id: flickableArea
 
+    ViewerViewportGestures {
+        id: gestures
+        viewport: flickableArea
+        image: viewerImage
+        viewportFrameAnimation: frameAnimation
+    }
+
     property var viewerModel: null
     property var sourceMasonry: null
 
@@ -446,89 +453,15 @@ Item {
     }
 
     function beginPinchZoom(centerX, centerY) {
-        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
-            return
-        }
-
-        viewportAnimation.stop()
-        frameAnimation.running = false
-        pinchZoomActive = true
-        pinchZoomOutToThumbnailsActive = false
-        pinchZoomOutToThumbnailsProgress = 0
-        pinchStartZoomScale = zoomScale
-        pinchStartCenterX = centerX
-        pinchStartCenterY = centerY
-        pinchStartImagePointX = (centerX - viewerImage.x) / zoomScale
-        pinchStartImagePointY = (centerY - viewerImage.y) / zoomScale
+        return gestures.beginPinchZoom(centerX, centerY)
     }
 
     function updatePinchZoom(scale) {
-        if (effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
-            return
-        }
-
-        let targetScale = clampZoomScale(pinchStartZoomScale * scale)
-        let fittedScale = fitZoomScale()
-        let transitionDistance = Math.max(0.001, fittedScale * pinchZoomOutToThumbnailsScaleDistanceRatio)
-        let transitionStartDistance = Math.min(transitionDistance * 0.8,
-                Math.max(0, fittedScale * pinchZoomOutToThumbnailsStartScaleDistanceRatio))
-        let activeTransitionDistance = Math.max(0.001, transitionDistance - transitionStartDistance)
-        let transitionProgress = Math.max(0,
-                Math.min(1, (fittedScale - transitionStartDistance - targetScale) / activeTransitionDistance))
-
-        if (pinchZoomOutToThumbnailsActive) {
-            if (transitionProgress > 0) {
-                pinchZoomOutToThumbnailsProgress = transitionProgress
-                pinchZoomOutToThumbnailsProgressed(transitionProgress)
-                return
-            }
-
-            pinchZoomOutToThumbnailsActive = false
-            pinchZoomOutToThumbnailsProgress = 0
-            pinchZoomOutToThumbnailsProgressed(0)
-        }
-
-        let targetX = pinchStartCenterX - pinchStartImagePointX * targetScale
-        let targetY = pinchStartCenterY - pinchStartImagePointY * targetScale
-
-        zoomFitView = false
-        zoomScale = targetScale
-        viewerImage.x = targetX
-        viewerImage.y = targetY
-        zoomAnimation.to = targetScale
-        xAnimation.to = targetX
-        yAnimation.to = targetY
-
-        forceShowScrollBars = true
-        forceShowScrollBars = false
-
-        if (active && transitionProgress > 0) {
-            pinchZoomOutToThumbnailsActive = true
-            pinchZoomOutToThumbnailsProgress = transitionProgress
-            pinchZoomOutToThumbnailsProgressed(transitionProgress)
-        }
+        return gestures.updatePinchZoom(scale)
     }
 
     function finishPinchZoom() {
-        pinchZoomActive = false
-        if (pinchZoomOutToThumbnailsActive) {
-            let commit = pinchZoomOutToThumbnailsProgress >= pinchZoomOutToThumbnailsCommitProgress
-            pinchZoomOutToThumbnailsActive = false
-            pinchZoomOutToThumbnailsFinished(commit)
-            return
-        }
-
-        if (!active || effectiveOriginalSize.width <= 1 || effectiveOriginalSize.height <= 1) {
-            return
-        }
-
-        let fittedScale = fitZoomScale()
-        if (zoomScale <= fittedScale * 1.02) {
-            zoomToFit()
-        }
-        else {
-            onControlReleased()
-        }
+        return gestures.finishPinchZoom()
     }
 
     function zoomToScale(targetScale, keepMousePosition) {
@@ -697,147 +630,43 @@ Item {
     }
 
     function updateWheelPanVelocityHistory(history, velocity, size) {
-        history.push(velocity)
-        if (history.length > size) {
-            history.shift()
-        }
+        return gestures.updateWheelPanVelocityHistory(history, velocity, size)
     }
 
     function averageWheelPanVelocity(history) {
-        if (!history.length) {
-            return 0
-        }
-
-        let sum = history.reduce(function(a, b) {
-            return a + b
-        }, 0)
-        return sum / history.length
+        return gestures.averageWheelPanVelocity(history)
     }
 
     function beginWheelPan() {
-        if (zoomFitView) {
-            return
-        }
-
-        viewportAnimation.stop()
-        wheelPanVelocityHistoryX = []
-        wheelPanVelocityHistoryY = []
-        wheelPanLastTime = 0
-        wheelPanActive = true
+        return gestures.beginWheelPan()
     }
 
     function cancelWheelPan() {
-        wheelPanVelocityHistoryX = []
-        wheelPanVelocityHistoryY = []
-        wheelPanLastTime = 0
-        wheelPanActive = false
+        return gestures.cancelWheelPan()
     }
 
     function recordWheelPanVelocity(consumedX, consumedY) {
-        if (!wheelPanActive) {
-            beginWheelPan()
-        }
-
-        let now = Date.now()
-        let dt = wheelPanLastTime ? Math.max(1, now - wheelPanLastTime) : 16
-        updateWheelPanVelocityHistory(wheelPanVelocityHistoryX, consumedX / dt * 1000, wheelPanHistorySize)
-        updateWheelPanVelocityHistory(wheelPanVelocityHistoryY, consumedY / dt * 1000, wheelPanHistorySize)
-        wheelPanLastTime = now
+        return gestures.recordWheelPanVelocity(consumedX, consumedY)
     }
 
     function finishWheelPan() {
-        // Zoom forwarding and delayed pan-end notifications can reach here
-        // without a pan. They must not replace a pending zoom destination.
-        if (!wheelPanActive)
-            return
-        if (zoomFitView) {
-            cancelWheelPan()
-            return
-        }
-
-        let avgVelocityX = averageWheelPanVelocity(wheelPanVelocityHistoryX)
-        let avgVelocityY = averageWheelPanVelocity(wheelPanVelocityHistoryY)
-        let useInertia = wheelPanActive && (Math.abs(avgVelocityX) > 20 || Math.abs(avgVelocityY) > 20)
-        let decelerationFactor = 0.1
-        let targetX = viewerImage.x + (useInertia ? avgVelocityX * decelerationFactor : 0)
-        let targetY = viewerImage.y + (useInertia ? avgVelocityY * decelerationFactor : 0)
-
-        xAnimation.to = fitViewerImageInViewportBoundsX(targetX)
-        yAnimation.to = fitViewerImageInViewportBoundsY(targetY)
-        zoomAnimation.to = zoomScale
-        xAnimation.duration = useInertia ? 500 : animationDuration
-        yAnimation.duration = useInertia ? 500 : animationDuration
-        zoomAnimation.duration = 0
-        viewportAnimation.easing = useInertia ? Easing.OutCirc : Easing.OutSine
-        viewportAnimation.restart()
-
-        cancelWheelPan()
+        return gestures.finishWheelPan()
     }
 
     function panBy(deltaX, deltaY, recordVelocity) {
-        if (zoomFitView) {
-            return Qt.point(deltaX, deltaY)
-        }
-
-        viewportAnimation.stop()
-
-        let oldX = viewerImage.x
-        let oldY = viewerImage.y
-        let targetX = fitViewerImageInViewportBoundsX(viewerImage.x + deltaX)
-        let targetY = fitViewerImageInViewportBoundsY(viewerImage.y + deltaY)
-
-        viewerImage.x = targetX
-        viewerImage.y = targetY
-        xAnimation.to = targetX
-        yAnimation.to = targetY
-        zoomAnimation.to = zoomScale
-        if (recordVelocity) {
-            recordWheelPanVelocity(targetX - oldX, targetY - oldY)
-        }
-
-        forceShowScrollBars = true
-        forceShowScrollBars = false
-
-        return Qt.point(deltaX - (targetX - oldX), deltaY - (targetY - oldY))
+        return gestures.panBy(deltaX, deltaY, recordVelocity)
     }
 
     function settlePan() {
-        if (zoomFitView) {
-            return
-        }
-
-        xAnimation.to = fitViewerImageInViewportBoundsX(viewerImage.x)
-        yAnimation.to = fitViewerImageInViewportBoundsY(viewerImage.y)
-        zoomAnimation.to = zoomScale
-        xAnimation.duration = animationDuration
-        yAnimation.duration = animationDuration
-        zoomAnimation.duration = 0
-        viewportAnimation.easing = Easing.OutSine
-        viewportAnimation.restart()
+        return gestures.settlePan()
     }
 
     function fitViewerImageInViewportBoundsX(targetX, targetScale) {
-        if (targetScale === undefined) {
-            targetScale = zoomScale
-        }
-        let targetWidth = effectiveOriginalSize.width * targetScale
-        targetX = Math.min(0, Math.max(targetX, flickableArea.width - targetWidth))
-        if (targetWidth < flickableArea.width) {
-            targetX = flickableArea.width / 2 - targetWidth / 2
-        }
-        return targetX
+        return gestures.fitViewerImageInViewportBoundsX(targetX, targetScale)
     }
 
     function fitViewerImageInViewportBoundsY(targetY, targetScale) {
-        if (targetScale === undefined) {
-            targetScale = zoomScale
-        }
-        let targetHeight = effectiveOriginalSize.height * targetScale
-        targetY = Math.min(0, Math.max(targetY, flickableArea.height - targetHeight))
-        if (targetHeight < flickableArea.height) {
-            targetY = flickableArea.height / 2 - targetHeight / 2
-        }
-        return targetY
+        return gestures.fitViewerImageInViewportBoundsY(targetY, targetScale)
     }
 
     function onControlReleased() {

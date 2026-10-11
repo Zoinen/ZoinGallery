@@ -37,7 +37,9 @@ Item {
             for (let item = chromeRoot; item; item = item.parent)
                 dependency += item.x + item.y
             const origin = chromeRoot.mapToItem(null, dependency * 0, 0).x
-            const dpr = chromeRoot.Screen.devicePixelRatio
+            const dpr = chromeRoot.Window.window
+                ? chromeRoot.Window.window.devicePixelRatio
+                : chromeRoot.Screen.devicePixelRatio
             return Math.round((origin + localX) * dpr) / dpr - origin
         }
         y: chromeRoot.layoutOrigin.y

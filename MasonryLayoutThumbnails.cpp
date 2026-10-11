@@ -48,7 +48,17 @@ void MasonryLayout::updateViewportIndexSets() {
     QList<int> overscan;
     const ZoinGallery::GalleryViewportWindow materialization =
         viewportMaterializationPlan();
-    if (_presentationMode == Columns) {
+    if (_containedPreview) {
+        // Contained cards have no scrolling window. Their final geometry
+        // selects the bounded 1/4/9/16-cell demand; hidden bricks can retain
+        // old row coordinates across a capacity change.
+        for (int index = 0; index < _bricks.size(); ++index) {
+            if (!_bricks[index].normalizedSize.isEmpty())
+                visible.append(index);
+        }
+        overscan = visible;
+    }
+    else if (_presentationMode == Columns) {
         const qreal visibleLeft = materialization.visibleStart;
         const qreal visibleRight = materialization.visibleEnd;
         const qreal overscanLeft = materialization.metadataStart;

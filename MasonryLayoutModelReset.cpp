@@ -494,6 +494,19 @@ void MasonryLayout::applyIncrementalModelChange() {
         || --_incrementalModelChangeDepth > 0) {
         return;
     }
+    if (_sparseCatalogRows != (_model && _model->property("sparseCatalog").toBool())) {
+        // A paging-threshold crossing is a layout change, not a model reset.
+        // Rebuild the appropriate bounded/dense geometry while keeping the
+        // current viewport and reusing painted delegate slots.
+        preserveCurrentItemPositionForNextModelReset();
+        preservePendingThumbnailRequestsForModelReset();
+        _preserveDecodeQueueForCurrentRebuild = true;
+        onModelAboutToBeReset();
+        onModelReset();
+        _incrementalInsertedFirst = -1;
+        _incrementalInsertedLast = -1;
+        return;
+    }
     if (applySparseTailInsert()) {
         _incrementalInsertedFirst = -1;
         _incrementalInsertedLast = -1;

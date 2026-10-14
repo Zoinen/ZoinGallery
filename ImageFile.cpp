@@ -1,4 +1,5 @@
 #include "ImageFile.h"
+#include "VectorSource.h"
 
 #include <QFileInfo>
 #include <QLocale>
@@ -175,7 +176,7 @@ bool ImageFile::isVideoThumbnail() const {
 }
 
 bool ImageFile::isViewerImage() const {
-    return _isImage && !isVideoThumbnail();
+    return _isImage && !isVideoThumbnail() && !_vectorSourceFailed;
 }
 
 bool ImageFile::isFolderView() const {
@@ -364,7 +365,13 @@ void ImageFile::setInfo(const ImageInfo &info) {
     bool oldIsPanorama = isPanorama();
     const QDateTime oldLastModified = lastModified();
     const qint64 oldFileSize = fileSize();
+    if (vectorRevisionKey(_info) != vectorRevisionKey(info)) {
+        _vectorSourceFailed = false;
+        _vectorSource.clear();
+        emit imageIdUrlChanged();
+    }
     _info = info;
+    if (_vectorSource) _info.vectorSource = _vectorSource;
     if (oldIsPanorama != isPanorama()) {
         emit isPanoramaChanged();
     }
@@ -648,4 +655,12 @@ void ImageFile::setSelectionGroupColor(const QColor &selectionGroupColor) {
         _selectionGroupColor = selectionGroupColor;
         emit selectionGroupChanged();
     }
+}
+
+void ImageFile::setVectorSource(const VectorSourcePtr &source) {
+    if (source) _vectorSourceFailed = false;
+    if (_vectorSource == source) return;
+    _vectorSource = source;
+    _info.vectorSource = source;
+    emit imageIdUrlChanged();
 }

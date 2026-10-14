@@ -15,6 +15,7 @@ class GalleryPreferences final : public QObject {
     Q_PROPERTY(bool busy READ busy NOTIFY changed)
     Q_PROPERTY(QString error READ error NOTIFY changed)
     Q_PROPERTY(QString targetColorSpace READ targetColorSpace NOTIFY changed)
+    Q_PROPERTY(bool showCheckerboard READ showCheckerboard WRITE setShowCheckerboard NOTIFY changed)
     Q_PROPERTY(bool animateResizing READ animateResizing NOTIFY changed)
 public:
     explicit GalleryPreferences(DecodeManager *decoder, bool persistent, QObject *parent = nullptr);
@@ -25,6 +26,8 @@ public:
     QString error() const { return _error; }
     QString targetColorSpace() const;
     bool animateResizing() const;
+    bool showCheckerboard() const;
+    void setShowCheckerboard(bool enabled);
     Q_INVOKABLE bool apply(const QVariantMap &values);
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void clearCache();

@@ -496,7 +496,10 @@ void VideoThumbnailRunner::run() {
     }
     if (needSheet && validFrames == 0) {
         ImageDecodeRequest failed = _request;
-        failed.sourceAccessFailed = _request.info.source.isValid();
+        // Source descriptors also identify local files. An opened source with
+        // no decodable frames is a content failure unless its range reader
+        // actually reported an I/O failure.
+        failed.sourceAccessFailed = rangeDevice && rangeDevice->readFailed();
         emit imageReadFailed(failed);
         if (!posterCaptured) {
             span.set(QStringLiteral("outcome"), QStringLiteral("no-frame"));

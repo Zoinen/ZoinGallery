@@ -69,6 +69,8 @@ FocusScope {
     property bool videoPlaybackInitializationAllowed: false
     property var videoIconSources: ({})
     property bool playbackPresentationVisible: visible
+    property bool currentIsVectorValue: false
+    readonly property bool currentIsVector: currentIsVectorValue
     property bool currentIsVideoValue: false
     readonly property bool currentIsVideo: currentIsVideoValue
     property GalleryThemePalette theme: GalleryThemePalette {}
@@ -144,6 +146,7 @@ FocusScope {
     property url transitionThumbnailSource: ""
     property bool transitionHasGeometry: false
     property bool completingClose: false
+    property bool checkerboardEnabled: true
     property bool viewerContentVisible: true
     property bool returningFromPinch: false
     property bool pinchCloseActive: false
@@ -180,8 +183,8 @@ FocusScope {
     property real scrollBarsRightMargin: 0
     property bool sphericViewerMode: false
     onSphericViewerModeChanged: {
-        if (sphericViewerMode)
-            requestImage()
+        if (sphericViewerMode && currentIsVector) sphericViewerMode = false
+        else if (sphericViewerMode) requestImage()
     }
 
     property real viewerNavigationOffsetX: 0

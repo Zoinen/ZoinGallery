@@ -1,4 +1,5 @@
 #include "ViewerImageCache.h"
+#include "VectorSource.h"
 
 #include <QReadLocker>
 #include <QWriteLocker>
@@ -128,10 +129,12 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
         }
     }
 
-    result.cachedImages = cachedImagesForRequest(currentRequest);
+    result.cachedImages = isVectorSource(currentRequest.info) && currentRequest.info.vectorSource
+        ? QList<QPair<QString, int>>{{currentRequest.info.vectorSource->url.toString(), 1}}
+        : cachedImagesForRequest(currentRequest);
     for (const ImageDecodeRequest &request :
          std::as_const(plannedRequests)) {
-        if (!needsDecode(request)) {
+        if ((isVectorSource(request.info) && request.info.vectorSource) || !needsDecode(request)) {
             continue;
         }
 
@@ -309,6 +312,10 @@ QList<QPair<QString, int>> ViewerImageCache::imageSources(
         return result;
     }
 
+    if (isVectorSource(item->info())) {
+        if (item->vectorSource()) result.append({item->vectorSource()->url.toString(), 1});
+        return result;
+    }
     if (!item->imageIdUrl().isEmpty()) {
         result.append({item->imageIdUrl(), 0});
     }
@@ -422,6 +429,7 @@ bool ViewerImageCache::needsDecode(
 bool ViewerImageCache::needsDecode(
     const ImageInfo &info, const QSize &targetSize, bool fullSize,
     bool requireNativeSource) const {
+    if (isVectorSource(info) && info.vectorSource) return false;
     QReadLocker locker(&_lock);
     const QHash<QString, Entry> &cache =
         fullSize ? _fullSizeImages : _viewerImages;

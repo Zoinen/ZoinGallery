@@ -10,6 +10,7 @@ Item {
     required property bool shaderThumbnail
     required property bool activePresentation
     readonly property alias thumbnailItem: thumbnail
+    readonly property bool isVector: entry.visualModel.isVector
     readonly property bool thumbnailHasSource:
         thumbnail.source.toString() !== ""
     readonly property bool thumbnailReady:
@@ -19,6 +20,7 @@ Item {
     // even its lazy ImageFile facade) arrive. Suppress icons from that point.
     readonly property bool thumbnailExpected:
         entry.panelRoot.controller.thumbnailsEnabled === true
+        && (!preview.isVector || thumbnailReady)
         && (entry.imageIdUrl !== "" || (entry.isImage === true
             && (entry.visualModel.imageDimensionsKnown
                 || (entry.model && entry.model.fullSize
@@ -148,7 +150,7 @@ Item {
             preview.activePresentation
                 && preview.entry.panelRoot.controller.thumbnailsEnabled
                 && (!preview.entry.masonryMode || preview.entry.masonryGeometryReady)
-                ? preview.entry.imageIdUrl : ""
+                ? (preview.isVector ? preview.entry.visualModel.vectorSource : preview.entry.imageIdUrl) : ""
         visible: thumbnail.source.toString() !== ""
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId
@@ -169,7 +171,7 @@ Item {
         anchors.fill: parent
         asynchronous: false
         sourceComponent: thumbnail.source.toString() !== ""
-                         ? (preview.shaderThumbnail
+                         ? (preview.isVector ? vectorThumbnailComponent : preview.shaderThumbnail
                             ? shaderThumbnailComponent
                             : compactThumbnailComponent)
                          : (sourceColorIconNeeded
@@ -228,6 +230,28 @@ Item {
             font.pixelSize: preview.entry.panelRoot.detailsNameFontPixelSize
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    Component {
+        id: vectorThumbnailComponent
+        GalleryVectorImage {
+            id: vectorThumbnail
+            source: thumbnail.source
+            onSourceStatusChanged: {
+                if (sourceStatus !== Image.Error) return
+                const row = preview.entry.viewIndex
+                const failedSource = source
+                Qt.callLater(() => {
+                    if (preview.entry.panelRoot.session)
+                        preview.entry.panelRoot.session.reportVectorFailure(row, failedSource)
+                })
+            }
+            devicePixelRatio: preview.entry.renderDpr
+            readonly property point pixelGridOffset: preview.entry.iconPixelOffset(vectorThumbnail)
+            transform: Translate { x: vectorThumbnail.pixelGridOffset.x; y: vectorThumbnail.pixelGridOffset.y }
+            crop: preview.entry.masonryMode
+            showCheckerboard: preview.shaderThumbnail && preview.entry.panelRoot.showTransparentGrid
         }
     }
 

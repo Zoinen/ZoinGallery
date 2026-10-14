@@ -271,13 +271,13 @@ bool ExternalCatalogModel::applySparseCatalog(
         entry.item->setIsFolder(entry.directory);
         entry.item->setIsFolderView(
             entry.directoryPreviewState == DirectoryPreviewState::HasImages);
-        entry.item->setIsImage(entry.image);
+        entry.item->setIsImage(entry.thumbnailPresentation());
         entry.item->setHighlightStyle(entry.highlightStyle);
         entry.item->setIconPath(entry.iconPath);
         entry.item->setIsSelected(entry.selected);
         entry.item->setImageProviderName(_thumbnailProviderName);
         entry.item->setInfo(entry.imageInfo);
-        entry.item->setFullSize(entry.originalSize);
+        entry.item->setFullSize(entry.videoThumbnailFailed ? QSize{} : entry.originalSize);
         entry.item->setDisplayFields(entry.displayFields);
     };
 
@@ -756,7 +756,8 @@ int ExternalCatalogModel::sourceIndexAt(int row) const {
 
 QSize ExternalCatalogModel::imageOriginalSizeAt(int row) const {
     const Entry *entry = entryAt(row);
-    return entry && entry->loaded ? entry->originalSize : QSize();
+    return entry && entry->loaded && !entry->videoThumbnailFailed
+        ? entry->originalSize : QSize();
 }
 
 void ExternalCatalogModel::setThumbnailsEnabled(bool enabled) {

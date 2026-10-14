@@ -159,6 +159,7 @@ void ExternalCatalogModel::applyImageInfoResult(
     _backgroundMetadataRetries.remove(retryKey);
     const bool unusableMetadata = !info.imageSize.isValid();
     if (unusableMetadata) {
+        markVideoThumbnailFailed(authorityRows);
         markViewerDecodeFailed(authorityRows);
     }
     if (_catalogFitWaitingMetadata.remove(sourceIdentity)
@@ -226,6 +227,7 @@ bool ExternalCatalogModel::applyImageInfoToRow(
     if (entry.size >= 0) {
         currentInfo.fileSize = entry.size;
     }
+    currentInfo.vectorSource = entry.vectorSource;
     entry.imageInfo = currentInfo;
     entry.metadataSettled = true;
     entry.originalSize = originalSize;
@@ -239,7 +241,7 @@ bool ExternalCatalogModel::applyImageInfoToRow(
         });
     if (entry.item) {
         entry.item->setInfo(entry.imageInfo);
-        entry.item->setFullSize(entry.originalSize);
+        entry.item->setFullSize(entry.videoThumbnailFailed ? QSize{} : entry.originalSize);
     }
     // Repeated metadata with identical geometry must not invalidate the
     // committed thumbnail layout or send it through another rewrap pass.
@@ -335,6 +337,7 @@ void ExternalCatalogModel::handleImageReady(
         // A successful source read followed by a null pixel decode is a
         // content failure, regardless of whether its bytes came from a VFS.
         // Transport failures are reported separately by imageReadFailed.
+        markVideoThumbnailFailed(authorityRows);
         markViewerDecodeFailed(authorityRows);
         return;
     }
@@ -570,6 +573,25 @@ void ExternalCatalogModel::publishThumbnailImage(
         entry.size, request.targetSize, thumbnailTransformKey(request), image);
 }
 
+void ExternalCatalogModel::markVideoThumbnailFailed(const QList<int> &rows) {
+    for (int row : rows) {
+        if (!validRow(row)) continue;
+        Entry &entry = loadedEntry(row);
+        // A failed larger request or poster must not discard a usable preview.
+        if ((entry.thumbnailKind != QStringLiteral("video") && !isVectorSource(entry.imageInfo))
+            || entry.videoThumbnailFailed || !entry.thumbnailProviderId.isEmpty()) continue;
+        entry.videoThumbnailFailed = true;
+        setEntryHighlightStyle(entry, entry.highlightStyle);
+        if (entry.item) {
+            entry.item->setIsImage(false);
+            entry.item->setFullSize({});
+        }
+        emit dataChanged(index(row), index(row),
+            {FileListModel::IsImageRole, FileListModel::ImageFullSizeRole,
+             VisualSnapshotRole});
+    }
+}
+
 void ExternalCatalogModel::handleImageReadFailed(
     const ImageDecodeRequest &request) {
     if (_shutdown || request.requestNamespace != _sessionId) {
@@ -604,14 +626,17 @@ void ExternalCatalogModel::handleImageReadFailed(
         }
         else {
             completeCatalogFitRequest(request);
+            markVideoThumbnailFailed(authorityRows);
             markViewerDecodeFailed(authorityRows);
         }
         return;
     }
 
     releaseFailedThumbnailRequest(request);
-    if (!request.sourceAccessFailed)
+    if (!request.sourceAccessFailed) {
+        markVideoThumbnailFailed(decodeAuthorityRows(request));
         markViewerDecodeFailed(decodeAuthorityRows(request));
+    }
     // External/VFS reads can fail transiently while the media transport is
     // reconnecting. A normal thumbnail must get the same bounded retry as a
     // visible/high-priority request; otherwise one timeout leaves its card
@@ -724,6 +749,9 @@ bool ExternalCatalogModel::scheduleSourceDecodeRetry(
 }
 
 void ExternalCatalogModel::clearPublishedImage(Entry &entry) {
+    entry.vectorSource.clear();
+    entry.imageInfo.vectorSource.clear();
+    if (entry.item) entry.item->setVectorSource({});
     if (!entry.item) {
         return;
     }
@@ -757,6 +785,13 @@ void ExternalCatalogModel::attachThumbnail(
             _store->remove(legacyId);
         }
     }
+    const bool restoredVideo = entry.videoThumbnailFailed;
+    entry.videoThumbnailFailed = false;
+    if (restoredVideo) {
+        item->setIsImage(entry.image);
+        item->setFullSize(entry.originalSize);
+        setEntryHighlightStyle(entry, entry.highlightStyle);
+    }
     entry.thumbnailProviderId = providerId;
     const bool hadThumbnails = hasPublishedThumbnails();
     _providerEntryIds.insert(providerId, entry.id);
@@ -786,6 +821,10 @@ void ExternalCatalogModel::attachThumbnail(
     emit dataChanged(index(row), index(row),
                      {FileListModel::ImageIdUrlRole,
                       VisualSnapshotRole});
+    if (restoredVideo) {
+        emit dataChanged(index(row), index(row),
+            {FileListModel::IsImageRole, FileListModel::ImageFullSizeRole});
+    }
     emit viewerSourceAtChanged(row);
     if (entry.id == _viewerEntryId &&
         _viewerImageCache.bestImageUrl(item) == item->imageIdUrl()) {
@@ -819,7 +858,7 @@ bool ExternalCatalogModel::adoptCachedThumbnail(int row) {
         return false;
     }
     const Entry &entry = loadedEntry(row);
-    if (!entry.image || !entry.thumbnailRequestedSize.isValid()) {
+    if (isVectorSource(entry.imageInfo) || !entry.image || !entry.thumbnailRequestedSize.isValid()) {
         return false;
     }
     const ThumbnailMemoryCache::Handle cached = _thumbnailCache->lookup(
@@ -1328,3 +1367,76 @@ void ExternalCatalogModel::replanAfterImageProbe(bool completed) {
 
 
 } // namespace ZoinGallery
+
+namespace ZoinGallery {
+void ExternalCatalogModel::handleVectorSourceReady(const ImageDecodeRequest &request,
+                                                  const VectorSourcePtr &source) {
+    if (_shutdown || request.requestNamespace != _sessionId || !source) return;
+    const auto rows = validatedDecodedRows(decodeAuthorityRows(request), request);
+    if (rows.isEmpty()) return;
+    clearCompletedDecodeRequest(request);
+    for (int row : rows) {
+        Entry &entry = loadedEntry(row);
+        entry.vectorSource = source;
+        _vectorRetention.removeAll(entry.id);
+        _vectorRetention.append(entry.id);
+        entry.originalSize = source->size;
+        entry.imageInfo.imageSize = source->size;
+        entry.imageInfo.vectorSource = source;
+        entry.metadataSettled = true;
+        entry.videoThumbnailFailed = false;
+        auto *item = ensureItem(row);
+        item->setInfo(entry.imageInfo);
+        item->setFullSize(source->size);
+        item->setVectorSource(source);
+        emit dataChanged(index(row), index(row), {VisualSnapshotRole, KnownImageSizeRole, FileListModel::ImageFullSizeRole});
+        emit viewerSourceAtChanged(row);
+    }
+    setViewerRequestState(rows, QStringLiteral("ready"));
+    pruneVectorSources();
+    // Failures do not consume the successful neighbor budget; continue the
+    // existing planner after publishing this immutable vector revision.
+    const auto plans = _viewerPlans;
+    for (auto it = plans.cbegin(); it != plans.cend(); ++it) {
+        const int row = rowForEntryId(it.key());
+        if (validRow(row)) scheduleViewerDecodeAt(row, it->viewportSize, it->prefetchCount);
+    }
+}
+} // namespace ZoinGallery
+
+namespace ZoinGallery {
+void ExternalCatalogModel::pruneVectorSources() {
+    constexpr int RetainedRevisions = 32;
+    QSet<int> pinned = _metadataLastVisibleRows;
+    pinned.unite(_metadataLastOverscanRows);
+    const int viewerRow = rowForEntryId(_viewerEntryId);
+    if (validRow(viewerRow)) {
+        for (int row : viewerCandidateRows(viewerRow, 16)) pinned.insert(row);
+    }
+    for (int i = 0; _vectorRetention.size() > RetainedRevisions && i < _vectorRetention.size();) {
+        const int row = rowForEntryId(_vectorRetention.at(i));
+        if (pinned.contains(row)) { ++i; continue; }
+        _vectorRetention.removeAt(i);
+        if (!validRow(row)) continue;
+        auto &entry = loadedEntry(row);
+        entry.vectorSource.clear();
+        entry.imageInfo.vectorSource.clear();
+        if (entry.item) entry.item->setVectorSource({});
+        emit dataChanged(index(row), index(row), {VisualSnapshotRole});
+        emit viewerSourceAtChanged(row);
+    }
+}
+}
+
+namespace ZoinGallery {
+void ExternalCatalogModel::reportVectorFailure(int row, const QUrl &source) {
+    if (!validRow(row) || source.isEmpty() || vectorSourceAt(row) != source) return;
+    auto &entry = loadedEntry(row);
+    entry.vectorSource.clear();
+    entry.imageInfo.vectorSource.clear();
+    if (entry.item) entry.item->setVectorSource({});
+    markVideoThumbnailFailed({row});
+    markViewerDecodeFailed({row});
+    emit viewerSourceAtChanged(row);
+}
+}

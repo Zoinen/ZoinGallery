@@ -88,6 +88,7 @@ GallerySession::GallerySession(
     qint64 viewerNativeCacheByteBudget,
     QObject *parent)
     : QObject(parent), d(new Private) {
+    connect(this, &GallerySession::viewerSourceAtChanged, this, &GallerySession::vectorSourceAtChanged);
     d->sessionId = sessionId;
     d->sourceKind = sourceKind;
     d->thumbnailProviderName = thumbnailProviderName;
@@ -1187,7 +1188,8 @@ void GallerySession::requestToggleSelection(int index) {
 }
 
 bool GallerySession::viewerDecodeFailedAt(int index) const {
-    return d->external && d->external->viewerDecodeFailedAt(index);
+    return d->external ? d->external->viewerDecodeFailedAt(index)
+        : d->local && d->local->viewerDecodeFailedAt(index);
 }
 
 QString GallerySession::viewerRequestStateAt(int index) const {
@@ -1279,3 +1281,20 @@ void GallerySession::shutdown() {
 }
 
 } // namespace ZoinGallery
+
+namespace ZoinGallery {
+bool GallerySession::isVectorAt(int index) const {
+    return d->external ? d->external->isVectorAt(index) : d->local && d->local->isVectorAt(index);
+}
+QUrl GallerySession::vectorSourceAt(int index) const {
+    return d->external ? d->external->vectorSourceAt(index) : d->local ? d->local->vectorSourceAt(index) : QUrl{};
+}
+}
+
+namespace ZoinGallery {
+void GallerySession::reportVectorFailure(int row, const QUrl &source) {
+    if (d->shutdown) return;
+    if (d->external) d->external->reportVectorFailure(row, source);
+    else if (d->local) d->local->reportVectorFailure(row, source);
+}
+}

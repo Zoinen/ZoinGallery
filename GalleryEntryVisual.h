@@ -18,6 +18,9 @@ class GalleryEntryVisual final : public QObject {
     Q_PROPERTY(bool isFolder READ isFolder NOTIFY mediaChanged)
     Q_PROPERTY(int folderPreviewState READ folderPreviewState NOTIFY mediaChanged)
     Q_PROPERTY(quint64 folderPreviewRevision READ folderPreviewRevision NOTIFY mediaChanged)
+    Q_PROPERTY(bool isVector READ isVector NOTIFY mediaChanged)
+    Q_PROPERTY(QString vectorSource READ vectorSource NOTIFY mediaChanged)
+    Q_PROPERTY(QString vectorState READ vectorState NOTIFY mediaChanged)
     Q_PROPERTY(bool isImage READ isImage NOTIFY mediaChanged)
     Q_PROPERTY(bool isVideo READ isVideo NOTIFY mediaChanged)
     Q_PROPERTY(bool imageDimensionsKnown READ imageDimensionsKnown NOTIFY mediaChanged)
@@ -71,6 +74,9 @@ public:
     bool isFolder() const;
     int folderPreviewState() const { return _folderPreviewState; }
     quint64 folderPreviewRevision() const { return _folderPreviewRevision; }
+    bool isVector() const;
+    QString vectorSource() const;
+    QString vectorState() const;
     bool isImage() const;
     bool isVideo() const;
     bool imageDimensionsKnown() const { return _imageDimensionsKnown; }
@@ -117,6 +123,9 @@ private:
     bool _isFolder = false;
     int _folderPreviewState = 0;
     quint64 _folderPreviewRevision = 0;
+    bool _isVector = false;
+    QString _vectorSource = {};
+    QString _vectorState = {};
     bool _isImage = false;
     bool _isVideo = false;
     bool _imageDimensionsKnown = false;

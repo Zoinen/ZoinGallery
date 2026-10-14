@@ -1,4 +1,5 @@
 #include "SelectedImagesModel.h"
+#include "VectorSource.h"
 
 #include "DecodeManager.h"
 #include "PersistentSelectionCache.h"
@@ -150,6 +151,20 @@ SelectedImagesModel::SelectedImagesModel(
                     onImagesInfoAvailable(matching);
                 }
             });
+    connect(_decodeManager, &DecodeManager::vectorSourceReady, this,
+        [this](const ImageDecodeRequest &request, const VectorSourcePtr &source) {
+            if (!source || !acceptsRequestNamespace(request.requestNamespace)) return;
+            for (auto *item : std::as_const(_items)) {
+                if (item->info().sourceIdentity() != request.info.sourceIdentity()
+                    || !isCurrentFileVersion(item, request.info)) continue;
+                item->setVectorSource(source);
+                item->setFullSize(source->size);
+                emit dataChanged(index(item->index()), index(item->index()),
+                    {FileListModel::ImageIdUrlRole, FileListModel::ImageFullSizeRole});
+                if (item->fullPath() == _currentViewerPath)
+                    emit viewerImageIdUrlChanged(source->url.toString(), 1);
+            }
+        });
     connect(_decodeManager, &DecodeManager::imageReady,
             this, [this](const ImageDecodeRequest &request,
                          const QImage &image,
@@ -161,6 +176,15 @@ SelectedImagesModel::SelectedImagesModel(
     connect(_decodeManager, &DecodeManager::imageReadFailed,
             this, [this](const ImageDecodeRequest &request) {
                 if (!acceptsRequestNamespace(request.requestNamespace)) {
+                    return;
+                }
+                if (isVectorSource(request.info) && !request.sourceAccessFailed) {
+                    auto *item = _pathToItem.value(request.info.path);
+                    if (item && isCurrentFileVersion(item, request.info)) {
+                        item->setVectorSourceFailed(true);
+                        item->setIsShowAsImage(false);
+                        emit dataChanged(index(item->index()), index(item->index()));
+                    }
                     return;
                 }
                 rememberFailedDecodeRequest(request);
@@ -425,7 +449,7 @@ QString SelectedImagesModel::preparedViewerImageUrlForIndex(
     }
 
     const bool fitRequest = width > 0 && height > 0;
-    const int requiredLevel = fitRequest ? 1 : 2;
+    const int requiredLevel = (isVectorSource(_items.at(index)->info()) || fitRequest) ? 1 : 2;
     const auto sources = _viewerImageCache.imageSources(
         _items.at(index), QSize(width, height));
     for (auto it = sources.crbegin(); it != sources.crend(); ++it) {
@@ -800,6 +824,12 @@ ImageFile *SelectedImagesModel::applyImageInfo(const ImageInfo &info) {
         return nullptr;
     }
     if (!info.imageSize.isValid()) {
+        if (isVectorSource(info) && !info.sourceAccessFailed && isCurrentFileVersion(item, info)) {
+            item->setVectorSourceFailed(true);
+            item->setIsShowAsImage(false);
+            emit dataChanged(index(item->index()), index(item->index()));
+            return nullptr;
+        }
         rememberFailedImageInfo(info);
         return nullptr;
     }
@@ -1204,4 +1234,17 @@ int SelectedImagesModel::indexForPath(const QString &path) const {
         }
     }
     return -1;
+}
+
+void SelectedImagesModel::reportVectorFailureForIndex(int row, const QString &source) {
+    if (row < 0 || row >= _items.size()) return;
+    auto *item = _items.at(row);
+    if (!item->vectorSource() || item->vectorSource()->url.toString() != source) return;
+    item->setVectorSource({});
+    item->setVectorSourceFailed(true);
+    item->setIsShowAsImage(false);
+    item->setFullSize({});
+    emit dataChanged(index(row), index(row));
+    if (auto *model = qobject_cast<FileListModel *>(_selectionSourceModel))
+        model->reportVectorFailureForIndex(mapToSourceRow(row), source);
 }

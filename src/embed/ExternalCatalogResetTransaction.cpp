@@ -249,6 +249,8 @@ bool ExternalCatalogResetTransaction::adoptPreviousState(
          || old.size != entry.size || old.image != entry.image
          || old.thumbnailKind != entry.thumbnailKind);
     if (hadOldEntry && !sourceChanged) {
+        entry.videoThumbnailFailed = old.videoThumbnailFailed;
+        entry.vectorSource = old.vectorSource;
         entry.imageInfo = old.imageInfo;
         entry.originalSize = old.originalSize;
         entry.metadataSettled = old.metadataSettled;
@@ -317,13 +319,13 @@ void ExternalCatalogResetTransaction::updateMaterializedItem(
     entry.item->setIndex(row);
     entry.item->setIsFolder(entry.directory);
     entry.item->setIsFolderView(entry.directoryPreviewState == DirectoryPreviewState::HasImages);
-    entry.item->setIsImage(entry.image);
+    entry.item->setIsImage(entry.thumbnailPresentation());
     entry.item->setHighlightStyle(entry.highlightStyle);
     entry.item->setIconPath(entry.iconPath);
     entry.item->setIsSelected(entry.selected);
     entry.item->setImageProviderName(m_model._thumbnailProviderName);
     entry.item->setInfo(entry.imageInfo);
-    entry.item->setFullSize(entry.originalSize);
+    entry.item->setFullSize(entry.videoThumbnailFailed ? QSize{} : entry.originalSize);
     entry.item->setDisplayFields(entry.displayFields);
 }
 

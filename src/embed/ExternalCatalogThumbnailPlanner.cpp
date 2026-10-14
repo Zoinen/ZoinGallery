@@ -18,7 +18,8 @@ bool ExternalCatalogThumbnailPlanner::resolveRequest(
         return false;
     }
     row = m_model._sourceToRow.value(request.info.sourceIdentity(), -1);
-    if (!m_model.validRow(row) || !m_model.loadedEntry(row).image) {
+    if (!m_model.validRow(row) || !m_model.loadedEntry(row).image
+        || m_model.loadedEntry(row).videoThumbnailFailed) {
         return false;
     }
     entry = &m_model.loadedEntry(row);
@@ -116,6 +117,7 @@ void ExternalCatalogThumbnailPlanner::admitRequest(
     if (!resolveRequest(request, row, entry, item)) {
         return;
     }
+    if (isVectorSource(entry->imageInfo) && entry->vectorSource) return;
     serviceProbeBarrier(row, *entry, request);
     configureRequest(request, *entry);
     clearSupersededTarget(*entry, item, request);
@@ -125,6 +127,11 @@ void ExternalCatalogThumbnailPlanner::admitRequest(
     const QString key = m_model.thumbnailRequestKey(request);
     if (m_model._pendingThumbnailRequests.contains(key)) {
         traceAdmission(request, row, QStringLiteral("local-pending"));
+        return;
+    }
+    if (isVectorSource(entry->imageInfo)) {
+        m_model._pendingThumbnailRequests.insert(key, {});
+        m_submitted.append(request);
         return;
     }
     const ThumbnailMemoryCache::AcquireResult cached =

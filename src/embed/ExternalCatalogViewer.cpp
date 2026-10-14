@@ -79,6 +79,9 @@ QList<QPair<QString, int>> ExternalCatalogModel::viewerImageSourcesAt(
     if (plan != _viewerPlans.constEnd()) {
         viewerSize = plan->viewportSize;
     }
+    if (isVectorSource(entry.imageInfo)) {
+        return entry.vectorSource ? QList<QPair<QString, int>>{{entry.vectorSource->url.toString(), 1}} : QList<QPair<QString, int>>{};
+    }
     auto sources = _viewerImageCache.imageSources(
         ensureItem(row), viewerSize,
         [this](ImageDecodeRequest &request) {
@@ -568,4 +571,14 @@ void ExternalCatalogModel::shutdown() {
 }
 
 
+} // namespace ZoinGallery
+
+namespace ZoinGallery {
+bool ExternalCatalogModel::isVectorAt(int row) const {
+    return validRow(row) && isVectorSource(loadedEntry(row).imageInfo);
+}
+QUrl ExternalCatalogModel::vectorSourceAt(int row) const {
+    return validRow(row) && loadedEntry(row).vectorSource
+        ? loadedEntry(row).vectorSource->url : QUrl{};
+}
 } // namespace ZoinGallery

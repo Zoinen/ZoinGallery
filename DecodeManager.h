@@ -12,6 +12,7 @@
 
 #include "CacheUsageMode.h"
 #include "ImageFile.h"
+#include "VectorSource.h"
 #include "ImageProbe.h"
 
 enum class RunnerType {
@@ -155,6 +156,7 @@ signals:
     void imageProbeReady(const ZoinGallery::ImageProbeResult &result);
     void imageInfoReady(const ImageInfo &result);
     void imagesInfoReady(const QList<ImageInfo> &result);
+    void vectorSourceReady(const ImageDecodeRequest &request, const VectorSourcePtr &source);
     void imageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
     void imageReadFailed(const ImageDecodeRequest &request);
     void folderListReady(const QString &path, const QList<FileInfo> &subfiles,
@@ -171,6 +173,7 @@ protected:
     void onRunnerFinished(QObject *runner);
 
 private:
+    QHash<QString, QWeakPointer<VectorSource>> _vectorSources;
     void onImageInfoReady(const ImageInfo &result);
     void onImageReadReady(const ImageData &result);
     void onImageReadFailed(const ImageDecodeRequest &request);

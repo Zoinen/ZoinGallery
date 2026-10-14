@@ -77,6 +77,7 @@ public:
     void applySelectionChanges(const QList<int> &selectedIndexes,
                                const QList<int> &deselectedIndexes);
     Q_INVOKABLE void removeFromCollection(int index);
+    Q_INVOKABLE void reportVectorFailureForIndex(int index, const QString &source);
     Q_INVOKABLE int mapToSourceRow(int viewRow) const;
     Q_INVOKABLE int mapFromSourceRow(int sourceRow) const;
     Q_INVOKABLE QVariantList mapToSourceRows(const QVariantList &viewRows) const;

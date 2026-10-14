@@ -16,6 +16,9 @@
 
 #include <memory>
 
+struct VectorSource;
+using VectorSourcePtr = QSharedPointer<VectorSource>;
+
 enum ExifOrientation {
     Horizontal = 1,
     MirrorHorizontal = 2,
@@ -57,6 +60,7 @@ struct ImageInfo {
             ? source.displayName : path;
     }
 
+    VectorSourcePtr vectorSource;
     QSize imageSize;
     ExifOrientation orientation = ExifOrientation::Horizontal;
     QVariantMap exif;
@@ -146,6 +150,7 @@ struct DecodedImageInfo {
 struct ImageData {
     const ImageDecodeRequest request;
 
+    VectorSourcePtr vectorSource;
     QByteArray data;
     QString mimeType;
 
@@ -199,6 +204,10 @@ public:
     void setImage(const QImage &image, const ImageInfo &sourceInfo);
     bool imageMatchesSource(const ImageInfo &sourceInfo) const;
 
+    VectorSourcePtr vectorSource() const { return _vectorSource; }
+    bool vectorSourceFailed() const { return _vectorSourceFailed; }
+    void setVectorSourceFailed(bool failed) { _vectorSourceFailed = failed; }
+    void setVectorSource(const VectorSourcePtr &source);
     QString imageIdUrl() const;
     void setImageId(const QString &imageId);
     QString imageProviderName() const;
@@ -311,6 +320,8 @@ private:
 
     QString _folderPath;
     QString _fileName;
+    VectorSourcePtr _vectorSource;
+    bool _vectorSourceFailed = false;
     QImage _image;
     ImageInfo _imageSourceInfo;
     QString _imageId;

@@ -1,4 +1,6 @@
 #include "ThumbnailLoader.h"
+#include "VectorSource.h"
+#include <QSvgRenderer>
 #include "Decoders/ImageDecoderInterface.h"
 #include "DisplayColorSpace.h"
 #include "ViewerResampler.h"
@@ -30,6 +32,12 @@ bool ThumbnailLoader::readMetadata(ImageInfo &result) {
         result.fileSize = fileInfo.size();
     }
 
+    if (isVectorSource(result)) {
+        QSvgRenderer source(result.path);
+        result.imageSize = source.isValid() ? source.defaultSize() : QSize{};
+        result.orientation = ExifOrientation::Horizontal;
+        return source.isValid() && !result.imageSize.isEmpty();
+    }
     bool metadataRead = false;
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
         const auto decoder = ImageDecoderFactory::createDecoder(i);

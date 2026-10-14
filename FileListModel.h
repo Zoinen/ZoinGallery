@@ -78,6 +78,7 @@ class FileListModel : public QAbstractItemModel,
     Q_PROPERTY(bool fileDragActive READ fileDragActive NOTIFY fileDragActiveChanged)
 
 public:
+    Q_INVOKABLE void reportVectorFailureForIndex(int index, const QString &source);
     enum ItemUserRoles {
         IsImageRole = Qt::UserRole + 100,
         ImageIdUrlRole,

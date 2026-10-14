@@ -6,6 +6,8 @@
 #include <QIODevice>
 #include <QUrl>
 
+#include <atomic>
+
 namespace ZoinGallery {
 
 // Seekable, bounded adapter used by both video playback and video thumbnails.
@@ -20,6 +22,7 @@ public:
     bool isSequential() const override { return false; }
     qint64 size() const override { return m_source.size; }
     bool seek(qint64 position) override;
+    bool readFailed() const { return m_readFailed.load(); }
 
 protected:
     qint64 readData(char *data, qint64 maxlen) override;
@@ -34,6 +37,7 @@ private:
     QByteArray m_prefetched;
     qint64 m_prefetchOffset = -1;
     bool m_prefetchEndOfFile = false;
+    std::atomic_bool m_readFailed = false;
 };
 
 bool imageSourceSupportsRangeReads(

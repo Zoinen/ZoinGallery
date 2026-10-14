@@ -8,6 +8,24 @@ Item {
 
     required property var viewport
 
+    property string pendingVectorSource: ""
+    property size pendingVectorSize: Qt.size(0, 0)
+    property int pendingVectorIndex: -1
+
+    function commitVectorSource(source) {
+        if (!viewport.vectorMode || pendingVectorSource !== String(source)
+                || String(viewport.image.source) !== String(source)) return
+        applyOriginalSize(pendingVectorSize)
+        viewport.image.fromIndex = pendingVectorIndex
+        viewport.image.fromLevel = 1
+        pendingVectorSource = ""
+    }
+
+    Connections {
+        target: root.viewport
+        function onVectorSourcePrepared(source) { root.commitVectorSource(source) }
+    }
+
     function clearNativeTier() {
         viewport.viewerImage2.source = ""
         viewport.viewerImage2.fromIndex = -1
@@ -16,8 +34,10 @@ Item {
     }
 
     function resetViewerImages() {
+        pendingVectorSource = ""
         delayedIdSetter.stop()
         viewport.sourceSizeFallbackPending = false
+        viewport.vectorMode = false
         viewport.originalSize = Qt.size(0, 0)
         viewport.image.source = ""
         viewport.image.fromIndex = -1
@@ -149,7 +169,30 @@ Item {
         }
     }
 
+    function setVectorImage(url, originalSize, fromIndex) {
+        const retainGeometry = viewport.vectorMode && viewport.image.vectorHasPresentation
+        delayedIdSetter.stop()
+        clearNativeTier()
+        viewport.vectorMode = true
+        viewport.sourceSizeFallbackPending = false
+        pendingVectorSource = String(url)
+        pendingVectorIndex = fromIndex
+        pendingVectorSize = Qt.size(originalSize.width / viewport.devicePixelRatio,
+                                    originalSize.height / viewport.devicePixelRatio)
+        if (!retainGeometry) applyOriginalSize(pendingVectorSize)
+        const alreadyPresented = String(viewport.image.source) === String(url)
+                && viewport.imageTextureReady
+        viewport.image.source = url
+        if (alreadyPresented) commitVectorSource(url)
+    }
+
     function setImage(imageIdUrl, originalSize, fromIndex, level) {
+        if (String(imageIdUrl).indexOf("vector=1") >= 0) {
+            setVectorImage(imageIdUrl, originalSize, fromIndex)
+            return
+        }
+        pendingVectorSource = ""
+        viewport.vectorMode = false
         viewport.animateRotation = false
         delayedIdSetter.stop()
         viewport.sourceSizeFallbackPending = originalSize.width <= 1
@@ -168,6 +211,13 @@ Item {
             viewport.simpleSourceMetadataKnown = false
             return
         }
+        if (viewport.simpleSourceIsVector || String(viewport.simpleSource).indexOf("vector=1") >= 0) {
+            setVectorImage(viewport.simpleSource, viewport.simpleSourceOriginalSize,
+                           viewport.simpleSourceIndex)
+            viewport.appliedSimpleSourceIndex = viewport.simpleSourceIndex
+            viewport.simpleSourceMetadataKnown = true
+            return
+        }
         const indexChanged = viewport.appliedSimpleSourceIndex
                 !== viewport.simpleSourceIndex
         if (indexChanged)
@@ -177,6 +227,7 @@ Item {
                 viewport.simpleSourceOriginalSize.width <= 1
                 || viewport.simpleSourceOriginalSize.height <= 1
         clearNativeTier()
+        viewport.vectorMode = viewport.simpleSourceIsVector || String(viewport.simpleSource).indexOf("vector=1") >= 0
         viewport.image.source = viewport.simpleSource
         viewport.image.fromIndex = viewport.simpleSourceIndex
         viewport.image.fromLevel = 0

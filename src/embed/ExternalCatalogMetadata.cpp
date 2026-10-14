@@ -279,6 +279,7 @@ void ExternalCatalogMetadataTransaction::scheduleChangedSource(
 void ExternalCatalogMetadataTransaction::updateImageInfo(
     ExternalCatalogModel::Entry &entry, const QVariantMap &value,
     bool changedSource) {
+    if (changedSource) entry.videoThumbnailFailed = false;
     ImageInfo imageInfo = changedSource ? ImageInfo{} : entry.imageInfo;
     imageInfo.path = entry.sourceIdentity;
     imageInfo.source = entry.source;
@@ -301,7 +302,7 @@ void ExternalCatalogMetadataTransaction::updateImageInfo(
     if (!entry.item) {
         return;
     }
-    entry.item->setIsImage(entry.image);
+    entry.item->setIsImage(entry.thumbnailPresentation());
     entry.item->setInfo(entry.imageInfo);
     if (carriesDisplayFields(value)) {
         entry.item->setDisplayFields(entry.displayFields);

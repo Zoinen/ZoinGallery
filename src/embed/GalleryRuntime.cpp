@@ -22,6 +22,7 @@
 #include "ThumbnailLoader.h"
 #include "ThumbnailMemoryCache.h"
 #include "ViewerWheelArea.h"
+#include "VectorSource.h"
 
 #include <QDebug>
 #include <QPointer>
@@ -116,6 +117,7 @@ void GalleryRuntime::registerTypes() {
         qmlRegisterType<GalleryNativeTextMetrics>(NativeModuleUri, 1, 0,
                                                 "GalleryNativeTextMetrics");
         qmlRegisterType<BrickItem>(NativeModuleUri, 1, 0, "BrickItem");
+        qmlRegisterType<VectorSourcePin>(NativeModuleUri, 1, 0, "VectorSourcePin");
         qmlRegisterType<ViewerWheelArea>(NativeModuleUri, 1, 0,
                                         "ViewerWheelArea");
         // QML Timer shares Qt Quick's animation driver and can be suspended

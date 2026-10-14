@@ -609,7 +609,7 @@ QString FileListModel::preparedViewerImageUrlForIndex(
     }
 
     const bool fitRequest = width > 0 && height > 0;
-    const int requiredLevel = fitRequest ? 1 : 2;
+    const int requiredLevel = (isVectorSource(_items.at(index)->info()) || fitRequest) ? 1 : 2;
     const auto sources = _viewerImageCache.imageSources(
         _items.at(index), QSize(width, height));
     for (auto it = sources.crbegin(); it != sources.crend(); ++it) {
@@ -1009,4 +1009,16 @@ void RootProxyModel::decodeImages(const QList<ImageDecodeRequest> &requests) {
     }
     dynamic_cast<ZoinGallery::GalleryCatalogSource *>(sourceModel())
         ->decodeImages(requests);
+}
+
+void FileListModel::reportVectorFailureForIndex(int row, const QString &source) {
+    if (row < 0 || row >= _items.size()) return;
+    auto *item = _items.at(row);
+    if (!item->vectorSource() || item->vectorSource()->url.toString() != source) return;
+    item->setVectorSource({});
+    item->setVectorSourceFailed(true);
+    item->setIsShowAsImage(false);
+    item->setFullSize({});
+    setViewerRequestState(item->fullPath(), QStringLiteral("failed"));
+    emit dataChanged(index(row), index(row), {ImageIdUrlRole, ImageFullSizeRole});
 }

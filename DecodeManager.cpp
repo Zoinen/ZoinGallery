@@ -18,6 +18,7 @@
 #include "PersistentImageCache.h"
 #include "NaturalSort.h"
 #include "ThumbnailLoader.h"
+#include "VectorSource.h"
 
 #include <ZoinGallery/MediaTimingTrace.h>
 
@@ -688,6 +689,9 @@ int DecodeManager::priorityForRunner(Runner *runner) const {
 }
 
 void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
+    if (_vectorSources.size() > 128) {
+        _vectorSources.removeIf([](auto it) { return it.value().isNull(); });
+    }
     QList<ImageDecodeRequest> queuedRequests = requests;
     for (ImageDecodeRequest &request : queuedRequests) {
         // Keep the owner on both halves of the request. Read/decode/cache
@@ -729,7 +733,7 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
         // qDebug() << "ZZ DECODE" << requests.size() << (requests.size() ? requests.first().info.path : "");
         if (cacheReadsEnabled(_imageCacheMode)) {
             for (const auto &request : queuedRequests) {
-                if (request.checkCache || _imageCacheMode == CacheUsageMode::OnlyCache) {
+                if (!isVectorSource(request.info) && (request.checkCache || _imageCacheMode == CacheUsageMode::OnlyCache)) {
                     // qDebug() << "ZZ TO RUN CACHE LOOKUP";
                     CachedImageRetrieveRunner *runner = new CachedImageRetrieveRunner(
                         request, sourceReadsEnabled(_imageCacheMode));
@@ -770,6 +774,15 @@ void DecodeManager::decodeImages(const QList<ImageDecodeRequest> &requests) {
     for (const auto &request : queuedRequests) {
         if (request.viewerRequest) {
             // qDebug() << "ZZ read" << request.info.path << request.targetSize << _taskQueue.size();
+        }
+        if (isVectorSource(request.info)) {
+            const auto source = _vectorSources.value(vectorRevisionKey(request.info)).toStrongRef();
+            if (source) {
+                QTimer::singleShot(0, this, [this, request, source] {
+                    emit vectorSourceReady(request, source);
+                });
+                continue;
+            }
         }
         Runner *runner = nullptr;
 #if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
@@ -1173,6 +1186,11 @@ void DecodeManager::onImageReadReady(const ImageData &result) {
         return;
     }
 
+    if (result.vectorSource) {
+        _vectorSources.insert(vectorRevisionKey(result.request.info), result.vectorSource);
+        emit vectorSourceReady(result.request, result.vectorSource);
+        return;
+    }
     ImageDecodeRunner *runner = new ImageDecodeRunner(result);
     if (cacheWritesEnabled(_imageCacheMode)) {
         runner->connections.append({
@@ -1209,7 +1227,19 @@ void DecodeManager::onImageInfoReady(const ImageInfo &result) {
         return;
     }
 
+    if (result.vectorSource) {
+        _vectorSources.insert(vectorRevisionKey(result), result.vectorSource);
+    }
     emit imageInfoReady(result);
+    if (result.vectorSource) {
+        ImageDecodeRequest request;
+        request.info = result;
+        request.requestNamespace = result.requestNamespace;
+        request.panelThumbnailRequest = result.panelThumbnailRequest;
+        request.targetSize = result.imageSize;
+        request.viewerRequest = !result.panelThumbnailRequest;
+        emit vectorSourceReady(request, result.vectorSource);
+    }
 }
 
 void DecodeManager::onImageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo) {
@@ -1217,7 +1247,7 @@ void DecodeManager::onImageReady(const ImageDecodeRequest &request, const QImage
         return;
     }
 
-    if (!request.info.isFromScanner) {
+    if (!request.info.isFromScanner && !isVectorSource(request.info)) {
         emit imageReady(request, image, decodedInfo);
     }
 }

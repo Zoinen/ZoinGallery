@@ -3,6 +3,7 @@
 
 #include "FileListModel.h"
 #include "ImageProbe.h"
+#include "VectorSource.h"
 #include "DirectoryPreviewCache.h"
 #include <ZoinGallery/DirectoryPreviewProvider.h>
 #include <ZoinGallery/ImageSourceProvider.h>
@@ -92,6 +93,9 @@ public:
     QString entryIdAt(int row) const;
     QString entryNameAt(int row) const;
     QString localPathAt(int row) const;
+    bool isVectorAt(int row) const;
+    QUrl vectorSourceAt(int row) const;
+    void reportVectorFailure(int row, const QUrl &source);
     bool isImageAt(int row) const;
     bool isVideoAt(int row) const;
     QString videoThumbnailUrlAt(int row) const;
@@ -208,6 +212,9 @@ private:
         QString localPath;
         bool directory = false;
         bool image = false;
+        VectorSourcePtr vectorSource;
+        bool videoThumbnailFailed = false;
+        bool thumbnailPresentation() const { return image && !videoThumbnailFailed; }
         QString thumbnailKind;
         bool selected = false;
         qint64 mtimeNs = 0;
@@ -296,6 +303,9 @@ private:
                           const QString &providerId);
     bool finishCatalogProbePass();
     void replanAfterImageProbe(bool completedCatalogProbePass);
+    QStringList _vectorRetention;
+    void pruneVectorSources();
+    void handleVectorSourceReady(const ImageDecodeRequest &request, const VectorSourcePtr &source);
     void handleImageReady(const ImageDecodeRequest &request,
                           const QImage &image,
                           const DecodedImageInfo &decodedInfo);
@@ -320,6 +330,7 @@ private:
                                const QImage &image);
     void handleImageReadFailed(const ImageDecodeRequest &request);
     void markViewerDecodeFailed(const QList<int> &rows);
+    void markVideoThumbnailFailed(const QList<int> &rows);
     void pruneViewerDecodeFailures();
     void handleThumbnailFrameAvailable(const QString &sourceIdentity,
                                        const QString &versionToken,

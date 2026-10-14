@@ -29,6 +29,11 @@ Item {
     property real topInset: 0
     property bool checkerboardEnabled: false
     property GalleryThemePalette scrollBarTheme: GalleryThemePalette {}
+    signal vectorLoadFailed(url source)
+    signal vectorSourcePrepared(url source)
+    signal vectorSourcePresented(url source)
+    property bool vectorMode: false
+    property bool simpleSourceIsVector: false
     property url simpleSource: ""
     property int simpleSourceIndex: -1
     property size simpleSourceOriginalSize: Qt.size(0, 0)
@@ -100,7 +105,7 @@ Item {
     property real pinchZoomOutToThumbnailsScaleDistanceRatio: 0.45
     property real pinchZoomOutToThumbnailsCommitProgress: 0.35
 
-    property bool imageTextureReady: videoMode
+    property bool imageTextureReady: vectorMode ? image.vectorReady : videoMode
         ? ((videoFrameSource && videoFrameSource.hasFrame)
            || (videoPosterImage && videoPosterImage.status === Image.Ready)
            || (!videoDisplayFailed && viewerImageBase.status === Image.Ready
@@ -697,6 +702,11 @@ Item {
     function applyOriginalSize(nextOriginalSize) {
         sourceController.applyOriginalSize(nextOriginalSize)
     }
+
+    function setVectorImage(url, originalSize, fromIndex) {
+        sourceController.setVectorImage(url, originalSize, fromIndex)
+    }
+    onSimpleSourceIsVectorChanged: sourceController.applySimpleSource()
 
     function setImage(imageIdUrl, originalSize_, fromIndex, level) {
         sourceController.setImage(imageIdUrl, originalSize_, fromIndex, level)

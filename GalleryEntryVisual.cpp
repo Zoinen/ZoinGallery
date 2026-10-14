@@ -31,6 +31,9 @@ struct GalleryEntryVisual::SnapshotValues {
     bool isFolder = false;
     int folderPreviewState = 0;
     quint64 folderPreviewRevision = 0;
+    bool isVector = false;
+    QString vectorSource = {};
+    QString vectorState = {};
     bool isImage = false;
     bool isVideo = false;
     bool imageDimensionsKnown = false;
@@ -72,6 +75,9 @@ GalleryEntryVisual::SnapshotValues GalleryEntryVisual::parseSnapshot(
             QStringLiteral("isFolder")).toBool(),
         .folderPreviewState = snapshot.value(QStringLiteral("folderPreviewState")).toInt(),
         .folderPreviewRevision = snapshot.value(QStringLiteral("folderPreviewRevision")).toULongLong(),
+        .isVector = snapshot.value(QStringLiteral("isVector")).toBool(),
+        .vectorSource = snapshot.value(QStringLiteral("vectorSource")).toString(),
+        .vectorState = snapshot.value(QStringLiteral("vectorState")).toString(),
         .isImage = snapshot.value(QStringLiteral("isImage")).toBool(),
         .isVideo = snapshot.value(QStringLiteral("thumbnailKind")).toString()
                        .compare(QStringLiteral("video"), Qt::CaseInsensitive) == 0,
@@ -129,6 +135,9 @@ bool GalleryEntryVisual::applyMedia(const SnapshotValues &values) {
     changed |= assignChanged(_isFolder, values.isFolder);
     changed |= assignChanged(_folderPreviewState, values.folderPreviewState);
     changed |= assignChanged(_folderPreviewRevision, values.folderPreviewRevision);
+    changed |= assignChanged(_isVector, values.isVector);
+    changed |= assignChanged(_vectorSource, values.vectorSource);
+    changed |= assignChanged(_vectorState, values.vectorState);
     changed |= assignChanged(_isImage, values.isImage);
     changed |= assignChanged(_isVideo, values.isVideo);
     changed |= assignChanged(_imageDimensionsKnown, values.imageDimensionsKnown);
@@ -226,3 +235,9 @@ QString GalleryEntryVisual::selectedCursorBackground() const {
     return _selectedCursorBackground;
 }
 QString GalleryEntryVisual::imageIdUrl() const { return _imageIdUrl; }
+
+bool GalleryEntryVisual::isVector() const { return _isVector; }
+
+QString GalleryEntryVisual::vectorSource() const { return _vectorSource; }
+
+QString GalleryEntryVisual::vectorState() const { return _vectorState; }

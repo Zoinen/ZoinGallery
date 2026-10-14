@@ -188,6 +188,7 @@ Item {
     }
 
     function setImage(imageIdUrl, originalSize, fromIndex, level) {
+        if (String(imageIdUrl).indexOf("vector=1") >= 0) sphericViewerMode = false
         flickableArea.setImage(imageIdUrl, originalSize, fromIndex, level)
     }
 

@@ -40,6 +40,7 @@ GalleryPreferences::GalleryPreferences(DecodeManager *decoder, bool persistent, 
         {"location", settings.value("Cache/location", QString()).toString()},
         {"activeLocation", StorageLocations::cacheRoot()},
         {"convertColors", DisplayColorSpace::conversionEnabled()},
+        {"showCheckerboard", settings.value("Gallery/showCheckerboard", true).toBool()},
         {"animateResizing", settings.value("Gallery/animateResizing", false).toBool()},
         {"videoPlaybackMode", storedVideoPlaybackMode(settings)}};
     if (persistent) runCacheOperation(false, true);
@@ -48,6 +49,22 @@ QVariantMap GalleryPreferences::values() const { return _values; }
 QVariantList GalleryPreferences::decoders() const { return _decoders; }
 QString GalleryPreferences::targetColorSpace() const { return DisplayColorSpace::currentDescription(); }
 bool GalleryPreferences::animateResizing() const { return _values.value("animateResizing").toBool(); }
+
+bool GalleryPreferences::showCheckerboard() const { return _values.value("showCheckerboard", true).toBool(); }
+void GalleryPreferences::setShowCheckerboard(bool enabled) {
+    if (showCheckerboard() == enabled) return;
+    QSettings settings;
+    settings.setValue("Gallery/showCheckerboard", enabled);
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        _error = tr("Could not save Gallery settings.");
+        emit changed();
+        return;
+    }
+    _values["showCheckerboard"] = enabled;
+    _error.clear();
+    emit changed();
+}
 
 bool GalleryPreferences::apply(const QVariantMap &values) {
     const int limit = values.value("diskLimitMiB").toInt();
@@ -70,7 +87,9 @@ bool GalleryPreferences::apply(const QVariantMap &values) {
         return false;
     }
     if (_busy) { _error = tr("Wait for the current cache operation to finish."); emit changed(); return false; }
+    const bool checkerboard = values.value("showCheckerboard", showCheckerboard()).toBool();
     QSettings settings;
+    settings.setValue("Gallery/showCheckerboard", checkerboard);
     settings.setValue("Cache/imageUsageMode", imageMode);
     settings.setValue("Cache/fileListUsageMode", folderMode);
     settings.setValue("Cache/diskLimitMiB", limit);
@@ -82,6 +101,7 @@ bool GalleryPreferences::apply(const QVariantMap &values) {
     settings.sync();
     if (settings.status() != QSettings::NoError) { _error = tr("Could not save Gallery settings."); emit changed(); return false; }
     _values = values;
+    _values["showCheckerboard"] = checkerboard;
     _values["videoPlaybackMode"] = videoPlaybackMode;
     _values["location"] = location;
     _values["activeLocation"] = StorageLocations::cacheRoot();

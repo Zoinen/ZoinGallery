@@ -7,6 +7,8 @@ Item {
 
     required property var viewport
     property string source: ""
+    readonly property bool vectorReady: vectorSurface.item && vectorSurface.item.sourceStatus === Image.Ready
+    readonly property bool vectorHasPresentation: vectorSurface.item && vectorSurface.item.displayedSlot >= 0
     property int fromIndex: -1
     property int fromLevel: -1
 
@@ -145,7 +147,7 @@ Item {
         return Qt.point(x + corrected.x - originX, y + corrected.y - originY)
     }
 
-    opacity: viewport.imageTextureReady ? 1 : 0
+    opacity: viewport.vectorMode || viewport.imageTextureReady ? 1 : 0
     width: viewport.animatedEffectiveWidth * viewport.zoomScale
     height: viewport.animatedEffectiveHeight * viewport.zoomScale
 
@@ -185,11 +187,30 @@ Item {
             }
         }
 
+        Loader {
+            id: vectorSurface
+            anchors.fill: parent
+            active: root.viewport.vectorMode
+            sourceComponent: Component {
+                GalleryVectorSwap {
+                    source: root.source
+                    onSourcePrepared: source => root.viewport.vectorSourcePrepared(source)
+                    onSourcePresented: source => root.viewport.vectorSourcePresented(source)
+                    onSourceStatusChanged: {
+                        if (sourceStatus === Image.Error) root.viewport.vectorLoadFailed(source)
+                    }
+                    animate: root.viewport.active
+                    showCheckerboard: root.viewport.checkerboardEnabled
+                    devicePixelRatio: root.dpr
+                }
+            }
+        }
+
         Image {
             id: baseImage
             objectName: "galleryViewerBaseImage"
             anchors.fill: parent
-            source: root.source
+            source: root.viewport.vectorMode ? "" : root.source
             cache: false
             mipmap: false
             asynchronous: false
@@ -218,12 +239,15 @@ Item {
             cache: false
             mipmap: root.viewport.sphericTextureMipmapsEnabled
             asynchronous: true
-            property int fromIndex: -1
+            readonly property bool vectorReady: vectorSurface.item && vectorSurface.item.sourceStatus === Image.Ready
+    readonly property bool vectorHasPresentation: vectorSurface.item && vectorSurface.item.displayedSlot >= 0
+    property int fromIndex: -1
             visible: false
         }
 
         ViewerResample {
             id: imageShader
+            visible: !root.viewport.vectorMode
             objectName: "galleryViewerImageShader"
             anchors.fill: parent
             // A completed native request is retained for later zooming. Fit
@@ -234,6 +258,7 @@ Item {
                 && baseImage.sourceSize.width + 1 >= viewportSize.width
                 && baseImage.sourceSize.height + 1 >= viewportSize.height
             imageSource: {
+                if (root.viewport.vectorMode) return null
                 if (root.viewport.videoMode) {
                     if (root.viewport.videoDisplayFailed
                             && !(root.viewport.videoFrameSource
@@ -292,7 +317,9 @@ Item {
                     : root.snapExtent(unscaledWidth * root.viewport.zoomScale)
                 height: root.moving ? unscaledHeight * root.viewport.zoomScale
                     : root.snapExtent(unscaledHeight * root.viewport.zoomScale)
-                property int fromIndex: -1
+                readonly property bool vectorReady: vectorSurface.item && vectorSurface.item.sourceStatus === Image.Ready
+    readonly property bool vectorHasPresentation: vectorSurface.item && vectorSurface.item.displayedSlot >= 0
+    property int fromIndex: -1
                 visible: false
             }
 

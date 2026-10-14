@@ -41,6 +41,8 @@ class GalleryDelegateItem : public QQuickItem {
                NOTIFY visualRowChanged)
     Q_PROPERTY(QObject *visualModel READ visualModel CONSTANT)
     Q_PROPERTY(QString entryId READ entryId NOTIFY visualIdentityChanged)
+    Q_PROPERTY(bool visualIdentityChanging READ visualIdentityChanging
+               NOTIFY visualIdentityChangingChanged)
     Q_PROPERTY(QString displayName READ displayName
                NOTIFY visualIdentityChanged)
     Q_PROPERTY(QString displayBaseName READ displayBaseName
@@ -89,6 +91,7 @@ public:
     QVariantMap visualRow() const;
     QObject *visualModel() const;
     QString entryId() const;
+    bool visualIdentityChanging() const;
     QString displayName() const;
     QString displayBaseName() const;
     QString displayExtension() const;
@@ -125,6 +128,7 @@ signals:
     void iconLabelTextChanged();
     void visualRowChanged();
     void visualIdentityChanged();
+    void visualIdentityChangingChanged();
     void visualMediaChanged();
     void visualStateChanged();
     void visualStyleChanged();
@@ -154,6 +158,7 @@ private:
     QString _iconLabelText;
     QVariantMap _visualRow;
     GalleryEntryVisual *_visualModel = nullptr;
+    bool _visualIdentityChanging = false;
     bool _visualFacadeReady = false;
 
     QParallelAnimationGroup *_geometryAnimationGroup = nullptr;

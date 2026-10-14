@@ -237,18 +237,6 @@ QFont MasonryLayout::iconLabelFont() const {
     return _iconLabelFont;
 }
 
-void MasonryLayout::setIconLabelFont(const QFont &font) {
-    if (_iconLabelFont == font) {
-        return;
-    }
-    _iconLabelFont = font;
-    emit iconLabelFontChanged();
-    if (_presentationMode == Icons || _presentationMode == Grid || _presentationMode == Details
-        || _presentationMode == Columns) {
-        rewrap(false);
-    }
-}
-
 bool MasonryLayout::deferDelegateRefreshOnReset() const {
     return _deferDelegateRefreshOnReset;
 }
@@ -712,6 +700,7 @@ void MasonryLayout::setGroupRanges(const QVariantList &ranges) {
         _preserveViewportAnchorForNextRewrap = true;
     }
     _groupRanges = std::move(next);
+    invalidateIconCaptionMetrics();
     _fixedLayoutPlanCached = false;
     emit groupRangesChanged();
     requestRewrap(false);
@@ -821,6 +810,7 @@ void MasonryLayout::setGroups(const QVariantList &groups)
         _groupIndex.clear();
     }
     restoreGroupState();
+    invalidateIconCaptionMetrics();
     emit groupsChanged();
     requestRewrap(false);
     // The ungrouped rewrap path does not publish header geometry. Notify even

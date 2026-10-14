@@ -4,6 +4,7 @@
 #include "DecodeManager.h"
 #include "FileListModel.h"
 #include "ImageFile.h"
+#include "GalleryDelegateItem.h"
 
 #include <QDir>
 #include <QElapsedTimer>
@@ -144,6 +145,54 @@ class GalleryQmlInteractionTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void recycledDelegateClearsPreviewBeforeIdentityChanges() {
+        GalleryDelegateItem item;
+        QVERIFY2(item.metaObject()->indexOfProperty("visualIdentityChanging") >= 0,
+                 "Image retention needs a pre-rebind identity reset gate");
+        QVariantMap row{
+            {QStringLiteral("valid"), true},
+            {QStringLiteral("entryId"), QStringLiteral("first")},
+            {QStringLiteral("text"), QStringLiteral("first.png")},
+            {QStringLiteral("imageIdUrl"), QStringLiteral("image://fixture/shared")},
+        };
+        item.setVisualRow(row);
+        QVERIFY(!item.property("visualIdentityChanging").toBool());
+
+        QStringList events;
+        QSignalSpy resetSpy(&item, SIGNAL(visualIdentityChangingChanged()));
+        QVERIFY(resetSpy.isValid());
+        connect(&item, &GalleryDelegateItem::visualIdentityChanged, this, [&] {
+            events.append(item.property("visualIdentityChanging").toBool()
+                ? QStringLiteral("identity-with-reset")
+                : QStringLiteral("identity-without-reset"));
+        });
+        connect(&item, &GalleryDelegateItem::visualRowChanged, this, [&] {
+            events.append(item.property("visualIdentityChanging").toBool()
+                ? QStringLiteral("snapshot-with-reset")
+                : QStringLiteral("snapshot-without-reset"));
+        });
+
+        row[QStringLiteral("entryId")] = QStringLiteral("second");
+        row[QStringLiteral("text")] = QStringLiteral("second.png");
+        item.setVisualRow(row);
+        QCOMPARE(events, QStringList({QStringLiteral("identity-with-reset"),
+            QStringLiteral("snapshot-with-reset")}));
+        QCOMPARE(resetSpy.count(), 2);
+        QVERIFY(!item.property("visualIdentityChanging").toBool());
+
+        events.clear();
+        resetSpy.clear();
+        row[QStringLiteral("sourceIndex")] = 17;
+        row[QStringLiteral("text")] = QStringLiteral("renamed.png");
+        item.setVisualRow(row);
+        QCOMPARE(events, QStringList({QStringLiteral("identity-without-reset"),
+            QStringLiteral("snapshot-without-reset")}));
+        QVERIFY(resetSpy.isEmpty());
+        events.clear();
+        item.setVisualRow(row);
+        QVERIFY(events.isEmpty());
+    }
+
     void initTestCase() {
 #ifdef Q_OS_LINUX
         if (qgetenv("QSG_RHI_BACKEND") == "opengl") {
@@ -3749,6 +3798,7 @@ private slots:
                     anchors.fill: parent
                     session: testSession
                     devicePixelRatio: 1.75
+                    debugLayoutZones: false
                 }
             }
         )QML", QStringLiteral("GalleryVideoThumbnailBadge.qml"));

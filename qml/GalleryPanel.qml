@@ -23,6 +23,8 @@ GalleryPanelFacade {
     // rasterized Lucide icon whose stroke follows the rendered icon size.
     property var iconProvider: null
     property GalleryThemePalette theme: GalleryThemePalette {}
+    // Temporary diagnostic aid; pixel tests can inspect normal rendering.
+    property bool debugLayoutZones: false
     // Embedders can replace or suppress the standalone gallery wording while
     // retaining the same authoritative zero-row condition.
     property bool liveSelectionUpdates: false

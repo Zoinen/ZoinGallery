@@ -92,10 +92,21 @@ void MasonryLayout::onDataChanged(
     delta.imageUrlOnly = roles.size() == 1
         && roles.contains(FileListModel::ImageIdUrlRole);
 
+    if (delta.textRoleChanged) {
+        if (_iconCaptionCancelled)
+            _iconCaptionCancelled->store(true, std::memory_order_relaxed);
+        ++_iconCaptionGeneration;
+        _iconCaptionMetricsDirty = true;
+    }
+
     if (_sparseCatalogRows) {
         applySparseModelDelta(delta);
     } else {
         applyMaterializedModelDelta(delta);
+    }
+    if (delta.textRoleChanged && _presentationMode == Icons) {
+        _preserveViewportAnchorForNextRewrap = true;
+        requestRewrap(false);
     }
 }
 
@@ -118,6 +129,12 @@ void MasonryLayout::applySparseModelDelta(const ModelDelta &delta)
         ImageFile *image = rebindFacade
             ? imageFileFromDeltaIndex(_model->index(row, 0)) : nullptr;
         const quint64 previousRevision = target.modelVisualRevision;
+        if (incoming.modelText == target.modelText) {
+            incoming.iconLabelText = std::move(target.iconLabelText);
+            incoming.iconLabelStyleRevision = target.iconLabelStyleRevision;
+            incoming.iconLabelNameHash = target.iconLabelNameHash;
+            incoming.iconLabelWidth = target.iconLabelWidth;
+        }
         target = std::move(incoming);
         target.item = item;
         target.image = image;

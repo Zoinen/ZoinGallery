@@ -73,8 +73,8 @@ Item {
             galleryLayout.anchors.rightMargin = 0
             galleryLayout.paddingLeft = horizontalPadding
             galleryLayout.paddingRight = rightPadding
-            galleryLayout.paddingTop = verticalContentInset ? 6 : 0
-            galleryLayout.paddingBottom = verticalContentInset ? 6 : 0
+            galleryLayout.paddingTop = verticalContentInset ? horizontalPadding : 0
+            galleryLayout.paddingBottom = verticalContentInset ? horizontalPadding : 0
             galleryLayout.presentationMode = nativePresentationMode(mode)
             if (panel.benchmarkTracingEnabled)
                 panel.traceBenchmarkStage(
@@ -290,6 +290,9 @@ Item {
                          && !viewportRoot.panelRoot.pathViewportPlacementPending
         devicePixelRatio: viewportRoot.panelRoot.devicePixelRatio
         iconLabelFont: viewportRoot.iconLabelFont
+        cellHorizontalPadding: viewportRoot.panelRoot.metrics.cellHorizontalPadding
+        cellVerticalPadding: viewportRoot.panelRoot.metrics.cellVerticalPadding
+        cellCaptionSpacing: viewportRoot.panelRoot.metrics.cellCaptionSpacing
         deferDelegateRefreshOnReset:
             !viewportRoot.controller.catalogReady
 

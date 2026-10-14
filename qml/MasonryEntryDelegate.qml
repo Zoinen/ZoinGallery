@@ -10,13 +10,18 @@ Item {
 
     Item {
         id: labelSurface
+        GalleryLayoutDebugZone {
+            visible: content.entry.debugLayoutZones
+            color: "#20ffaa55"
+        }
         readonly property real dpr: content.entry.renderDpr
-        readonly property real margin: Math.round(4 * dpr) / dpr
-        readonly property real padding: Math.round(6 * dpr) / dpr
-        x: margin
+        readonly property real margin: content.entry.cellVerticalInset
+        readonly property real captionTopSpacing: content.entry.isImage
+            ? content.entry.cellCaptionSpacing : 0
+        x: content.entry.cellHorizontalInset
         y: Math.round((parent.height - margin - height) * dpr) / dpr
-        width: Math.max(0, Math.round((parent.width - 2 * margin) * dpr) / dpr)
-        height: Math.ceil(masonryLabel.implicitHeight * dpr) / dpr + 2 * padding
+        width: content.entry.cellContentWidth
+        height: Math.ceil(masonryLabel.implicitHeight * dpr) / dpr + captionTopSpacing
         readonly property point pixelGridOffset:
             content.entry.iconPixelOffset(labelSurface)
         transform: Translate {
@@ -25,6 +30,7 @@ Item {
         }
 
         Rectangle {
+            objectName: "galleryMasonryLabelBackground-" + content.entry.viewIndex
             anchors.fill: parent
             color: content.entry.highlightLabelBackground
             radius: 3
@@ -32,10 +38,11 @@ Item {
 
         Text {
             id: masonryLabel
+            GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             font: content.entry.panelRoot.iconLabelFont
             objectName: "galleryMasonryLabel-" + content.entry.viewIndex
             anchors.fill: parent
-            anchors.margins: labelSurface.padding
+            anchors.topMargin: labelSurface.captionTopSpacing
             text: content.entry.panelRoot.quickSearchFormatter.styledText(
                       content.entry.effectiveDisplayName,
                       content.entry.entryId, 0)

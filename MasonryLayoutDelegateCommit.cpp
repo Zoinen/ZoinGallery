@@ -1,6 +1,7 @@
 #include "MasonryLayout.h"
 
 #include "GalleryPixelGrid.h"
+#include "GalleryIconTextMeasurer.h"
 
 #include <ZoinGallery/MediaTimingTrace.h>
 
@@ -321,7 +322,15 @@ void MasonryLayout::applyDelegateRowLayout(
     DelegateRowCommit *row, bool animate, DelegateCommitContext *context)
 {
     row->item->setRowColumn(row->brick->row, row->brick->column);
-    row->item->setIconLabelText(row->brick->iconLabelText);
+    if (_presentationMode == Grid) {
+        // Only prepare captions for viewport delegates, not the entire catalog.
+        ZoinGallery::GalleryIconTextMeasurer measurer(_iconLabelFont, true);
+        row->item->setIconLabelText(measurer.layout(
+            row->item->property("effectiveDisplayName").toString(),
+            cellCaptionWidth(row->brick->geometry()), 2).text);
+    } else {
+        row->item->setIconLabelText(row->brick->iconLabelText);
+    }
     const QRectF geometry = ZoinGallery::PixelGrid::snapDeviceRect(
         row->brick->geometry(), devicePixelRatio());
     row->item->setPreviewRect(ZoinGallery::PixelGrid::snapDeviceRect(

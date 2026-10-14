@@ -7,20 +7,20 @@ Item {
     required property GalleryEntryDelegateBase entry
     readonly property Item previewHost: null
     readonly property real paintedHeight: Math.max(
-        0, label.y + label.contentHeight + 3)
+        0, label.y + label.contentHeight + content.entry.cellVerticalInset)
 
     Text {
         id: label
+        GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
         readonly property point pixelCorrection:
             content.entry.iconPixelOffset(label)
         objectName: "galleryIconsLabel-" + content.entry.viewIndex
-        x: 4
+        x: content.entry.cellHorizontalInset
         y: content.entry.effectivePreviewRect.y
-           + content.entry.effectivePreviewRect.height + 3
-        width: Math.max(0, Math.round((parent.width - 8)
-                                      * content.entry.renderDpr)
-                              / content.entry.renderDpr)
-        height: Math.max(0, Math.ceil((parent.height - y - 3)
+           + content.entry.effectivePreviewRect.height + content.entry.cellCaptionSpacing
+        width: content.entry.cellContentWidth
+        height: Math.max(0, Math.floor((parent.height - y - content.entry.cellVerticalInset
+                                       - pixelCorrection.y + 0.000001)
                                       * content.entry.renderDpr)
                                / content.entry.renderDpr)
         text: content.entry.panelRoot.quickSearchFormatter.styledElidedText(

@@ -14,6 +14,8 @@ BrickItem {
     property bool masonryGeometryReady: false
     // Cleared only during synchronous photo-to-folder delegate reassignment.
     property bool visualGeometryReady: true
+    // Temporary visual aid shared by every mode, including folder previews.
+    property bool debugLayoutZones: panelRoot.debugLayoutZones
     readonly property Item thumbnailItem: sharedPreview.thumbnailItem
     readonly property Item previewContainerItem: sharedPreview
     readonly property real paintedContentHeight:
@@ -43,6 +45,31 @@ BrickItem {
     })
     readonly property real renderDpr:
         Math.max(0.01, Number(panelRoot.devicePixelRatio) || 1)
+    readonly property real cellHorizontalInset: Math.min(
+        Math.max(0, Math.floor((Math.round(width * renderDpr) - 1) / 2)) / renderDpr,
+        Math.round(Math.max(0, panelRoot.metrics.cellHorizontalPadding) * renderDpr) / renderDpr)
+    readonly property real cellContentWidth: Math.max(0, width - 2 * cellHorizontalInset)
+    readonly property real cellCaptionSpacing:
+        Math.round(panelRoot.metrics.cellCaptionSpacing * renderDpr) / renderDpr
+    FontMetrics {
+        id: standaloneCaptionMetrics
+        font: entry.panelRoot.iconLabelFont
+    }
+    readonly property real masonryCaptionReserve: masonryMode && !isImage
+        && !(visualModel && visualModel.isVideo)
+        ? Math.ceil(standaloneCaptionMetrics.height * renderDpr) / renderDpr
+          + cellCaptionSpacing : 0
+    readonly property real cellVerticalInset: {
+        // Native layout can clamp the requested inset to reserve caption space
+        // or preserve a positive Masonry preview at minimum zoom.
+        const rect = previewRect
+        if ((masonryMode || gridMode || iconsMode)
+            && rect && rect.width > 0 && rect.height > 0)
+            return Math.max(0, rect.y)
+        return Math.min(
+            Math.max(0, Math.floor((Math.round(height * renderDpr) - 1) / 2)) / renderDpr,
+            Math.round(Math.max(0, panelRoot.metrics.cellVerticalPadding) * renderDpr) / renderDpr)
+    }
     readonly property point iconSceneOrigin: {
         if (detailsMode)
             return Qt.point(0, 0)
@@ -169,11 +196,11 @@ BrickItem {
         }
         const rect = previewRect
         if (rect && rect.width > 0 && rect.height > 0)
-            return rect
-        const inset = masonryMode || gridMode ? 4 : 3
-        return Qt.rect(inset, inset,
-                       Math.max(0, width - inset * 2),
-                       Math.max(0, height - inset * 2))
+            return Qt.rect(cellHorizontalInset, rect.y, cellContentWidth,
+                           Math.max(1 / renderDpr, rect.height - masonryCaptionReserve))
+        return Qt.rect(cellHorizontalInset, cellVerticalInset,
+                       cellContentWidth,
+                       Math.max(0, height - cellVerticalInset * 2))
     }
 
     readonly property real compactImageContentWidth: {
@@ -221,22 +248,47 @@ BrickItem {
             const requestedSize = Math.max(1, Math.round(Number(logicalSize) || 1))
             const strokeWidth = provider.lucideStrokeWidth(
                         Math.max(1, Number(logicalSize) || 1))
-            return provider.rasterizedLucideSource(
+            return fittedIconSource(provider.rasterizedLucideSource(
                         iconName, requestedSize,
                         Math.max(0.5, Number(renderDpr) || 1),
                         tint === undefined || tint === null ? "" : String(tint),
-                        strokeWidth)
+                        strokeWidth))
         }
-        return panelRoot.iconResolver.retargetProviderSource(
+        return fittedIconSource(panelRoot.iconResolver.retargetProviderSource(
                     value,
                     Math.max(1, Math.round(Number(logicalSize) || 1)),
                     Math.max(0.5, Number(renderDpr) || 1),
                     tint === undefined || tint === null ? "" : String(tint),
-                    lucide)
+                    lucide))
+    }
+
+    function fittedIconSource(source) {
+        const value = source ? source.toString() : ""
+        return value.startsWith("image://") && value.indexOf("/lucide/") >= 0
+                ? value + (value.indexOf("?") >= 0 ? "&" : "?") + "fileArt=1"
+                  + (iconsMode ? "&alignBottom=1" : "")
+                : value
     }
 
     GalleryEntrySelectionSurface {
         entry: entry
+    }
+
+    GalleryLayoutDebugZone {
+        objectName: "galleryCellZone-" + entry.viewIndex
+        zone: "cell"
+        visible: entry.debugLayoutZones
+    }
+
+    GalleryLayoutDebugZone {
+        objectName: "galleryPreviewZone-" + entry.viewIndex
+        anchors.fill: undefined
+        x: entry.effectivePreviewRect.x
+        y: entry.effectivePreviewRect.y
+        width: entry.effectivePreviewRect.width
+        height: entry.effectivePreviewRect.height
+        zone: "preview"
+        visible: entry.debugLayoutZones && !entry.folderPreviewActive
     }
 
     // Preview/icon rendering is common to every presentation. Keep exactly
@@ -247,7 +299,8 @@ BrickItem {
         id: sharedPreview
         entry: entry
         shaderThumbnail: entry.masonryMode || entry.gridMode
-        activePresentation: entry.visualGeometryReady && (!entry.folderPreviewRequested
+        activePresentation: entry.visualGeometryReady && !entry.visualIdentityChanging
+            && (!entry.folderPreviewRequested
             || entry.visualModel.folderPreviewState !== 2)
         z: 1
     }

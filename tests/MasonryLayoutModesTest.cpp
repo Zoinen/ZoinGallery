@@ -3,6 +3,7 @@
 #include "PersistentDerivedImageCache.h"
 #include "MasonryLayout.h"
 #include "GalleryPixelGrid.h"
+#include "GalleryIconTextMeasurer.h"
 #include "SvgCursor.h"
 #include "tests/DirectoryPreviewFixture.h"
 
@@ -41,6 +42,7 @@
 #include <QUrlQuery>
 #include <QtTest>
 #include <QFontMetricsF>
+#include <QTextLayout>
 
 #include <algorithm>
 #include <cmath>
@@ -154,6 +156,7 @@ QObject *createPanel(QQuickView &view, QObject *session,
             presentationMode: "%2"
             autoFocus: false
             devicePixelRatio: 1
+            debugLayoutZones: false
         }
     )QML").arg(contextName, initialPresentationMode).toUtf8();
     component->setData(source, QUrl(QStringLiteral("inline:ModesPanel.qml")));
@@ -1148,6 +1151,285 @@ private slots:
         }
     }
 
+    void graphicalCellPaddingIsSharedByFilesAndFolderPreviews_data() {
+        QTest::addColumn<QString>("mode");
+        for (const auto &mode : {"masonry", "grid", "icons"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void graphicalViewportVerticalInsetsMatchLeftInset_data() {
+        QTest::addColumn<QString>("mode");
+        for (const auto &mode : {"masonry", "grid", "icons"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void graphicalViewportVerticalInsetsMatchLeftInset() {
+        QFETCH(QString, mode);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("viewport-equal-insets");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(100), 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "insetsSession", mode));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        const qreal dpr = view.devicePixelRatio();
+        for (qreal inset : {0.0, 8.0, 13.0}) {
+            panel->setProperty("contentHorizontalInset", inset);
+            const qreal expected = qRound((inset + 6) * dpr) / dpr;
+            QTRY_COMPARE(layout->paddingLeft(), expected);
+            QTRY_COMPARE(layout->paddingTop(), expected);
+            QTRY_COMPARE(layout->paddingBottom(), expected);
+            auto *entry = layout->itemForIndex(0);
+            QVERIFY(entry);
+            QTRY_VERIFY(qAbs(entry->mapToItem(layout, QPointF()).y()
+                + layout->contentY() - expected) <= 1 / dpr);
+            const QString name = mode == "masonry" ? "galleryMasonryLabel-0"
+                : mode == "grid" ? "galleryGridLabel-0" : "galleryIconsLabel-0";
+            QQuickItem *label = nullptr;
+            QTRY_VERIFY((label = findVisualItem(panel, name)));
+            const QPointF origin = label->mapToScene({});
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+            QVERIFY(qAbs(label->width() * dpr - qRound(label->width() * dpr)) < .01);
+            QVERIFY(qAbs(label->height() * dpr - qRound(label->height() * dpr)) < .01);
+            QCOMPARE(label->mapToScene({1, 0}) - origin, QPointF(1, 0));
+            QCOMPARE(label->mapToScene({0, 1}) - origin, QPointF(0, 1));
+        }
+        QVERIFY(!view.grabWindow().isNull());
+    }
+
+    void masonryImageCaptionTopSpacingFollowsGap_data() {
+        QTest::addColumn<qreal>("gap");
+        for (qreal gap : {0.0, 3.0, 17.0, 32.0})
+            QTest::newRow(qPrintable(QString::number(gap))) << gap;
+    }
+
+    void masonryImageCaptionTopSpacingFollowsGap() {
+        QFETCH(qreal, gap);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("photo.png");
+        QImage source(73, 41, QImage::Format_RGB32);
+        source.fill(Qt::red);
+        QVERIFY(source.save(path));
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("masonry-caption-padding");
+        auto parent = catalogEntry(0);
+        parent["name"] = "..";
+        parent["isDir"] = true;
+        auto folder = catalogEntry(1);
+        folder["name"] = "Folder";
+        folder["isDir"] = true;
+        QVERIFY(session->applyExternalCatalog({parent, folder, catalogEntry(2, path)}, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "captionSession", "masonry"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {{"cellCaptionSpacing", gap}}));
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        const qreal dpr = view.devicePixelRatio();
+        for (int index : {0, 1, 2}) {
+            QQuickItem *label = nullptr;
+            QTRY_VERIFY((label = findVisualItem(panel, QString("galleryMasonryLabel-%1").arg(index))));
+            const qreal expectedHeight = qCeil(label->implicitHeight() * dpr) / dpr;
+            const qreal expectedGap = index == 2 ? qRound(gap * dpr) / dpr : 0;
+            QTRY_COMPARE(label->height(), expectedHeight);
+            QCOMPARE(label->parentItem()->height(), expectedHeight + expectedGap);
+            QCOMPARE(label->y(), expectedGap);
+            const QPointF origin = label->mapToScene({});
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+            QVERIFY(qAbs(label->width() * dpr - qRound(label->width() * dpr)) < .01);
+            QVERIFY(qAbs(label->height() * dpr - qRound(label->height() * dpr)) < .01);
+            QCOMPARE(label->mapToScene({1, 0}) - origin, QPointF(1, 0));
+            QCOMPARE(label->mapToScene({0, 1}) - origin, QPointF(0, 1));
+        }
+        QVERIFY(!view.grabWindow().isNull());
+    }
+
+    void graphicalCellPaddingIsSharedByFilesAndFolderPreviews() {
+        QFETCH(QString, mode);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString name = "A long photo caption with several words.png";
+        const QString path = directory.filePath(name);
+        QImage source(73, 41, QImage::Format_RGB32);
+        source.fill(Qt::red);
+        QVERIFY(source.save(path));
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->imagePath = directory.path();
+        provider->names = {name};
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("cell-padding");
+        auto folder = previewFolder(1);
+        folder["name"] = "Google Play Ready - Sunburst";
+        QVERIFY(session->applyExternalCatalog({catalogEntry(0, path), folder}, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "paddingSession", "masonry"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("density", 120.0);
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {{"panelFontPixelSize", 16}}));
+        panel->setProperty("presentationMode", mode);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QQuickItem *folderPreview = nullptr;
+        QTRY_VERIFY((folderPreview = findVisualItem(panel, "galleryFolderPreview-1")));
+        QTRY_VERIFY(folderPreview->property("hasUsablePreview").toBool());
+        const QString labelName = mode == "masonry" ? "galleryMasonryLabel-0"
+            : mode == "grid" ? "galleryGridLabel-0" : "galleryIconsLabel-0";
+        const qreal dpr = view.devicePixelRatio();
+        for (qreal padding : {0.0, 4.0, 13.0, 24.0, 32.0}) {
+            QVERIFY(setPanelObjectProperties(panel, "metrics", {{"cellHorizontalPadding", padding}}));
+            QTRY_COMPARE(layout->cellHorizontalPadding(), padding);
+            for (qreal verticalPadding : {0.0, 4.0, 13.0, 32.0}) {
+                const quint64 beforeVerticalChange = layout->iconCaptionMeasurementCount();
+                QVERIFY(setPanelObjectProperties(panel, "metrics", {{"cellVerticalPadding", verticalPadding}}));
+                QTRY_COMPARE(layout->cellVerticalPadding(), verticalPadding);
+                QQuickItem *fileLabel = nullptr;
+                QTRY_VERIFY((fileLabel = findVisualItem(panel, labelName)));
+                auto *folderLabel = findVisualItem(folderPreview, "folderPreviewTitle");
+                auto *frame = findVisualItem(folderPreview, "folderPreviewFrame");
+                QVERIFY(folderLabel && frame);
+                for (int index : {0, 1}) {
+                    auto *entry = layout->itemForIndex(index);
+                    QVERIFY(entry);
+                    const qreal inset = ZoinGallery::PixelGrid::cellHorizontalInset(entry->width(), padding, dpr);
+                    auto *label = index == 0 ? fileLabel : folderLabel;
+                    QTRY_COMPARE(label->width(), entry->width() - 2 * inset);
+                    if (mode == "icons") {
+                        QTRY_VERIFY2(label->height() + 1 / dpr >= label->property("contentHeight").toReal(),
+                            qPrintable(QString("%1 padding=%2 width=%3 height=%4 contentHeight=%5 lines=%6 text=%7 font=%8 native=%9 equal=%10 spacing=%11")
+                                .arg(label->objectName()).arg(padding).arg(label->width()).arg(label->height())
+                                .arg(label->property("contentHeight").toReal()).arg(label->property("lineCount").toInt())
+                                .arg(label->property("text").toString()).arg(label->property("font").value<QFont>().toString())
+                                .arg(layout->iconLabelFont().toString())
+                                .arg(label->property("font").value<QFont>() == layout->iconLabelFont())
+                                .arg(QFontMetricsF(layout->iconLabelFont()).lineSpacing())));
+                        QVERIFY2(label->mapToItem(entry, QPointF(0, label->height())).y() <= entry->height() + .001,
+                            qPrintable(QString("padding=%1 vertical=%2 label=%3 y=%4 h=%5 row=%6")
+                                .arg(padding).arg(verticalPadding).arg(label->objectName())
+                                .arg(label->mapToItem(entry, QPointF()).y()).arg(label->height()).arg(entry->height())));
+                    }
+                    const QPointF origin = label->mapToItem(entry, QPointF());
+                    QVERIFY(qAbs(origin.x() - inset) <= 1 / dpr);
+                    const QRectF preview = entry->property("effectivePreviewRect").toRectF();
+                    QCOMPARE(preview.left(), inset);
+                    QCOMPARE(preview.width(), label->width());
+                    const qreal verticalInset = ZoinGallery::PixelGrid::cellVerticalInset(entry->height(), verticalPadding, dpr);
+                    QVERIFY(qAbs(preview.top() - verticalInset) <= 1 / dpr);
+                    QVERIFY(label->mapToItem(entry, {0, label->height()}).y()
+                        <= entry->height() - verticalInset + 1 / dpr);
+                    const QPointF frameOrigin = frame->mapToItem(layout->itemForIndex(1), QPointF());
+                    QVERIFY(frameOrigin.y() >= verticalInset);
+                    const QPointF sceneOrigin = label->mapToItem(view.contentItem(), QPointF());
+                    QVERIFY(qAbs(sceneOrigin.x() * dpr - qRound(sceneOrigin.x() * dpr)) < .01);
+                    QVERIFY(qAbs(sceneOrigin.y() * dpr - qRound(sceneOrigin.y() * dpr)) < .01);
+                    QVERIFY(qAbs(label->width() * dpr - qRound(label->width() * dpr)) < .01);
+                    QCOMPARE(label->mapToItem(view.contentItem(), {1, 0}) - sceneOrigin, QPointF(1, 0));
+                    QCOMPARE(label->mapToItem(view.contentItem(), {0, 1}) - sceneOrigin, QPointF(0, 1));
+                }
+                QCOMPARE(frame->width(), folderLabel->width());
+                QVERIFY(qAbs(frame->mapToItem(layout->itemForIndex(1), QPointF()).x()
+                    - folderLabel->mapToItem(layout->itemForIndex(1), QPointF()).x()) < .01);
+                const quint64 measurements = layout->iconCaptionMeasurementCount();
+                layout->setCellHorizontalPadding(padding);
+                QTest::qWait(30);
+                QCOMPARE(layout->iconCaptionMeasurementCount(), measurements);
+                QCOMPARE(layout->iconCaptionMeasurementCount(), beforeVerticalChange);
+                QQuickItem *imageLeaf = nullptr;
+                const QString imageName = mode == "icons"
+                    ? "galleryThumbnailImage-0" : "galleryThumbnailShader-0";
+                QTRY_VERIFY((imageLeaf = findVisualItem(panel, imageName)));
+                for (auto *leaf : {imageLeaf, frame}) {
+                    const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+                    const QString dimensions = QString("%1 padding=%2 vertical=%3 origin=%4,%5 size=%6,%7")
+                        .arg(leaf->objectName()).arg(padding).arg(verticalPadding)
+                        .arg(origin.x()).arg(origin.y()).arg(leaf->width()).arg(leaf->height());
+                    QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01, qPrintable(dimensions));
+                    QVERIFY2(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01, qPrintable(dimensions));
+                    QVERIFY2(qAbs(leaf->width() * dpr - qRound(leaf->width() * dpr)) < .01, qPrintable(dimensions));
+                    QVERIFY2(qAbs(leaf->height() * dpr - qRound(leaf->height() * dpr)) < .01, qPrintable(dimensions));
+                    QCOMPARE(leaf->mapToItem(view.contentItem(), {1, 0}) - origin, QPointF(1, 0));
+                    QCOMPARE(leaf->mapToItem(view.contentItem(), {0, 1}) - origin, QPointF(0, 1));
+                }
+            }
+        }
+        // Gap-only changes must update both real caption leaves without
+        // remeasuring wrapped text. Masonry image captions stay overlays.
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {
+            {"cellHorizontalPadding", 4}, {"cellVerticalPadding", 4}}));
+        for (qreal gap : {0.0, 3.0, 17.0, 32.0}) {
+            const quint64 measurements = layout->iconCaptionMeasurementCount();
+            QVERIFY(setPanelObjectProperties(panel, "metrics", {{"cellCaptionSpacing", gap}}));
+            QTRY_COMPARE(layout->cellCaptionSpacing(), gap);
+            auto *fileLabel = findVisualItem(panel, labelName);
+            auto *folderLabel = findVisualItem(folderPreview, "folderPreviewTitle");
+            auto *frame = findVisualItem(folderPreview, "folderPreviewFrame");
+            QVERIFY(fileLabel && folderLabel && frame);
+            const qreal snappedGap = qRound(gap * dpr) / dpr;
+            if (mode != "masonry") {
+                for (int index : {0, 1}) {
+                    auto *entry = layout->itemForIndex(index);
+                    auto *label = index == 0 ? fileLabel : folderLabel;
+                    const QRectF preview = entry->property("effectivePreviewRect").toRectF();
+                    QTRY_VERIFY(qAbs(label->mapToItem(entry, QPointF()).y()
+                        - preview.bottom() - snappedGap) <= 1 / dpr);
+                }
+            } else {
+                QTRY_VERIFY(qAbs(folderLabel->mapToScene({}).y()
+                    - frame->mapToScene({0, frame->height()}).y()
+                    - snappedGap) <= 1 / dpr);
+            }
+            QCOMPARE(layout->iconCaptionMeasurementCount(), measurements);
+            for (auto *leaf : {fileLabel, folderLabel, frame}) {
+                const QPointF origin = leaf->mapToScene({});
+                QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
+                QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+                QVERIFY(qAbs(leaf->width() * dpr - qRound(leaf->width() * dpr)) < .01);
+                QVERIFY(qAbs(leaf->height() * dpr - qRound(leaf->height() * dpr)) < .01);
+                QCOMPARE(leaf->mapToScene({1, 0}) - origin, QPointF(1, 0));
+                QCOMPARE(leaf->mapToScene({0, 1}) - origin, QPointF(0, 1));
+            }
+        }
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {{"cellCaptionSpacing", 3}}));
+        if (mode == "icons") {
+            auto *entry = layout->itemForIndex(1);
+            auto *title = findVisualItem(folderPreview, "folderPreviewTitle");
+            const qreal height = title->height();
+            // During a mode switch the Loader can still have its outgoing
+            // extent. Caption space belongs to the committed row geometry.
+            folderPreview->setHeight(entry->height() - 16);
+            QTRY_COMPARE(title->height(), height);
+            QVERIFY(title->height() + 1 / dpr >= title->property("contentHeight").toReal());
+        }
+        // At minimum zoom the native plan may clamp large padding to leave
+        // usable content. Captions and folder frames must use that same inset.
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {
+            {"cellHorizontalPadding", 4}, {"cellVerticalPadding", 32}}));
+        panel->setProperty("density", mode == "grid" ? 96.0 : mode == "icons" ? 18.0 : 30.0);
+        QCoreApplication::processEvents();
+        for (int index : {0, 1}) {
+            auto *entry = layout->itemForIndex(index);
+            QVERIFY(entry);
+            const QRectF preview = entry->property("effectivePreviewRect").toRectF();
+            QVERIFY(preview.height() > 0);
+            QCOMPARE(entry->property("cellVerticalInset").toReal(), preview.top());
+        }
+        QVERIFY(!view.grabWindow().isNull());
+        runtime->shutdown();
+    }
+
     void folderPreviewGridAndPixels_data() {
         QTest::addColumn<QString>("mode");
         for (const auto &mode : {"masonry", "grid", "icons"})
@@ -1197,13 +1479,41 @@ private slots:
         QVERIFY(childCatalog->imageOriginalSizeAt(15).isEmpty());
         auto *title = findVisualItem(preview, "folderPreviewTitle");
         QVERIFY(title);
+        auto *titleZone = findVisualItem(preview, "folderPreviewTitleZone");
+        auto *frameZone = findVisualItem(preview, "folderPreviewFrameZone");
+        auto *thumbnailsZone = findVisualItem(preview, "folderPreviewThumbnailsZone");
+        QVERIFY(titleZone && frameZone && thumbnailsZone);
+        QCOMPARE(titleZone->size(), title->size());
+        QCOMPARE(frameZone->size(), frameZone->parentItem()->size());
+        QCOMPARE(thumbnailsZone->size(), thumbnailsZone->parentItem()->size());
+        if (mode == "grid") {
+            const qreal reservedHeight = title->height();
+            title->setProperty("text", QStringLiteral("Short"));
+            QTest::qWait(50);
+            QCOMPARE(title->property("lineCount").toInt(), 1);
+            QCOMPARE(title->height(), reservedHeight);
+            QCOMPARE(title->property("verticalAlignment").toInt(), int(Qt::AlignTop));
+        }
         title->setProperty("font", QFont("Segoe UI", 9));
         title->setProperty("text", QStringLiteral("Folder with a long filename that wraps onto two lines"));
         QTest::qWait(100);
-        QCOMPARE(title->property("lineCount").toInt(), 2);
+        if (mode == "icons")
+            QVERIFY(title->property("lineCount").toInt() >= 2 && title->property("lineCount").toInt() <= 4);
+        else
+            QCOMPARE(title->property("lineCount").toInt(), 2);
         const QSizeF normalGridSize = grid->size();
         auto *outerLayout = panel->findChild<MasonryLayout *>("galleryViewportItem");
         const QRectF outer = outerLayout->itemForIndex(0)->boundingRect();
+        if (mode == "grid") {
+            const qreal expectedWidth = qRound((outer.width() - 8) * view.devicePixelRatio())
+                                        / view.devicePixelRatio();
+            qInfo() << "[FIX:folder-grid-caption] actual/expected width"
+                    << title->width() << expectedWidth;
+            QCOMPARE(title->width(), expectedWidth);
+            const auto *brick = outerLayout->itemForIndex(0);
+            const QPointF titleOrigin = title->mapToItem(brick, QPointF());
+            QVERIFY(qAbs(titleOrigin.x() - 4) <= 1 / view.devicePixelRatio());
+        }
         qInfo() << "outer folder geometry" << outer;
         if (mode == "masonry")
             QVERIFY(qAbs(outer.width() - outer.height()) < 2);
@@ -1240,9 +1550,9 @@ private slots:
             QCOMPARE(displayed, cells);
         }
         QCOMPARE(title->property("horizontalAlignment").toInt(), int(Qt::AlignHCenter));
-        QCOMPARE(title->property("maximumLineCount").toInt(), mode == "grid" ? 3 : 2);
-        QCOMPARE(title->property("elide").toInt(), int(Qt::ElideRight));
-        QCOMPARE(title->property("wrapMode").toInt(), 4); // Text.Wrap
+        QCOMPARE(title->property("maximumLineCount").toInt(), mode == "icons" ? 4 : 2);
+        QCOMPARE(title->property("elide").toInt(), mode == "icons" ? int(Qt::ElideNone) : int(Qt::ElideRight));
+        QCOMPARE(title->property("wrapMode").toInt(), mode == "icons" ? 3 : 4); // WrapAnywhere / Wrap
         auto *folderFill = findVisualItem(preview, "folderPreviewFill");
         QVERIFY(folderFill);
         QCOMPARE(folderFill->property("color").value<QColor>(), QColor("#304051"));
@@ -2877,7 +3187,61 @@ private slots:
         runtime->shutdown();
     }
 
-    void iconRowsReserveUniformFourLineCapacity() {
+    void iconCaptionMeasurementMatchesRenderedUnicodeText() {
+        QQuickView view;
+        QQmlComponent component(view.engine());
+        component.setData(R"QML(import QtQuick
+            Text { width: 97; font.pixelSize: 13; wrapMode: Text.WrapAnywhere }
+        )QML", QUrl("inline:IconCaption.qml"));
+        QTRY_COMPARE_WITH_TIMEOUT(component.status(), QQmlComponent::Ready, 3000);
+        QScopedPointer<QObject> label(component.create());
+        QVERIFY2(label, qPrintable(component.errorString()));
+        const QFont font = label->property("font").value<QFont>();
+        ZoinGallery::GalleryIconTextMeasurer measurer(font);
+        for (const QString &name : {
+                 QStringLiteral("short.txt"),
+                 QStringLiteral("Документы — отпуск и фотографии.jpg"),
+                 QString::fromUtf8("Family 👩‍👩‍👧‍👦 é 日本語写真.jpeg"),
+                 QStringLiteral("a\n\nb"),
+                 QStringLiteral("Very long filename ").repeated(20) + ".extension"}) {
+            label->setProperty("text", name);
+            QCOMPARE(measurer.lineCount(name, 97), qMin(4, label->property("lineCount").toInt()));
+            const auto wrapped = measurer.layout(name, 97);
+            label->setProperty("text", wrapped.text);
+            QCOMPARE(wrapped.lineCount, label->property("lineCount").toInt());
+            QVERIFY(wrapped.lineCount >= 1 && wrapped.lineCount <= 4);
+            QVERIFY(!wrapped.text.contains(QChar::ReplacementCharacter));
+        }
+    }
+
+    void iconCaptionMeasurementScalesToTenThousandEntries() {
+        QFont font = QGuiApplication::font();
+        font.setPixelSize(13);
+        QStringList names;
+        names.reserve(10000);
+        for (int index = 0; index < 10000; ++index) {
+            names.append(index % 3 == 0
+                ? QStringLiteral("IMG_20230924_%1-Enhanced-NR.jpg").arg(index)
+                : index % 3 == 1
+                    ? QStringLiteral("Документы — отпуск и фотографии %1.jpg").arg(index)
+                    : QStringLiteral("A very long descriptive filename with several words %1.extension").arg(index));
+        }
+        ZoinGallery::GalleryIconTextMeasurer measurer(font);
+        (void)measurer.lineCount(QStringLiteral("warm font"), 96);
+        for (const bool elide : {false, true}) {
+            QElapsedTimer timer;
+            timer.start();
+            int totalLines = 0;
+            for (const QString &name : names)
+                totalLines += elide ? measurer.layout(name, 96).lineCount
+                                   : measurer.lineCount(name, 96);
+            qInfo() << "icon captions 10000" << (elide ? "visible text with elision" : "exact line count only")
+                    << timer.nsecsElapsed() / 1000000.0 << "ms" << totalLines;
+            QVERIFY(totalLines >= 10000 && totalLines <= 40000);
+        }
+    }
+
+    void iconRowsGrowOnlyToTheirTallestCaption() {
         QVariantList catalog;
         const QString longName = QStringLiteral(
             "Beginning-of-a-very-long-file-name-with-many-descriptive-"
@@ -2907,6 +3271,7 @@ private slots:
             view, session, QStringLiteral("variableIconRowsSession"),
             QStringLiteral("icons"));
         QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
         panel->setProperty("density", 96.0);
         auto *layout = panel->findChild<MasonryLayout *>(
             QStringLiteral("galleryViewportItem"));
@@ -2924,24 +3289,27 @@ private slots:
         const QRectF firstLong = layout->indexGeometry(2);
         const QRectF secondShort = layout->indexGeometry(secondRow);
         QCOMPARE(firstShort.height(), firstLong.height());
-        QCOMPARE(firstLong.height(), secondShort.height());
+        QVERIFY(firstLong.height() > secondShort.height());
         QVERIFY(firstLong.height() > firstLong.width());
         QCOMPARE(secondShort.top(), firstShort.bottom());
 
-        // The analytical Icons layout reserves one fixed four-line-capable
-        // stride for every row. Preview size remains invariant across short
-        // and long labels and across physical rows.
+        // Only the caption zone grows. Every icon retains the same preview
+        // height and shares its bottom edge with the other icons in the row.
         const QRectF shortPreview = layout->indexPreviewGeometry(0);
         const QRectF longPreview = layout->indexPreviewGeometry(2);
         const QRectF secondPreview =
             layout->indexPreviewGeometry(secondRow);
         QCOMPARE(shortPreview.size(), longPreview.size());
         QCOMPARE(shortPreview.size(), secondPreview.size());
-        QCOMPARE(shortPreview.left(), firstShort.left());
-        QCOMPARE(shortPreview.top(), firstShort.top());
-        QCOMPARE(shortPreview.width(), firstShort.width());
-        QCOMPARE(secondPreview.left(), secondShort.left());
-        QCOMPARE(secondPreview.top(), secondShort.top());
+        const qreal inset = ZoinGallery::PixelGrid::cellHorizontalInset(
+            firstShort.width(), layout->cellHorizontalPadding(), layout->devicePixelRatio());
+        const qreal verticalInset = ZoinGallery::PixelGrid::cellVerticalInset(
+            firstShort.height(), layout->cellVerticalPadding(), layout->devicePixelRatio());
+        QCOMPARE(shortPreview.left(), firstShort.left() + inset);
+        QCOMPARE(shortPreview.top(), firstShort.top() + verticalInset);
+        QCOMPARE(shortPreview.width(), firstShort.width() - 2 * inset);
+        QCOMPARE(secondPreview.left(), secondShort.left() + inset);
+        QCOMPARE(secondPreview.top(), secondShort.top() + verticalInset);
 
         auto *fallbackIcon = panel->findChild<QQuickItem *>(
             QStringLiteral("galleryFallbackIcon-0"));
@@ -2956,8 +3324,16 @@ private slots:
             QStringLiteral("galleryThumbnailShader-0")));
         QTRY_VERIFY_WITH_TIMEOUT(
             qAbs(fallbackIcon->width()
-                 - qMin(shortPreview.width(), shortPreview.height())) <= 0.51,
+                 - shortPreview.width()) <= 0.51,
             3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            qAbs(fallbackIcon->height() - shortPreview.height()) <= 0.51,
+            3000);
+        QCOMPARE(fallbackIcon->size(), fallbackIcon->parentItem()->size());
+        QCOMPARE(fallbackIcon->property("verticalAlignment").toInt(), int(Qt::AlignBottom));
+        const QSize rasterSize = fallbackIcon->property("sourceSize").toSize();
+        QCOMPARE(rasterSize.width(), rasterSize.height());
+        QCOMPARE(rasterSize.width(), qRound(qMax(fallbackIcon->width(), fallbackIcon->height())));
         QVERIFY(!backdrop->property("enabledForPresentation").toBool());
         QVERIFY(!backdrop->isVisible());
 
@@ -2981,7 +3357,7 @@ private slots:
         QVERIFY(longLabel->property("lineCount").toInt() <= 4);
         QCOMPARE(shortLabel->property("lineCount").toInt(), 1);
         QVERIFY(shortLabel->height() >= shortLabel->implicitHeight());
-        QCOMPARE(shortLabel->height(), longLabel->height());
+        QVERIFY(shortLabel->height() < longLabel->height());
 
         auto *longSelection = panel->findChild<QQuickItem *>(
             QStringLiteral("gallerySelectionSurface-2"));
@@ -2995,6 +3371,7 @@ private slots:
         QVERIFY(shortSelection);
         QVERIFY(sameRowShortSelection);
         QVERIFY(sameRowShortLabel);
+        QCOMPARE(sameRowShortLabel->height(), longLabel->height());
         QTRY_VERIFY_WITH_TIMEOUT(
             longSelection->height() > sameRowShortSelection->height(), 3000);
         QVERIFY2(sameRowShortSelection->height()
@@ -3008,6 +3385,21 @@ private slots:
                  layout->indexGeometry(layout->count() - 1).bottom()
                      + layout->paddingBottom());
 
+        const qreal dpr = view.devicePixelRatio();
+        for (auto *leaf : {longLabel, shortLabel, sameRowShortLabel, fallbackIcon}) {
+            const QPointF origin = leaf->mapToScene(QPointF());
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.001);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.001);
+            QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+            QVERIFY(qAbs(leaf->width() * dpr - qRound(leaf->width() * dpr)) < 0.001);
+            QVERIFY(qAbs(leaf->height() * dpr - qRound(leaf->height() * dpr)) < 0.001);
+        }
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        if (qEnvironmentVariableIsSet("F4_ICONS_ROW_CAPTURE"))
+            QVERIFY(capture.save(qEnvironmentVariable("F4_ICONS_ROW_CAPTURE")));
+
         // Grid remains equal-height even with wrapped labels.
         panel->setProperty("presentationMode", QStringLiteral("grid"));
         QTRY_COMPARE_WITH_TIMEOUT(layout->presentationMode(),
@@ -3016,6 +3408,242 @@ private slots:
         QCOMPARE(layout->indexGeometry(2).height(), layout->density());
 
         runtime->shutdown();
+    }
+
+    void iconCaptionMetricsAreNotRemeasuredDuringLayout() {
+        QVariantList catalog = plainCatalog(10000);
+        for (QVariant &value : catalog) {
+            auto entry = value.toMap();
+            entry[QStringLiteral("name")] = QStringLiteral("x");
+            value = entry;
+        }
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession(QStringLiteral("icon-caption-metrics"));
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        QObject *panel = createPanel(view, session, QStringLiteral("captionMetricsSession"), QStringLiteral("icons"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 10000, 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(layout->indexGeometry(9999).height()
+            <= layout->indexGeometry(9999).width() + 1, 3000);
+        const quint64 measurements = layout->iconCaptionMeasurementCount();
+        QElapsedTimer timer;
+        timer.start();
+        for (int pass = 0; pass < 100; ++pass)
+            layout->setPaddingBottom(pass % 2);
+        qInfo() << "Icons 10000 rows, hot rewrap average ms="
+                << timer.nsecsElapsed() / 100000000.0;
+        QCOMPARE(layout->iconCaptionMeasurementCount(), measurements);
+        QCOMPARE(layout->indexGeometry(0).height(), layout->indexGeometry(9999).height());
+        runtime->shutdown();
+    }
+
+    void sparseIconCaptionsMeasureOnlyReceivedNamesAndPreserveAnchor() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession(QStringLiteral("sparse-icon-captions"));
+        const QVariantMap sparseOptions{
+            {QStringLiteral("totalCount"), 10000},
+            {QStringLiteral("catalogRowsDeferred"), true},
+            {QStringLiteral("currentPath"), QStringLiteral("/virtual/icon-captions")}};
+        QVariantList preview = plainCatalog(12);
+        for (QVariant &value : preview) {
+            auto entry = value.toMap();
+            entry[QStringLiteral("name")] = QStringLiteral("x");
+            value = entry;
+        }
+        QVERIFY(session->applyExternalCatalog(preview, 1, sparseOptions));
+        auto *panel = createPanel(view, session, QStringLiteral("sparseCaptionSession"), QStringLiteral("icons"));
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>(QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->count(), 10000, 3000);
+        QVERIFY(layout->iconCaptionMeasurementCount() <= 128);
+        QVERIFY(layout->indexGeometry(0).height() < layout->indexGeometry(600).height());
+        layout->setContentY(layout->indexGeometry(600).top() + 7);
+        const qreal anchor = layout->indexGeometry(600).top() - layout->contentY();
+        QVariantList page;
+        for (int index = 600; index < 664; ++index) {
+            auto entry = catalogEntry(index);
+            entry[QStringLiteral("name")] = QStringLiteral("x");
+            page.append(entry);
+        }
+        QVERIFY(session->applyExternalCatalogRows(page, 1));
+        QTRY_VERIFY_WITH_TIMEOUT(layout->indexGeometry(600).height()
+            < layout->indexGeometry(900).height(), 3000);
+        QVERIFY(qAbs(layout->indexGeometry(600).top() - layout->contentY() - anchor) < 0.51);
+        QVERIFY(layout->iconCaptionMeasurementCount() < 256);
+        runtime->shutdown();
+    }
+
+    void iconCaptionChangesInvalidateMetricsAndPageByGeometry() {
+        QVariantList catalog = plainCatalog(120);
+        for (QVariant &value : catalog) {
+            auto entry = value.toMap();
+            entry["name"] = QStringLiteral("x");
+            value = entry;
+        }
+        auto longEntry = catalog[2].toMap();
+        longEntry["name"] = QStringLiteral("Long filename with plenty of words ").repeated(5);
+        catalog[2] = longEntry;
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("icon-caption-invalidation");
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        QObject *panel = createPanel(view, session, "captionInvalidationSession", "icons");
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        layout->setDevicePixelRatio(view.devicePixelRatio());
+        layout->setDensity(96);
+        const QRectF current = layout->indexGeometry(0);
+        const int page = layout->navigationTarget(0, MasonryLayout::NavigateDown, true)
+                            .value("targetIndex").toInt();
+        QVERIFY(page > 0);
+        const qreal target = current.center().y() + layout->height();
+        const auto score = [&](int index) {
+            const auto rect = layout->indexGeometry(index);
+            return qAbs(rect.center().y() - target)
+                 + qAbs(rect.center().x() - current.center().x()) * 0.01;
+        };
+        for (int index = 1; index < layout->count(); ++index)
+            if (layout->indexGeometry(index).center().y() > current.center().y())
+                QVERIFY(score(page) <= score(index) + 0.01);
+
+        const quint64 initialMeasurements = layout->iconCaptionMeasurementCount();
+        longEntry["name"] = "x";
+        QVERIFY(session->applyExternalCatalogRows({longEntry}, 1));
+        QTRY_COMPARE(layout->indexGeometry(0).height(), layout->indexGeometry(119).height());
+        QVERIFY(layout->iconCaptionMeasurementCount() > initialMeasurements);
+        const auto normal = layout->indexGeometry(0);
+        QFont larger = layout->iconLabelFont();
+        larger.setPixelSize(26);
+        layout->setIconLabelFont(larger);
+        QVERIFY(layout->indexPreviewGeometry(0).height() < normal.height());
+        const quint64 fontMeasurements = layout->iconCaptionMeasurementCount();
+        QVERIFY(fontMeasurements > initialMeasurements);
+        layout->setPaddingBottom(5);
+        QCOMPARE(layout->iconCaptionMeasurementCount(), fontMeasurements);
+
+        // A reset must reject the previous catalog's in-flight measurements.
+        QVariantList huge = plainCatalog(10000);
+        for (QVariant &value : huge) {
+            auto entry = value.toMap();
+            entry["name"] = QStringLiteral("Long caption ").repeated(10);
+            value = entry;
+        }
+        QVERIFY(session->applyExternalCatalog(huge, 2));
+        QVERIFY(session->applyExternalCatalog(catalog.mid(6), 3));
+        QTest::qWait(250);
+        QCOMPARE(layout->count(), 114);
+        QCOMPARE(layout->indexGeometry(0).height(), layout->indexGeometry(113).height());
+        QVERIFY(layout->indexGeometry(0).height() <= layout->indexGeometry(0).width() + 1);
+        runtime->shutdown();
+    }
+
+    void iconsFilesAndFolderPreviewsShareRowsAndBottomAlignment() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("short.png");
+        QImage source(73, 41, QImage::Format_RGB32);
+        source.fill(Qt::red);
+        QVERIFY(source.save(path));
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->imagePath = directory.path();
+        provider->names = {"short.png"};
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("icon-folder-captions");
+        QVariantList catalog = plainCatalog(12);
+        catalog[0] = catalogEntry(0, path);
+        auto folder = previewFolder(1);
+        folder["name"] = QStringLiteral("Long directory name with words ").repeated(8);
+        catalog[1] = folder;
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "iconFoldersSession", "icons"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("density", 96.0);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QQuickItem *preview = nullptr;
+        QTRY_VERIFY((preview = findVisualItem(panel, "galleryFolderPreview-1")));
+        QTRY_VERIFY(preview->property("hasUsablePreview").toBool());
+        auto *label = findVisualItem(preview, "folderPreviewTitle");
+        QVERIFY(label);
+        QTRY_COMPARE(label->property("lineCount").toInt(), 4);
+        QCOMPARE(label->property("maximumLineCount").toInt(), 4);
+        QVERIFY(label->property("text").toString().contains(QChar(0x2026)));
+        QCOMPARE(layout->indexGeometry(0).height(), layout->indexGeometry(1).height());
+        QVERIFY(layout->indexGeometry(0).height() > layout->indexGeometry(6).height());
+        auto *frame = findVisualItem(preview, "folderPreviewFrame");
+        QVERIFY(frame);
+        QVERIFY(qAbs(frame->mapToItem(layout->itemForIndex(1), QPointF(0, frame->height())).y()
+            - (layout->indexPreviewGeometry(1).bottom()
+               - layout->indexGeometry(1).top())) <= 1 / view.devicePixelRatio());
+        QQuickItem *thumbnail = nullptr;
+        QTRY_VERIFY((thumbnail = panel->findChild<QQuickItem *>("galleryThumbnailImage-0")));
+        QTRY_COMPARE(thumbnail->property("status").toInt(), 1);
+        QCOMPARE(thumbnail->property("verticalAlignment").toInt(), int(Qt::AlignBottom));
+        QVERIFY(thumbnail->property("paintedWidth").toReal()
+                / thumbnail->property("paintedHeight").toReal() > 1.5);
+        QVERIFY(thumbnail->property("paintedHeight").toReal() < thumbnail->height());
+        const qreal bottom = thumbnail->mapToItem(layout->itemForIndex(0), QPointF(0, thumbnail->height())).y();
+        QVERIFY(qAbs(bottom - (layout->indexPreviewGeometry(0).bottom()
+                              - layout->indexGeometry(0).top())) <= 1 / view.devicePixelRatio());
+        for (auto *leaf : {label, frame, thumbnail}) {
+            const QPointF origin = leaf->mapToScene(QPointF());
+            const qreal dpr = view.devicePixelRatio();
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.01);
+            QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        }
+        runtime->shutdown();
+    }
+
+    void layoutDebugZonesFollowEveryPresentation() {
+        for (const QString &mode : {QString("masonry"), QString("icons"),
+                                   QString("grid"), QString("columns"), QString("details")}) {
+            QQuickView view;
+            ZoinGallery::RuntimeOptions options;
+            options.persistentCache = false;
+            auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+            QVERIFY(runtime);
+            auto *session = runtime->createExternalSession("debug-zones");
+            QVERIFY(session->applyExternalCatalog(plainCatalog(3), 1));
+            QObject *panel = createPanel(view, session, "debugZonesSession", mode);
+            QVERIFY(panel);
+            panel->setProperty("debugLayoutZones", true);
+            QQuickItem *cellZone = nullptr;
+            QTRY_VERIFY((cellZone = panel->findChild<QQuickItem *>("galleryCellZone-0")));
+            auto *previewZone = panel->findChild<QQuickItem *>("galleryPreviewZone-0");
+            QVERIFY(previewZone && previewZone->isVisible());
+            QCOMPARE(cellZone->size(), cellZone->parentItem()->size());
+            const QString labelName = mode == "masonry" ? "galleryMasonryLabel-0"
+                : mode == "icons" ? "galleryIconsLabel-0"
+                : mode == "grid" ? "galleryGridLabel-0" : "galleryBaseName-0";
+            QQuickItem *label = nullptr;
+            QTRY_VERIFY((label = panel->findChild<QQuickItem *>(labelName)));
+            auto *textZone = label->findChild<QQuickItem *>(
+                mode == "grid" ? "galleryGridTextZone-0" : "galleryLayoutDebugZone");
+            QVERIFY(textZone && textZone->isVisible());
+            QCOMPARE(textZone->size(), label->size());
+            cellZone->parentItem()->setProperty("debugLayoutZones", false);
+            QTRY_VERIFY(!cellZone->isVisible() && !previewZone->isVisible() && !textZone->isVisible());
+            runtime->shutdown();
+        }
     }
 
     void gridLabelsWrapWithinPaddedCells() {
@@ -3033,6 +3661,7 @@ private slots:
         QVERIFY(session->applyExternalCatalog(catalog, 1));
         QObject *panel = createPanel(view, session, "gridWrappedSession", "grid");
         QVERIFY(panel);
+        panel->setProperty("debugLayoutZones", true);
         panel->setProperty("devicePixelRatio", view.devicePixelRatio());
         panel->setProperty("density", 160.0);
         auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
@@ -3040,16 +3669,33 @@ private slots:
         QTRY_COMPARE(layout->count(), 8);
         QQuickItem *label = nullptr;
         QTRY_VERIFY((label = panel->findChild<QQuickItem *>("galleryGridLabel-0")));
-        QTRY_COMPARE(label->property("maximumLineCount").toInt(), 3);
-        QTRY_COMPARE(label->property("lineCount").toInt(), 3);
-        QVERIFY(label->property("truncated").toBool());
+        QTRY_COMPARE(label->property("maximumLineCount").toInt(), 2);
+        QTRY_COMPARE(label->property("lineCount").toInt(), 2);
+        QVERIFY(label->property("text").toString().contains(QChar(0x2026)));
+        QVERIFY(label->property("text").toString().endsWith("elision.txt"));
+        QCOMPARE(label->property("verticalAlignment").toInt(), int(Qt::AlignTop));
+        auto *shortLabel = panel->findChild<QQuickItem *>("galleryGridLabel-1");
+        QVERIFY(shortLabel);
+        QCOMPARE(shortLabel->height(), label->height());
         const QRectF cell = layout->indexGeometry(0);
         const QRectF preview = layout->indexPreviewGeometry(0);
-        QVERIFY(preview.top() - cell.top() >= 8);
+        auto *previewZone = panel->findChild<QQuickItem *>("galleryPreviewZone-0");
+        auto *textZone = panel->findChild<QQuickItem *>("galleryGridTextZone-0");
+        auto *cellZone = panel->findChild<QQuickItem *>("galleryCellZone-0");
+        QVERIFY(previewZone && textZone && cellZone);
+        QVERIFY(previewZone->isVisible() && textZone->isVisible());
+        QVERIFY(qAbs(previewZone->width() - preview.width()) < 1 / view.devicePixelRatio());
+        QVERIFY(qAbs(previewZone->height() - preview.height()) < 1 / view.devicePixelRatio());
+        QCOMPARE(textZone->size(), label->size());
+        QCOMPARE(textZone->mapToScene(QPointF()), label->mapToScene(QPointF()));
+        QCOMPARE(cellZone->size(), label->parentItem()->size());
+        const qreal verticalInset = ZoinGallery::PixelGrid::cellVerticalInset(
+            cell.height(), layout->cellVerticalPadding(), view.devicePixelRatio());
+        QCOMPARE(preview.top() - cell.top(), verticalInset);
         QVERIFY(label->height() >= label->implicitHeight() - 0.6);
         QVERIFY(label->y() + label->height() <= label->parentItem()->height());
         QVERIFY(label->parentItem()->height() - label->y() - label->height()
-                <= 8 + 1 / view.devicePixelRatio());
+                <= verticalInset + 1 / view.devicePixelRatio());
         for (const int index : {0, 1}) {
             QQuickItem *leaf = panel->findChild<QQuickItem *>(
                 QStringLiteral("galleryGridLabel-%1").arg(index));
@@ -3068,7 +3714,9 @@ private slots:
         layout->setIconLabelFont(largerFont);
         QTRY_VERIFY(layout->indexPreviewGeometry(0).height() < preview.height());
         QCOMPARE(layout->indexGeometry(0), cell);
-        QTRY_COMPARE(label->property("lineCount").toInt(), 3);
+        QTRY_VERIFY(!label->property("text").toString().isEmpty());
+        QVERIFY(label->property("lineCount").toInt() <= 2);
+        QVERIFY(label->property("text").toString().contains(QChar(0x2026)));
         QVERIFY(label->height() >= label->implicitHeight() - 0.6);
         runtime->shutdown();
     }
@@ -8138,6 +8786,10 @@ private slots:
         QQuickItem *icon = nullptr;
         QTRY_VERIFY((icon = panel->findChild<QQuickItem *>(QStringLiteral("galleryFallbackIcon-0"))));
         auto *preview = icon->parentItem();
+        while (preview && !preview->property("thumbnailHasSource").isValid()) {
+            preview = preview->parentItem();
+        }
+        QVERIFY(preview);
         auto *entry = preview->property("entry").value<QObject *>();
         QVERIFY(entry);
         QTest::qWait(150);

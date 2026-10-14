@@ -1,4 +1,5 @@
 #include "GalleryLayoutEngine.h"
+#include "GalleryPixelGrid.h"
 
 #include <QtMath>
 
@@ -121,8 +122,41 @@ void buildFixedSections(const GalleryLayoutRequest &request,
                     plan->canvasWidth, headerHeight),
             });
         }
-        offset += (!section.title.isEmpty() ? headerHeight : 0)
-            + section.primaryCells * plan->extent;
+        offset += !section.title.isEmpty() ? headerHeight : 0;
+        if (plan->mode == GalleryPresentationMode::Icons
+            && request.iconLabelLineHeight > 0
+            && request.iconCaptionLineCounts.size() == plan->entryCount) {
+            section.firstIconRow = plan->iconRowTops.size();
+            const qreal lineHeight = request.iconLabelLineHeight;
+            const qreal verticalPadding = request.cellVerticalPadding < 0 ? 0
+                : qRound64(request.cellVerticalPadding * plan->devicePixelRatio)
+                    / plan->devicePixelRatio;
+            const qreal labelSpacing = request.cellVerticalPadding < 0 ? 6
+                : 2 * verticalPadding + qRound64(request.cellCaptionSpacing * plan->devicePixelRatio)
+                    / plan->devicePixelRatio;
+            plan->iconPreviewHeight = qMax<qreal>(
+                1, plan->cellWidth - labelSpacing - lineHeight);
+            for (int row = 0; row < section.primaryCells; ++row) {
+                const int first = section.start + row * plan->columns;
+                const int end = qMin(section.start + section.count,
+                                     first + plan->columns);
+                int lines = 1;
+                for (int index = first; index < end; ++index) {
+                    const int measured = request.iconCaptionLineCounts.at(index);
+                    lines = qMax(lines, measured > 0 ? qMin(measured, 4) : 4);
+                }
+                const qreal height = qMax(plan->cellWidth,
+                    plan->iconPreviewHeight + labelSpacing + lines * lineHeight);
+                const qreal dpr = qMax<qreal>(0.01, request.devicePixelRatio);
+                const qreal snappedHeight = std::ceil(height * dpr - 0.000001) / dpr;
+                plan->iconRowTops.append(plan->insets.top + offset);
+                plan->iconRowHeights.append(snappedHeight);
+                offset += snappedHeight;
+            }
+        } else {
+            offset += section.primaryCells * plan->extent;
+        }
+        section.contentExtent = offset - section.contentOffset;
     }
     if (plan->mode == GalleryPresentationMode::Details) {
         const qreal height = usableHeight(request);
@@ -152,36 +186,36 @@ int sectionForIndex(const GalleryFixedLayoutPlan &plan, int index) {
 }
 
 QSizeF scaleToWidthWithSpacing(const QSizeF &size, qreal width,
-                               qreal spacing) {
+                               qreal spacing, qreal horizontalSpacing) {
     if (size.width() <= 0 || size.height() <= 0) {
         return QSizeF(qMax<qreal>(0, width), qMax<qreal>(0, width));
     }
     const qreal aspect = size.width() / size.height();
     return QSizeF(qMax<qreal>(0, width),
-                  qMax<qreal>(0, (width - spacing) / aspect + spacing));
+                  qMax<qreal>(0, (width - horizontalSpacing) / aspect + spacing));
 }
 
 QSizeF scaleToHeightWithSpacing(const QSizeF &size, qreal height,
-                                qreal spacing) {
+                                qreal spacing, qreal horizontalSpacing) {
     if (size.width() <= 0 || size.height() <= 0) {
         return QSizeF(qMax<qreal>(0, height), qMax<qreal>(0, height));
     }
     const qreal aspect = size.width() / size.height();
-    return QSizeF((height - spacing) * aspect + spacing, height);
+    return QSizeF((height - spacing) * aspect + horizontalSpacing, height);
 }
 
 qreal scaleMasonryRow(QVector<GalleryLayoutCell> &cells,
                       const QVector<GalleryLayoutEntry> &entries,
                       qreal width, qreal targetHeight, qreal spacing,
-                      int lastIndex, qreal requestedHeight = 0) {
+                      qreal horizontalSpacing, int lastIndex, qreal requestedHeight = 0) {
     const int cellsInRow = cells.at(lastIndex).column + 1;
     qreal rowHeight = requestedHeight;
     if (rowHeight <= 0) {
         const qreal rowRight = cells.at(lastIndex).geometry.right();
         const qreal totalWithoutSpacing =
-            rowRight - cellsInRow * spacing;
+            rowRight - cellsInRow * horizontalSpacing;
         if (totalWithoutSpacing > 0) {
-            const qreal stretch = (width - cellsInRow * spacing)
+            const qreal stretch = (width - cellsInRow * horizontalSpacing)
                 / totalWithoutSpacing;
             rowHeight = (targetHeight - spacing) * stretch + spacing;
         } else {
@@ -194,20 +228,20 @@ qreal scaleMasonryRow(QVector<GalleryLayoutCell> &cells,
         const QSizeF source = entries.at(index).originalSize.isEmpty()
             ? cells.at(index).geometry.size() : entries.at(index).originalSize;
         const QSizeF size = scaleToHeightWithSpacing(
-            source, rowHeight, spacing);
+            source, rowHeight, spacing, horizontalSpacing);
         const qreal x = index == firstIndex
             ? 0 : cells.at(index - 1).geometry.right();
         cells[index].geometry = QRectF(
             x, cells.at(index).geometry.y(), size.width(), size.height());
         cells[index].previewGeometry = cells[index].geometry.adjusted(
-            spacing / 2, spacing / 2, -spacing / 2, -spacing / 2);
+            horizontalSpacing / 2, spacing / 2, -horizontalSpacing / 2, -spacing / 2);
     }
     return rowHeight;
 }
 
 QSizeF masonryEntrySize(const GalleryLayoutEntry &entry,
                         qreal width, qreal targetHeight,
-                        qreal spacing) {
+                        qreal spacing, qreal horizontalSpacing) {
     if (entry.originalSize.width() == 0
         && entry.originalSize.height() == 0) {
         return QSizeF(width, targetHeight);
@@ -216,34 +250,34 @@ QSizeF masonryEntrySize(const GalleryLayoutEntry &entry,
         return QSizeF(width, entry.originalSize.height());
     }
     return scaleToHeightWithSpacing(
-        entry.originalSize, targetHeight, spacing);
+        entry.originalSize, targetHeight, spacing, horizontalSpacing);
 }
 
 void matchFinalMasonryRow(
     QVector<GalleryLayoutCell> &cells,
     const QVector<GalleryLayoutEntry> &entries,
-    qreal width, qreal targetHeight, qreal spacing,
+    qreal width, qreal targetHeight, qreal spacing, qreal horizontalSpacing,
     int index, int currentRow, qreal lastY) {
     for (int previous = index - 1; previous >= 0; --previous) {
         if (cells.at(previous).row == currentRow) {
             continue;
         }
         scaleMasonryRow(
-            cells, entries, width, targetHeight, spacing, index,
+            cells, entries, width, targetHeight, spacing, horizontalSpacing, index,
             cells.at(previous).geometry.height());
         if (cells.at(index).geometry.right() <= width) {
             return;
         }
         for (int item = previous + 1; item <= index; ++item) {
             const QSizeF resetSize = scaleToHeightWithSpacing(
-                entries.at(item).originalSize, targetHeight, spacing);
+                entries.at(item).originalSize, targetHeight, spacing, horizontalSpacing);
             const qreal resetX = item == previous + 1
                 ? 0 : cells.at(item - 1).geometry.right();
             cells[item].geometry = QRectF(
                 resetX, lastY, resetSize.width(), resetSize.height());
         }
         scaleMasonryRow(
-            cells, entries, width, targetHeight, spacing, index);
+            cells, entries, width, targetHeight, spacing, horizontalSpacing, index);
         return;
     }
 }
@@ -300,6 +334,11 @@ QRectF GalleryFixedLayoutPlan::geometryFor(int index) const {
     }
     const int row = localIndex / columns;
     const int column = localIndex % columns;
+    if (!iconRowTops.isEmpty()) {
+        const int globalRow = section.firstIconRow + row;
+        return QRectF(column * cellWidth, iconRowTops.at(globalRow),
+                      cellWidth, iconRowHeights.at(globalRow));
+    }
     return QRectF(column * cellWidth,
                   insets.top + section.contentOffset + headerHeight
                       + row * extent,
@@ -315,15 +354,32 @@ QRectF GalleryFixedLayoutPlan::previewGeometryForRect(const QRectF &geometry) co
         return {};
     }
     const qreal halfSpacing = spacing / 2;
+    const qreal horizontalInset = cellHorizontalPadding < 0 ? halfSpacing
+        : PixelGrid::cellHorizontalInset(geometry.width(), cellHorizontalPadding, devicePixelRatio);
+    const qreal verticalInset = cellVerticalPadding < 0 ? 0
+        : PixelGrid::cellVerticalInset(geometry.height(), cellVerticalPadding, devicePixelRatio);
+    if (mode == GalleryPresentationMode::Icons && iconPreviewHeight > 0)
+        return QRectF(geometry.x() + (cellHorizontalPadding < 0 ? 0 : horizontalInset),
+                      geometry.y() + verticalInset,
+                      geometry.width() - (cellHorizontalPadding < 0 ? 0 : 2 * horizontalInset), iconPreviewHeight);
     if (mode == GalleryPresentationMode::Grid) {
+        const qreal labelHeight = 2 * gridLabelLineHeight
+            + qRound64(cellCaptionSpacing * devicePixelRatio) / devicePixelRatio;
+        if (cellVerticalPadding >= 0) {
+            const qreal inset = PixelGrid::cellVerticalInset(
+                geometry.height() - labelHeight, cellVerticalPadding, devicePixelRatio);
+            return QRectF(geometry.x() + horizontalInset, geometry.y() + inset,
+                          geometry.width() - 2 * horizontalInset,
+                          qMax<qreal>(1 / devicePixelRatio,
+                              geometry.height() - 2 * inset - labelHeight));
+        }
         const QRectF inner = geometry.adjusted(
-            halfSpacing, halfSpacing, -halfSpacing, -halfSpacing);
-        // Three font-sized lines, a preview/text gap, and bottom padding.
+            horizontalInset, halfSpacing, -horizontalInset, -halfSpacing);
+        // Two font-sized lines, a preview/text gap, and bottom padding.
         // Keep row pitch uniform; filenames never cause per-entry relayout.
-        const qreal labelHeight = 3 * gridLabelLineHeight + 3 + 4;
         const qreal topPadding = qMin<qreal>(8, qMax<qreal>(0, inner.height() - 1));
         return QRectF(inner.left(), inner.top() + topPadding, inner.width(),
-                      qMax<qreal>(1, inner.height() - topPadding - labelHeight));
+                      qMax<qreal>(1, inner.height() - topPadding - labelHeight - 4));
     }
     const qreal side = qMax<qreal>(
         1, qMin(geometry.height() - spacing,
@@ -374,16 +430,23 @@ QVector<int> GalleryFixedLayoutPlan::indexesIntersecting(
 
     for (const GalleryLayoutSection &section : sections) {
         const qreal sectionTop = insets.top + section.contentOffset;
-        const qreal sectionBottom = sectionTop
-            + (section.title.isEmpty() ? 0 : groupHeaderHeight)
-            + section.primaryCells * extent;
+        const qreal sectionBottom = sectionTop + section.contentExtent;
         if (sectionBottom < start || sectionTop > end) {
             continue;
         }
         const qreal itemTop = sectionTop
             + (section.title.isEmpty() ? 0 : groupHeaderHeight);
-        int firstRow = int(std::floor((start - itemTop) / extent));
-        int lastRow = int(std::floor((end - itemTop) / extent));
+        int firstRow;
+        int lastRow;
+        if (!iconRowTops.isEmpty()) {
+            const auto first = iconRowTops.cbegin() + section.firstIconRow;
+            const auto last = first + section.primaryCells;
+            firstRow = qMax(0, int(std::upper_bound(first, last, start) - first) - 1);
+            lastRow = qMax(0, int(std::upper_bound(first, last, end) - first) - 1);
+        } else {
+            firstRow = int(std::floor((start - itemTop) / extent));
+            lastRow = int(std::floor((end - itemTop) / extent));
+        }
         firstRow = qBound(0, firstRow, qMax(0, section.primaryCells - 1));
         lastRow = qBound(0, lastRow, qMax(0, section.primaryCells - 1));
         if (lastRow < firstRow || section.primaryCells <= 0) {
@@ -513,6 +576,10 @@ GalleryFixedLayoutPlan UniformGridStrategy::analyticalPlan(
     GalleryFixedLayoutPlan result;
     result.mode = request.mode;
     result.gridLabelLineHeight = qMax<qreal>(1, request.gridLabelLineHeight);
+    result.cellHorizontalPadding = request.cellHorizontalPadding;
+    result.cellVerticalPadding = request.cellVerticalPadding;
+    result.cellCaptionSpacing = request.cellCaptionSpacing;
+    result.devicePixelRatio = request.devicePixelRatio;
     result.entryCount = qMax(0, entryCount);
     result.columns = uniformColumnCount(request);
     result.rowsPerColumn = 1;
@@ -549,12 +616,17 @@ GalleryLayoutResult UniformGridStrategy::layout(
         const int rowCount = (entries.size() + plan.columns - 1)
             / plan.columns;
         QVector<qreal> rowHeights(rowCount, plan.cellWidth);
+        const qreal verticalPadding = request.cellVerticalPadding < 0 ? 0
+            : qRound64(request.cellVerticalPadding * plan.devicePixelRatio) / plan.devicePixelRatio;
+        const qreal labelSpacing = request.cellVerticalPadding < 0 ? 6
+            : 2 * verticalPadding + qRound64(request.cellCaptionSpacing * plan.devicePixelRatio)
+                / plan.devicePixelRatio;
         const qreal previewHeight = qMax<qreal>(
-            1, plan.cellWidth - 3 - oneLineHeight - 3);
+            1, plan.cellWidth - labelSpacing - oneLineHeight);
         for (int index = 0; index < entries.size(); ++index) {
             const int row = index / plan.columns;
-            const qreal required = previewHeight + 3
-                + qMax(oneLineHeight, entries.at(index).labelHeight) + 3;
+            const qreal required = previewHeight + labelSpacing
+                + qMax(oneLineHeight, entries.at(index).labelHeight);
             rowHeights[row] = qMax(rowHeights[row], required);
         }
         QVector<qreal> rowTops(rowCount, request.insets.top);
@@ -568,9 +640,11 @@ GalleryLayoutResult UniformGridStrategy::layout(
             cell.geometry = QRectF(cell.column * plan.cellWidth,
                                    rowTops[cell.row], plan.cellWidth,
                                    rowHeights[cell.row]);
+            const qreal inset = request.cellHorizontalPadding < 0 ? 0
+                : PixelGrid::cellHorizontalInset(plan.cellWidth, request.cellHorizontalPadding, request.devicePixelRatio);
             cell.previewGeometry = QRectF(
-                cell.geometry.x(), cell.geometry.y(),
-                plan.cellWidth, previewHeight);
+                cell.geometry.x() + inset, cell.geometry.y() + verticalPadding,
+                plan.cellWidth - 2 * inset, previewHeight);
             cell.displayLabel = entries.at(index).displayLabel;
         }
     } else {
@@ -602,7 +676,10 @@ GalleryLayoutResult JustifiedMasonryStrategy::layout(
 
     const qreal width = canvasWidth(request);
     const qreal targetHeight = qMax<qreal>(1, request.density);
-    const qreal spacing = request.spacing;
+    const qreal spacing = request.cellVerticalPadding < 0 ? request.spacing
+        : 2 * PixelGrid::cellVerticalInset(targetHeight, request.cellVerticalPadding, request.devicePixelRatio);
+    const qreal horizontalSpacing = request.cellHorizontalPadding < 0 ? spacing
+        : 2 * PixelGrid::cellHorizontalInset(width, request.cellHorizontalPadding, request.devicePixelRatio);
     int currentRow = 0;
     int currentColumn = 0;
     qreal lastX = 0;
@@ -612,12 +689,12 @@ GalleryLayoutResult JustifiedMasonryStrategy::layout(
         const GalleryLayoutEntry &entry = entries.at(index);
         GalleryLayoutCell &cell = result.cells[index];
         QSizeF size = masonryEntrySize(
-            entry, width, targetHeight, spacing);
+            entry, width, targetHeight, spacing, horizontalSpacing);
         cell.row = currentRow;
         cell.column = currentColumn;
         cell.geometry = QRectF(lastX, lastY, size.width(), size.height());
         cell.previewGeometry = cell.geometry.adjusted(
-            spacing / 2, spacing / 2, -spacing / 2, -spacing / 2);
+            horizontalSpacing / 2, spacing / 2, -horizontalSpacing / 2, -spacing / 2);
 
         bool lineBreak = false;
         if (index > 0) {
@@ -633,16 +710,16 @@ GalleryLayoutResult JustifiedMasonryStrategy::layout(
                 && request.lastRowMatchesPrevious) {
                 matchFinalMasonryRow(
                     result.cells, entries, width, targetHeight,
-                    spacing, index, currentRow, lastY);
+                    spacing, horizontalSpacing, index, currentRow, lastY);
             }
         } else if (currentColumn == 0) {
             if (!entry.originalSize.isEmpty()) {
                 size = scaleToWidthWithSpacing(
-                    entry.originalSize, width, spacing);
+                    entry.originalSize, width, spacing, horizontalSpacing);
                 cell.geometry.setSize(size);
                 cell.previewGeometry = cell.geometry.adjusted(
-                    spacing / 2, spacing / 2,
-                    -spacing / 2, -spacing / 2);
+                    horizontalSpacing / 2, spacing / 2,
+                    -horizontalSpacing / 2, -spacing / 2);
             }
             ++currentRow;
             currentColumn = -1;
@@ -654,7 +731,7 @@ GalleryLayoutResult JustifiedMasonryStrategy::layout(
             const qreal rowHeight = request.singleRow
                 ? targetHeight
                 : scaleMasonryRow(result.cells, entries, width,
-                                   targetHeight, spacing, index - 1);
+                                   targetHeight, spacing, horizontalSpacing, index - 1);
             ++currentRow;
             currentColumn = -1;
             lastX = 0;

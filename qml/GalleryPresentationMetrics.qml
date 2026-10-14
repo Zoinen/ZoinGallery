@@ -6,6 +6,9 @@ QtObject {
     property string panelFontFamily: ""
     property real panelFontPixelSize: 13
     property real columnPadding: 8
+    property real cellHorizontalPadding: 4
+    property real cellVerticalPadding: 4
+    property real cellCaptionSpacing: 3
     property real detailsRowInset: columnPadding
     property real detailsRowSpacing: columnPadding
     property real detailsIconSlotSize: 18

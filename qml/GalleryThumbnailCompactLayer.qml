@@ -24,8 +24,10 @@ Item {
             Math.max(1, Math.round(width * layer.entry.renderDpr)),
             Math.max(1, Math.round(height * layer.entry.renderDpr)))
         fillMode: Image.PreserveAspectFit
+        verticalAlignment: layer.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
         asynchronous: false
         cache: false
+        retainWhileLoading: true
         smooth: true
         visible: source.toString() !== ""
     }

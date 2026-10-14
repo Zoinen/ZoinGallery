@@ -16,7 +16,7 @@ Item {
     }
     readonly property real dpr: entry.renderDpr
     readonly property real outerSpacing: panelRoot.itemSpacing
-    readonly property real contentMargin: snap(outerSpacing / 2)
+    readonly property real contentMargin: entry.cellVerticalInset
     readonly property real folderTopOffset: snap(Math.round(width / 20))
     readonly property bool darkTheme: Qt.styleHints.colorScheme !== Qt.Light
     readonly property color folderColor: darkTheme ? "#397db1" : "#397db2"
@@ -37,14 +37,18 @@ Item {
         return preview.mapToItem(null, dependency * 0, dependency * 0)
     }
     function snap(value) { return Math.round(value * dpr) / dpr }
+    FontMetrics {
+        id: captionMetrics
+        font: preview.panelRoot.iconLabelFont
+    }
 
     Item {
         id: content
         opacity: preview.hasUsablePreview ? 1 : 0
-        x: preview.snap(preview.sceneOrigin.x + preview.contentMargin) - preview.sceneOrigin.x
-        y: preview.snap(preview.sceneOrigin.y + preview.contentMargin
-                        + (preview.entry.gridMode ? 8 : 0)) - preview.sceneOrigin.y
-        width: Math.max(0, preview.snap(preview.width - x - preview.contentMargin))
+        x: preview.snap(preview.sceneOrigin.x + preview.entry.cellHorizontalInset) - preview.sceneOrigin.x
+        y: preview.snap(preview.sceneOrigin.y + preview.entry.effectivePreviewRect.y)
+           - preview.sceneOrigin.y
+        width: preview.entry.cellContentWidth
         height: Math.max(0, preview.snap(preview.height - y - preview.contentMargin))
         Rectangle {
             id: tab
@@ -56,10 +60,17 @@ Item {
         }
         Rectangle {
             id: frame
+            GalleryLayoutDebugZone {
+                objectName: "folderPreviewFrameZone"
+                visible: preview.entry.debugLayoutZones
+                zone: "preview"
+            }
             objectName: "folderPreviewFrame"
             y: preview.folderTopOffset
             width: content.width
-            height: Math.max(0, content.height - y - title.height - preview.snap(preview.outerSpacing))
+            height: preview.entry.iconsMode
+                    ? Math.max(0, preview.snap(preview.entry.effectivePreviewRect.height - y))
+                    : Math.max(0, content.height - y - title.height - preview.entry.cellCaptionSpacing)
             radius: 4
             color: preview.folderColor
             Rectangle {
@@ -74,24 +85,50 @@ Item {
         }
         Text {
             id: title
+            GalleryLayoutDebugZone {
+                objectName: "folderPreviewTitleZone"
+                visible: preview.entry.debugLayoutZones
+            }
             objectName: "folderPreviewTitle"
-            x: preview.contentMargin
-            y: content.height - height - preview.contentMargin
-            width: Math.max(0, content.width - preview.contentMargin * 2)
-            height: preview.snap(implicitHeight)
+            // Use tile-relative padding, not another inset inside the folder frame.
+            x: preview.snap(preview.sceneOrigin.x + preview.entry.cellHorizontalInset)
+               - preview.sceneOrigin.x - content.x
+            y: preview.entry.gridMode || preview.entry.iconsMode
+               ? preview.snap(preview.sceneOrigin.y + preview.entry.effectivePreviewRect.y
+                              + preview.entry.effectivePreviewRect.height + preview.entry.cellCaptionSpacing)
+                 - preview.sceneOrigin.y - content.y
+               : preview.snap(preview.sceneOrigin.y + content.y + content.height
+                              - height)
+                 - preview.sceneOrigin.y - content.y
+            width: preview.entry.cellContentWidth
+            height: preview.entry.gridMode
+                    ? preview.snap(2 * Math.ceil(captionMetrics.height))
+                    : preview.entry.iconsMode
+                      ? Math.max(0, Math.floor((preview.entry.height
+                          - content.y - y - preview.contentMargin + 0.000001)
+                          * preview.dpr) / preview.dpr)
+                    : preview.snap(implicitHeight)
             text: preview.entry.folderPreviewRequested
-                ? preview.panelRoot.quickSearchFormatter.styledText(preview.entry.effectiveDisplayName, preview.entry.entryId, 0) : ""
+                ? (preview.entry.gridMode || preview.entry.iconsMode
+                   ? preview.panelRoot.quickSearchFormatter.styledElidedText(preview.entry.iconLabelText, preview.entry.effectiveDisplayName, preview.entry.entryId)
+                   : preview.panelRoot.quickSearchFormatter.styledText(preview.entry.effectiveDisplayName, preview.entry.entryId, 0)) : ""
             textFormat: preview.panelRoot.quickSearchFormatter.matchForEntry(preview.entry.entryId) ? Text.StyledText : Text.PlainText
             color: preview.entry.itemTextColor
-            font: preview.entry.gridMode ? preview.panelRoot.iconLabelFont : Qt.application.font
+            font: preview.entry.gridMode || preview.entry.iconsMode ? preview.panelRoot.iconLabelFont : Qt.application.font
             horizontalAlignment: Text.AlignHCenter
-            maximumLineCount: preview.entry.gridMode ? 3 : 2
-            wrapMode: Text.Wrap
-            elide: Text.ElideRight
+            maximumLineCount: preview.entry.iconsMode ? 4 : 2
+            wrapMode: preview.entry.iconsMode ? Text.WrapAnywhere : Text.Wrap
+            elide: preview.entry.iconsMode ? Text.ElideNone : Text.ElideRight
             verticalAlignment: Text.AlignTop
         }
         Loader {
             id: gridLoader
+            GalleryLayoutDebugZone {
+                objectName: "folderPreviewThumbnailsZone"
+                visible: preview.entry.debugLayoutZones
+                color: "#22cc77ee"
+                border.color: "#aacc77ee"
+            }
             objectName: "folderPreviewGridLoader"
             asynchronous: true
             active: preview.entry.folderPreviewRequested && Boolean(preview.childModel)

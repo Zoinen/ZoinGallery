@@ -221,6 +221,7 @@ set(ZOIN_CORE_SOURCES
     MasonryLayout.cpp
     MasonryLayoutDelegateCommit.cpp
     MasonryLayoutGeometry.cpp
+    MasonryLayoutIconCaptions.cpp
     MasonryLayoutModelDelta.cpp
     MasonryLayoutModelReset.cpp
     MasonryLayoutNavigation.cpp
@@ -723,6 +724,7 @@ if(BUILD_TESTING)
         add_test(NAME ${_zoin_visual_test}
             COMMAND ZoinGalleryMasonryLayoutModesTests
                 folderPreviewGridAndPixels
+                graphicalCellPaddingIsSharedByFilesAndFolderPreviews
                 panelThemeColorsUpdateLiveAfterConstruction
                 presentationSwitchInstantlyRevealsStableCurrentItem
                 settledCursorUsesPhysicalPixelGridButAnimationsStaySmooth
@@ -946,6 +948,7 @@ set(ZOIN_QML_FILES
     qml/ColumnsEntryDelegate.qml
     qml/DetailsEntryDelegate.qml
     qml/GridEntryDelegate.qml
+    qml/GalleryLayoutDebugZone.qml
     qml/IconsEntryDelegate.qml
       qml/GalleryViewer.qml
       qml/GalleryViewerOsd.qml

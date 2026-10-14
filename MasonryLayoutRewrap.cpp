@@ -241,6 +241,7 @@ void MasonryLayout::rewrapFixed(bool animate, RewrapTrace *trace)
     const bool preserve = std::exchange(
         _preserveViewportAnchorForNextRewrap, false);
     const ViewportAnchor anchor = fixedViewportAnchor(preserve);
+    prepareIconCaptionMetrics();
     const ZoinGallery::GalleryFixedLayoutPlan plan = fixedLayoutPlan();
     updateFixedContentExtent(plan);
     trace->extentCompletedNs = trace->enabled
@@ -358,10 +359,10 @@ void MasonryLayout::rewrapMasonry(bool animate, qreal currentIndexOffset)
     }
     for (MasonryBrick &brick : _bricks) {
         const QRectF geometry = brick.geometry();
-        brick.previewGeometry = _containedPreview ? geometry : geometry.isValid() && !geometry.isEmpty()
-            ? geometry.adjusted(_spacing / 2.0, _spacing / 2.0,
-                                -_spacing / 2.0, -_spacing / 2.0)
-            : QRectF();
+        if (_containedPreview)
+            brick.previewGeometry = geometry;
+        else if (!geometry.isValid() || geometry.isEmpty())
+            brick.previewGeometry = {};
     }
     rebuildLayoutBands();
     if (_containedPreview) {
@@ -464,13 +465,7 @@ void MasonryLayout::rewrapGroupedMasonry(
             target.row = globalRowBase + qMax(0, source.row);
             target.column = source.column;
             target.temporaryLineBreakAfter = false;
-            target.previewGeometry = target.normalizedSize.isValid()
-                && !target.normalizedSize.isEmpty()
-                ? QRectF(target.x, target.y, target.normalizedSize.width(),
-                         target.normalizedSize.height()).adjusted(
-                             _spacing / 2.0, _spacing / 2.0,
-                             -_spacing / 2.0, -_spacing / 2.0)
-                : QRectF();
+            target.previewGeometry = source.previewGeometry.translated(0, origin + header);
             extent = qMax(extent,
                           source.y + source.normalizedSize.height());
             localRows = qMax(localRows, source.row + 1);

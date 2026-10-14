@@ -43,14 +43,31 @@ ZoinGallery::GalleryLayoutRequest MasonryLayout::layoutRequest() const {
     };
     request.density = effectiveTargetExtent();
     request.spacing = _spacing;
+    request.cellHorizontalPadding = _cellHorizontalPadding;
+    request.cellVerticalPadding = _cellVerticalPadding;
+    request.cellCaptionSpacing = _cellCaptionSpacing;
     if (_presentationMode == Grid) {
         request.gridLabelLineHeight =
             ZoinGallery::GalleryIconTextMeasurer(_iconLabelFont).lineHeight();
+    }
+    if (_presentationMode == Icons) {
+        request.iconLabelLineHeight =
+            ZoinGallery::GalleryIconTextMeasurer(_iconLabelFont).lineHeight();
+        request.iconCaptionLineCounts = _iconCaptionLineCounts;
     }
     request.columnCount = _columnCount;
     request.devicePixelRatio = devicePixelRatio();
     request.groupHeaderHeight = _groupHeaderHeight;
     request.groups = _groupRanges;
+    if (_presentationMode == Icons && groupingActive()) {
+        request.groupHeaderHeight = groupHeaderHeight();
+        request.groups.clear();
+        for (int group = 0; group < _groupIndex.groupCount(); ++group) {
+            const auto *descriptor = _groupIndex.descriptor(group);
+            request.groups.append({descriptor->startIndex, descriptor->count,
+                                   descriptor->key, descriptor->title});
+        }
+    }
     if (_presentationMode == Icons || sparseVirtualLayout()) {
         request.iconRowHeight = virtualGridRowHeight();
     }
@@ -186,11 +203,8 @@ void MasonryLayout::observePixelGridAncestors() {
 }
 
 void MasonryLayout::calcFixedLayout() {
-    // Columns, Details, Grid and Icons are fixed layouts. Their geometry is
-    // derived when a viewport row is materialized; a presentation switch
-    // must never rewrite one MasonryBrick per catalog entry. Icons reserve a
-    // uniform four-line label row so wrapping remains bounded and geometry
-    // stays analytical.
+    // Geometry is materialized only for the viewport. Icons keep compact
+    // row metrics separately; no full-catalog brick/delegate rewrite.
 }
 
 bool MasonryLayout::sparseFixedLayout() const {
@@ -221,9 +235,8 @@ qreal MasonryLayout::virtualGridRowHeight() const {
         0, width() - _paddingLeft - _paddingRight);
     const qreal cellWidth = columns > 0
         ? canvasWidth / columns : canvasWidth;
-    // Unknown rows cannot be measured without materializing their catalog
-    // payload. Reserve the same maximum of four wrapped label lines for
-    // every virtual row, keeping all row positions stable as pages arrive.
+    // Maximum pitch for unknown rows. Received captions use the compact
+    // per-row metrics in fixedLayoutPlan instead of this fallback.
     ZoinGallery::GalleryIconTextMeasurer textMeasurer(_iconLabelFont);
     return qMax<qreal>(1.0, cellWidth + 3 * textMeasurer.lineHeight());
 }
@@ -249,25 +262,27 @@ void MasonryLayout::applyVirtualGridGeometry(
     brick.normalizedSize = geometry.size();
 
     if (_presentationMode == Icons) {
-        const qreal labelWidth = qMax<qreal>(1, geometry.width() - 8);
-        const qreal oneLinePreviewHeight = qMax<qreal>(
-            1, geometry.width() - 3
-                - ZoinGallery::GalleryIconTextMeasurer(
-                      _iconLabelFont).lineHeight() - 3);
-        ZoinGallery::GalleryIconTextMeasurer textMeasurer(_iconLabelFont);
-        const QString sourceText = brick.image
-            ? brick.image->text() : brick.modelText;
-        brick.iconLabelText = textMeasurer.layout(
-            sourceText, labelWidth).text;
-        brick.previewGeometry = QRectF(
-            geometry.x(), geometry.y(), geometry.width(),
-            oneLinePreviewHeight);
+        applyIconCaptionGeometry(brick, geometry);
     }
     else {
-        brick.previewGeometry = geometry.adjusted(
-            _spacing / 2.0, _spacing / 2.0,
-            -_spacing / 2.0, -_spacing / 2.0);
+        brick.previewGeometry = plan.previewGeometryForRect(geometry);
     }
+}
+
+void MasonryLayout::applyIconCaptionGeometry(
+    MasonryBrick &brick, const QRectF &geometry) const {
+    const qreal labelWidth = cellCaptionWidth(geometry);
+    const QString sourceText = brick.modelText;
+    const size_t nameHash = qHash(sourceText);
+    if (brick.iconLabelStyleRevision != _iconCaptionStyleRevision
+        || brick.iconLabelNameHash != nameHash || brick.iconLabelWidth != labelWidth) {
+        ZoinGallery::GalleryIconTextMeasurer measurer(_iconLabelFont);
+        brick.iconLabelText = measurer.layout(sourceText, labelWidth).text;
+        brick.iconLabelStyleRevision = _iconCaptionStyleRevision;
+        brick.iconLabelNameHash = nameHash;
+        brick.iconLabelWidth = labelWidth;
+    }
+    brick.previewGeometry = fixedLayoutPlan().previewGeometryForRect(geometry);
 }
 
 void MasonryLayout::rebuildGroupSections(
@@ -333,7 +348,9 @@ void MasonryLayout::rebuildGroupSections(
         const int prefixCount = _groupIndex.descriptor(0)->startIndex;
         const int prefixRows = prefixCount > 0
             ? (prefixCount + columns - 1) / columns : 0;
-        qreal offset = _paddingTop + prefixRows * rowExtent;
+        qreal offset = _presentationMode == Icons && prefixCount > 0
+            ? plan.geometryFor(prefixCount - 1).bottom()
+            : _paddingTop + prefixRows * rowExtent;
         for (int group = 0; group < groupCount; ++group) {
             const auto *descriptor = _groupIndex.descriptor(group);
             const int rows = qMax(1, (descriptor->count + columns - 1)
@@ -343,6 +360,11 @@ void MasonryLayout::rebuildGroupSections(
             section.columns = columns;
             section.rowsPerColumn = rows;
             section.extent = headerExtent + rows * rowExtent;
+            if (_presentationMode == Icons) {
+                const int planSection = plan.sectionIndexFor(descriptor->startIndex);
+                if (planSection >= 0)
+                    section.extent = plan.sections.at(planSection).contentExtent;
+            }
             if (_groupIndex.isCollapsed(group)) {
                 section.extent = headerExtent;
             }
@@ -369,6 +391,14 @@ QRectF MasonryLayout::groupedFixedGeometry(int index) const
     const GroupSection &section = _groupSections.at(group);
     const int local = index - descriptor->startIndex;
     const auto plan = fixedLayoutPlan();
+    if (_presentationMode == Icons) {
+        QRectF geometry = plan.geometryFor(index);
+        const int planSection = plan.sectionIndexFor(index);
+        if (planSection < 0) return {};
+        geometry.translate(0, section.offset - _paddingTop
+            - plan.sections.at(planSection).contentOffset);
+        return geometry;
+    }
     if (_presentationMode == Columns) {
         const int rows = qMax(1, section.rowsPerColumn);
         const int column = local / rows;
@@ -529,6 +559,8 @@ void MasonryLayout::applyAnalyticFixedGeometry(
             brick.y = geometry.y();
             brick.normalizedSize = geometry.size();
             brick.previewGeometry = groupedFixedPreviewGeometry(index);
+            if (_presentationMode == Icons)
+                applyIconCaptionGeometry(brick, geometry);
             return;
         }
     }
@@ -688,7 +720,7 @@ QList<int> MasonryLayout::indexesForVerticalRange(
             ? _groupIndex.descriptor(0)->startIndex : 0;
         const bool virtualRows = _presentationMode == Icons
             || (_presentationMode == Masonry && _sparseCatalogRows);
-        if (virtualRows) {
+        if (virtualRows && _presentationMode != Icons) {
             const QRectF range(0, top, width(), bottom - top);
             for (int index = 0; index < prefixCount; ++index) {
                 if (virtualGridGeometry(index).intersects(range)) {
@@ -712,6 +744,18 @@ QList<int> MasonryLayout::indexesForVerticalRange(
                 continue;
             }
             const auto *descriptor = _groupIndex.descriptor(group);
+            if (_presentationMode == Icons) {
+                const int planSection = plan.sectionIndexFor(descriptor->startIndex);
+                if (planSection < 0) continue;
+                const qreal translation = _paddingTop
+                    + plan.sections.at(planSection).contentOffset - section.offset;
+                for (const int index : plan.indexesIntersecting(top + translation, bottom + translation)) {
+                    if (index >= descriptor->startIndex
+                        && index < descriptor->startIndex + descriptor->count
+                        && indexGeometry(index).intersects(range)) result.append(index);
+                }
+                continue;
+            }
             const bool virtualRows = _presentationMode == Icons
                 || (_presentationMode == Masonry && _sparseCatalogRows);
             const qreal rowExtent = virtualRows ? virtualGridRowHeight()

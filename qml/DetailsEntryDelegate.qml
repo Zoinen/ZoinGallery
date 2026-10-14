@@ -46,6 +46,7 @@ Item {
 
         Text {
             id: baseNameText
+            GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             font.family: content.entry.panelRoot.metrics.panelFontFamily
             objectName: "galleryBaseName-" + content.entry.viewIndex
             x: content.snap(detailsIconSlot.x + detailsIconSlot.width
@@ -83,6 +84,7 @@ Item {
 
         Text {
             id: extensionText
+            GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             font.family: content.entry.panelRoot.metrics.panelFontFamily
             objectName: "galleryExtension-" + content.entry.viewIndex
             x: content.snap(content.entry.panelRoot.fileFieldPresentationHelper.detailsColumnX(1)
@@ -113,6 +115,7 @@ Item {
 
             delegate: Text {
                 id: detailsFieldText
+                GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
                 font.family: content.entry.panelRoot.metrics.panelFontFamily
                 required property int index
                 required property var modelData
@@ -147,6 +150,7 @@ Item {
 
         Text {
             id: sizeText
+            GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             font.family: content.entry.panelRoot.metrics.panelFontFamily
             objectName: "gallerySize-" + content.entry.viewIndex
             x: content.snap(content.entry.panelRoot.fileFieldPresentationHelper.detailsColumnX(1)

@@ -110,6 +110,11 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _quickSearch = new MasonryLayoutQuickSearch(this);
 }
 
+MasonryLayout::~MasonryLayout() {
+    if (_iconCaptionCancelled)
+        _iconCaptionCancelled->store(true, std::memory_order_relaxed);
+}
+
 void MasonryLayout::componentComplete() {
     QQuickItem::componentComplete();
     observePixelGridAncestors();
@@ -512,6 +517,11 @@ void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int
                                bool lastRowMatchesPrevious, qreal paddingTop, CalcLayoutMode layoutMode) {
     if (layoutMode == CalcLayoutGrid) {
         calcGridLayout(bricks, canvasWidth, rowTargetHeight, spacing, lastRowMatchesPrevious, paddingTop);
+        for (MasonryBrick &brick : bricks) {
+            const qreal inset = _cellHorizontalPadding < 0 ? spacing / 2.0
+                : ZoinGallery::PixelGrid::cellHorizontalInset(brick.normalizedSize.width(), _cellHorizontalPadding, devicePixelRatio());
+            brick.previewGeometry = brick.geometry().adjusted(inset, spacing / 2.0, -inset, -spacing / 2.0);
+        }
         return;
     }
 
@@ -521,6 +531,10 @@ void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int
     request.insets.top = paddingTop;
     request.density = rowTargetHeight;
     request.spacing = spacing;
+    request.cellHorizontalPadding = _containedPreview ? -1 : _cellHorizontalPadding;
+    request.cellVerticalPadding = _containedPreview ? -1 : _cellVerticalPadding;
+    request.cellCaptionSpacing = _containedPreview ? 3 : _cellCaptionSpacing;
+    request.devicePixelRatio = devicePixelRatio();
     request.lastRowMatchesPrevious = lastRowMatchesPrevious;
     request.singleRow = layoutMode == CalcLayoutSingleRow;
 
@@ -542,6 +556,7 @@ void MasonryLayout::calcLayout(QList<MasonryBrick> &bricks, int canvasWidth, int
         brick.x = cell.geometry.x();
         brick.y = cell.geometry.y();
         brick.normalizedSize = cell.geometry.size();
+        brick.previewGeometry = cell.previewGeometry;
         brick.row = cell.row;
         brick.column = cell.column;
         brick.temporaryLineBreakAfter = false;

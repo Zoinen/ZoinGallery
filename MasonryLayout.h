@@ -12,6 +12,7 @@
 #include <QVector>
 
 #include <atomic>
+#include <memory>
 
 #include "GalleryDelegateItem.h"
 #include "GalleryDelegatePool.h"
@@ -54,6 +55,7 @@ class MasonryLayout : public QQuickItem {
     // to reject presentation changes which populate a disposable viewport
     // before committing the final anchored one.
     Q_PROPERTY(quint64 delegateCommitRevision READ delegateCommitRevision)
+    Q_PROPERTY(quint64 iconCaptionMeasurementCount READ iconCaptionMeasurementCount)
     Q_PROPERTY(int targetHeight READ targetHeight WRITE setTargetHeight NOTIFY targetHeightChanged)
     Q_PROPERTY(qreal contentY READ contentY WRITE setContentY NOTIFY contentYChanged)
     Q_PROPERTY(qreal contentHeight READ contentHeight NOTIFY contentHeightChanged)
@@ -84,6 +86,9 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(bool containedPreview READ containedPreview WRITE setContainedPreview NOTIFY containedPreviewChanged)
     Q_PROPERTY(qreal devicePixelRatio READ devicePixelRatio WRITE setDevicePixelRatio NOTIFY devicePixelRatioChanged)
     Q_PROPERTY(QFont iconLabelFont READ iconLabelFont WRITE setIconLabelFont NOTIFY iconLabelFontChanged)
+    Q_PROPERTY(qreal cellHorizontalPadding READ cellHorizontalPadding WRITE setCellHorizontalPadding NOTIFY cellHorizontalPaddingChanged)
+    Q_PROPERTY(qreal cellVerticalPadding READ cellVerticalPadding WRITE setCellVerticalPadding NOTIFY cellVerticalPaddingChanged)
+    Q_PROPERTY(qreal cellCaptionSpacing READ cellCaptionSpacing WRITE setCellCaptionSpacing NOTIFY cellCaptionSpacingChanged)
     // Embedders which hide a path-replacement transaction may stage delegate
     // rebinding in the polish pass. Geometry, hit testing and the current model
     // still change synchronously; only QML visual-slot population moves to the
@@ -117,6 +122,7 @@ public:
     Q_ENUM(NavigationDirection)
 
     explicit MasonryLayout(QQuickItem *parent = nullptr);
+    ~MasonryLayout() override;
     void componentComplete() override;
     void itemChange(ItemChange change, const ItemChangeData &data) override;
     QPointF parentPixelGridOffset() const { return _parentPixelGridOffset; }
@@ -274,7 +280,14 @@ public:
     qreal devicePixelRatio() const;
     void setDevicePixelRatio(qreal value);
     QFont iconLabelFont() const;
+    qreal cellHorizontalPadding() const { return _cellHorizontalPadding; }
+    void setCellHorizontalPadding(qreal padding);
+    qreal cellVerticalPadding() const { return _cellVerticalPadding; }
+    void setCellVerticalPadding(qreal padding);
+    qreal cellCaptionSpacing() const { return _cellCaptionSpacing; }
+    void setCellCaptionSpacing(qreal spacing);
     void setIconLabelFont(const QFont &font);
+    quint64 iconCaptionMeasurementCount() const { return _iconCaptionMeasurementCount; }
     bool deferDelegateRefreshOnReset() const;
     void setDeferDelegateRefreshOnReset(bool defer);
 
@@ -339,6 +352,9 @@ signals:
     void parentPixelGridOffsetChanged();
     void viewportSceneOriginChanged();
     void iconLabelFontChanged();
+    void cellHorizontalPaddingChanged();
+    void cellVerticalPaddingChanged();
+    void cellCaptionSpacingChanged();
     void deferDelegateRefreshOnResetChanged();
 
 private slots:
@@ -366,6 +382,9 @@ private:
         int globalIndex = -1;
         QRectF previewGeometry;
         QString iconLabelText;
+        quint64 iconLabelStyleRevision = 0;
+        size_t iconLabelNameHash = 0;
+        qreal iconLabelWidth = 0;
         QSize lastPlannedTargetSize;
         QString lastPlannedTransformKey;
         QString lastPlannedSourcePath;
@@ -427,6 +446,8 @@ private:
     void traceFixedRewrap(const RewrapTrace &trace) const;
     bool applyPreparedResetViewport();
     void calcFixedLayout();
+    void prepareIconCaptionMetrics();
+    void invalidateIconCaptionMetrics();
     ZoinGallery::GalleryLayoutRequest layoutRequest() const;
     ZoinGallery::GalleryFixedLayoutPlan fixedLayoutPlan() const;
     bool sparseFixedLayout() const;
@@ -440,6 +461,8 @@ private:
     qreal virtualGridRowHeight() const;
     QRectF virtualGridGeometry(int index) const;
     void applyVirtualGridGeometry(MasonryBrick &brick, int index) const;
+    void applyIconCaptionGeometry(MasonryBrick &brick, const QRectF &geometry) const;
+    qreal cellCaptionWidth(const QRectF &geometry) const;
     bool groupingActive() const;
     void rebuildGroupSections(
         const ZoinGallery::GalleryFixedLayoutPlan &plan);
@@ -512,7 +535,7 @@ private:
                                   CalcLayoutMode layoutMode);
     static void calcGridLayout(QList<MasonryBrick> &bricks, int canvasWidth, int rowTargetHeight, int spacing,
                            bool lastRowMatchesPrevious, qreal paddingTop);
-    static void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth,
+    void calcLayout(QList<MasonryBrick> &bricks, int canvasWidth,
                            int rowTargetHeight, int spacing,
                            bool lastRowMatchesPrevious, qreal paddingTop,
                            CalcLayoutMode layoutMode);
@@ -752,6 +775,19 @@ private:
     qreal _dp;
     qreal _devicePixelRatioOverride = 0;
     QFont _iconLabelFont;
+    qreal _cellHorizontalPadding = -1;
+    qreal _cellVerticalPadding = -1;
+    qreal _cellCaptionSpacing = 3;
+    QFont _measuredIconFont;
+    qreal _measuredIconCellWidth = 0;
+    qreal _measuredIconDpr = 0;
+    QByteArray _iconCaptionLineCounts;
+    QVector<size_t> _iconCaptionNameHashes;
+    bool _iconCaptionMetricsDirty = true;
+    quint64 _iconCaptionGeneration = 0;
+    quint64 _iconCaptionStyleRevision = 1;
+    quint64 _iconCaptionMeasurementCount = 0;
+    std::shared_ptr<std::atomic_bool> _iconCaptionCancelled;
     bool _listView;
     int _imageCount;
     int _currentImageIndex;

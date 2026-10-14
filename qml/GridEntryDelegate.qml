@@ -7,29 +7,33 @@ Item {
     required property GalleryEntryDelegateBase entry
     readonly property Item previewHost: null
     readonly property real paintedHeight: height
+    FontMetrics {
+        id: captionMetrics
+        font: content.entry.panelRoot.iconLabelFont
+    }
 
     Text {
         id: label
+        GalleryLayoutDebugZone {
+            objectName: "galleryGridTextZone-" + content.entry.viewIndex
+            visible: content.entry.debugLayoutZones
+        }
         readonly property var quickSearchMatch:
             content.entry.panelRoot.quickSearchFormatter.matchForEntry(
                 content.entry.entryId)
         readonly property point pixelCorrection:
             content.entry.iconPixelOffset(label)
         objectName: "galleryGridLabel-" + content.entry.viewIndex
-        x: 4
+        x: content.entry.cellHorizontalInset
         y: content.entry.effectivePreviewRect.y
-           + content.entry.effectivePreviewRect.height + 3
-        width: Math.max(0, Math.round((parent.width - 8)
-                                      * content.entry.renderDpr)
-                              / content.entry.renderDpr)
-        height: Math.max(0, Math.floor((parent.height - y - 4 - content.entry.panelRoot.itemSpacing / 2)
-                                      * content.entry.renderDpr)
-                               / content.entry.renderDpr)
-        text: quickSearchMatch
-              ? content.entry.panelRoot.quickSearchFormatter.styledTextForMatch(
-                    content.entry.effectiveDisplayName,
-                    quickSearchMatch, 0)
-              : content.entry.effectiveDisplayName
+           + content.entry.effectivePreviewRect.height + content.entry.cellCaptionSpacing
+        width: content.entry.cellContentWidth
+        height: Math.round(2 * Math.ceil(captionMetrics.height)
+                           * content.entry.renderDpr) / content.entry.renderDpr
+        text: content.entry.panelRoot.quickSearchFormatter.styledElidedText(
+                  content.entry.iconLabelText,
+                  content.entry.effectiveDisplayName,
+                  content.entry.entryId)
         textFormat: quickSearchMatch ? Text.StyledText : Text.PlainText
         font: content.entry.panelRoot.iconLabelFont
         color: content.entry.hiddenEntry
@@ -40,10 +44,10 @@ Item {
                : content.entry.itemTextColor
         elide: Text.ElideRight
         wrapMode: Text.Wrap
-        maximumLineCount: 3
+        maximumLineCount: 2
         clip: true
         horizontalAlignment: Text.AlignHCenter
-        verticalAlignment: Text.AlignVCenter
+        verticalAlignment: Text.AlignTop
         transform: Translate {
             x: label.pixelCorrection.x
             y: label.pixelCorrection.y

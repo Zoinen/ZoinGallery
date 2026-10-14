@@ -51,9 +51,12 @@ Item {
             ? layer.height
             : Math.min(layer.height, layer.width / textureAspect)
         x: (layer.width - width) / 2
-        y: (layer.height - height) / 2
-        width: fittedWidth
-        height: fittedHeight
+        y: layer.entry.iconsMode ? layer.height - height : (layer.height - height) / 2
+        width: Math.round(fittedWidth * layer.entry.renderDpr) / layer.entry.renderDpr
+        height: Math.round(fittedHeight * layer.entry.renderDpr) / layer.entry.renderDpr
+        readonly property point pixelCorrection:
+            layer.entry.iconPixelOffset(thumbnailShader)
+        transform: Translate { x: thumbnailShader.pixelCorrection.x; y: thumbnailShader.pixelCorrection.y }
         property var source: sourceImage
         property size viewportSize: Qt.size(
             width * layer.entry.renderDpr,

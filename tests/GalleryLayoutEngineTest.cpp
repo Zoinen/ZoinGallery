@@ -21,7 +21,12 @@ private slots:
     void groupedColumnsReserveAHeaderAcrossTheirBlock();
     void groupedIconsUseTheirVirtualRowHeight();
     void iconsGrowOnlyRowsThatNeedWrappedLabels();
+    void iconPlanUsesCompactRowMetricsAndBinaryRangeSearch();
+    void iconPlanTenThousandEntriesBenchmark();
     void masonryJustifiesCompletedRows();
+    void graphicalCellPaddingKeepsPreviewsAndAspectRatios();
+    void graphicalCellPaddingLeavesCompactModesUnchanged();
+    void captionSpacingReservesSpaceWithoutChangingCompactModes();
     void densityPolicyIsPresentationSpecific();
     void geometryIndexBuildsOneSortedActiveBandSet();
     void delegatePoolRetainsOnlyClaimedViewportSlots();
@@ -152,7 +157,7 @@ void GalleryLayoutEngineTest::gridReservesFontSizedLabelsAndTopPadding() {
         const QRectF preview = plan.previewGeometryFor(0);
         QCOMPARE(cell.height(), 160.0);
         QCOMPARE(preview.top() - cell.top(), 12.0);
-        QCOMPARE(cell.bottom() - preview.bottom(), 3 * lineHeight + 11);
+        QCOMPARE(cell.bottom() - preview.bottom(), 2 * lineHeight + 11);
         QCOMPARE(plan.previewGeometryFor(4).size(), preview.size());
         QVERIFY(cell.contains(preview));
     }
@@ -227,6 +232,50 @@ void GalleryLayoutEngineTest::iconsGrowOnlyRowsThatNeedWrappedLabels() {
              result.cells.at(0).geometry.bottom());
 }
 
+void GalleryLayoutEngineTest::iconPlanUsesCompactRowMetricsAndBinaryRangeSearch() {
+    GalleryLayoutRequest request;
+    request.mode = GalleryPresentationMode::Icons;
+    request.viewportSize = QSizeF(400, 400);
+    request.density = 100;
+    request.iconLabelLineHeight = 16;
+    request.iconCaptionLineCounts = QByteArray(12, 1);
+    request.iconCaptionLineCounts[1] = 4;
+    request.iconCaptionLineCounts[8] = 0;
+    const auto plan = GalleryLayoutEngine::fixedPlan(request, 12);
+    QCOMPARE(plan.iconRowHeights, QVector<qreal>({148, 100, 148}));
+    QCOMPARE(plan.geometryFor(0), QRectF(0, 0, 100, 148));
+    QCOMPARE(plan.geometryFor(4), QRectF(0, 148, 100, 100));
+    QCOMPARE(plan.previewGeometryFor(0).height(), 78.0);
+    QCOMPARE(plan.previewGeometryFor(8).height(), 78.0);
+    QCOMPARE(plan.indexesIntersecting(149, 247), QVector<int>({4, 5, 6, 7}));
+    request.groupHeaderHeight = 20;
+    request.groups = {{.start = 4, .count = 8, .key = "group", .title = "Group"}};
+    const auto grouped = GalleryLayoutEngine::fixedPlan(request, 12);
+    QCOMPARE(grouped.groupHeaders.first().geometry.top(), 148.0);
+    QCOMPARE(grouped.geometryFor(4).top(), 168.0);
+    QCOMPARE(grouped.contentExtent, 416.0);
+}
+
+void GalleryLayoutEngineTest::iconPlanTenThousandEntriesBenchmark() {
+    GalleryLayoutRequest request;
+    request.mode = GalleryPresentationMode::Icons;
+    request.viewportSize = QSizeF(1001, 800);
+    request.density = 96;
+    request.iconLabelLineHeight = 16;
+    request.iconCaptionLineCounts = QByteArray(10000, 1);
+    for (int index = 0; index < 10000; index += 7)
+        request.iconCaptionLineCounts[index] = 4;
+    QElapsedTimer timer;
+    timer.start();
+    for (int pass = 0; pass < 1000; ++pass) {
+        const auto plan = GalleryLayoutEngine::fixedPlan(request, 10000);
+        QVERIFY(plan.indexesIntersecting(10000, 10800).size() < 100);
+        QCOMPARE(plan.iconRowTops.size(), 1000);
+    }
+    qInfo() << "Icons geometry 10000 entries average ms="
+            << timer.nsecsElapsed() / 1000000000.0;
+}
+
 void GalleryLayoutEngineTest::masonryJustifiesCompletedRows() {
     GalleryLayoutRequest request;
     request.mode = GalleryPresentationMode::Masonry;
@@ -255,6 +304,114 @@ void GalleryLayoutEngineTest::masonryJustifiesCompletedRows() {
              qPrintable(QStringLiteral("row right=%1 %2")
                             .arg(last.right(), 0, 'f', 6)
                             .arg(geometryText)));
+}
+
+void GalleryLayoutEngineTest::graphicalCellPaddingKeepsPreviewsAndAspectRatios() {
+    GalleryLayoutRequest request;
+    request.viewportSize = QSizeF(640, 400);
+    request.density = 100;
+    request.spacing = 8;
+    request.devicePixelRatio = 1.75;
+    request.iconRowHeight = 120;
+    request.iconLabelLineHeight = 16;
+    request.iconCaptionLineCounts = QByteArray(12, 2);
+    request.lastRowMatchesPrevious = true;
+    QVector<GalleryLayoutEntry> entries(12);
+    for (int index = 0; index < entries.size(); ++index)
+        entries[index].originalSize = index % 2 ? QSizeF(73, 41) : QSizeF(41, 73);
+
+    for (const auto mode : {GalleryPresentationMode::Grid, GalleryPresentationMode::Icons,
+                            GalleryPresentationMode::Masonry}) {
+        request.mode = mode;
+        for (qreal padding : {0.0, 4.0, 13.0, 32.0}) {
+            request.cellHorizontalPadding = padding;
+            for (qreal verticalPadding : {0.0, 4.0, 13.0, 32.0}) {
+                request.cellVerticalPadding = verticalPadding;
+                const auto result = GalleryLayoutEngine::layout(request, entries, 16);
+                for (int index = 0; index < result.cells.size(); ++index) {
+                    const auto &cell = result.cells[index];
+                    const auto &preview = cell.previewGeometry;
+                    const qreal expectedInset = qRound(padding * 1.75) / 1.75;
+                    QVERIFY(qAbs(preview.left() - cell.geometry.left() - expectedInset) < .001);
+                    QVERIFY(qAbs(cell.geometry.right() - preview.right() - expectedInset) < .001);
+                    QVERIFY(preview.width() > 0 && preview.height() > 0);
+                    const qreal expectedVerticalInset = qRound(verticalPadding * 1.75) / 1.75;
+                    QVERIFY(qAbs(preview.top() - cell.geometry.top() - expectedVerticalInset) < .001);
+                    QVERIFY(preview.bottom() <= cell.geometry.bottom());
+                    if (mode == GalleryPresentationMode::Masonry) {
+                        const auto &size = entries[index].originalSize;
+                        QVERIFY(qAbs(preview.width() / preview.height() - size.width() / size.height()) < .001);
+                        QVERIFY(qAbs(cell.geometry.bottom() - preview.bottom() - expectedVerticalInset) < .001);
+                    }
+                }
+            }
+        }
+    }
+    request.mode = GalleryPresentationMode::Icons;
+    request.viewportSize.setWidth(18);
+    request.density = 18;
+    const auto narrow = GalleryLayoutEngine::layout(request, entries, 16);
+    QVERIFY(narrow.cells.first().previewGeometry.width() >= 1 / request.devicePixelRatio);
+}
+
+void GalleryLayoutEngineTest::graphicalCellPaddingLeavesCompactModesUnchanged() {
+    GalleryLayoutRequest request;
+    request.viewportSize = QSizeF(640, 400);
+    request.density = 24;
+    request.spacing = 8;
+    QVector<GalleryLayoutEntry> entries(12);
+    for (const auto mode : {GalleryPresentationMode::Details, GalleryPresentationMode::Columns}) {
+        request.mode = mode;
+        request.cellHorizontalPadding = 0;
+        request.cellVerticalPadding = 0;
+        const auto before = GalleryLayoutEngine::layout(request, entries);
+        request.cellHorizontalPadding = 32;
+        request.cellVerticalPadding = 32;
+        const auto after = GalleryLayoutEngine::layout(request, entries);
+        for (int index = 0; index < before.cells.size(); ++index) {
+            QCOMPARE(after.cells[index].geometry, before.cells[index].geometry);
+            QCOMPARE(after.cells[index].previewGeometry, before.cells[index].previewGeometry);
+        }
+    }
+}
+
+void GalleryLayoutEngineTest::captionSpacingReservesSpaceWithoutChangingCompactModes() {
+    GalleryLayoutRequest request;
+    request.viewportSize = QSizeF(640, 400);
+    request.density = 120;
+    request.devicePixelRatio = 1.75;
+    request.cellHorizontalPadding = 4;
+    request.cellVerticalPadding = 4;
+    request.gridLabelLineHeight = 16;
+    request.iconLabelLineHeight = 16;
+    request.iconCaptionLineCounts = QByteArray(12, 2);
+    for (const auto mode : {GalleryPresentationMode::Grid, GalleryPresentationMode::Icons}) {
+        request.mode = mode;
+        for (qreal gap : {0.0, 3.0, 17.0, 32.0}) {
+            request.cellCaptionSpacing = gap;
+            const auto plan = GalleryLayoutEngine::fixedPlan(request, 12);
+            const QRectF cell = plan.geometryFor(0);
+            const QRectF preview = plan.previewGeometryFor(0);
+            const qreal snappedGap = qRound(gap * request.devicePixelRatio) / request.devicePixelRatio;
+            const qreal bottomInset = qRound(4 * request.devicePixelRatio) / request.devicePixelRatio;
+            QVERIFY(preview.height() > 0);
+            QVERIFY(preview.bottom() + snappedGap + 32 <= cell.bottom() - bottomInset + .001);
+            QVERIFY(qAbs(preview.height() * request.devicePixelRatio
+                - qRound(preview.height() * request.devicePixelRatio)) < .001);
+        }
+    }
+    QVector<GalleryLayoutEntry> entries(12);
+    for (const auto mode : {GalleryPresentationMode::Details, GalleryPresentationMode::Columns}) {
+        request.mode = mode;
+        request.cellCaptionSpacing = 0;
+        const auto before = GalleryLayoutEngine::layout(request, entries);
+        request.cellCaptionSpacing = 32;
+        const auto after = GalleryLayoutEngine::layout(request, entries);
+        for (int index = 0; index < before.cells.size(); ++index) {
+            QCOMPARE(after.cells[index].geometry, before.cells[index].geometry);
+            QCOMPARE(after.cells[index].previewGeometry, before.cells[index].previewGeometry);
+        }
+    }
 }
 
 void GalleryLayoutEngineTest::densityPolicyIsPresentationSpecific() {

@@ -3,6 +3,7 @@
 
 #include <QPointF>
 #include <QRectF>
+#include <cmath>
 
 namespace ZoinGallery::PixelGrid {
 
@@ -27,6 +28,17 @@ inline QRectF snapDeviceRect(const QRectF &rect, qreal devicePixelRatio) {
 inline QPointF devicePixelOffset(const QPointF &sceneOrigin,
                                  qreal devicePixelRatio) {
     return snapDevicePoint(sceneOrigin, devicePixelRatio) - sceneOrigin;
+}
+
+// Leave at least one physical pixel of content, even at minimum icon zoom.
+inline qreal cellHorizontalInset(qreal width, qreal padding, qreal devicePixelRatio) {
+    const qreal dpr = qMax<qreal>(0.01, devicePixelRatio);
+    const qreal maximum = qMax<qreal>(0, std::floor((qRound64(width * dpr) - 1) / 2.0));
+    return qBound<qreal>(0, qRound64(padding * dpr), maximum) / dpr;
+}
+
+inline qreal cellVerticalInset(qreal height, qreal padding, qreal devicePixelRatio) {
+    return cellHorizontalInset(height, padding, devicePixelRatio);
 }
 
 } // namespace ZoinGallery::PixelGrid

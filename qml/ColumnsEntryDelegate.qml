@@ -49,6 +49,7 @@ Item {
 
         Text {
             id: baseNameLabel
+            GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             readonly property point pixelCorrection: content.pixelOffset(baseNameLabel)
             objectName: "galleryBaseName-" + content.entry.viewIndex
             x: 0
@@ -85,6 +86,7 @@ Item {
 
         Text {
             id: extensionLabel
+            GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             readonly property point pixelCorrection: content.pixelOffset(extensionLabel)
             objectName: "galleryExtension-" + content.entry.viewIndex
             visible: content.entry.panelRoot.separateFileExtensions

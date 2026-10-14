@@ -407,7 +407,8 @@ int MasonryLayout::fixedNavigationIndex(
     int lastIndex) const {
     const bool usesFixedGeometry = _presentationMode != Masonry
         || sparseVirtualLayout();
-    if (usesFixedGeometry && !_groupRanges.isEmpty()) {
+    if ((usesFixedGeometry && !_groupRanges.isEmpty())
+        || (_presentationMode == Icons && page)) {
         const ZoinGallery::GalleryFixedLayoutPlan plan = fixedLayoutPlan();
         if (page) {
             const QRectF current = indexGeometry(index);
@@ -415,12 +416,12 @@ int MasonryLayout::fixedNavigationIndex(
                 const bool backwards = direction == NavigateLeft
                     || direction == NavigateUp;
                 const qreal currentCenter = current.center().y();
-                const qreal target = currentCenter
+                const qreal target = qBound<qreal>(0, currentCenter
                     + (backwards ? -1 : 1) * qMax<qreal>(
-                        1, height());
+                        1, height()), contentHeight());
                 const qreal reach = qMax<qreal>(
                     effectiveTargetExtent(), height() / 2);
-                const QVector<int> candidates = plan.indexesIntersecting(
+                const QVector<int> candidates = indexesForVerticalRange(
                     target - reach, target + reach);
                 int best = index;
                 qreal bestScore = std::numeric_limits<qreal>::max();
@@ -446,6 +447,8 @@ int MasonryLayout::fixedNavigationIndex(
                     return best;
                 }
             }
+            if (_presentationMode == Icons)
+                return index;
         } else if (_presentationMode == Grid || _presentationMode == Icons
                    || sparseVirtualLayout()) {
             const int sectionIndex = plan.sectionIndexFor(index);

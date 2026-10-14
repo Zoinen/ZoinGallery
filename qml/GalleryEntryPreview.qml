@@ -42,6 +42,13 @@ Item {
     }
 
     visible: activePresentation && !entry.folderPreviewActive
+    onActivePresentationChanged: {
+        if (entry.visualIdentityChanging && entry.panelRoot.benchmarkTracingEnabled) {
+            entry.panelRoot.traceBenchmarkStage("[FIX] preview.identity-reset", {
+                "entryId": entry.entryId, "row": entry.viewIndex
+            })
+        }
+    }
     opacity: entry.hiddenEntry && !entry.detailsMode ? 0.5 : 1
     x: entry.effectivePreviewRect.x
     y: entry.effectivePreviewRect.y
@@ -66,10 +73,13 @@ Item {
                          === preview.entry.entryId)
     }
 
-    IconImage {
+    Loader {
         id: fallbackIcon
-        objectName: preview.activePresentation
-                    ? "galleryFallbackIcon-" + preview.entry.viewIndex : ""
+        // IconImage's empty source can fall back to its preceding URL. Own
+        // its lifetime here instead: only a new entry discards the old leaf;
+        // resizing the same entry keeps both the leaf and its loaded pixels.
+        active: preview.activePresentation
+        asynchronous: false
         readonly property color effectiveIconColor:
             preview.entry.fallbackIconColor
         property url modelIconSource:
@@ -83,15 +93,6 @@ Item {
             preview.entry.isLucideIconSource(modelIconSource)
         readonly property bool systemFileSource:
             preview.entry.isSystemFileIconSource(modelIconSource)
-        // A delegate can complete before MasonryLayout attaches it to its
-        // window. At that point Qt uses the maximum screen DPR (for example
-        // 2 instead of this panel's 1.75) and keeps the oversized raster after
-        // attachment. Start the image request only with the owning window.
-        source: !preview.activePresentation || !Window.window ? "" : lucideSource
-                ? preview.entry.sourceColorIconAtSize(
-                      modelIconSource, width, effectiveIconColor)
-                : (systemFileSource
-                   ? preview.entry.systemFileFallbackSource(width) : "")
         anchors.centerIn: parent
         readonly property real nominalIconSize:
             preview.entry.detailsMode || preview.entry.columnsMode
@@ -100,18 +101,13 @@ Item {
                            ? preview.entry.panelRoot.detailsIconSize : Infinity,
                        preview.entry.height
                        - 2 * preview.entry.panelRoot.metrics.detailsIconVerticalPadding))
-            : preview.entry.iconsMode
+            : preview.entry.iconsMode || preview.entry.gridMode
             ? Math.max(0, Math.min(parent.width, parent.height))
             : Math.max(0, Math.min(parent.width, parent.height) * 0.55)
-        width: preview.entry.snapIconExtent(nominalIconSize)
-        height: width
-        // Qt applies the window DPR to sourceSize before requesting provider
-        // pixels. Supplying physical dimensions here applies DPR twice.
-        sourceSize: Qt.size(Math.round(width), Math.round(height))
-        color: effectiveIconColor
-        fillMode: Image.PreserveAspectFit
-        smooth: false
-        mipmap: false
+        readonly property bool fullAreaIcon: preview.entry.iconsMode || preview.entry.gridMode
+        width: fullAreaIcon ? parent.width
+                                      : preview.entry.snapIconExtent(nominalIconSize)
+        height: fullAreaIcon ? parent.height : width
         readonly property point pixelGridOffset:
             preview.entry.iconPixelOffset(fallbackIcon)
         transform: Translate {
@@ -132,6 +128,61 @@ Item {
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId
                          === preview.entry.entryId)
+        readonly property bool useAspectRaster: fullAreaIcon
+                                               && rasterSource.toString().startsWith("image://")
+        readonly property real rasterExtent: fullAreaIcon
+                                                ? Math.max(width, height)
+                                                : Math.min(width, height)
+        readonly property url rasterSource: !Window.window ? "" : lucideSource
+            ? preview.entry.sourceColorIconAtSize(modelIconSource, rasterExtent, effectiveIconColor)
+            : (systemFileSource ? preview.entry.systemFileFallbackSource(rasterExtent) : "")
+        sourceComponent: useAspectRaster ? aspectRasterComponent : tintedRasterComponent
+    }
+
+    Component {
+        id: aspectRasterComponent
+        Image {
+            objectName: preview.activePresentation
+                        ? "galleryFallbackIcon-" + preview.entry.viewIndex : ""
+            anchors.fill: parent
+            source: fallbackIcon.rasterSource
+            // Qt multiplies provider requests by the window DPR. Request the
+            // complete logical slot so its bitmap maps 1:1 to physical pixels.
+            sourceSize: Qt.size(Math.round(width), Math.round(height))
+            fillMode: Image.PreserveAspectFit
+            verticalAlignment: preview.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
+            smooth: false
+            mipmap: false
+            retainWhileLoading: true
+        }
+    }
+
+    Component {
+        id: tintedRasterComponent
+        IconImage {
+            id: fallbackRaster
+            objectName: preview.activePresentation
+                        ? "galleryFallbackIcon-" + preview.entry.viewIndex : ""
+            readonly property color effectiveIconColor:
+                fallbackIcon.effectiveIconColor
+            anchors.fill: parent
+            // A delegate can complete before MasonryLayout attaches it to
+            // its window. Request pixels only at the owning window's DPR.
+            source: fallbackIcon.rasterSource
+            // Qt applies DPR once to this logical sourceSize.
+            // Icon providers render the requested rectangle directly. Keep
+            // the raster square; PreserveAspectFit positions it in our slot.
+            sourceSize: Qt.size(Math.round(fallbackIcon.rasterExtent),
+                                Math.round(fallbackIcon.rasterExtent))
+            color: fallbackIcon.effectiveIconColor
+            fillMode: Image.PreserveAspectFit
+            verticalAlignment: preview.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
+            smooth: false
+            mipmap: false
+            retainWhileLoading: true
+            readonly property point pixelGridOffset:
+                fallbackIcon.pixelGridOffset
+        }
     }
 
     Item {
@@ -192,10 +243,24 @@ Item {
                 anchors.centerIn: parent
                 width: fallbackIcon.width
                 height: fallbackIcon.height
+                readonly property real rasterExtent: fallbackIcon.fullAreaIcon
+                                                        ? Math.max(width, height)
+                                                        : Math.min(width, height)
                 source: preview.entry.sourceColorIconAtSize(
-                            fallbackIcon.modelIconSource, width)
+                            fallbackIcon.modelIconSource, rasterExtent)
+                // Direct SVGs must derive height from their native aspect.
+                // Specifying both dimensions can rasterize them stretched
+                // before PreserveAspectFit ever sees the resulting texture.
+                sourceSize: source.toString().startsWith("image://")
+                    ? (fallbackIcon.fullAreaIcon
+                    ? Qt.size(Math.round(width), Math.round(height))
+                    : Qt.size(Math.round(rasterExtent), Math.round(rasterExtent)))
+                    : Qt.size(Math.round(rasterExtent), 0)
                 fillMode: Image.PreserveAspectFit
-                smooth: false
+                verticalAlignment: preview.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
+                // Colored SVGs can have a rectangular canvas, so fitting the
+                // loaded raster to the slot requires filtered sampling.
+                smooth: true
                 asynchronous: true
                 cache: true
                 retainWhileLoading: true

@@ -2,7 +2,6 @@
 #define GALLERYICONTEXTMEASURER_H
 
 #include <QFontMetricsF>
-#include <QHash>
 #include <QString>
 
 namespace ZoinGallery {
@@ -18,19 +17,21 @@ struct GalleryIconLabelLayout {
 // same wrapping and middle-elision decisions.
 class GalleryIconTextMeasurer final {
 public:
-    explicit GalleryIconTextMeasurer(const QFont &font);
+    explicit GalleryIconTextMeasurer(const QFont &font, bool wordWrap = false);
 
     [[nodiscard]] qreal lineHeight() const;
+    [[nodiscard]] int lineCount(
+        const QString &text, qreal width, int maximumLines = 4) const;
     [[nodiscard]] GalleryIconLabelLayout layout(
-        const QString &sourceText, qreal width);
+        const QString &sourceText, qreal width, int maximumLines = 4) const;
 
 private:
-    qreal glyphWidth(QChar character);
-    int wrappedLineCount(const QString &text, qreal width);
+    int wrappedLineCount(const QString &text, qreal width, int limit) const;
 
+    QFont _font;
+    bool _wordWrap = false;
     QFontMetricsF _metrics;
     qreal _lineHeight = 0;
-    QHash<QChar, qreal> _glyphWidths;
 };
 
 } // namespace ZoinGallery

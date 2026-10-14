@@ -977,6 +977,10 @@ bool MasonryLayout::commitReadyMasonryRows() {
     request.insets.top = _paddingTop;
     request.density = _targetHeight;
     request.spacing = _spacing;
+    request.cellHorizontalPadding = _cellHorizontalPadding;
+    request.cellVerticalPadding = _cellVerticalPadding;
+    request.cellCaptionSpacing = _cellCaptionSpacing;
+    request.devicePixelRatio = devicePixelRatio();
     request.lastRowMatchesPrevious = !_listView;
     request.singleRow = layoutMode() == CalcLayoutSingleRow;
     const auto candidate = ZoinGallery::JustifiedMasonryStrategy::layout(request, entries);
@@ -1063,6 +1067,7 @@ struct MasonryLayout::ModelResetTrace {
 };
 
 void MasonryLayout::rebuildBricksAfterModelReset() {
+    invalidateIconCaptionMetrics();
     _sparseCatalogRows =
         _model && _model->property("sparseCatalog").toBool();
     _sparseBricks.clear();

@@ -5,6 +5,7 @@
 #include <QSizeF>
 #include <QString>
 #include <QVector>
+#include <QByteArray>
 
 namespace ZoinGallery {
 
@@ -38,6 +39,8 @@ struct GalleryLayoutSection {
     qreal primaryOffset = 0;
     qreal contentOffset = 0;
     int primaryCells = 0;
+    int firstIconRow = 0;
+    qreal contentExtent = 0;
 };
 
 struct GalleryGroupHeader {
@@ -52,10 +55,17 @@ struct GalleryLayoutRequest {
     GalleryInsets insets;
     qreal density = 150;
     qreal spacing = 0;
+    // Negative preserves the legacy spacing-derived preview inset.
+    qreal cellHorizontalPadding = -1;
+    qreal cellVerticalPadding = -1;
+    qreal cellCaptionSpacing = 3;
     int columnCount = 2;
     qreal devicePixelRatio = 1;
     qreal groupHeaderHeight = 0;
     qreal iconRowHeight = 0;
+    qreal iconLabelLineHeight = 0;
+    // 0 denotes a not-yet-received/measured name; 1..4 are exact metrics.
+    QByteArray iconCaptionLineCounts;
     qreal gridLabelLineHeight = 16;
     QVector<GalleryLayoutGroup> groups;
     bool lastRowMatchesPrevious = false;
@@ -91,9 +101,8 @@ struct GalleryLayoutResult {
     qreal contentExtent = 0;
 };
 
-// An immutable analytical description of a fixed presentation. It contains
-// no per-row state, so a 30K-row catalog costs exactly the same as an empty
-// one until the viewport materializer asks for concrete row geometry.
+// Fixed presentations are analytical. Icons additionally keep compact row
+// heights/offsets, not file payloads, bricks or delegates.
 struct GalleryFixedLayoutPlan {
     GalleryPresentationMode mode = GalleryPresentationMode::Details;
     int entryCount = 0;
@@ -106,9 +115,16 @@ struct GalleryFixedLayoutPlan {
     qreal contentExtent = 0;
     GalleryInsets insets;
     qreal spacing = 0;
+    qreal cellHorizontalPadding = -1;
+    qreal cellVerticalPadding = -1;
+    qreal cellCaptionSpacing = 3;
+    qreal devicePixelRatio = 1;
     qreal gridLabelLineHeight = 16;
     QVector<GalleryLayoutSection> sections;
     QVector<GalleryGroupHeader> groupHeaders;
+    QVector<qreal> iconRowTops;
+    QVector<qreal> iconRowHeights;
+    qreal iconPreviewHeight = 0;
 
     [[nodiscard]] bool horizontal() const;
     [[nodiscard]] QRectF geometryFor(int index) const;

@@ -167,9 +167,21 @@ quint8 GalleryDelegateItem::setVisualRow(const QVariantMap &visualRow) {
     if (_visualRow == visualRow) {
         return 0;
     }
+    const bool identityChanges = _visualModel->entryId()
+        != visualRow.value(QStringLiteral("entryId")).toString();
+    // Clear retained preview pixels before any replacement snapshot bindings
+    // run. Geometry, selection and same-entry metadata updates keep them alive.
+    if (identityChanges) {
+        _visualIdentityChanging = true;
+        emit visualIdentityChangingChanged();
+    }
     _visualRow = visualRow;
     const quint8 changes = _visualModel->applySnapshot(visualRow);
     emit visualRowChanged();
+    if (identityChanges) {
+        _visualIdentityChanging = false;
+        emit visualIdentityChangingChanged();
+    }
     return changes;
 }
 
@@ -200,6 +212,9 @@ bool GalleryDelegateItem::geometryAnimationRunning() const {
 QObject *GalleryDelegateItem::visualModel() const { return _visualModel; }
 QString GalleryDelegateItem::entryId() const {
     return _visualModel->entryId();
+}
+bool GalleryDelegateItem::visualIdentityChanging() const {
+    return _visualIdentityChanging;
 }
 QString GalleryDelegateItem::displayName() const {
     return _visualModel->text();

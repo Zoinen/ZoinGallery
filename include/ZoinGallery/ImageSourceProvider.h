@@ -132,11 +132,17 @@ struct ImageSourceProbeResult {
 // Methods are synchronous because DecodeManager invokes them only from worker
 // threads. A provider instance is shared by all sessions and must support
 // concurrent calls. Returned leases and cancellation tokens are thread-safe
-// ownership boundaries; no method is invoked on the GUI thread by the source
-// pipeline itself.
+// ownership boundaries. Source reads run on workers; scheduling hints are
+// delivered separately from the owning thread.
 class ImageSourceProvider {
 public:
     virtual ~ImageSourceProvider() = default;
+
+    // Scheduling hint from the owning thread. Implementations must synchronize
+    // it with worker calls; an empty resource restores background admission.
+    virtual void setInteractiveResource(const QString &resourceId) {
+        Q_UNUSED(resourceId)
+    }
 
     virtual ImageSourceReadResult readRange(
         const ImageSourceDescriptor &source, qint64 offset, qint64 length,

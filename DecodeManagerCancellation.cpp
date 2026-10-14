@@ -177,6 +177,13 @@ void DecodeManager::cancelRequests(const QString &requestNamespace) {
     if (requestNamespace.isEmpty()) {
         return;
     }
+    _visibleSources.remove(requestNamespace);
+    _viewerSourceRanks.remove(requestNamespace);
+    if (_interactiveNamespace == requestNamespace) {
+        _interactiveNamespace.clear();
+        _interactiveSource.clear();
+        _imageSourceProvider->setInteractiveResource({});
+    }
 
     for (WorkerInfo &worker : _workers) {
         Runner *runner = worker.runner;

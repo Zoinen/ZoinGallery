@@ -53,6 +53,10 @@ public:
     QString localPathAt(int viewIndex) const;
     QString sourceVersionAt(int viewIndex) const;
     bool isImageAt(int viewIndex) const;
+    bool isVectorAt(int viewIndex) const;
+    bool viewerDecodeFailedAt(int viewIndex) const;
+    QUrl vectorSourceAt(int viewIndex) const;
+    void reportVectorFailure(int viewIndex, const QUrl &source);
     bool isVideoAt(int viewIndex) const;
     QUrl videoThumbnailSourceAt(int viewIndex) const;
     QUrl videoPosterSourceAt(int viewIndex) const;

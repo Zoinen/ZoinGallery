@@ -88,6 +88,7 @@ GallerySession::GallerySession(
     qint64 viewerNativeCacheByteBudget,
     QObject *parent)
     : QObject(parent), d(new Private) {
+    connect(this, &GallerySession::viewerSourceAtChanged, this, &GallerySession::vectorSourceAtChanged);
     d->sessionId = sessionId;
     d->sourceKind = sourceKind;
     d->thumbnailProviderName = thumbnailProviderName;
@@ -585,6 +586,9 @@ bool GallerySession::applySameExternalCatalogRevision(
         || revision == 0) {
         return false;
     }
+    if (context.catalogRowsDeferred != d->external->sparseCatalog()
+        || (context.catalogRowsDeferred
+            && context.totalCount != d->external->rowCount())) return false;
     const bool alreadyCompleted = context.metadataDeferred
         && context.metadataRevision == d->metadataRevision
         && d->metadataCompleted;
@@ -934,7 +938,7 @@ int GallerySession::adjacentImageIndex(
     }
     const int step = direction < 0 ? -1 : 1;
     for (int row = fromIndex + step; row >= 0 && row < count; row += step) {
-        if (isImageAt(row)) {
+        if (isImageAt(row) && !viewerDecodeFailedAt(row)) {
             return row;
         }
     }
@@ -950,7 +954,7 @@ int GallerySession::adjacentViewableIndex(
     }
     const int step = direction < 0 ? -1 : 1;
     for (int row = fromIndex + step; row >= 0 && row < count; row += step) {
-        if (isViewableAt(row)) {
+        if (isViewableAt(row) && !viewerDecodeFailedAt(row)) {
             return row;
         }
     }
@@ -1183,6 +1187,11 @@ void GallerySession::requestToggleSelection(int index) {
                          actionPayload(this, d->currentIndex));
 }
 
+bool GallerySession::viewerDecodeFailedAt(int index) const {
+    return d->external ? d->external->viewerDecodeFailedAt(index)
+        : d->local && d->local->viewerDecodeFailedAt(index);
+}
+
 QString GallerySession::viewerRequestStateAt(int index) const {
     if (d->shutdown) {
         return QStringLiteral("idle");
@@ -1272,3 +1281,20 @@ void GallerySession::shutdown() {
 }
 
 } // namespace ZoinGallery
+
+namespace ZoinGallery {
+bool GallerySession::isVectorAt(int index) const {
+    return d->external ? d->external->isVectorAt(index) : d->local && d->local->isVectorAt(index);
+}
+QUrl GallerySession::vectorSourceAt(int index) const {
+    return d->external ? d->external->vectorSourceAt(index) : d->local ? d->local->vectorSourceAt(index) : QUrl{};
+}
+}
+
+namespace ZoinGallery {
+void GallerySession::reportVectorFailure(int row, const QUrl &source) {
+    if (d->shutdown) return;
+    if (d->external) d->external->reportVectorFailure(row, source);
+    else if (d->local) d->local->reportVectorFailure(row, source);
+}
+}

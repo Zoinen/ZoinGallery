@@ -3,6 +3,7 @@
 
 #include "FileListModel.h"
 #include "ImageProbe.h"
+#include "VectorSource.h"
 #include "DirectoryPreviewCache.h"
 #include <ZoinGallery/DirectoryPreviewProvider.h>
 #include <ZoinGallery/ImageSourceProvider.h>
@@ -92,6 +93,9 @@ public:
     QString entryIdAt(int row) const;
     QString entryNameAt(int row) const;
     QString localPathAt(int row) const;
+    bool isVectorAt(int row) const;
+    QUrl vectorSourceAt(int row) const;
+    void reportVectorFailure(int row, const QUrl &source);
     bool isImageAt(int row) const;
     bool isVideoAt(int row) const;
     QString videoThumbnailUrlAt(int row) const;
@@ -111,6 +115,7 @@ public:
     QString bestViewerImageUrlAt(int row) const;
     QList<QPair<QString, int>> viewerImageSourcesAt(int row) const;
     QString viewerRequestStateAt(int row) const;
+    bool viewerDecodeFailedAt(int row) const;
     void requestViewer(int row, const QSize &viewportSize);
     void requestViewerAt(int row, const QSize &viewportSize);
     void setViewerIndex(int row);
@@ -192,6 +197,7 @@ private:
     void prepareDirectoryPreviewStates(const QVariantList &values);
     bool _previewReadsSuspended = false;
     bool _thumbnailsEnabled = true;
+    bool _hasViewportDemand = false;
 
     struct Entry {
         QString id;
@@ -206,6 +212,9 @@ private:
         QString localPath;
         bool directory = false;
         bool image = false;
+        VectorSourcePtr vectorSource;
+        bool videoThumbnailFailed = false;
+        bool thumbnailPresentation() const { return image && !videoThumbnailFailed; }
         QString thumbnailKind;
         bool selected = false;
         qint64 mtimeNs = 0;
@@ -294,6 +303,9 @@ private:
                           const QString &providerId);
     bool finishCatalogProbePass();
     void replanAfterImageProbe(bool completedCatalogProbePass);
+    QStringList _vectorRetention;
+    void pruneVectorSources();
+    void handleVectorSourceReady(const ImageDecodeRequest &request, const VectorSourcePtr &source);
     void handleImageReady(const ImageDecodeRequest &request,
                           const QImage &image,
                           const DecodedImageInfo &decodedInfo);
@@ -317,6 +329,9 @@ private:
                                const ImageDecodeRequest &request,
                                const QImage &image);
     void handleImageReadFailed(const ImageDecodeRequest &request);
+    void markViewerDecodeFailed(const QList<int> &rows);
+    void markVideoThumbnailFailed(const QList<int> &rows);
+    void pruneViewerDecodeFailures();
     void handleThumbnailFrameAvailable(const QString &sourceIdentity,
                                        const QString &versionToken,
                                        qint64 sourceFileSize,
@@ -413,6 +428,9 @@ private:
     QSharedPointer<ThumbnailMemoryCache> _thumbnailCache;
     DecodeManager *_decodeManager = nullptr; // owned by GalleryRuntime
     ViewerImageCache _viewerImageCache;
+    // Pixel/format failures are immutable only for this content revision.
+    QHash<QString, QString> _viewerDecodeFailedVersions;
+    bool _viewerDecodeReplanScheduled = false;
     QList<Entry> _entries;
     // In paged mode _entries contains only materialized viewport rows.
     // QAbstractItemModel still exposes _virtualRowCount rows; this compact
@@ -433,6 +451,7 @@ private:
     QSet<QString> _metadataResolvedPaths;
     QList<int> _metadataVisibleRows;
     QSet<int> _metadataLastVisibleRows;
+    QSet<int> _metadataLastOverscanRows;
     QList<int> _metadataOverscanRows;
     QList<int> _metadataUrgentRows;
     QList<int> _metadataAdHocRows;

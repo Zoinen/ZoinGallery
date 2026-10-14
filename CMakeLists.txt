@@ -72,7 +72,7 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
 find_package(QT NAMES Qt6)
-set(ZOIN_QT_COMPONENTS Core Quick Gui Qml Concurrent Svg QuickControls2)
+set(ZOIN_QT_COMPONENTS Core Quick Gui Qml Concurrent Svg QuickVectorImage QuickControls2)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     list(APPEND ZOIN_QT_COMPONENTS Multimedia)
 endif()
@@ -185,6 +185,8 @@ set(ZOIN_CORE_SOURCES
     FileListModelFileOperations.cpp
     FileListModelSelection.cpp
     ImageFile.h
+    VectorSource.cpp
+    VectorSource.h
     ImageFile.cpp
     ProviderImageStore.h
     ProviderImageStore.cpp
@@ -938,6 +940,8 @@ set(ZOIN_QML_FILES
     qml/GalleryEntryDelegateBase.qml
     qml/GalleryInteractiveEntryDelegate.qml
     qml/GalleryEntrySelectionSurface.qml
+    qml/GalleryVectorImage.qml
+    qml/GalleryVectorSwap.qml
     qml/GalleryEntryPreview.qml
     qml/GalleryThumbnailShaderLayer.qml
     qml/GalleryThumbnailCompactLayer.qml
@@ -1023,6 +1027,7 @@ qt_add_shaders(ZoinGalleryQml zoin_gallery_shaders
     ${SHADER_GLSL_FLAGS}
     PREFIX "/ZoinGallery"
     FILES
+        "resources/vector_checkerboard.frag"
         "resources/shader.frag"
         "resources/viewer_resample.vert"
         "resources/viewer_resample.frag"
@@ -1214,6 +1219,7 @@ target_link_libraries(ZoinGalleryCore PUBLIC
     Qt${QT_VERSION_MAJOR}::Core 
     Qt${QT_VERSION_MAJOR}::Quick
     Qt${QT_VERSION_MAJOR}::Concurrent 
+    Qt${QT_VERSION_MAJOR}::QuickVectorImage
     Qt${QT_VERSION_MAJOR}::Svg 
     Qt${QT_VERSION_MAJOR}::QuickControls2
     TIFF::TIFF

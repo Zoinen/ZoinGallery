@@ -1,10 +1,12 @@
 #include "ImageInfoReadRunner.h"
 #include "FolderPreviewSelection.h"
 #include "PersistentDerivedImageCache.h"
+#include "VectorSource.h"
 #include "ThumbnailLoader.h"
 
 #include <ZoinGallery/MediaTimingTrace.h>
 
+#include <QFile>
 #include <QFileInfo>
 #include <QThread>
 
@@ -90,7 +92,7 @@ void ImageInfoReadRunner::run() {
     if (_source.isValid()) {
         result.path = _source.runtimeIdentity();
         result.fileSize = _source.size;
-        if (_readDerivedMetadataCache &&
+        if (!isVectorSource(result) && _readDerivedMetadataCache &&
             PersistentDerivedImageCache::retrieveMetadata(result)) {
             timingSpan.set(QStringLiteral("outcome"),
                            QStringLiteral("derived-cache-hit"));
@@ -130,7 +132,13 @@ void ImageInfoReadRunner::run() {
     {
         ZoinGallery::MediaTimingTrace::Span readSpan(
             QStringLiteral("qt.gallery.metadata.decode"), timingFields);
-        metadataRead = ThumbnailLoader::readMetadata(result);
+        if (isVectorSource(result)) {
+            QFile sourceFile(result.path);
+            result.sourceAccessFailed = !sourceFile.open(QIODevice::ReadOnly);
+            result.vectorSource = result.sourceAccessFailed ? VectorSourcePtr{} : acquireVectorSource(result, lease);
+            result.imageSize = result.vectorSource ? result.vectorSource->size : QSize{};
+            metadataRead = bool(result.vectorSource);
+        } else metadataRead = ThumbnailLoader::readMetadata(result);
         // A successful source open and completed decoder pass establishes
         // missing values as known-missing even when no supported EXIF tag is
         // present or the image itself is damaged.
@@ -146,7 +154,7 @@ void ImageInfoReadRunner::run() {
         // Never leak a temporary materialized path into catalog identity or a
         // later cache key. Decode stages acquire their own shared lease.
         result.path = _source.runtimeIdentity();
-        if (_writeDerivedMetadataCache && result.fileFieldsRead) {
+        if (_writeDerivedMetadataCache && result.fileFieldsRead && !isVectorSource(result)) {
             PersistentDerivedImageCache::storeMetadata(result);
         }
     }

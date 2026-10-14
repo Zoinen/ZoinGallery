@@ -9,6 +9,61 @@ QtObject {
     required property Item frame
     required property GalleryViewerMotion motion
 
+    property string navigationEntryId: ""
+    property string navigationOriginEntryId: ""
+    property int navigationDirection: 0
+
+    property var navigationSession: viewer.session
+    onNavigationSessionChanged: {
+        navigationEntryId = ""
+        navigationOriginEntryId = ""
+        navigationDirection = 0
+    }
+
+    property Connections viewerFailureConnection: Connections {
+        target: controller.navigationSession
+        ignoreUnknownSignals: true
+        function onViewerRequestStateAtChanged(index) {
+            if (index === controller.viewer.presentedIndex)
+                controller.continueFailedNavigation()
+        }
+    }
+
+    function continueFailedNavigation() {
+        const failedEntryId = navigationEntryId
+        if (navigationDirection === 0 || failedEntryId === ""
+                || viewer.presentedEntryId !== failedEntryId
+                || !viewer.session
+                || typeof viewer.session.viewerDecodeFailedAt !== "function"
+                || !viewer.session.viewerDecodeFailedAt(viewer.presentedIndex))
+            return
+        // Failure can arrive synchronously while requestImage is publishing
+        // a navigation intent. Finish that intent before advancing again.
+        Qt.callLater(function() {
+            if (controller.navigationEntryId !== failedEntryId
+                    || controller.viewer.presentedEntryId !== failedEntryId)
+                return
+            const next = controller.adjacentIndex(
+                        controller.viewer.presentedIndex,
+                        controller.navigationDirection)
+            if (next >= 0 && next !== controller.viewer.presentedIndex) {
+                controller.emitNavigation(next)
+                return
+            }
+            const origin = controller.indexForEntryId(
+                        controller.navigationOriginEntryId)
+            controller.navigationDirection = 0
+            controller.navigationEntryId = ""
+            controller.navigationOriginEntryId = ""
+            if (origin >= 0 && origin !== controller.viewer.presentedIndex
+                    && !controller.viewer.session.viewerDecodeFailedAt(origin))
+                controller.emitNavigation(origin)
+            controller.navigationDirection = 0
+            controller.navigationEntryId = ""
+            controller.navigationOriginEntryId = ""
+        })
+    }
+
     property Connections videoPlaybackAvailabilityConnection: Connections {
         target: controller.viewer.session
         ignoreUnknownSignals: true
@@ -181,6 +236,9 @@ QtObject {
         }
 
         viewer.refreshViewerRequestState()
+        viewer.currentIsVectorValue = typeof viewer.session.isVectorAt === "function"
+                && viewer.session.isVectorAt(viewer.presentedIndex)
+        if (viewer.currentIsVectorValue) viewer.sphericViewerMode = false
         viewer.currentIsVideoValue = typeof viewer.session.isVideoAt === "function"
                 && viewer.session.videoPlaybackAvailable === true
                 && viewer.session.isVideoAt(viewer.presentedIndex)
@@ -249,6 +307,10 @@ QtObject {
             signature += "|" + Number(signatureTier.level) + ":"
                     + signatureTier.source.toString()
         }
+        if (indexChanged && sources.length === 0
+                && !(viewer.currentIsVectorValue && imageViewport.vectorMode
+                     && !viewer.session.viewerDecodeFailedAt(viewer.presentedIndex)))
+            imageViewport.resetViewerImages()
         if (indexChanged || signature !== viewer.appliedTierSignature) {
             for (let sourceIndex = 0; sourceIndex < sources.length;
                  ++sourceIndex) {
@@ -256,7 +318,9 @@ QtObject {
                 if (!tier || tier.source === undefined
                         || tier.source.toString() === "")
                     continue
-                imageViewport.setImage(tier.source, viewer.currentOriginalSizeValue,
+                if (viewer.currentIsVectorValue)
+                    imageViewport.setVectorImage(tier.source, viewer.currentOriginalSizeValue, viewer.presentedIndex)
+                else imageViewport.setImage(tier.source, viewer.currentOriginalSizeValue,
                                        viewer.presentedIndex, Number(tier.level))
             }
             viewer.appliedTierSignature = signature
@@ -264,27 +328,44 @@ QtObject {
 
         if (sources.length > 0) {
             viewer.appliedPresentedIndex = viewer.presentedIndex
-            if (indexChanged) {
-                if (viewer.pendingCommittedViewport
-                        && viewer.pendingCommittedViewport.index === viewer.presentedIndex) {
-                    // The neighbor already ended at this viewport. Apply it
-                    // with the source handoff, before another frame can render
-                    // the new image at the previous image's offset.
-                    viewer.applyPendingCommittedViewport()
-                } else if (applyPendingPreviousImageViewport()) {
-                    // Previous-image switching restores the same normalized
-                    // center and zoom-to-fit ratio as ViewerMode.
-                } else if (wasFit) {
-                    imageViewport.zoomToFit(true)
-                } else {
-                    // ViewerMode preserves the numeric zoom on an index
-                    // change and only brings the old x/y into the new image's
-                    // legal bounds.  It never silently returns to Fit.
-                    imageViewport.fitViewerImageInViewportBounds()
+            if (viewer.currentIsVectorValue && !imageViewport.imageTextureReady) {
+                if (indexChanged) {
+                    pendingVectorGeometryIndex = viewer.presentedIndex
+                    pendingVectorFit = wasFit
                 }
-            } else {
-                applyPendingPreviousImageViewport()
+                return
             }
+            pendingVectorGeometryIndex = -1
+            applyCurrentViewport(indexChanged, wasFit)
+        }
+    }
+
+    property int pendingVectorGeometryIndex: -1
+    property bool pendingVectorFit: true
+    property Connections vectorPresentationConnection: Connections {
+        target: controller.imageViewport
+        function onVectorSourcePresented(source) {
+            if (controller.pendingVectorGeometryIndex !== controller.viewer.presentedIndex) return
+            const wasFit = controller.pendingVectorFit
+            controller.pendingVectorGeometryIndex = -1
+            controller.applyCurrentViewport(true, wasFit)
+        }
+    }
+
+    function applyCurrentViewport(indexChanged, wasFit) {
+        if (indexChanged) {
+            if (viewer.pendingCommittedViewport
+                    && viewer.pendingCommittedViewport.index === viewer.presentedIndex) {
+                viewer.applyPendingCommittedViewport()
+            } else if (applyPendingPreviousImageViewport()) {
+                // Restore the remembered center and zoom-to-fit ratio.
+            } else if (wasFit) {
+                imageViewport.zoomToFit(true)
+            } else {
+                imageViewport.fitViewerImageInViewportBounds()
+            }
+        } else {
+            applyPendingPreviousImageViewport()
         }
     }
 
@@ -296,7 +377,9 @@ QtObject {
             return
         }
         const sources = sourceTiersAt(viewer.viewerNavigationTargetIndex)
-        const requiredLevel = imageViewport.zoomFitView
+        const vector = typeof viewer.session.isVectorAt === "function"
+                && viewer.session.isVectorAt(viewer.viewerNavigationTargetIndex)
+        const requiredLevel = vector || imageViewport.zoomFitView
                 && !viewer.sphericViewerMode ? 1 : 2
         let preparedSource = ""
         for (let sourceIndex = 0; sourceIndex < sources.length;
@@ -340,7 +423,7 @@ QtObject {
         if (typeof viewer.session.isImageAt === "function"
                 && !viewer.session.isImageAt(viewer.presentedIndex))
             return
-        if (imageViewport.zoomFitView && !viewer.sphericViewerMode
+        if (viewer.currentIsVector || imageViewport.zoomFitView && !viewer.sphericViewerMode
                 && !viewer.nearestNeighbor) {
             requestIndex(viewer.presentedIndex, 1)
             viewer.refreshCurrentSource()
@@ -363,6 +446,11 @@ QtObject {
         const nextEntryId = entryIdAt(index)
         if (nextEntryId === "")
             return false
+        if (!awaitAuthority && nextEntryId !== navigationEntryId) {
+            navigationEntryId = ""
+            navigationOriginEntryId = ""
+            navigationDirection = 0
+        }
         const previousIndex = viewer.presentedIndex
         const sameIdentity = viewer.presentedEntryId !== ""
                 && viewer.presentedEntryId === nextEntryId
@@ -377,6 +465,7 @@ QtObject {
         viewer.presentedEntryId = nextEntryId
         refreshCurrentSource(indexChanged, previousFitMode)
         requestImage()
+        continueFailedNavigation()
         if (awaitAuthority) {
             viewer.pendingAuthorityIndex = index
             viewer.pendingAuthorityEntryId = nextEntryId
@@ -416,6 +505,16 @@ QtObject {
         const sourceIndex = viewer.session.sourceIndexAt(index)
         if (entryId === "" || sourceIndex < 0)
             return false
+        if (viewer.presentedIndex !== index) {
+            navigationDirection = index > viewer.presentedIndex ? 1 : -1
+            if ((typeof viewer.session.viewerDecodeFailedAt !== "function"
+                    || !viewer.session.viewerDecodeFailedAt(viewer.presentedIndex))
+                    && (viewer.currentViewerRequestState === "ready"
+                        || viewer.currentIsVideoValue
+                        || viewer.currentSourcesValue.length > 0))
+                navigationOriginEntryId = viewer.presentedEntryId
+            navigationEntryId = entryId
+        }
         recordPresentedTransition(viewer.presentedEntryId, entryId,
                                   preservePendingViewport === true)
         setPresentedIndex(index, true)

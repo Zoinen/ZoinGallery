@@ -1,9 +1,11 @@
 #include "ImageReadRunner.h"
 #include "ThumbnailLoader.h"
+#include "VectorSource.h"
 
 #include <ZoinGallery/MediaTimingTrace.h>
 
 #include <utility>
+#include <QFile>
 
 ImageReadRunner::ImageReadRunner(
     const ImageDecodeRequest &request,
@@ -12,7 +14,7 @@ ImageReadRunner::ImageReadRunner(
       _provider(std::move(provider)),
       _cancellation(QSharedPointer<ZoinGallery::ImageSourceCancellation>::create()),
       _derivedLookupGate(
-          PersistentDerivedImageCache::joinLookup(request)) {
+          isVectorSource(request.info) ? PersistentDerivedImageCache::LookupGate{} : PersistentDerivedImageCache::joinLookup(request)) {
 }
 
 void ImageReadRunner::run() {
@@ -29,11 +31,12 @@ void ImageReadRunner::run() {
                         _request.highPriority);
     ZoinGallery::MediaTimingTrace::Span timingSpan(
         QStringLiteral("qt.gallery.image_read"), timingFields);
+    const bool vector = isVectorSource(_request.info);
     bool derivedLookupWon = false;
     {
         ZoinGallery::MediaTimingTrace::Span lookupSpan(
             QStringLiteral("qt.gallery.derived_lookup_wait"), timingFields);
-        derivedLookupWon = PersistentDerivedImageCache::waitForLookup(
+        derivedLookupWon = !vector && PersistentDerivedImageCache::waitForLookup(
             _derivedLookupGate, _cancellation);
         lookupSpan.set(QStringLiteral("satisfied"), derivedLookupWon);
     }
@@ -73,6 +76,24 @@ void ImageReadRunner::run() {
     }
     ImageData imageData(materializedRequest);
     imageData.sourceLease = lease;
+    if (vector) {
+        QFile backing(materializedRequest.info.path);
+        if (!backing.open(QIODevice::ReadOnly)) {
+            auto failed = _request;
+            failed.sourceAccessFailed = true;
+            if (!_cancellation->isCanceled()) emit imageReadFailed(failed);
+            emit finished(this);
+            return;
+        }
+        backing.close();
+        imageData.vectorSource = acquireVectorSource(_request.info, lease);
+        if (!_cancellation->isCanceled()) {
+            if (imageData.vectorSource) emit imageReadReady(imageData);
+            else emit imageReadFailed(_request);
+        }
+        emit finished(this);
+        return;
+    }
     bool read = false;
     {
         ZoinGallery::MediaTimingTrace::Span compressedReadSpan(

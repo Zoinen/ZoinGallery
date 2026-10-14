@@ -89,6 +89,12 @@ Item {
             checkerboardEnabled: Boolean(surface.viewer.sourceMasonry && surface.viewer.sourceMasonry.view
                                          && surface.viewer.sourceMasonry.view.showTransparentGrid)
             scrollBarTheme: viewerScrollTheme
+            onVectorLoadFailed: source => {
+                const row = surface.viewer.currentSourceIndex()
+                Qt.callLater(() => {
+                    if (surface.viewer.decodeModel) surface.viewer.decodeModel.reportVectorFailureForIndex(row, String(source))
+                })
+            }
             onCloseRequested: surface.shell.toggleViewer()
             onMiddleClickRequested: surface.hostWindow.toggleFullscreen()
             // visible: !surface.viewer.sphericViewerMode
@@ -279,11 +285,19 @@ Item {
                           * surface.viewer.viewerNavigationTargetScale : parent.height)
                 rotation: flickableArea.rotationMode * 90
 
+                readonly property bool vectorNeighbor: String(surface.viewer.viewerNavigationTargetSource).indexOf("vector=1") >= 0
+                GalleryVectorImage {
+                    anchors.fill: parent
+                    source: parent.vectorNeighbor ? surface.viewer.viewerNavigationTargetSource : ""
+                    visible: parent.vectorNeighbor
+                    devicePixelRatio: surface.devicePixelRatio
+                    showCheckerboard: flickableArea.checkerboardEnabled
+                }
                 Image {
                     id: viewerNavigationNeighborImage
                     objectName: "standaloneViewerNavigationNeighborImage"
                     anchors.fill: parent
-                    source: surface.viewer.viewerNavigationTargetSource
+                    source: parent.vectorNeighbor ? "" : surface.viewer.viewerNavigationTargetSource
                     fillMode: Image.PreserveAspectFit
                     asynchronous: true
                     cache: false
@@ -293,6 +307,7 @@ Item {
 
                 ViewerResample {
                     objectName: "standaloneViewerNavigationNeighborShader"
+                    visible: !parent.vectorNeighbor
                     anchors.fill: parent
 
                     imageSource: viewerNavigationNeighborImage

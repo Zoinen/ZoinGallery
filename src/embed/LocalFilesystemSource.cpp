@@ -1,4 +1,5 @@
 #include "LocalFilesystemSource.h"
+#include "VectorSource.h"
 
 #include "DecodeManager.h"
 #include "FileListModel.h"
@@ -400,3 +401,27 @@ void LocalFilesystemSource::shutdown() {
 }
 
 } // namespace ZoinGallery
+
+namespace ZoinGallery {
+bool LocalFilesystemSource::isVectorAt(int index) const {
+    const auto *item = itemAt(index);
+    return item && isVectorSource(item->info());
+}
+QUrl LocalFilesystemSource::vectorSourceAt(int index) const {
+    const auto *item = itemAt(index);
+    return item && item->vectorSource() ? item->vectorSource()->url : QUrl{};
+}
+}
+
+namespace ZoinGallery {
+void LocalFilesystemSource::reportVectorFailure(int row, const QUrl &source) {
+    if (_fileListModel) _fileListModel->reportVectorFailureForIndex(sourceIndexAt(row), source.toString());
+}
+}
+
+namespace ZoinGallery {
+bool LocalFilesystemSource::viewerDecodeFailedAt(int row) const {
+    const auto *item = itemAt(row);
+    return item && item->vectorSourceFailed();
+}
+}

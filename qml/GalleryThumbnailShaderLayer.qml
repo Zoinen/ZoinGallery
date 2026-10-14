@@ -62,7 +62,7 @@ Item {
             width * layer.entry.renderDpr,
             height * layer.entry.renderDpr)
         property real sharpenAmount: 1.5
-        property bool showCheckerboard: true
+        property bool showCheckerboard: layer.entry.panelRoot.showTransparentGrid
         property int checkerboardSize: 4 * layer.entry.renderDpr
         property real borderRadius: 4.1 * layer.entry.renderDpr
         fragmentShader: "qrc:/ZoinGallery/resources/shader.frag.qsb"

@@ -161,6 +161,9 @@ public:
     Q_INVOKABLE int indexForEntryId(const QString &entryId) const;
     Q_INVOKABLE QString entryNameAt(int index) const;
     Q_INVOKABLE QString localPathAt(int index) const;
+    Q_INVOKABLE bool isVectorAt(int index) const;
+    Q_INVOKABLE QUrl vectorSourceAt(int index) const;
+    Q_INVOKABLE void reportVectorFailure(int index, const QUrl &source);
     Q_INVOKABLE bool isImageAt(int index) const;
     Q_INVOKABLE bool isVideoAt(int index) const;
     Q_INVOKABLE bool isViewableAt(int index) const;
@@ -180,6 +183,7 @@ public:
     // row.  Consumers must use this instead of treating an empty URL as
     // proof that work is still running.
     Q_INVOKABLE QString viewerRequestStateAt(int index) const;
+    Q_INVOKABLE bool viewerDecodeFailedAt(int index) const;
     Q_INVOKABLE void activateIndex(int index);
     Q_INVOKABLE void ensurePreviews();
     Q_INVOKABLE void requestViewer(int width, int height);
@@ -214,6 +218,7 @@ signals:
     void viewerOpenChanged();
     void viewerSourceChanged();
     void viewerSourceAtChanged(int index);
+    void vectorSourceAtChanged(int index);
     void viewerRequestStateAtChanged(int index);
     void fileFieldsRead(const QVariantMap &update);
     void fileFieldsReadBatch(const QVariantList &updates);

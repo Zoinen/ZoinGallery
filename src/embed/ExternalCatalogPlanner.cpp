@@ -168,6 +168,9 @@ void ExternalCatalogModel::pumpCatalogFitRequests() {
             continue;
         }
         const Entry &entry = loadedEntry(row);
+        // A viewport owns network byte demand. Its normal thumbnails use
+        // scaled decoding; do not warm full-resolution viewer fits across it.
+        if (_hasViewportDemand && expensiveSource(entry.source)) continue;
         if (!entry.image || entry.thumbnailKind == QStringLiteral("video") ||
             _catalogFitResolvedSources.contains(entry.sourceIdentity)) {
             continue;
@@ -193,11 +196,10 @@ void ExternalCatalogModel::pumpCatalogFitRequests() {
             continue;
         }
         const QString key = viewerRequestKey(request);
+        if (_pendingViewerRequests.contains(key)) continue;
         _catalogFitPendingKeys.insert(key);
-        if (!_pendingViewerRequests.contains(key)) {
-            _pendingViewerRequests.insert(key);
-            requests.append(request);
-        }
+        _pendingViewerRequests.insert(key);
+        requests.append(request);
         --available;
     }
     if (!requests.isEmpty()) {
@@ -331,14 +333,14 @@ void ExternalCatalogModel::requestImageMetadataForRow(
         }
         scheduleProbePump();
     }
-    // Before the catalog barrier only an explicit high-priority viewer row
-    // may materialize. Masonry visible/overscan requests stay in their queues
-    // until every bounded probe has produced an outcome.
+    // Viewer Fit neighbors depend on their own probe, not the catalog barrier.
     const Entry &entry = loadedEntry(row);
-    const bool explicitCurrentViewer = highPriority &&
-        entry.id == _viewerEntryId;
+    const bool explicitViewer = highPriority &&
+        (entry.id == _viewerEntryId
+         || (!_viewerViewportSize.isEmpty()
+             && viewerCandidateRows(rowForEntryId(_viewerEntryId), 16).contains(row)));
     if (!_catalogProbeRequested || _probePassComplete ||
-        (explicitCurrentViewer && probeResolvedFor(entry))) {
+        (explicitViewer && probeResolvedFor(entry))) {
         scheduleMetadataPump();
     }
 }
@@ -549,7 +551,8 @@ void ExternalCatalogModel::scheduleViewerDecode() {
         return;
     }
     const bool nativeRequest = _viewerViewportSize.isEmpty();
-    const int prefetchCount = nativeRequest ? 5 : 16;
+    const int prefetchCount = nativeRequest ? 5
+        : 16;
     _viewerPlans.insert(
         _viewerEntryId,
         {_viewerViewportSize, nativeRequest ? 1 : prefetchCount});
@@ -572,6 +575,8 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
         return;
     }
 
+    if (viewerDecodeFailedAt(row)) return;
+
     const Entry &requestedEntry = loadedEntry(row);
     const QSize requestedOriginalSize = requestedEntry.originalSize.isValid()
         ? requestedEntry.originalSize
@@ -584,8 +589,20 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
 
     const bool probeBarrierActive =
         _catalogProbeRequested && !_probePassComplete;
-    const int effectivePrefetchCount = probeBarrierActive ? 1 : prefetchCount;
     const bool explicitCurrentPlan = loadedEntry(row).id == _viewerEntryId;
+    const bool waitingForCurrent = explicitCurrentPlan
+        && viewerRequestStateAt(row) != QStringLiteral("ready");
+    if (explicitCurrentPlan && !viewportSize.isEmpty()) {
+        QStringList sources;
+        for (const int candidate : viewerCandidateRows(row, prefetchCount))
+            sources.append(loadedEntry(candidate).sourceIdentity);
+        _decodeManager->setViewerDemand(_sessionId, sources);
+    }
+    // A slow catalog probe must not hold the Fit neighbor window behind an
+    // unrelated offscreen source. Native neighbors retain their dwell/barrier.
+    const int effectivePrefetchCount = (probeBarrierActive && viewportSize.isEmpty())
+        || (waitingForCurrent && expensiveSource(requestedEntry.source))
+        ? 1 : prefetchCount;
     const QList<int> candidates = viewerCandidateRows(
         row, effectivePrefetchCount);
     for (const int candidateRow : candidates) {
@@ -594,7 +611,8 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
             (!candidate.item || !candidate.item->fullSize().isValid())) {
             requestImageMetadataForRow(
                 candidateRow,
-                candidateRow == row && explicitCurrentPlan);
+                explicitCurrentPlan
+                    && (candidateRow == row || !viewportSize.isEmpty()));
         }
     }
 
@@ -636,13 +654,8 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
         request.storeInPersistentCache = request.fitToViewerRequest;
         const QString key = viewerRequestKey(request);
         if (_pendingViewerRequests.contains(key)) {
-            if (!_catalogFitPendingKeys.contains(key)) {
-                continue;
-            }
-            // Upgrade the interactive subscriber. The background decode may
-            // still finish, but shared materialization prevents a second
-            // download and this request enters the viewer priority band.
-            requests.append(request);
+            // DecodeManager's live source demand promotes the existing owner,
+            // including a cache/read/decode stage already in flight.
             continue;
         }
         _pendingViewerRequests.insert(key);
@@ -660,23 +673,24 @@ QList<int> ExternalCatalogModel::viewerCandidateRows(
         return result;
     }
 
-    bool hitStart = false;
-    bool hitEnd = false;
-    for (int counter = 0;
-         result.size() < count && !(hitStart && hitEnd); ++counter) {
-        const int candidate = counter % 2 == 0
-            ? row + counter / 2
-            : row - (counter + 1) / 2;
-        if (candidate < 0) {
-            hitStart = true;
+    result.append(row);
+    int next = row + 1;
+    int previous = row - 1;
+    bool forward = true;
+    while (result.size() < count
+           && (next < logicalRowCount() || previous >= 0)) {
+        int &cursor = forward ? next : previous;
+        const int step = forward ? 1 : -1;
+        while (cursor >= 0 && cursor < logicalRowCount()
+               && (!validRow(cursor) || !loadedEntry(cursor).image
+                   || viewerDecodeFailedAt(cursor)
+                   || loadedEntry(cursor).thumbnailKind == QStringLiteral("video")))
+            cursor += step;
+        if (cursor >= 0 && cursor < logicalRowCount()) {
+            result.append(cursor);
+            cursor += step;
         }
-        if (candidate >= logicalRowCount()) {
-            hitEnd = true;
-        }
-        if (validRow(candidate) && loadedEntry(candidate).image
-            && loadedEntry(candidate).thumbnailKind != QStringLiteral("video")) {
-            result.append(candidate);
-        }
+        forward = !forward;
     }
     return result;
 }

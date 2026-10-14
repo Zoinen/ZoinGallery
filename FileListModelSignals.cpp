@@ -132,6 +132,15 @@ void FileListModel::connectImageInfoSignal() {
             ImageInfo itemInfo = result;
             normalizeVideoImageInfo(itemInfo, item);
             if (!itemInfo.imageSize.isValid()) {
+                if (isVectorSource(result) && !result.sourceAccessFailed) {
+                    item->setVectorSourceFailed(true);
+                    item->setIsShowAsImage(false);
+                    item->setFullSize({});
+                    emit dataChanged(index(item->index()), index(item->index()));
+                    setViewerRequestState(item->fullPath(), QStringLiteral("failed"));
+                    handleDirectOpenImageInfo(result);
+                    return;
+                }
                 rememberFailedImageInfo(result);
                 if (result.isLast && !result.isFromEmbeddedView) {
                     emitThumbnailInfoFlush();
@@ -341,6 +350,21 @@ void FileListModel::finishImageInfoBatch(ImageInfoBatchUpdate *update) {
     }
 }
 void FileListModel::connectImageReadySignal() {
+    connect(_decodeManager, &DecodeManager::vectorSourceReady, this,
+        [this](const ImageDecodeRequest &request, const VectorSourcePtr &source) {
+            if (!source || !acceptsRequestNamespace(request.requestNamespace)) return;
+            auto it = _fileToItem.find(request.info.path);
+            if (it == _fileToItem.end() || !isCurrentFileVersion(it.value(), request.info)) return;
+            auto *item = it.value();
+            item->setVectorSource(source);
+            item->setFullSize(source->size);
+            emit dataChanged(index(item->index(), 0), index(item->index(), 0),
+                {ImageIdUrlRole, ImageFullSizeRole});
+            setViewerRequestState(request.info.sourceIdentity(), QStringLiteral("ready"));
+            emit viewerImageCacheChanged(item->index());
+            if (item->index() == _currentViewIndex)
+                emit viewerImageIdUrlChanged(source->url.toString(), 1);
+        });
     connect(_decodeManager, &DecodeManager::imageReady, this, [&] (const ImageDecodeRequest &request,
                                                                    const QImage &image, const DecodedImageInfo &decodedInfo) {
         if (!acceptsRequestNamespace(request.requestNamespace)) {
@@ -754,6 +778,17 @@ void FileListModel::connectImageReadFailedSignal() {
         }
         if (request.info.directOpenGeneration &&
             request.info.directOpenGeneration != _directOpen.generation) {
+            return;
+        }
+        if (isVectorSource(request.info) && !request.sourceAccessFailed) {
+            auto it = _fileToItem.find(request.info.path);
+            if (it != _fileToItem.end() && isCurrentFileVersion(it.value(), request.info)) {
+                it.value()->setVectorSourceFailed(true);
+                it.value()->setIsShowAsImage(false);
+                it.value()->setFullSize({});
+                emit dataChanged(index(it.value()->index(), 0), index(it.value()->index(), 0), {ImageFullSizeRole});
+                setViewerRequestState(request.info.sourceIdentity(), QStringLiteral("failed"));
+            }
             return;
         }
         const bool retryScheduled = rememberFailedDecodeRequest(request);

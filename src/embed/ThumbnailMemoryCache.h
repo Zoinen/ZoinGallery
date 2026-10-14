@@ -117,6 +117,7 @@ private:
         QSize decodedSize;
         qint64 bytes = 0;
         quint64 lastUse = 0;
+        QSet<QSize> completedRequests;
     };
 
     struct PendingEntry {

@@ -35,6 +35,8 @@ ExternalCatalogModel::ExternalCatalogModel(
             &ExternalCatalogModel::handleImageInfo);
     connect(_decodeManager, &DecodeManager::imagesInfoReady, this,
             &ExternalCatalogModel::handleImageInfos);
+    connect(_decodeManager, &DecodeManager::vectorSourceReady, this,
+            &ExternalCatalogModel::handleVectorSourceReady);
     connect(_decodeManager, &DecodeManager::imageReady, this,
             &ExternalCatalogModel::handleImageReady);
     connect(_decodeManager, &DecodeManager::imageReadFailed, this,
@@ -174,13 +176,14 @@ ImageFile *ExternalCatalogModel::ensureItem(int row) const {
     auto *item = new ImageFile(
         const_cast<ExternalCatalogModel *>(this));
     item->initializeExternalCatalogRow(
-        folder, fileName, row, entry->directory, entry->image,
+        folder, fileName, row, entry->directory, entry->thumbnailPresentation(),
         entry->iconPath.isEmpty()
             ? defaultIconPath(entry->directory, entry->image)
             : entry->iconPath,
         entry->selected, _thumbnailProviderName, entry->imageInfo,
         entry->highlightStyle, entry->displayFields,
         entry->metadataDeferred);
+    if (entry->vectorSource) item->setVectorSource(entry->vectorSource);
     // A retained provider frame belongs to this current catalog entry even
     // when its QObject facade is created only after the first painted frame.
     // Restore that identity before exposing the facade so thumbnail planning
@@ -188,7 +191,7 @@ ImageFile *ExternalCatalogModel::ensureItem(int row) const {
     if (!entry->thumbnailProviderId.isEmpty()) {
         item->setImageId(entry->thumbnailProviderId);
     }
-    if (entry->originalSize.isValid()) {
+    if (entry->originalSize.isValid() && !entry->videoThumbnailFailed) {
         item->setFullSize(entry->originalSize);
     }
     entry->item = item;
@@ -259,9 +262,12 @@ QVariantMap ExternalCatalogModel::visualSnapshot(int row) const {
         {QStringLiteral("isFolder"), entry->directory},
         {QStringLiteral("folderPreviewState"), int(entry->directoryPreviewState)},
         {QStringLiteral("folderPreviewRevision"), entry->directoryPreviewRevision},
-        {QStringLiteral("isImage"), entry->image},
+        {QStringLiteral("isVector"), isVectorSource(entry->imageInfo)},
+        {QStringLiteral("vectorSource"), entry->vectorSource ? entry->vectorSource->url.toString() : QString()},
+        {QStringLiteral("vectorState"), entry->videoThumbnailFailed ? QStringLiteral("failed") : entry->vectorSource ? QStringLiteral("ready") : QStringLiteral("loading")},
+        {QStringLiteral("isImage"), entry->thumbnailPresentation()},
         {QStringLiteral("thumbnailKind"), entry->thumbnailKind},
-        {QStringLiteral("imageDimensionsKnown"), entry->image && !entry->originalSize.isEmpty()},
+        {QStringLiteral("imageDimensionsKnown"), entry->thumbnailPresentation() && !entry->originalSize.isEmpty()},
         {QStringLiteral("imageWidth"), entry->originalSize.width()},
         {QStringLiteral("imageHeight"), entry->originalSize.height()},
         {QStringLiteral("isSelected"), entry->selected},
@@ -280,7 +286,7 @@ bool ExternalCatalogModel::setEntryHighlightStyle(
     const QString styledIcon = highlightStyle.value(
         QStringLiteral("icon")).toString();
     const QString iconPath = styledIcon.isEmpty()
-        ? defaultIconPath(entry.directory, entry.image) : styledIcon;
+        ? defaultIconPath(entry.directory, entry.thumbnailPresentation()) : styledIcon;
     if (entry.highlightStyle == highlightStyle
         && entry.iconPath == iconPath && entry.iconKey == iconKey) {
         return false;
@@ -347,9 +353,9 @@ QVariant ExternalCatalogModel::data(const QModelIndex &index, int role) const {
     case FileListModel::FolderRole:
         return entry->directory;
     case FileListModel::IsImageRole:
-        return entry->image;
+        return entry->thumbnailPresentation();
     case FileListModel::ImageFullSizeRole:
-        return entry->originalSize;
+        return entry->videoThumbnailFailed ? QSize{} : entry->originalSize;
     case FileListModel::FolderViewRole:
         return directoryPreviewAvailable(index.row());
     case FileListModel::LastModifiedRole:
@@ -367,7 +373,7 @@ QVariant ExternalCatalogModel::data(const QModelIndex &index, int role) const {
     case EntryNameRole:
         return entry->name;
     case KnownImageSizeRole:
-        return entry->originalSize;
+        return entry->videoThumbnailFailed ? QSize{} : entry->originalSize;
     case MetadataSettledRole:
         return entry->metadataSettled;
     case VisualSnapshotRole:
@@ -487,14 +493,14 @@ bool ExternalCatalogModel::catalogMatches(
 void ExternalCatalogModel::restoreCachedMetadata(Entry &entry) {
     const bool videoPlaceholder = entry.thumbnailKind == QStringLiteral("video")
         && entry.originalSize == QSize(16, 9);
-    if (!entry.image || (entry.originalSize.isValid() && !videoPlaceholder)
+    if (isVectorSource(entry.imageInfo) || !entry.image || (entry.originalSize.isValid() && !videoPlaceholder)
         || !cacheReadsEnabled(_decodeManager->imageCacheMode())
         || !PersistentDerivedImageCache::retrieveMemoryMetadata(entry.imageInfo)) return;
     entry.originalSize = rotateToOrientation(entry.imageInfo.imageSize, entry.imageInfo.orientation);
     entry.metadataSettled = true;
     if (entry.item) {
         entry.item->setInfo(entry.imageInfo);
-        entry.item->setFullSize(entry.originalSize);
+        entry.item->setFullSize(entry.videoThumbnailFailed ? QSize{} : entry.originalSize);
     }
     if (entry.imageInfo.fileFieldsRead && entry.source.isValid()) {
         emit fileFieldsRead(QVariantMap{
@@ -582,6 +588,7 @@ bool ExternalCatalogModel::parseCatalogEntry(
         : QDateTime{};
     parsed.imageInfo.fileSize = parsed.size;
     parsed.imageInfo.thumbnailKind = parsed.thumbnailKind;
+    if (!parsed.directory && isVectorSource(parsed.imageInfo)) parsed.image = true;
     if (parsed.image && parsed.thumbnailKind == QStringLiteral("video")) {
         // Video metadata is obtained by the thumbnail decoder. A stable
         // 16:9 placeholder keeps Masonry geometry and thumbnail admission

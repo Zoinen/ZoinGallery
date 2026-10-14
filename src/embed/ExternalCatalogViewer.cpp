@@ -79,11 +79,82 @@ QList<QPair<QString, int>> ExternalCatalogModel::viewerImageSourcesAt(
     if (plan != _viewerPlans.constEnd()) {
         viewerSize = plan->viewportSize;
     }
-    return _viewerImageCache.imageSources(
+    if (isVectorSource(entry.imageInfo)) {
+        return entry.vectorSource ? QList<QPair<QString, int>>{{entry.vectorSource->url.toString(), 1}} : QList<QPair<QString, int>>{};
+    }
+    auto sources = _viewerImageCache.imageSources(
         ensureItem(row), viewerSize,
         [this](ImageDecodeRequest &request) {
             stabilizeViewerFitRequest(request);
         });
+    if (!entry.thumbnailProviderId.isEmpty()
+        && std::none_of(sources.cbegin(), sources.cend(),
+            [](const auto &source) { return source.second == 0; })) {
+        sources.prepend({QStringLiteral("image://") + _thumbnailProviderName
+            + QLatin1Char('/') + entry.thumbnailProviderId, 0});
+    }
+    return sources;
+}
+
+bool ExternalCatalogModel::viewerDecodeFailedAt(int row) const {
+    if (!validRow(row)) return false;
+    const Entry &entry = loadedEntry(row);
+    const auto failed = _viewerDecodeFailedVersions.constFind(entry.sourceIdentity);
+    return failed != _viewerDecodeFailedVersions.cend()
+        && failed.value() == entry.contentVersion;
+}
+
+void ExternalCatalogModel::pruneViewerDecodeFailures() {
+    for (auto failed = _viewerDecodeFailedVersions.begin();
+         failed != _viewerDecodeFailedVersions.end();) {
+        const QList<int> rows = sourceRows(failed.key());
+        const bool retained = std::any_of(rows.cbegin(), rows.cend(),
+            [this, &failed](int row) {
+                return loadedEntry(row).contentVersion == failed.value();
+            });
+        if (retained) ++failed;
+        else failed = _viewerDecodeFailedVersions.erase(failed);
+    }
+}
+
+void ExternalCatalogModel::markViewerDecodeFailed(const QList<int> &rows) {
+    bool changed = false;
+    QList<int> failedRows;
+    QList<int> readyRows;
+    for (const int row : rows) {
+        if (!validRow(row)
+            || loadedEntry(row).thumbnailKind == QStringLiteral("video")) continue;
+        const auto sources = viewerImageSourcesAt(row);
+        if (std::any_of(sources.cbegin(), sources.cend(),
+                        [](const auto &source) { return source.second >= 1; })) {
+            // A native/alternate-tier failure cannot invalidate already
+            // decoded Fit pixels (including a usable embedded-preview frame).
+            readyRows.append(row);
+            continue;
+        }
+        failedRows.append(row);
+        if (viewerDecodeFailedAt(row)) continue;
+        const Entry &entry = loadedEntry(row);
+        _viewerDecodeFailedVersions.insert(entry.sourceIdentity, entry.contentVersion);
+        MediaTimingTrace::event(QStringLiteral("qt.gallery.viewer.decode_failed"), {
+            {QStringLiteral("message"), QStringLiteral("[FIX:viewer-decode] Excluding undecodable source revision")},
+            {QStringLiteral("sourceIdentity"), entry.sourceIdentity},
+            {QStringLiteral("contentVersion"), entry.contentVersion},
+            {QStringLiteral("row"), row},
+        });
+        changed = true;
+    }
+    setViewerRequestState(readyRows, QStringLiteral("ready"));
+    setViewerRequestState(failedRows, QStringLiteral("failed"));
+    if (changed && !_viewerDecodeReplanScheduled) {
+        // One refill for the batch, after callbacks finish, without recursively
+        // submitting metadata from inside its own batch publication.
+        _viewerDecodeReplanScheduled = true;
+        QTimer::singleShot(0, this, [this] {
+            _viewerDecodeReplanScheduled = false;
+            if (!_shutdown) scheduleViewerDecode();
+        });
+    }
 }
 
 QString ExternalCatalogModel::viewerRequestStateAt(int row) const {
@@ -91,6 +162,7 @@ QString ExternalCatalogModel::viewerRequestStateAt(int row) const {
         || loadedEntry(row).thumbnailKind == QStringLiteral("video")) {
         return QStringLiteral("idle");
     }
+    if (viewerDecodeFailedAt(row)) return QStringLiteral("failed");
     return _viewerRequestStates.value(loadedEntry(row).id,
                                       QStringLiteral("idle"));
 }
@@ -104,6 +176,13 @@ void ExternalCatalogModel::setViewerRequestState(
         const QString entryId = loadedEntry(row).id;
         const QString previous = _viewerRequestStates.value(
             entryId, QStringLiteral("idle"));
+        if (entryId == _viewerEntryId) {
+            _decodeManager->setInteractiveSource(_sessionId,
+                state == QStringLiteral("pending")
+                    ? loadedEntry(row).sourceIdentity : QString(),
+                state == QStringLiteral("pending")
+                    ? loadedEntry(row).source.resourceId : QString());
+        }
         if (previous == state) {
             continue;
         }
@@ -162,7 +241,12 @@ void ExternalCatalogModel::requestViewer(
         _viewerEntryId = entryId;
         notifyViewerImageUrlChanged();
     }
-    const int prefetchCount = nativeRequest ? 5 : 16;
+    if (viewerDecodeFailedAt(row)) {
+        setViewerRequestState({row}, QStringLiteral("failed"));
+        return;
+    }
+    const int prefetchCount = nativeRequest ? 5
+        : 16;
     // Metadata/retry callbacks replay this retained plan. Until the Fit window
     // has completed its dwell, keep native replay restricted to the selected
     // frame; finishDeferredNativeDwell() widens it to the +/-2 window.
@@ -277,6 +361,8 @@ void ExternalCatalogModel::clearViewer() {
     _deferredNativeEntryId.clear();
     invalidateNativeDwell();
     _viewerEntryId.clear();
+    _decodeManager->setViewerDemand(_sessionId, {});
+    _decodeManager->setInteractiveSource(_sessionId, {});
     _viewerViewportSize = {};
     _viewerPlans.clear();
     clearViewerRequestStates();
@@ -363,13 +449,21 @@ void ExternalCatalogModel::requestImageMetadata(
     // overscan window.
     if (!catalogWide || !rows.isEmpty()) {
         if (highPriority) {
+            _hasViewportDemand = true;
             _metadataVisibleRows = normalized;
             _metadataLastVisibleRows = QSet<int>(
                 _metadataVisibleRows.cbegin(),
                 _metadataVisibleRows.cend());
+            QSet<QString> visibleSources;
+            for (const int row : normalized)
+                visibleSources.insert(loadedEntry(row).sourceIdentity);
+            _decodeManager->setViewportDemand(_sessionId, visibleSources);
+            _probeVisibleRows = normalized;
         }
         else {
             _metadataOverscanRows = normalized;
+            _metadataLastOverscanRows = QSet<int>(normalized.cbegin(), normalized.cend());
+            _probeOverscanRows = normalized;
         }
         enqueueProbeRows(normalized, highPriority);
     }
@@ -477,4 +571,14 @@ void ExternalCatalogModel::shutdown() {
 }
 
 
+} // namespace ZoinGallery
+
+namespace ZoinGallery {
+bool ExternalCatalogModel::isVectorAt(int row) const {
+    return validRow(row) && isVectorSource(loadedEntry(row).imageInfo);
+}
+QUrl ExternalCatalogModel::vectorSourceAt(int row) const {
+    return validRow(row) && loadedEntry(row).vectorSource
+        ? loadedEntry(row).vectorSource->url : QUrl{};
+}
 } // namespace ZoinGallery

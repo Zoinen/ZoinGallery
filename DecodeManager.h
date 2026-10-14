@@ -2,6 +2,7 @@
 #define DECODEMANAGER_H
 
 #include <QElapsedTimer>
+#include <QHash>
 #include <QObject>
 #include <QQueue>
 #include <QSet>
@@ -11,6 +12,7 @@
 
 #include "CacheUsageMode.h"
 #include "ImageFile.h"
+#include "VectorSource.h"
 #include "ImageProbe.h"
 
 enum class RunnerType {
@@ -37,6 +39,7 @@ public:
 
     virtual QString path() const { return QString(); }
     virtual bool isViewerRequest() const { return false; }
+    virtual bool isViewerFitRequest() const { return false; }
     virtual bool isPanelThumbnailRequest() const { return false; }
     virtual bool isHighPriority() const { return false; }
     virtual QString requestNamespace() const { return QString(); }
@@ -110,6 +113,15 @@ public:
     void probeImages(
         const QList<ZoinGallery::ImageProbeRequest> &requests);
     void decodeImages(const QList<ImageDecodeRequest> &requests);
+    // Demand is separate from immutable runner requests: changing visibility
+    // promotes an existing owner without duplicating or mutating worker data.
+    void setViewportDemand(const QString &requestNamespace,
+                           const QSet<QString> &visibleSources);
+    void setViewerDemand(const QString &requestNamespace,
+                         const QStringList &orderedSources);
+    void setInteractiveSource(const QString &requestNamespace,
+                             const QString &sourceIdentity,
+                             const QString &resourceId = {});
     void restoreCachedVideoPoster(const ImageDecodeRequest &thumbnailRequest);
     void readFolderList(const QStringList &paths, int totalImages = -1,
                         quint64 requestGeneration = 0,
@@ -144,6 +156,7 @@ signals:
     void imageProbeReady(const ZoinGallery::ImageProbeResult &result);
     void imageInfoReady(const ImageInfo &result);
     void imagesInfoReady(const QList<ImageInfo> &result);
+    void vectorSourceReady(const ImageDecodeRequest &request, const VectorSourcePtr &source);
     void imageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
     void imageReadFailed(const ImageDecodeRequest &request);
     void folderListReady(const QString &path, const QList<FileInfo> &subfiles,
@@ -160,6 +173,7 @@ protected:
     void onRunnerFinished(QObject *runner);
 
 private:
+    QHash<QString, QWeakPointer<VectorSource>> _vectorSources;
     void onImageInfoReady(const ImageInfo &result);
     void onImageReadReady(const ImageData &result);
     void onImageReadFailed(const ImageDecodeRequest &request);
@@ -199,6 +213,9 @@ private:
     int compressedPayloadRunnerLimit() const;
     bool isRunnerTypeMatchesThreadType(Runner *runner, int threadType);
     void updateRunningTasksCount();
+    int priorityForRunner(Runner *runner) const;
+    void preemptSourceReads(const QString &requestNamespace,
+                            bool interactiveDemand = false);
     QString runnerToString(Runner *task);
 
     struct WorkerInfo {
@@ -207,6 +224,10 @@ private:
     };
 
     QQueue<Runner *> _taskQueue;
+    QHash<QString, QSet<QString>> _visibleSources;
+    QHash<QString, QHash<QString, int>> _viewerSourceRanks;
+    QString _interactiveNamespace;
+    QString _interactiveSource;
     QSet<QString> _pendingVideoPosterLookups;
     QList<WorkerInfo> _workers;
 

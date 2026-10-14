@@ -2,6 +2,7 @@
 #include <ZoinGallery/GallerySession.h>
 
 #include "ImageFile.h"
+#include "VectorSource.h"
 
 namespace ZoinGallery {
 namespace {
@@ -76,7 +77,9 @@ QVariant GalleryCatalogModel::visualSnapshotData(
         {QStringLiteral("localPath"), image->fullPath()},
         {QStringLiteral("text"), image->text()},
         {QStringLiteral("isFolder"), image->isFolder()},
-        {QStringLiteral("isImage"), image->isImage()},
+        {QStringLiteral("isVector"), isVectorSource(image->info())},
+        {QStringLiteral("vectorSource"), image->vectorSource() ? image->vectorSource()->url.toString() : QString()},
+        {QStringLiteral("isImage"), image->isImage() && !image->vectorSourceFailed()},
         {QStringLiteral("thumbnailKind"), image->info().thumbnailKind},
         {QStringLiteral("isSelected"), image->isSelected()},
         {QStringLiteral("iconPath"), image->iconPath()},

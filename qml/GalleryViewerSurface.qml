@@ -122,7 +122,7 @@ Item {
                     || hardwareSampling
                 sphericTextureMipmapsEnabled: root.viewer.sphericViewerMode
                 topInset: 0
-                checkerboardEnabled: true
+                checkerboardEnabled: root.viewer.checkerboardEnabled
                 scrollBarTheme: root.viewer.theme
                 scrollBarsRightMargin: root.viewer.scrollBarsRightMargin
                 pinchZoomEnabled: !root.viewer.sphericViewerMode
@@ -133,8 +133,14 @@ Item {
                     || Math.abs(root.viewer.viewerNavigationOffsetX) > 0.1
 
                 onZoomScaleChanged: {
-                    if (!root.viewer.currentIsVideo)
+                    if (!root.viewer.currentIsVideo && !root.viewer.currentIsVector)
                         root.viewer.scheduleDecodeRequest()
+                }
+                onVectorLoadFailed: source => {
+                    const row = root.viewer.presentedIndex
+                    Qt.callLater(() => {
+                        if (root.viewer.session) root.viewer.session.reportVectorFailure(row, source)
+                    })
                 }
                 onCloseRequested: root.viewer.handleViewportDoubleClick()
                 onMiddleClickRequested:
@@ -151,7 +157,7 @@ Item {
                 parent: viewportItem
                 anchors.fill: parent
                 active: root.viewer.sphericViewerMode
-                        && !root.viewer.currentIsVideo
+                        && !root.viewer.currentIsVideo && !root.viewer.currentIsVector
                 opacity: root.viewer.transitionHasGeometry
                          ? root.viewer.transitionProgress : 1
 
@@ -266,11 +272,20 @@ Item {
                             : parent.height)
                     rotation: viewportItem.rotationMode * 90
 
+                    readonly property bool vectorNeighbor: root.viewer.session
+                        && root.viewer.session.isVectorAt(root.viewer.viewerNavigationTargetIndex)
+                    GalleryVectorImage {
+                        anchors.fill: parent
+                        source: parent.vectorNeighbor ? root.viewer.viewerNavigationTargetSource : ""
+                        visible: parent.vectorNeighbor
+                        devicePixelRatio: root.viewer.devicePixelRatio
+                        showCheckerboard: viewportItem.checkerboardEnabled
+                    }
                     Image {
                         id: neighborImage
                         objectName: "galleryViewerNavigationNeighborImage"
                         anchors.fill: parent
-                        source: root.viewer.viewerNavigationTargetSource
+                        source: parent.vectorNeighbor ? "" : root.viewer.viewerNavigationTargetSource
                         fillMode: Image.PreserveAspectFit
                         asynchronous: true
                         cache: false
@@ -280,6 +295,7 @@ Item {
 
                     ViewerResample {
                         objectName: "galleryViewerNavigationNeighborShader"
+                        visible: !parent.vectorNeighbor
                         anchors.fill: parent
 
                         imageSource: neighborImage

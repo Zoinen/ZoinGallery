@@ -1437,6 +1437,126 @@ private slots:
         runtime->shutdown();
     }
 
+    void viewerNavigationSkipsNewFailuresAndRestoresOriginAtBoundary() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+#ifndef Q_MOC_RUN
+        QObject *rootObject = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 640; height: 420
+                QtObject {
+                    id: navigationSession
+                    objectName: "failedNavigationSession"
+                    property int currentIndex: 0
+                    property string cursorEntryId: "row-0"
+                    property bool videoPlaybackAvailable: false
+                    property var failedRows: []
+                    property string viewerPreviousEntryId: ""
+                    property string viewerPreviousReturnEntryId: ""
+                    property bool viewerPreviousLocked: false
+                    property var viewerPreviousViewport: ({})
+                    signal viewerRequestStateAtChanged(int index)
+                    function entryIdAt(index) {
+                        return index >= 0 && index < 4 ? "row-" + index : ""
+                    }
+                    function indexForEntryId(entryId) {
+                        return entryId.startsWith("row-") ? Number(entryId.slice(4)) : -1
+                    }
+                    function sourceIndexAt(index) { return index }
+                    function isImageAt(index) { return index >= 0 && index < 4 }
+                    function isVideoAt(index) { return false }
+                    function viewerSourcesAt(index) { return [] }
+                    function imageOriginalSizeAt(index) { return Qt.size(800, 600) }
+                    function viewerDecodeFailedAt(index) { return failedRows.indexOf(index) >= 0 }
+                    function viewerRequestStateAt(index) {
+                        return viewerDecodeFailedAt(index) ? "failed" : "ready"
+                    }
+                    function requestViewer(width, height) {}
+                    function requestViewerAt(index, width, height) {}
+                    function setViewerPreviousState(previous, returned, locked, viewport) {
+                        viewerPreviousEntryId = previous
+                    }
+                    function adjacentViewableIndex(index, direction) {
+                        for (let row = index + direction; row >= 0 && row < 4; row += direction)
+                            if (!viewerDecodeFailedAt(row)) return row
+                        return index
+                    }
+                    function open(index) {
+                        cursorEntryId = entryIdAt(index)
+                        currentIndex = index
+                    }
+                    function fail(index) {
+                        failedRows = failedRows.concat([index])
+                        viewerRequestStateAtChanged(index)
+                    }
+                }
+                GalleryViewer {
+                    id: viewer
+                    objectName: "failedNavigationViewer"
+                    anchors.fill: parent
+                    session: navigationSession
+                    animationDuration: 1
+                    onNavigationRequested: function(entryId, sourceIndex) {
+                        navigationSession.open(sourceIndex)
+                    }
+                }
+            }
+        )QML", QStringLiteral("GalleryFailedNavigation.qml"));
+#else
+        QObject *rootObject = nullptr;
+#endif
+        QVERIFY(rootObject);
+        view.show();
+        auto *viewer = rootObject->findChild<QObject *>(
+            QStringLiteral("failedNavigationViewer"));
+        auto *session = rootObject->findChild<QObject *>(
+            QStringLiteral("failedNavigationSession"));
+        QVERIFY(viewer);
+        QVERIFY(session);
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 0);
+        const auto navigate = [viewer](int direction) {
+            return QMetaObject::invokeMethod(viewer, "navigate",
+                Q_ARG(QVariant, QVariant(direction)));
+        };
+        const auto fail = [session](int index) {
+            return QMetaObject::invokeMethod(session, "fail",
+                Q_ARG(QVariant, QVariant(index)));
+        };
+        QVERIFY(navigate(1));
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 1);
+        QVERIFY(fail(1));
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 2);
+        // The last candidate fails: restore the successful navigation origin.
+        QVERIFY(navigate(1));
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 3);
+        QVERIFY(fail(3));
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 2);
+        QVERIFY(navigate(-1));
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 0);
+        // An explicit open of a known failed image remains an error screen.
+        QVERIFY(QMetaObject::invokeMethod(session, "open",
+            Q_ARG(QVariant, QVariant(1))));
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 1);
+        QTest::qWait(30);
+        QCOMPARE(viewer->property("presentedIndex").toInt(), 1);
+        QCOMPARE(viewer->property("currentViewerRequestState").toString(),
+                 QStringLiteral("failed"));
+        // A newly discovered backward failure continues in the same direction.
+        QVERIFY(session->setProperty("failedRows", QVariantList{}));
+        QVERIFY(QMetaObject::invokeMethod(session, "open",
+            Q_ARG(QVariant, QVariant(2))));
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 2);
+        QVERIFY(navigate(-1));
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 1);
+        QVERIFY(fail(1));
+        QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 0);
+        runtime->shutdown();
+    }
+
     void terminalViewerFailureStopsBusyIndicatorAndFrames() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

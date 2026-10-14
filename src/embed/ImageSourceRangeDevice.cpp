@@ -64,6 +64,7 @@ qint64 ImageSourceRangeDevice::readData(char *data, qint64 maxlen) {
         const ImageSourceReadResult result = m_provider->readRange(
             m_source, offset, requested, m_cancellation);
         if (!result.succeeded()) {
+            m_readFailed.store(true);
             setErrorString(result.errorString);
             return -1;
         }
@@ -74,6 +75,7 @@ qint64 ImageSourceRangeDevice::readData(char *data, qint64 maxlen) {
                 m_prefetchEndOfFile = true;
                 return 0;
             }
+            m_readFailed.store(true);
             setErrorString(QStringLiteral("video source returned no data"));
             return -1;
         }

@@ -1,6 +1,7 @@
 #include "ImageProbeRunner.h"
 
 #include "ThumbnailLoader.h"
+#include "VectorSource.h"
 #include "src/embed/EmbeddedImageProbe.h"
 
 #include <ZoinGallery/MediaTimingTrace.h>
@@ -79,6 +80,14 @@ void ImageProbeRunner::run()
         return;
     }
 
+    ImageInfo sourceInfo;
+    sourceInfo.source = _request.source;
+    if (isVectorSource(sourceInfo)) {
+        result.status = ZoinGallery::ImageSourceProbeStatus::NotFound;
+        emit imageProbeReady(result);
+        emit finished(this);
+        return;
+    }
     const ZoinGallery::ImageSourceProbeResult providerProbe =
         _provider->probeEmbedded(_request.source, _cancellation);
     if (_cancellation->isCanceled()) {

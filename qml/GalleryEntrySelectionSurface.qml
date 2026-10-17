@@ -62,7 +62,7 @@ Rectangle {
         if (entry.current && entry.panelRoot.showCursor
                 && !entry.cursorChromeSuppressed)
             return entry.panelRoot.cursorColor
-        if (entry.masonryMode || entry.gridMode) {
+        if (entry.masonryMode) {
             if (entry.folderPreviewActive)
                 return "transparent"
             return entry.isFolder

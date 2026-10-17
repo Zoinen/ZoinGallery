@@ -47,7 +47,8 @@ Item {
             devicePixelRatio: content.entry.renderDpr
         }
 
-        Text {
+        GalleryMotionText {
+            motionActive: content.entry.motionActive
             id: baseNameLabel
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             readonly property point pixelCorrection: content.pixelOffset(baseNameLabel)
@@ -84,7 +85,8 @@ Item {
             }
         }
 
-        Text {
+        GalleryMotionText {
+            motionActive: content.entry.motionActive
             id: extensionLabel
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             readonly property point pixelCorrection: content.pixelOffset(extensionLabel)

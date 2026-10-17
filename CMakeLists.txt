@@ -72,13 +72,13 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
 find_package(QT NAMES Qt6)
-set(ZOIN_QT_COMPONENTS Core Quick Gui Qml Concurrent Svg QuickVectorImage QuickControls2)
+set(ZOIN_QT_COMPONENTS Core Quick QuickPrivate Gui Qml Concurrent Svg QuickVectorImage QuickControls2)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     list(APPEND ZOIN_QT_COMPONENTS Multimedia)
 endif()
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS ${ZOIN_QT_COMPONENTS} REQUIRED)
 if(ZOIN_ENABLE_VIDEO_PLAYBACK)
-    find_package(Qt${QT_VERSION_MAJOR} COMPONENTS QuickPrivate MultimediaPrivate REQUIRED)
+    find_package(Qt${QT_VERSION_MAJOR} COMPONENTS MultimediaPrivate REQUIRED)
 endif()
 find_package(Qt${QT_VERSION_MAJOR}GuiPrivate ${Qt6_VERSION} CONFIG QUIET)
 if(NOT TARGET Qt${QT_VERSION_MAJOR}::GuiPrivate)
@@ -219,10 +219,13 @@ set(ZOIN_CORE_SOURCES
     GalleryIconTextMeasurer.cpp
     GalleryDelegateItem.h
     GalleryDelegateItem.cpp
+    GallerySceneItem.h
+    GallerySceneItem.cpp
     MasonryLayout.h
     MasonryLayout.cpp
     MasonryLayoutDelegateCommit.cpp
     MasonryLayoutGeometry.cpp
+    MasonryLayoutSceneBranches.cpp
     MasonryLayoutIconCaptions.cpp
     MasonryLayoutModelDelta.cpp
     MasonryLayoutModelReset.cpp
@@ -941,8 +944,11 @@ set(ZOIN_QML_FILES
     qml/GalleryInteractiveEntryDelegate.qml
     qml/GalleryEntrySelectionSurface.qml
     qml/GalleryVectorImage.qml
+    qml/GalleryVectorSceneCache.qml
+    qml/GalleryVectorPreview.qml
     qml/GalleryVectorSwap.qml
     qml/GalleryEntryPreview.qml
+    qml/GalleryMotionText.qml
     qml/GalleryThumbnailShaderLayer.qml
     qml/GalleryThumbnailCompactLayer.qml
     qml/GalleryMasonryEntryDelegate.qml
@@ -1232,6 +1238,7 @@ target_link_libraries(ZoinGalleryCore PUBLIC
     WebP::webp
     WebP::webpdemux
 )
+target_link_libraries(ZoinGalleryCore PRIVATE Qt${QT_VERSION_MAJOR}::QuickPrivate)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     target_link_libraries(ZoinGalleryCore PUBLIC
         Qt${QT_VERSION_MAJOR}::Multimedia)

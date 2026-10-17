@@ -58,6 +58,8 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(quint64 iconCaptionMeasurementCount READ iconCaptionMeasurementCount)
     Q_PROPERTY(int targetHeight READ targetHeight WRITE setTargetHeight NOTIFY targetHeightChanged)
     Q_PROPERTY(qreal contentY READ contentY WRITE setContentY NOTIFY contentYChanged)
+    Q_PROPERTY(bool scrollAnimationRunning READ scrollAnimationRunning
+               WRITE setScrollAnimationRunning NOTIFY scrollAnimationRunningChanged)
     Q_PROPERTY(qreal contentHeight READ contentHeight NOTIFY contentHeightChanged)
     Q_PROPERTY(QAbstractItemModel *model READ model WRITE setModel NOTIFY modelChanged)
     Q_PROPERTY(QQmlComponent *delegate MEMBER _delegate)
@@ -225,6 +227,8 @@ public:
 
     qreal contentY() const;
     void setContentY(qreal newContentY);
+    bool scrollAnimationRunning() const { return _scrollAnimationRunning; }
+    void setScrollAnimationRunning(bool running);
 
     qreal contentHeight() const;
 
@@ -312,6 +316,7 @@ signals:
     void layoutRevisionChanged();
     void targetHeightChanged();
     void contentYChanged();
+    void scrollAnimationRunningChanged();
     void contentHeightChanged();
     void modelChanged();
 
@@ -385,6 +390,7 @@ private:
         quint64 iconLabelStyleRevision = 0;
         size_t iconLabelNameHash = 0;
         qreal iconLabelWidth = 0;
+        int iconLabelPresentationMode = -1;
         QSize lastPlannedTargetSize;
         QString lastPlannedTransformKey;
         QString lastPlannedSourcePath;
@@ -553,6 +559,13 @@ private:
                                 DelegateCommitContext *context);
     void finalizeDelegateRow(DelegateRowCommit *row,
                              DelegateCommitContext *context);
+    void setDelegateVisible(BrickItem *item, bool visible);
+    QSet<int> retainedVectorSceneIndexes() const;
+    void updateRetainedVectorScenes();
+    void watchSceneBranchChanges(BrickItem *item);
+    void updateSceneBranchParent(BrickItem *item);
+    void updateSceneBranchParents();
+    void updateSceneBranchBounds();
     void releaseUnclaimedDelegates(DelegateCommitContext *context);
     void traceDeferredDelegateCommit(
         const QList<int> &delegateIndexes,
@@ -635,6 +648,9 @@ private:
         int viewIndex = -1,
         const QVariantMap &initialProperties = {});
     void trimFreeDelegatePool();
+    bool keepsNearbyDelegates() const;
+    void scheduleNearbyPreparation();
+    void prepareNearbyDelegates();
 
     QSize dp(QSizeF value);
     qreal dp(qreal value);
@@ -643,6 +659,7 @@ private:
     ZoinGallery::GalleryDelegatePool _delegatePool;
     quint64 _delegateCatalogGeneration = 1;
     QSet<int> _activeBrickIndexes;
+    bool _nearbyPreparationScheduled = false;
     // A model reset is synchronous on the GUI thread. Keep the currently
     // painted delegate assigned to its visual row until endResetModel(), so
     // a directory replacement performs one old->new binding change instead
@@ -716,6 +733,8 @@ private:
     const QVector<LayoutBand> &_layoutBands;
     quint64 _layoutRevision = 0;
     quint64 _delegateCommitRevision = 0;
+    quint64 _delegateLayoutRevision = 0;
+    quint64 _vectorSceneUseSerial = 0;
     QSet<int> _visibleIndexSet;
     QSet<int> _overscanIndexSet;
     ZoinGallery::GalleryThumbnailPlanner _thumbnailPlanner;
@@ -726,6 +745,9 @@ private:
     qreal _topItemOffset;
     qreal _currentIndexOffsetOverride;
     QQuickItem *_viewport;
+    QQuickItem *_masonryVectorBranch = nullptr;
+    QQuickItem *_masonryRasterBranch = nullptr;
+    bool _sceneBranchesSuspended = false;
     QPointF _parentPixelGridOffset;
     QPointF _viewportSceneOrigin;
     QVector<QMetaObject::Connection> _pixelGridConnections;
@@ -815,6 +837,7 @@ private:
     int _incrementalModelPreviousCount = 0;
     int _incrementalInsertedFirst = -1;
     int _incrementalInsertedLast = -1;
+    bool _scrollAnimationRunning = false;
 };
 
 #endif // MASONRYLAYOUT_H

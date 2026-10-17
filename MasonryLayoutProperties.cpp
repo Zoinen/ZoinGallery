@@ -191,10 +191,12 @@ BrickItem *MasonryLayout::popBrickItem(
 }
 
 void MasonryLayout::trimFreeDelegatePool() {
-    // updateProperties() has already claimed every slot required by the
-    // active viewport. Anything left is surplus from a larger previous
-    // viewport/mode and must not become a hidden panel cache.
-    _delegatePool.trimSurplus();
+    // Adjacent columns enter before the old column leaves. Keep anonymous
+    // spares across commits instead of rebuilding that entire column next time.
+    // The cap follows the live viewport and never retains another component.
+    _delegatePool.trimSurplus(_presentationModeCommitInProgress
+        ? 0 : qMin(64, _delegatePool.liveCount()),
+        reinterpret_cast<quintptr>(delegateComponent(_presentationMode)));
 }
 
 QSize MasonryLayout::dp(QSizeF value) {
@@ -1124,6 +1126,15 @@ qreal MasonryLayout::contentY() const {
     return _contentY;
 }
 
+void MasonryLayout::setScrollAnimationRunning(bool running) {
+    if (_scrollAnimationRunning == running) return;
+    _scrollAnimationRunning = running;
+    // Leave the aligned starting pose intact until the first motion frame.
+    // A pause, including the auto-scroll dead zone, restores the resting grid.
+    if (!running) positionViewport();
+    emit scrollAnimationRunningChanged();
+}
+
 void MasonryLayout::setContentY(qreal newContentY) {
     newContentY = qBound<qreal>(0, newContentY, maximumContentOffset());
     if (_presentationMode == Columns) {
@@ -1163,11 +1174,29 @@ void MasonryLayout::setContentYInternal(qreal newContentY) {
         return;
     }
 //    qDebug() << "contentY" << _contentY << "->" << newContentY;
+    const bool scrollingMasonry = _presentationMode == Masonry && !_containedPreview
+        && !_deferDelegateWindowCommit && !_delegateRefreshPending
+        && !_visualSnapshotRefresh && !_presentationModeCommitInProgress
+        && !_layoutUpdateDepth && _delegateLayoutRevision == _layoutRevision;
+    const auto previousDelegates = scrollingMasonry
+        ? delegateIndexesForCurrentViewport() : QList<int>{};
+    const auto previousVisible = scrollingMasonry ? _visibleIndexSet : QSet<int>{};
+    const auto previousGeneration = _delegateCatalogGeneration;
+    const auto previousLayoutRevision = _layoutRevision;
     _contentY = newContentY;
     positionViewport();
 
     if (!_deferDelegateWindowCommit) {
-        updateProperties();
+        // Scrolling translates one shared surface. While its materialized rows
+        // are unchanged, their metadata and geometry need no repeated commit.
+        // Keep decode/metadata demand current even inside the same row window.
+        if (scrollingMasonry) updateViewportIndexSets();
+        const bool sameWindow = scrollingMasonry
+            && previousGeneration == _delegateCatalogGeneration
+            && previousLayoutRevision == _layoutRevision
+            && previousVisible == _visibleIndexSet
+            && previousDelegates == delegateIndexesForCurrentViewport();
+        if (!sameWindow) updateProperties();
         emit contentYChanged();
         emit groupHeaderGeometriesChanged();
         if (groupingActive()) {

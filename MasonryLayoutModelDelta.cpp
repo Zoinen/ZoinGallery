@@ -134,6 +134,7 @@ void MasonryLayout::applySparseModelDelta(const ModelDelta &delta)
             incoming.iconLabelStyleRevision = target.iconLabelStyleRevision;
             incoming.iconLabelNameHash = target.iconLabelNameHash;
             incoming.iconLabelWidth = target.iconLabelWidth;
+            incoming.iconLabelPresentationMode = target.iconLabelPresentationMode;
         }
         target = std::move(incoming);
         target.item = item;

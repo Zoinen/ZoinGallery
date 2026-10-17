@@ -168,13 +168,14 @@ void MasonryLayout::positionViewport() {
     const QPointF scrollPosition(
         _paddingLeft - (_presentationMode == Columns ? _contentY : 0),
         _presentationMode == Columns ? 0 : -_contentY);
-    _viewport->setPosition(offset + ZoinGallery::PixelGrid::snapDevicePoint(
-        scrollPosition, devicePixelRatio()));
+    _viewport->setPosition(offset + (_scrollAnimationRunning ? scrollPosition
+        : ZoinGallery::PixelGrid::snapDevicePoint(scrollPosition, devicePixelRatio())));
     const QPointF viewportOrigin = _viewport->mapToScene(QPointF());
     if (_viewportSceneOrigin != viewportOrigin) {
         _viewportSceneOrigin = viewportOrigin;
         emit viewportSceneOriginChanged();
     }
+    updateSceneBranchBounds();
 }
 
 void MasonryLayout::observePixelGridAncestors() {
@@ -274,13 +275,15 @@ void MasonryLayout::applyIconCaptionGeometry(
     const qreal labelWidth = cellCaptionWidth(geometry);
     const QString sourceText = brick.modelText;
     const size_t nameHash = qHash(sourceText);
-    if (brick.iconLabelStyleRevision != _iconCaptionStyleRevision
+    if (brick.iconLabelPresentationMode != Icons
+        || brick.iconLabelStyleRevision != _iconCaptionStyleRevision
         || brick.iconLabelNameHash != nameHash || brick.iconLabelWidth != labelWidth) {
         ZoinGallery::GalleryIconTextMeasurer measurer(_iconLabelFont);
         brick.iconLabelText = measurer.layout(sourceText, labelWidth).text;
         brick.iconLabelStyleRevision = _iconCaptionStyleRevision;
         brick.iconLabelNameHash = nameHash;
         brick.iconLabelWidth = labelWidth;
+        brick.iconLabelPresentationMode = Icons;
     }
     brick.previewGeometry = fixedLayoutPlan().previewGeometryForRect(geometry);
 }

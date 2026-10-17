@@ -13,6 +13,7 @@
 #include "src/embed/ExternalCatalogModel.h"
 
 #include <QCoreApplication>
+#include <QAccessible>
 #include <QStandardItemModel>
 #include <QColor>
 #include <QColorSpace>
@@ -36,6 +37,7 @@
 #include <QQmlProperty>
 #include <QQuickImageProvider>
 #include <QQuickView>
+#include <QScreen>
 #include <QScopeGuard>
 #include <QSGRendererInterface>
 #include <QTemporaryDir>
@@ -207,6 +209,15 @@ bool rectInside(const QRectF &outer, const QRectF &inner) {
         inner.bottom() <= outer.bottom() + epsilon;
 }
 
+bool visibleInScene(QQuickItem *item) {
+    if (!item || !item->isVisible()) return false;
+    for (auto *ancestor = item; ancestor; ancestor = ancestor->parentItem()) {
+        if (ancestor->metaObject()->indexOfProperty("sceneVisible") >= 0
+            && !ancestor->property("sceneVisible").toBool()) return false;
+    }
+    return true;
+}
+
 QQuickItem *findVisualItem(QQuickItem *root, const QString &objectName) {
     if (!root) {
         return nullptr;
@@ -216,7 +227,7 @@ QQuickItem *findVisualItem(QQuickItem *root, const QString &objectName) {
     while (!pending.isEmpty()) {
         QQuickItem *item = pending.takeLast();
         if (item->objectName() == objectName) {
-            if (item->isVisible()) {
+            if (visibleInScene(item)) {
                 return item;
             }
             hiddenMatch = item;
@@ -302,6 +313,14 @@ private slots:
         QFETCH(bool, checkRaster);
         QFETCH(QString, title);
         QFETCH(bool, collapsed);
+        const QFont originalFont = QGuiApplication::font();
+        const auto restoreFont = qScopeGuard([originalFont] {
+            QGuiApplication::setFont(originalFont);
+        });
+#if defined(Q_OS_WIN)
+        QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
+        QGuiApplication::setFont(QFont(QStringLiteral("Segoe UI"), 9));
+#endif
         QQuickView view;
         auto *rasterProvider = new CompactIconProvider(true);
         view.engine()->addImageProvider("header-raster", rasterProvider);
@@ -859,7 +878,7 @@ private slots:
         QVERIFY(session->applyExternalCatalog({catalogEntry(0, path)}, 2, {{"currentPath", "/photos"}}));
         QTest::qWait(60);
         QVERIFY2(retainedFrame, "Recycled delegates must retain their lightweight folder frame");
-        QVERIFY(!retainedFrame->isVisible());
+        QVERIFY(!visibleInScene(retainedFrame));
         QTRY_VERIFY(!grid);
         auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
         QVERIFY(layout);
@@ -1185,8 +1204,12 @@ private slots:
             QTRY_COMPARE(layout->paddingBottom(), expected);
             auto *entry = layout->itemForIndex(0);
             QVERIFY(entry);
-            QTRY_VERIFY(qAbs(entry->mapToItem(layout, QPointF()).y()
-                + layout->contentY() - expected) <= 1 / dpr);
+            QTRY_VERIFY2(qAbs(entry->mapToItem(layout, QPointF()).y()
+                + layout->contentY() - expected) <= 1 / dpr,
+                qPrintable(QString("row top=%1 offset=%2 geometry=%3 expected=%4 revision=%5")
+                    .arg(entry->mapToItem(layout, QPointF()).y())
+                    .arg(layout->contentY()).arg(layout->indexGeometry(0).top())
+                    .arg(expected).arg(layout->layoutRevision())));
             const QString name = mode == "masonry" ? "galleryMasonryLabel-0"
                 : mode == "grid" ? "galleryGridLabel-0" : "galleryIconsLabel-0";
             QQuickItem *label = nullptr;
@@ -1470,6 +1493,7 @@ private slots:
         MasonryLayout *grid = nullptr;
         QTRY_VERIFY((grid = preview->findChild<MasonryLayout *>("folderPreviewGrid")));
         QVERIFY(grid->property("containedPreview").toBool());
+        if (mode == "masonry") QVERIFY(!grid->clip());
         QTRY_COMPARE(grid->count(), 16);
         QTest::qWait(200);
         auto *childCatalog = qobject_cast<ZoinGallery::ExternalCatalogModel *>(grid->model());
@@ -1542,6 +1566,12 @@ private slots:
                 ++displayed;
                 QTRY_COMPARE_WITH_TIMEOUT(leaf->property("status").toInt(), 1, 3000);
                 checkPoint(leaf);
+                const QRectF paintedBounds = leaf->mapRectToItem(grid, leaf->boundingRect());
+                QVERIFY2(grid->boundingRect().adjusted(-.001, -.001, .001, .001)
+                             .contains(paintedBounds),
+                         qPrintable(QStringLiteral("%1 paints outside its contained grid: %2,%3 %4x%5")
+                             .arg(leaf->objectName()).arg(paintedBounds.x()).arg(paintedBounds.y())
+                             .arg(paintedBounds.width()).arg(paintedBounds.height())));
                 const QSize original = grid->indexOriginalSize(i);
                 QVERIFY(original.width() > 1 && original.height() > 1);
                 const QRectF geometry = grid->indexGeometry(i);
@@ -1575,6 +1605,12 @@ private slots:
         QCOMPARE(outerLayout->itemForIndex(0)->boundingRect(), outer);
         const auto capture = view.grabWindow();
         QVERIFY(!capture.isNull());
+        if (mode == "masonry") {
+            grid->setClip(true);
+            QTest::qWait(50);
+            QCOMPARE(view.grabWindow(), capture);
+            grid->setClip(false);
+        }
         QVERIFY(capture.save(dir.filePath("folder-preview.png")));
         if (!qEnvironmentVariable("F4_FOLDER_PREVIEW_CAPTURE").isEmpty())
             QVERIFY(capture.save(qEnvironmentVariable("F4_FOLDER_PREVIEW_CAPTURE") + "-" + mode + ".png"));
@@ -1592,7 +1628,312 @@ private slots:
     }
 
     void initTestCase() {
-        QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+        if (!qEnvironmentVariableIsSet("ZOIN_TEST_NATIVE_RENDERER"))
+            QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+    }
+
+    void masonryVectorAndRasterScenesAreIndependent() {
+        if (!qEnvironmentVariableIsSet("ZOIN_TEST_NATIVE_RENDERER"))
+            QSKIP("Native scene-branch regression");
+        if (QFileInfo::exists("C:/Windows/Fonts/segoeui.ttf"))
+            QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
+        QTemporaryDir directory;
+        const QString path = directory.filePath("scene-root.png");
+        QImage pixels(120, 80, QImage::Format_RGB32);
+        pixels.fill(QColor("orange"));
+        QVERIFY(pixels.save(path));
+        const QString svgPath = directory.filePath("scene-root.svg");
+        QFile svg(svgPath);
+        QVERIFY(svg.open(QIODevice::WriteOnly));
+        svg.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"80\">"
+                  "<rect width=\"120\" height=\"80\" fill=\"magenta\"/></svg>");
+        svg.close();
+        const QString failedPath = directory.filePath("unreadable.svg");
+        QFile failedFile(failedPath);
+        QVERIFY(failedFile.open(QIODevice::WriteOnly));
+        failedFile.write("<svg broken");
+        failedFile.close();
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("masonry-scene-roots");
+        auto catalog = plainCatalog(80);
+        catalog[0] = catalogEntry(0, path);
+        catalog[1] = catalogEntry(1, svgPath);
+        catalog[2] = catalogEntry(2, failedPath);
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "sceneRootSession"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("showCursor", false);
+        panel->setProperty("animateLayoutChanges", false);
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {{"panelFontFamily", "Segoe UI"}}));
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QQuickItem *tile = nullptr;
+        QTRY_VERIFY((tile = layout->itemForIndex(0)));
+        QTRY_COMPARE(tile->parentItem()->objectName(), QString("galleryMasonryRasterBranch"));
+        auto *rasterBranch = tile->parentItem();
+        QTRY_VERIFY_WITH_TIMEOUT(!session->vectorSourceAt(1).isEmpty(), 5000);
+        QQuickItem *vectorTile = nullptr;
+        QTRY_VERIFY((vectorTile = layout->itemForIndex(1)));
+        QTRY_COMPARE(vectorTile->parentItem()->objectName(), QString("galleryMasonryVectorBranch"));
+        auto *vectorBranch = vectorTile->parentItem();
+        QVERIFY(rasterBranch != vectorBranch);
+        QVERIFY(rasterBranch->clip() && vectorBranch->clip());
+        QVERIFY(!tile->clip() && !vectorTile->clip());
+        QTRY_VERIFY(session->viewerDecodeFailedAt(2));
+        QVERIFY(session->isVectorAt(2));
+        QVERIFY(session->vectorSourceAt(2).isEmpty());
+        auto *failedTile = layout->itemForIndex(2);
+        QVERIFY(failedTile);
+        auto *failedPreview = failedTile->property("previewContainerItem").value<QQuickItem *>();
+        QVERIFY(failedPreview);
+        QVERIFY2(!failedPreview->clip(), "An SVG failure paints an ordinary file icon and needs no SVG clip root");
+        QQuickItem *image = nullptr;
+        QQuickItem *caption = nullptr;
+        QTRY_VERIFY((image = findVisualItem(tile, "galleryThumbnailImage-0")));
+        QTRY_VERIFY((caption = findVisualItem(tile, "galleryMasonryLabel-0")));
+        QQuickItem *vectorCaption = nullptr;
+        QQuickItem *vectorSurface = nullptr;
+        QTRY_VERIFY((vectorCaption = findVisualItem(vectorTile, "galleryMasonryLabel-1")));
+        QTRY_VERIFY((vectorSurface = findVisualItem(vectorTile, "galleryVectorSurface")));
+        QQuickItem *failedCaption = nullptr;
+        QQuickItem *failedIcon = nullptr;
+        QTRY_VERIFY((failedCaption = findVisualItem(failedTile, "galleryMasonryLabel-2")));
+        QTRY_VERIFY((failedIcon = findVisualItem(failedTile, "galleryFallbackIcon-2")));
+        QTRY_COMPARE(vectorSurface->parentItem()->property("sourceStatus").toInt(), 1);
+        QTRY_COMPARE_WITH_TIMEOUT(image->property("status").toInt(), 1, 5000);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QTest::qWait(100);
+        const qreal dpr = view.devicePixelRatio();
+        for (auto *leaf : {image, caption, vectorCaption, vectorSurface, failedCaption, failedIcon}) {
+            const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+            QVERIFY2(qAbs(origin.x()*dpr-qRound(origin.x()*dpr)) < .01,
+                     qPrintable(QStringLiteral("%1 physical x=%2").arg(leaf->objectName()).arg(origin.x()*dpr, 0, 'f', 6)));
+            QVERIFY2(qAbs(origin.y()*dpr-qRound(origin.y()*dpr)) < .01,
+                     qPrintable(QStringLiteral("%1 physical y=%2").arg(leaf->objectName()).arg(origin.y()*dpr, 0, 'f', 6)));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0))-origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1))-origin, QPointF(0, 1));
+        }
+        const auto countOrange = [](const QImage &capture) {
+            int result = 0;
+            for (int y=0;y<capture.height();++y)
+                for (int x=0;x<capture.width();++x)
+                    result += capture.pixelColor(x,y) == QColor("orange");
+            return result;
+        };
+        const QImage before = view.grabWindow();
+        QVERIFY(countOrange(before) > 100);
+        tile->setProperty("sceneVisible", false);
+        QVERIFY(tile->isVisible());
+        QTRY_COMPARE(countOrange(view.grabWindow()), 0);
+        tile->setProperty("sceneVisible", true);
+        QTRY_COMPARE(view.grabWindow(), before);
+        rasterBranch->setClip(false);
+        QTest::qWait(50);
+        const auto unclipped = view.grabWindow();
+        if (unclipped != before) {
+            QVERIFY(before.save("masonry-row-clipped-before-175.png"));
+            QVERIFY(unclipped.save("masonry-row-unclipped-after-175.png"));
+        }
+        QCOMPARE(unclipped.size(), before.size());
+        const auto beforeRgb = before.convertToFormat(QImage::Format_ARGB32);
+        const auto unclippedRgb = unclipped.convertToFormat(QImage::Format_ARGB32);
+        int maximumDelta = 0;
+        for (int y=0;y<before.height();++y) {
+            const auto *a = reinterpret_cast<const QRgb *>(beforeRgb.constScanLine(y));
+            const auto *b = reinterpret_cast<const QRgb *>(unclippedRgb.constScanLine(y));
+            for (int x=0;x<before.width();++x)
+                maximumDelta = std::max({maximumDelta, qAbs(qRed(a[x])-qRed(b[x])),
+                    qAbs(qGreen(a[x])-qGreen(b[x])), qAbs(qBlue(a[x])-qBlue(b[x])),
+                    qAbs(qAlpha(a[x])-qAlpha(b[x]))});
+        }
+        // Rebatching native glyphs can change the last color bit. The measured
+        // 175% baseline differed at 48 edge pixels, by exactly one channel bit.
+        QVERIFY2(maximumDelta <= 1, qPrintable(QString::number(maximumDelta)));
+        rasterBranch->setClip(true);
+        QVERIFY(before.save("masonry-scene-branches-175.png"));
+        for (const qreal offset : {layout->indexGeometry(40).top(), qreal(0)}) {
+            layout->setContentY(offset);
+            for (auto *branch : {rasterBranch, vectorBranch}) {
+                const QRectF clip = branch->mapRectToItem(layout, branch->clipRect());
+                QVERIFY(qAbs(clip.x()) < .001 && qAbs(clip.y()) < .001);
+                QVERIFY(qAbs(clip.width()-layout->width()) < .001);
+                QVERIFY(qAbs(clip.height()-layout->height()) < .001);
+                QVERIFY(branch->contains(branch->mapFromItem(layout, layout->boundingRect().center())));
+                const QPointF origin = branch->mapToScene(branch->clipRect().topLeft());
+                QVERIFY(qAbs(origin.x()*dpr-qRound(origin.x()*dpr)) < .01);
+                QVERIFY(qAbs(origin.y()*dpr-qRound(origin.y()*dpr)) < .01);
+            }
+            const int target = offset > 0 ? 40 : 1;
+            const QRectF targetRect = layout->indexGeometry(target);
+            const QPointF targetPoint = layout->mapToScene(QPointF(
+                targetRect.center().x(), targetRect.center().y()-layout->contentY()));
+            QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, targetPoint.toPoint());
+            QTRY_COMPARE(session->currentIndex(), target);
+        }
+        auto *nativeTile = qobject_cast<GalleryDelegateItem *>(tile);
+        QVERIFY(nativeTile);
+        const QRectF geometry = nativeTile->geometry();
+        nativeTile->setGeometry(geometry.translated(0, 8/dpr), true, false);
+        QVERIFY(nativeTile->geometryAnimationRunning());
+        QCOMPARE(tile->parentItem(), layout->viewport());
+        QCOMPARE(vectorTile->parentItem(), layout->viewport());
+        QTRY_VERIFY(!nativeTile->geometryAnimationRunning());
+        QCOMPARE(tile->parentItem(), rasterBranch);
+        QCOMPARE(vectorTile->parentItem(), vectorBranch);
+        nativeTile->setGeometry(geometry, false, false);
+        runtime->shutdown();
+    }
+
+    void masonryFallbackVisibilityPreservesOpacityNode() {
+        if (!qEnvironmentVariableIsSet("ZOIN_TEST_NATIVE_RENDERER"))
+            QSKIP("Native fallback drawing-gate regression");
+        if (QFileInfo::exists("C:/Windows/Fonts/segoeui.ttf"))
+            QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
+        QTemporaryDir directory;
+        const QString path = directory.filePath("fallback-gate.png");
+        QImage pixels(120, 80, QImage::Format_RGB32);
+        pixels.fill(QColor("orange"));
+        QVERIFY(pixels.save(path));
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("masonry-fallback-gate");
+        session->setThumbnailsEnabled(false);
+        QVERIFY(session->applyExternalCatalog({catalogEntry(0, path)}, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "fallbackGateSession"));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("showCursor", false);
+        panel->setProperty("animateLayoutChanges", false);
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {{"panelFontFamily", "Segoe UI"}}));
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QQuickItem *icon = nullptr;
+        QTRY_VERIFY((icon = findVisualItem(panel, "galleryFallbackIcon-0")));
+        QTRY_VERIFY(icon->isVisible());
+        auto *loader = icon->parentItem();
+        QQuickItem *gate = nullptr;
+        QTRY_VERIFY2((gate = findVisualItem(panel, "galleryFallbackDrawingGate-0")),
+                    "Fallback visibility must not toggle the Loader's opacity node");
+        QTRY_VERIFY(gate->property("sceneVisible").toBool());
+        session->setThumbnailsEnabled(true);
+        QQuickItem *image = nullptr;
+        QTRY_VERIFY((image = findVisualItem(panel, "galleryThumbnailImage-0")));
+        QTRY_COMPARE_WITH_TIMEOUT(image->property("status").toInt(), 1, 5000);
+        QTRY_VERIFY(!gate->property("sceneVisible").toBool());
+        QVERIFY(loader->isVisible());
+        QCOMPARE(loader->opacity(), .78);
+        QQuickItem *caption = nullptr;
+        QTRY_VERIFY((caption = findVisualItem(panel, "galleryMasonryLabel-0")));
+        const qreal dpr = view.devicePixelRatio();
+        for (auto *leaf : {icon, image, caption}) {
+            const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+            QVERIFY2(qAbs(origin.x()*dpr-qRound(origin.x()*dpr)) < .01,
+                     qPrintable(QStringLiteral("%1 physical x=%2").arg(leaf->objectName()).arg(origin.x()*dpr)));
+            QVERIFY2(qAbs(origin.y()*dpr-qRound(origin.y()*dpr)) < .01,
+                     qPrintable(QStringLiteral("%1 physical y=%2").arg(leaf->objectName()).arg(origin.y()*dpr)));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0))-origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1))-origin, QPointF(0, 1));
+        }
+        QVERIFY(view.grabWindow().save("masonry-fallback-drawing-gate-175.png"));
+        runtime->shutdown();
+    }
+
+    void masonryDrawingSubtreesAreAccessibilityLeaves() {
+#if QT_CONFIG(accessibility)
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("accessible-masonry");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(80), 1));
+        auto *panel = createPanel(view, session, "accessibleMasonrySession", "masonry");
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QQuickItem *item = nullptr;
+        QTRY_VERIFY((item = layout->itemForIndex(0)));
+        auto *accessible = QAccessible::queryAccessibleInterface(item);
+        QVERIFY(accessible);
+        QCOMPARE(accessible->role(), QAccessible::ListItem);
+        QCOMPARE(accessible->text(QAccessible::Name), item->property("effectiveDisplayName").toString());
+        QVERIFY(accessible->parent());
+        QCOMPARE(accessible->parent()->object(), panel);
+        QCOMPARE(accessible->parent()->role(), QAccessible::List);
+        QSignalSpy opened(panel, SIGNAL(openRequested(QString,int,bool,bool)));
+        QVERIFY(opened.isValid());
+        QVERIFY(accessible->actionInterface());
+        accessible->actionInterface()->doAction(QAccessibleActionInterface::pressAction());
+        QCOMPARE(opened.count(), 1);
+        QQmlComponent rowDrawing(view.engine());
+        rowDrawing.setData(R"QML(
+            import QtQuick
+            Item { Accessible.role: Accessible.StaticText; Accessible.name: "row drawing internals" }
+        )QML", QUrl("inline:RowDrawingAccessibleLabel.qml"));
+        QTRY_VERIFY(rowDrawing.status() != QQmlComponent::Loading);
+        QVERIFY2(rowDrawing.isReady(), qPrintable(rowDrawing.errorString()));
+        QScopedPointer<QObject> rowLabel(rowDrawing.create());
+        auto *rowLabelItem = qobject_cast<QQuickItem *>(rowLabel.data());
+        QVERIFY(rowLabelItem);
+        rowLabelItem->setParentItem(item);
+        QCOMPARE(accessible->childCount(), 0);
+        // Rows with independent controls still expose their descendants.
+        QVERIFY(item->setProperty("accessibleChildrenDecorative", false));
+        QVERIFY(accessible->childCount() > 0);
+        QVERIFY(item->setProperty("accessibleChildrenDecorative", true));
+        QCOMPARE(accessible->childCount(), 0);
+        for (auto *decoration : {
+                 item->property("previewContainerItem").value<QQuickItem *>(),
+                 panel->findChild<QQuickItem *>("galleryVectorSceneCache")}) {
+            QVERIFY(decoration);
+            QQmlComponent drawingLabel(view.engine());
+            drawingLabel.setData(R"QML(
+                import QtQuick
+                Item { Accessible.role: Accessible.StaticText; Accessible.name: "drawing internals" }
+            )QML", QUrl("inline:DecorativeAccessibleLabel.qml"));
+            QTRY_VERIFY(drawingLabel.status() != QQmlComponent::Loading);
+            QVERIFY2(drawingLabel.isReady(), qPrintable(drawingLabel.errorString()));
+            QScopedPointer<QObject> label(drawingLabel.create());
+            auto *labelItem = qobject_cast<QQuickItem *>(label.data());
+            QVERIFY(labelItem);
+            labelItem->setParentItem(decoration);
+            auto *interface = QAccessible::queryAccessibleInterface(decoration);
+            QVERIFY(interface);
+            QCOMPARE(interface->role(), QAccessible::NoRole);
+            QVERIFY(interface->state().invisible);
+            QCOMPARE(interface->childCount(), 0);
+            static QObject *geometryProbe = nullptr;
+            static int locationEvents = 0;
+            const bool accessibilityWasActive = QAccessible::isActive();
+            const auto oldHandler = QAccessible::installUpdateHandler([](QAccessibleEvent *event) {
+                if (event->object() == geometryProbe && event->type() == QAccessible::LocationChanged)
+                    ++locationEvents;
+            });
+            const auto restoreAccessibility = qScopeGuard([&] {
+                geometryProbe = nullptr;
+                QAccessible::installUpdateHandler(oldHandler);
+                QAccessible::setActive(accessibilityWasActive);
+            });
+            QAccessible::setActive(true);
+            geometryProbe = labelItem;
+            locationEvents = 0;
+            labelItem->setX(1 / view.devicePixelRatio());
+            QVERIFY(locationEvents > 0);
+            geometryProbe = decoration;
+            locationEvents = 0;
+            const qreal previousWidth = decoration->width();
+            decoration->setWidth(previousWidth + 1 / view.devicePixelRatio());
+            QCOMPARE(locationEvents, 0);
+            decoration->setWidth(previousWidth);
+        }
+        runtime->shutdown();
+#else
+        QSKIP("Qt accessibility is disabled");
+#endif
     }
 
     void panelThemeColorsUpdateLiveAfterConstruction() {
@@ -1852,6 +2193,87 @@ private slots:
             QColor(QStringLiteral("#00ff00")), 3000);
         QCOMPARE(fileIcon->property("effectiveIconColor").value<QColor>(),
                  fileIconColor);
+    }
+
+    void nearbyDelegatesArePreparedWithoutChangingVisibleRange_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::newRow("columns") << QStringLiteral("columns");
+        QTest::newRow("masonry") << QStringLiteral("masonry");
+    }
+
+    void nearbyDelegatesArePreparedWithoutChangingVisibleRange() {
+        QFETCH(QString, mode);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("nearby-preparation-" + mode);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(2000), 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "preparedSession", mode));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("animateLayoutChanges", false);
+        view.resize(640, 480);
+        view.show();
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QTRY_VERIFY(!layout->visibleIndexes().isEmpty());
+        QTest::qWait(200);
+        const QVariantList visible = layout->visibleIndexes();
+        const int next = visible.last().toInt() + 1;
+        QQuickItem *prepared = nullptr;
+        QTRY_VERIFY2_WITH_TIMEOUT((prepared = layout->itemForIndex(next)),
+            qPrintable(QString("mode=%1 next=%2 visible=%3..%4 extent=%5 height=%6 density=%7 target=%8")
+                .arg(mode).arg(next).arg(visible.first().toInt()).arg(visible.last().toInt())
+                .arg(layout->contentHeight()).arg(layout->height()).arg(layout->density())
+                .arg(layout->indexGeometry(next).y())), 3000);
+        if (mode == "masonry" && prepared->property("nativeCullingAvailable").toBool())
+            QVERIFY(!prepared->property("sceneVisible").toBool());
+        else
+            QVERIFY(!prepared->isVisible());
+        QCOMPARE(layout->visibleIndexes(), visible);
+        QVERIFY(!visible.contains(next));
+        QVERIFY(panel->findChildren<GalleryDelegateItem *>().size() <= visible.size() * 3 + 64);
+        QPointer<QQuickItem> retained(prepared);
+        const QRectF target = layout->indexGeometry(next);
+        layout->setContentY(mode == "columns" ? target.left() : target.top());
+        QTRY_VERIFY(layout->visibleIndexes().contains(next));
+        QCOMPARE(layout->itemForIndex(next), retained.data());
+        QVERIFY(retained->isVisible());
+        // A distant jump changes the visible range immediately. The bounded
+        // recent-row working set may retain the old row for reverse scrolling.
+        layout->setContentY(layout->contentHeight());
+        QVERIFY(!layout->visibleIndexes().contains(next));
+        QTest::qWait(600);
+        QVERIFY(panel->findChildren<GalleryDelegateItem *>().size()
+            <= layout->visibleIndexes().size() * 3 + 192);
+        for (auto *item : panel->findChildren<GalleryDelegateItem *>()) {
+            if (item->isVisible() && (mode != "masonry" || item->sceneVisible()))
+                QVERIFY(layout->visibleIndexes().contains(item->viewIndex()));
+        }
+        if (mode == "masonry") {
+            int clearedSnapshots = 0;
+            QSet<GalleryDelegateItem *> observed;
+            QObject observer;
+            for (int step = 1; step <= 6; ++step) {
+                for (auto *item : panel->findChildren<GalleryDelegateItem *>()) {
+                    if (observed.contains(item)) continue;
+                    observed.insert(item);
+                    connect(item, &GalleryDelegateItem::visualRowChanged,
+                            &observer, [item, &clearedSnapshots] {
+                        clearedSnapshots += !item->visualRow().value("valid").toBool();
+                    });
+                    connect(item, &QObject::destroyed, &observer,
+                            [item, &observed] { observed.remove(item); });
+                }
+                layout->setContentY(layout->contentHeight() * step / 7);
+                QTest::qWait(40);
+            }
+            // A parked slot clears presentation once, keeping coherent
+            // metadata until reassignment instead of broadcasting an empty row.
+            QCOMPARE(clearedSnapshots, 0);
+        }
+        runtime->shutdown();
     }
 
     void panelHoverTracksViewportInsteadOfRecycledDelegate() {
@@ -2818,6 +3240,10 @@ private slots:
             view, session, QStringLiteral("groupedMouseSession"),
             QStringLiteral("masonry"));
         QVERIFY(panel);
+        // Hit testing below uses final layout coordinates, so keep this
+        // fixture still while group descriptors replace the initial layout.
+        QVERIFY(panel->setProperty("animateLayoutChanges", false));
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
         auto *panelItem = qobject_cast<QQuickItem *>(panel);
         auto *layout = panel->findChild<MasonryLayout *>(
             QStringLiteral("galleryViewportItem"));
@@ -3540,8 +3966,12 @@ private slots:
             entry["name"] = QStringLiteral("Long caption ").repeated(10);
             value = entry;
         }
-        QVERIFY(session->applyExternalCatalog(huge, 2));
-        QVERIFY(session->applyExternalCatalog(catalog.mid(6), 3));
+        // Change catalog sources so this exercises reset cancellation rather
+        // than 9,880 same-folder incremental inserts and their intermediate layouts.
+        QSignalSpy resets(session->model(), &QAbstractItemModel::modelReset);
+        QVERIFY(session->applyExternalCatalog(huge, 2, {{"currentPath", "/queued-captions"}}));
+        QVERIFY(session->applyExternalCatalog(catalog.mid(6), 3, {{"currentPath", "/replacement-captions"}}));
+        QCOMPARE(resets.count(), 2);
         QTest::qWait(250);
         QCOMPARE(layout->count(), 114);
         QCOMPARE(layout->indexGeometry(0).height(), layout->indexGeometry(113).height());
@@ -3602,11 +4032,22 @@ private slots:
         const qreal bottom = thumbnail->mapToItem(layout->itemForIndex(0), QPointF(0, thumbnail->height())).y();
         QVERIFY(qAbs(bottom - (layout->indexPreviewGeometry(0).bottom()
                               - layout->indexGeometry(0).top())) <= 1 / view.devicePixelRatio());
+        const auto settled = [&] {
+            if (panel->property("cursorPixelAlignmentSuspended").toBool()) return false;
+            for (const auto &index : layout->visibleIndexes()) {
+                auto *tile = layout->itemForIndex(index.toInt());
+                if (tile && tile->property("geometryAnimationRunning").toBool()) return false;
+            }
+            return true;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(settled(), 3000);
         for (auto *leaf : {label, frame, thumbnail}) {
             const QPointF origin = leaf->mapToScene(QPointF());
             const qreal dpr = view.devicePixelRatio();
-            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.01);
-            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.01);
+            QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.01,
+                     qPrintable(QString("%1 physical x=%2").arg(leaf->objectName()).arg(origin.x()*dpr, 0, 'f', 6)));
+            QVERIFY2(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.01,
+                     qPrintable(QString("%1 physical y=%2").arg(leaf->objectName()).arg(origin.y()*dpr, 0, 'f', 6)));
             QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
             QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
         }
@@ -3644,6 +4085,474 @@ private slots:
             QTRY_VERIFY(!cellZone->isVisible() && !previewZone->isVisible() && !textZone->isVisible());
             runtime->shutdown();
         }
+    }
+
+    void masonryScrollingInsideMaterializedWindowDoesNotRecommitRows() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("masonry-scroll-window");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(400), 1));
+        auto *panel = createPanel(view, session, "masonryScrollWindowSession", "masonry");
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QTRY_VERIFY(!layout->visibleIndexes().isEmpty());
+        const auto visible = layout->visibleIndexes();
+        const quint64 revision = layout->delegateCommitRevision();
+        layout->setContentY(.01);
+        layout->setContentY(.02);
+        QCOMPARE(layout->visibleIndexes(), visible);
+        QCOMPARE(layout->delegateCommitRevision(), revision);
+        layout->setContentY(layout->indexGeometry(80).top());
+        QVERIFY(layout->delegateCommitRevision() > revision);
+        QVERIFY(layout->visibleIndexes() != visible);
+        runtime->shutdown();
+    }
+
+    void masonryRetiresSlotsUsingTheRendererVisibilityPolicy() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("masonry-retired-visibility");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(600), 1));
+        auto *panel = createPanel(view, session, "masonryRetiredSession", "masonry");
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QTRY_VERIFY(!layout->visibleIndexes().isEmpty());
+        for (int index = 0; index < 400; index += 40) {
+            layout->setContentY(layout->indexGeometry(index).top());
+            QTest::qWait(30);
+        }
+        const auto spares = [&] {
+            QList<GalleryDelegateItem *> result;
+            for (auto *item : panel->findChildren<GalleryDelegateItem *>())
+                if (item->viewIndex() < 0) result.append(item);
+            return result;
+        };
+        QTRY_VERIFY(!spares().isEmpty());
+        for (auto *item : spares()) {
+            QVERIFY(!visibleInScene(item));
+            QCOMPARE(item->isVisible(), item->nativeCullingAvailable());
+        }
+        runtime->shutdown();
+    }
+
+    void middleAutoScrollMovesEveryFrameAndAlignsAtRest_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<bool>("grouped");
+        for (const char *mode : {"masonry", "grid", "icons", "details", "columns"}) {
+            QTest::newRow(mode) << QString::fromLatin1(mode) << false;
+            QTest::newRow(qPrintable(QString::fromLatin1(mode) + "-grouped"))
+                << QString::fromLatin1(mode) << true;
+        }
+    }
+
+    void middleAutoScrollMovesEveryFrameAndAlignsAtRest() {
+        QFETCH(QString, mode);
+        QFETCH(bool, grouped);
+        const auto originalRendering = QQuickWindow::textRenderType();
+        const auto restoreRendering = qScopeGuard([originalRendering] {
+            QQuickWindow::setTextRenderType(originalRendering);
+        });
+        QQuickWindow::setTextRenderType(QQuickWindow::NativeTextRendering);
+        const QFont originalFont = QGuiApplication::font();
+        const auto restoreFont = qScopeGuard([originalFont] {
+            QGuiApplication::setFont(originalFont);
+        });
+#if defined(Q_OS_WIN)
+        QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
+        QGuiApplication::setFont(QFont(QStringLiteral("Segoe UI"), 9));
+#endif
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString imagePath = directory.filePath("thumbnail.png");
+        QImage pixels(80, 60, QImage::Format_RGB32);
+        pixels.fill(Qt::red);
+        QVERIFY(pixels.save(imagePath));
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("middle-motion-" + mode);
+        auto catalog = plainCatalog(200);
+        catalog[0] = catalogEntry(0, imagePath);
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "middleMotionSession", mode));
+        QVERIFY(panel);
+        panel->setProperty("animateLayoutChanges", false);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setPosition(QPointF(.2, .3));
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {{"panelFontFamily", "Segoe UI"}}));
+        if (grouped) panel->setProperty("groupDescriptors", QVariantList{
+            QVariantMap{{"key", "alpha"}, {"title", "First"}, {"startIndex", 0}, {"count", 1}},
+            QVariantMap{{"key", "beta"}, {"title", "Other files"}, {"startIndex", 1}, {"count", 199}}});
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        auto *scroll = panel->findChild<QObject *>("galleryMouseAutoScrollController");
+        QVERIFY(layout && scroll);
+        scroll->setProperty("scrollExtent", 320);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QTRY_VERIFY(layout->contentHeight() > (mode == "columns" ? layout->width() : layout->height()));
+        QTest::qWait(150);
+        QQuickItem *movingIcon = nullptr;
+        QTRY_VERIFY((movingIcon = findVisualItem(panel, "galleryFallbackIcon-1")));
+        QVERIFY(!movingIcon->property("smooth").toBool());
+        const QString labelName = mode == "masonry" ? "galleryMasonryLabel-1"
+            : mode == "grid" ? "galleryGridLabel-1"
+            : mode == "icons" ? "galleryIconsLabel-1" : "galleryBaseName-1";
+        auto *movingText = findVisualItem(panel, labelName);
+        QVERIFY(movingText);
+        QCOMPARE(movingText->property("renderType").toInt(), int(QQuickWindow::NativeTextRendering));
+        QQuickItem *movingHeading = nullptr;
+        if (grouped) QTRY_VERIFY((movingHeading = findVisualItem(panel, "galleryGroupHeader-gallery-beta-title")));
+
+        const bool horizontal = mode == "columns";
+        const auto axis = [horizontal](const QPointF &point) {
+            return horizontal ? point.x() : point.y();
+        };
+        const QPoint anchor = layout->mapToScene(QPointF(100, 100)).toPoint();
+        QTest::mouseClick(&view, Qt::MiddleButton, Qt::NoModifier, anchor);
+        QTRY_VERIFY(scroll->property("scrollingMode").toBool());
+        QVERIFY(!scroll->property("animationRunning").toBool());
+        QVERIFY(!panel->property("cursorPixelAlignmentSuspended").toBool());
+
+        struct Sample { qreal requested; qreal painted; bool alignmentSuspended; };
+        QList<Sample> samples;
+        bool filteredForEveryFrame = true;
+        bool scalableTextForEveryFrame = true;
+        const auto motionConnection = connect(layout, &MasonryLayout::contentYChanged, this, [&] {
+            if (scroll->property("animationRunning").toBool()) {
+                samples.append({layout->contentY(), axis(layout->viewport()->mapToScene(QPointF())),
+                                panel->property("cursorPixelAlignmentSuspended").toBool()});
+                filteredForEveryFrame &= movingIcon->property("smooth").toBool();
+                scalableTextForEveryFrame &= movingText->property("renderType").toInt()
+                    != int(QQuickWindow::NativeTextRendering);
+                if (grouped) {
+                    // The header snapshot replaces its repeater delegates on scroll.
+                    auto *heading = findVisualItem(panel, "galleryGroupHeader-gallery-beta-title");
+                    scalableTextForEveryFrame &= heading && heading->property("renderType").toInt()
+                        != int(QQuickWindow::NativeTextRendering);
+                }
+            }
+        });
+        QTest::mouseMove(&view, anchor + (horizontal ? QPoint(35, 0) : QPoint(0, 35)));
+        QTRY_VERIFY_WITH_TIMEOUT(samples.size() >= 16, 3000);
+        QTest::mouseMove(&view, anchor);
+        QTRY_VERIFY(!scroll->property("animationRunning").toBool());
+        disconnect(motionConnection);
+        QTRY_VERIFY(!panel->property("cursorPixelAlignmentSuspended").toBool());
+        QTest::qWait(60);
+
+        int stationaryFrames = 0;
+        qreal maximumMotionError = 0;
+        bool suspendedForEveryFrame = true;
+        for (qsizetype i = 1; i < samples.size(); ++i) {
+            const qreal requested = samples[i].requested - samples[i-1].requested;
+            const qreal painted = samples[i].painted - samples[i-1].painted;
+            if (qAbs(painted) < .00001) ++stationaryFrames;
+            maximumMotionError = qMax(maximumMotionError, qAbs(painted + requested));
+            suspendedForEveryFrame &= samples[i].alignmentSuspended;
+        }
+        qInfo() << "Middle scroll" << mode << "DPR" << view.devicePixelRatio()
+                << "samples" << samples.size() << "stationary frames" << stationaryFrames
+                << "max motion error" << maximumMotionError
+                << "filtered" << filteredForEveryFrame
+                << "scalable text" << scalableTextForEveryFrame
+                << "first physical origin" << samples.first().painted * view.devicePixelRatio();
+
+        int checkedLeaves = 0;
+        auto visualLeaves = layout->viewport()->findChildren<QQuickItem *>();
+        if (grouped) for (auto *leaf : panel->findChildren<QQuickItem *>())
+            if (leaf->objectName().startsWith("galleryGroupHeader-gallery-")) visualLeaves.append(leaf);
+        for (auto *leaf : visualLeaves) {
+            if (!visibleInScene(leaf) || !(leaf->inherits("QQuickText") || leaf->inherits("QQuickImage")))
+                continue;
+            QVERIFY(!leaf->objectName().isEmpty());
+            const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+            const qreal dpr = view.devicePixelRatio();
+            for (qreal physical : {origin.x() * dpr, origin.y() * dpr})
+                QVERIFY2(qAbs(physical - qRound(physical)) < .01,
+                         qPrintable(QString("%1 physical coordinate %2").arg(leaf->objectName()).arg(physical, 0, 'f', 6)));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - origin, QPointF(0, 1));
+            ++checkedLeaves;
+        }
+        QVERIFY(checkedLeaves > 0);
+        QVERIFY(view.grabWindow().save("middle-autoscroll-" + mode + (grouped ? "-grouped" : "") + "-rest-175.png"));
+        QVERIFY2(suspendedForEveryFrame, "Middle scrolling kept per-leaf static alignment active");
+        QCOMPARE(stationaryFrames, 0);
+        QVERIFY2(maximumMotionError < .001, "Viewport movement was quantized instead of following the frame's scroll delta");
+        QVERIFY2(filteredForEveryFrame, "Nearest-neighbour sampling quantized the moving raster icon");
+        QVERIFY(!movingIcon->property("smooth").toBool());
+        QVERIFY2(scalableTextForEveryFrame, "Qt's native glyph shader snapped the moving caption to pixels");
+        QCOMPARE(movingText->property("renderType").toInt(), int(QQuickWindow::NativeTextRendering));
+        QVERIFY(QMetaObject::invokeMethod(scroll, "end"));
+        runtime->shutdown();
+    }
+
+    void middleAutoScrollIgnoresStaleViewportRestoration_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<bool>("queuedBeforeGesture");
+        for (const char *mode : {"masonry", "grid", "icons", "details", "columns"}) {
+            QTest::newRow(mode) << QString::fromLatin1(mode) << false;
+            QTest::newRow(qPrintable(QString::fromLatin1(mode) + "-queued"))
+                << QString::fromLatin1(mode) << true;
+        }
+    }
+
+    void middleAutoScrollIgnoresStaleViewportRestoration() {
+        QFETCH(QString, mode);
+        QFETCH(bool, queuedBeforeGesture);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("middle-restore-" + mode);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(600), 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "middleRestoreSession", mode));
+        QVERIFY(panel);
+        panel->setProperty("animateLayoutChanges", false);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        auto *scroll = panel->findChild<QObject *>("galleryMouseAutoScrollController");
+        QVERIFY(layout && scroll);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QTest::qWait(200);
+        const qreal screenHeight = view.screen()->availableGeometry().height();
+        panel->setHeight(qMax<qreal>(360, screenHeight / 2));
+        scroll->setProperty("scrollExtent", screenHeight);
+        const bool horizontal = mode == "columns";
+        const QPoint anchor = layout->mapToScene(QPointF(60, 40)).toPoint();
+        const int distance = qRound(screenHeight / 4);
+        if (queuedBeforeGesture)
+            QVERIFY(QMetaObject::invokeMethod(panel, "scheduleViewportUpdate", Q_ARG(QVariant, false)));
+        QTest::mouseClick(&view, Qt::MiddleButton, Qt::NoModifier, anchor);
+        QTest::mouseMove(&view, anchor + (horizontal ? QPoint(distance, 0) : QPoint(0, distance)));
+        QTRY_VERIFY(layout->contentY() > 40);
+        QVERIFY(scroll->property("animationRunning").toBool());
+        const qreal before = layout->contentY();
+        const qreal saved = session->panelScrollOffset();
+        QVERIFY(before > saved + 20);
+        QList<qreal> positions;
+        const auto connection = connect(layout, &MasonryLayout::contentYChanged, &view, [&] {
+            positions.append(layout->contentY());
+        });
+        const auto disconnect = qScopeGuard([&] { QObject::disconnect(connection); });
+        // A delayed preview/metadata result can change the content extent.
+        // Exercise its real QML contentHeightChanged reconciliation path.
+        layout->setPaddingBottom(layout->paddingBottom() + 1);
+        QTest::qWait(120);
+        const qreal beforeStop = layout->contentY();
+        QVERIFY(QMetaObject::invokeMethod(scroll, "end"));
+        QTest::qWait(100);
+        qreal previous = before;
+        for (qreal position : positions) {
+            QVERIFY2(position >= previous - .001,
+                     qPrintable(QString("Active %1 scroll reversed from %2 to %3 (saved offset %4)")
+                         .arg(mode).arg(previous).arg(position).arg(saved)));
+            previous = position;
+        }
+        QVERIFY(beforeStop > before);
+        QVERIFY(qAbs(layout->contentY() - beforeStop) < .001);
+        QVERIFY(qAbs(session->panelScrollOffset() - beforeStop) < .001);
+        runtime->shutdown();
+    }
+
+    void wheelBurstKeepsMotionActiveUntilSettled_data() {
+        QTest::addColumn<QString>("mode");
+        for (const char *mode : {"masonry", "grid", "icons", "details", "columns"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void wheelBurstKeepsMotionActiveUntilSettled() {
+        QFETCH(QString, mode);
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("wheel-burst-" + mode);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(600), 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "wheelBurstSession", mode));
+        QVERIFY(panel);
+        panel->setProperty("animateLayoutChanges", false);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setX(13.2);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        auto *animation = panel->findChild<QObject *>("galleryPanelScrollAnimation");
+        QVERIFY(layout && animation);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QTest::qWait(200);
+        const auto property = panel->metaObject()->property(
+            panel->metaObject()->indexOfProperty("cursorPixelAlignmentSuspended"));
+        QSignalSpy motionChanges(panel, property.notifySignal());
+        QSignalSpy offsetChanges(session, SIGNAL(panelScrollOffsetChanged()));
+        QVERIFY(motionChanges.isValid() && offsetChanges.isValid());
+        const QPointF pointer = layout->mapToScene(QPointF(80, 80));
+        for (int step = 0; step < 8; ++step) {
+            QTest::wheelEvent(&view, pointer, QPoint(0, -120));
+            QTest::qWait(10);
+        }
+        QVERIFY(animation->property("running").toBool());
+        qInfo() << "Wheel burst" << mode << "motion state changes" << motionChanges.size()
+                << "offset commits" << offsetChanges.size();
+        // Retargeting an active gesture must not restore pixel alignment,
+        // native glyphs, or the saved viewport between consecutive notches.
+        QCOMPARE(motionChanges.size(), 1);
+        QCOMPARE(offsetChanges.size(), 0);
+        QCOMPARE(animation->property("to").toReal(), 960.0);
+        QTRY_VERIFY(!animation->property("running").toBool());
+        QCOMPARE(motionChanges.size(), 2);
+        QCOMPARE(offsetChanges.size(), 1);
+        QVERIFY(qAbs(layout->contentY() - 960) < .001);
+        QCOMPARE(session->panelScrollOffset(), layout->contentY());
+        QTest::qWait(60);
+        int checkedLeaves = 0;
+        for (auto *leaf : layout->viewport()->findChildren<QQuickItem *>()) {
+            if (!visibleInScene(leaf) || !(leaf->inherits("QQuickText") || leaf->inherits("QQuickImage")))
+                continue;
+            QVERIFY(!leaf->objectName().isEmpty());
+            const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+            const qreal dpr = view.devicePixelRatio();
+            for (qreal physical : {origin.x() * dpr, origin.y() * dpr})
+                QVERIFY2(qAbs(physical - qRound(physical)) < .01,
+                         qPrintable(QString("%1 physical coordinate %2").arg(leaf->objectName()).arg(physical, 0, 'f', 6)));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - origin, QPointF(0, 1));
+            ++checkedLeaves;
+        }
+        QVERIFY(checkedLeaves > 0);
+        QVERIFY(view.grabWindow().save("wheel-burst-" + mode + "-rest-175.png"));
+        runtime->shutdown();
+    }
+
+    void alignmentSleepsDuringScrollAndReturnsAtRest_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::newRow("grid") << QStringLiteral("grid");
+        QTest::newRow("masonry") << QStringLiteral("masonry");
+    }
+
+    void alignmentSleepsDuringScrollAndReturnsAtRest() {
+        QFETCH(QString, mode);
+#if defined(Q_OS_WIN)
+        QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
+#endif
+        const QFont originalFont = QGuiApplication::font();
+        const auto restoreFont = qScopeGuard([originalFont] { QGuiApplication::setFont(originalFont); });
+        QGuiApplication::setFont(QFont(QStringLiteral("Segoe UI"), 9));
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("animation-alignment-" + mode);
+        QVERIFY(session->applyExternalCatalog(plainCatalog(200), 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "animationSession", mode));
+        QVERIFY(panel);
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {{"panelFontFamily", "Segoe UI"}}));
+        panel->setX(13.2);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QTest::qWait(100);
+        qInfo() << "Alignment regression DPR" << view.devicePixelRatio()
+                << "screen DPR" << view.screen()->devicePixelRatio()
+                << "DPI" << view.screen()->logicalDotsPerInch()
+                << "rounding" << int(QGuiApplication::highDpiScaleFactorRoundingPolicy());
+        if (qEnvironmentVariableIsSet("F4_TEST_DPR"))
+            QCOMPARE(view.devicePixelRatio(), qEnvironmentVariable("F4_TEST_DPR").toDouble());
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        auto *animation = panel->findChild<QObject *>("galleryPanelScrollAnimation");
+        QVERIFY(layout && animation);
+        QQuickItem *label = nullptr;
+        const QString labelPrefix = mode == "grid" ? "galleryGridLabel-" : "galleryMasonryLabel-";
+        QTRY_VERIFY((label = panel->findChild<QQuickItem *>(labelPrefix + "0")) && label->isVisible());
+        QVERIFY(!label->property("text").toString().isEmpty());
+        auto *ancestor = label->parentItem();
+        while (ancestor && !qobject_cast<GalleryDelegateItem *>(ancestor)) ancestor = ancestor->parentItem();
+        auto *tile = qobject_cast<GalleryDelegateItem *>(ancestor);
+        QVERIFY(tile);
+        animation->setProperty("from", 0);
+        animation->setProperty("to", 20);
+        animation->setProperty("duration", 2000);
+        QVERIFY(QMetaObject::invokeMethod(animation, "start"));
+        QTRY_VERIFY(panel->property("cursorPixelAlignmentSuspended").toBool());
+        QCOMPARE(tile->property("iconSceneOrigin").value<QPointF>(), QPointF());
+        QCOMPARE(tile->property("iconPixelAlignmentRevision").toReal(), 0.0);
+        if (mode == "grid")
+            QCOMPARE(label->property("pixelCorrection").value<QPointF>(), QPointF());
+        const QMetaProperty originProperty = tile->metaObject()->property(
+            tile->metaObject()->indexOfProperty("iconSceneOrigin"));
+        QSignalSpy originChanges(tile, originProperty.notifySignal());
+        QTest::qWait(100);
+        QCOMPARE(originChanges.count(), 0);
+        QVERIFY(QMetaObject::invokeMethod(animation, "stop"));
+        QTRY_VERIFY(!panel->property("cursorPixelAlignmentSuspended").toBool());
+        QTest::qWait(50);
+        int leaves = 0;
+        int culledLeaves = 0;
+        for (auto *leaf : panel->findChildren<QQuickItem *>()) {
+            if (!leaf->isVisible() || !(leaf->objectName().startsWith(labelPrefix)
+                || leaf->objectName().startsWith("galleryFallbackIcon-")
+                || leaf->objectName().startsWith("gallerySourceColorIcon-"))) continue;
+            // Native culling keeps QQuickItem::visible true without painting
+            // its subtree. Validate every painted leaf, excluding only those
+            // behind a blocked native root (not merely outside the viewport).
+            if (!visibleInScene(leaf)) {
+                if (++culledLeaves == 1)
+                    qInfo() << "Culled leaf" << leaf->objectName()
+                            << "physical origin" << leaf->mapToScene(QPointF()) * view.devicePixelRatio();
+                continue;
+            }
+            ++leaves;
+            const QPointF origin = leaf->mapToScene(QPointF());
+            const qreal dpr = view.devicePixelRatio();
+            QVERIFY2(qAbs(origin.x()*dpr-qRound(origin.x()*dpr)) < .01, qPrintable(leaf->objectName()));
+            QVERIFY2(qAbs(origin.y()*dpr-qRound(origin.y()*dpr)) < .01, qPrintable(leaf->objectName()));
+            QCOMPARE(leaf->mapToScene(QPointF(1,0))-origin, QPointF(1,0));
+            QCOMPARE(leaf->mapToScene(QPointF(0,1))-origin, QPointF(0,1));
+        }
+        QVERIFY(leaves > 0);
+        if (mode == "masonry" && tile->property("nativeCullingAvailable").toBool())
+            QVERIFY(culledLeaves > 0);
+        QVERIFY(view.grabWindow().save(mode + "-scroll-resting-175.png"));
+        runtime->shutdown();
+    }
+
+    void gridCaptionMeasurementsAreCachedAndInvalidated() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("grid-caption-cache");
+        auto catalog = plainCatalog(80);
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *panel = createPanel(view, session, "gridCaptionCacheSession", "grid");
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QTRY_VERIFY(layout->iconCaptionMeasurementCount() > 0);
+        layout->setContentY(1);
+        const quint64 measured = layout->iconCaptionMeasurementCount();
+        for (int offset = 2; offset < 10; ++offset) layout->setContentY(offset);
+        QCOMPARE(layout->iconCaptionMeasurementCount(), measured);
+        QFont font = layout->iconLabelFont();
+        font.setPixelSize(font.pixelSize() + 2);
+        layout->setIconLabelFont(font);
+        QVERIFY(layout->iconCaptionMeasurementCount() > measured);
+        const auto fontMeasured = layout->iconCaptionMeasurementCount();
+        layout->setCellHorizontalPadding(layout->cellHorizontalPadding() + 3);
+        QVERIFY(layout->iconCaptionMeasurementCount() > fontMeasured);
+        const auto widthMeasured = layout->iconCaptionMeasurementCount();
+        auto row = catalog[0].toMap();
+        row["name"] = "renamed-long-grid-caption.txt";
+        catalog[0] = row;
+        QVERIFY(session->applyExternalCatalog(catalog, 2));
+        QTRY_VERIFY(layout->iconCaptionMeasurementCount() > widthMeasured);
+        auto *label = panel->findChild<QQuickItem *>("galleryGridLabel-0");
+        QVERIFY(label);
+        QVERIFY(label->property("text").toString().contains("renamed"));
+        runtime->shutdown();
     }
 
     void gridLabelsWrapWithinPaddedCells() {
@@ -6570,7 +7479,7 @@ private slots:
                 layout->overscanIndexes().size());
     }
 
-    void svgThumbnailsUseTheCurrentPhysicalPreviewResolution() {
+    void svgThumbnailsRetainVectorGeometryAcrossPreviewResizes() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString svgPath = directory.filePath(
@@ -6604,37 +7513,27 @@ private slots:
         QVERIFY(layout);
         layout->setDensity(180);
 
-        QQuickItem *thumbnail = nullptr;
-        QQuickItem *thumbnailImage = nullptr;
-        QQuickItem *thumbnailShader = nullptr;
+        QQuickItem *vector = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT(
-            (thumbnail = panel->findChild<QQuickItem *>(
-                 QStringLiteral("galleryThumbnail-0")))
-                && (thumbnailImage = panel->findChild<QQuickItem *>(
-                    QStringLiteral("galleryThumbnailImage-0")))
-                && (thumbnailShader = panel->findChild<QQuickItem *>(
-                    QStringLiteral("galleryThumbnailShader-0"))),
-            10000);
-        QTRY_VERIFY_WITH_TIMEOUT(thumbnail->isVisible(), 10000);
-        QTRY_COMPARE_WITH_TIMEOUT(thumbnailImage->property("status").toInt(),
-                                  1, 10000);
-        QTRY_VERIFY_WITH_TIMEOUT(thumbnailShader->isVisible(), 10000);
-
-        const QSizeF physicalViewport = thumbnailShader->property(
-            "viewportSize").toSizeF();
-        const qreal decodedWidth = thumbnailImage->implicitWidth();
-        const qreal decodedHeight = thumbnailImage->implicitHeight();
-        QVERIFY2(decodedWidth > 24 && decodedHeight > 24,
-                 qPrintable(QStringLiteral(
-                     "SVG was decoded at %1x%2 instead of the panel preview")
-                         .arg(decodedWidth).arg(decodedHeight)));
-        QVERIFY2(decodedWidth >= physicalViewport.width() - 2.0
-                 && decodedHeight >= physicalViewport.height() - 2.0,
-                 qPrintable(QStringLiteral(
-                     "decoded SVG %1x%2 does not cover physical preview %3x%4")
-                         .arg(decodedWidth).arg(decodedHeight)
-                         .arg(physicalViewport.width())
-                         .arg(physicalViewport.height())));
+            (vector = panel->findChild<QQuickItem *>("galleryVectorSurface")), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(vector->parentItem()->property("sourceStatus").toInt(), 1, 10000);
+        QVERIFY(!panel->findChild<QQuickItem *>("galleryThumbnailImage-0"));
+        QVERIFY(!panel->findChild<QQuickItem *>("galleryThumbnailShader-0"));
+        QPointer<QQuickItem> retained(vector);
+        const QUrl source = vector->property("source").toUrl();
+        QVERIFY(!source.isEmpty());
+        const auto sourceProperty = vector->metaObject()->property(
+            vector->metaObject()->indexOfProperty("source"));
+        QSignalSpy changes(vector, sourceProperty.notifySignal());
+        QVERIFY(changes.isValid());
+        const qreal initialWidth = vector->width();
+        layout->setDensity(240);
+        QTRY_VERIFY(vector->width() > initialWidth);
+        QCOMPARE(panel->findChild<QQuickItem *>("galleryVectorSurface"), retained.data());
+        QCOMPARE(vector->property("source").toUrl(), source);
+        QCOMPARE(changes.count(), 0);
+        QVERIFY(!panel->findChild<QQuickItem *>("galleryThumbnailImage-0"));
+        QVERIFY(!panel->findChild<QQuickItem *>("galleryThumbnailShader-0"));
 
         runtime->shutdown();
     }
@@ -6845,8 +7744,9 @@ private slots:
             for (const QVariant &value : layout->visibleIndexes()) {
                 const int row = value.toInt();
                 const QModelIndex index = left->model()->index(row, 0);
-                auto *thumbnail = panel->findChild<QQuickItem *>(
-                    QStringLiteral("galleryThumbnail-%1").arg(row));
+                auto *brick = layout->itemForIndex(row);
+                auto *thumbnail = brick ? brick->findChild<QQuickItem *>(
+                    QStringLiteral("galleryThumbnail-%1").arg(row)) : nullptr;
                 const QString modelUrl = index.data(FileListModel::ImageIdUrlRole).toString();
                 const QString visualUrl = thumbnail ? thumbnail->property("source").toUrl().toString() : QString();
                 if (modelUrl.isEmpty() || visualUrl != modelUrl) {
@@ -8799,13 +9699,13 @@ private slots:
         snapshot.insert("imageDimensionsKnown", true);
         snapshot.insert("imageIdUrl", "");
         QVERIFY(entry->setProperty("visualRow", snapshot));
-        QVERIFY(!icon->isVisible());
+        QVERIFY(!visibleInScene(icon));
         snapshot.insert("imageIdUrl", "file:///missing-thumbnail-regression.png");
         QVERIFY(entry->setProperty("masonryGeometryReady", false));
         QVERIFY(entry->setProperty("visualRow", snapshot));
         // The cached URL is known before geometry allows the pixel request.
         QVERIFY(!preview->property("thumbnailHasSource").toBool());
-        QVERIFY(!icon->isVisible());
+        QVERIFY(!visibleInScene(icon));
         QVERIFY(entry->setProperty("masonryGeometryReady", true));
         // A failed request must still restore the fallback.
         QTRY_VERIFY(icon->isVisible());
@@ -9135,7 +10035,16 @@ private slots:
             panel->setProperty("separateFileExtensions", columns == 3);
             item->setX(columns == 3 ? .375 : .25);
             item->setWidth(columns == 3 ? 631.5 : 640);
-            QTest::qWait(100);
+            // Animated leaves need not be aligned until their final frame.
+            const auto settled = [&] {
+                if (panel->property("cursorPixelAlignmentSuspended").toBool()) return false;
+                for (const auto &index : layout->visibleIndexes()) {
+                    auto *tile = layout->itemForIndex(index.toInt());
+                    if (tile && tile->property("geometryAnimationRunning").toBool()) return false;
+                }
+                return true;
+            };
+            QTRY_VERIFY_WITH_TIMEOUT(settled(), 3000);
             int checked = 0;
             const auto visit = [&](auto &&self, QQuickItem *leaf) -> void {
                 if (leaf->isVisible() && (leaf->objectName().startsWith("galleryBaseName-")
@@ -9360,7 +10269,7 @@ private slots:
             QStringLiteral("galleryThumbnailBackdrop-0"));
         QVERIFY(emptyThumbnail && previewBackdrop);
         QVERIFY(!emptyThumbnail->isVisible());
-        QVERIFY(previewBackdrop->isVisible());
+        QVERIFY(!previewBackdrop->isVisible()); // Grid keeps the source colours on a transparent tile.
         auto *sourceColourSlot = sourceColourIcon->parentItem();
         QVERIFY(sourceColourSlot);
         while (sourceColourSlot
@@ -9794,6 +10703,10 @@ private slots:
         QPointer<ImageFile> warmImage = firstSlot->property("model")
                                             .value<ImageFile *>();
         QVERIFY(warmImage);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        // Compile the first scene before timing a replacement of that scene.
+        // Otherwise native runs include the initial shader/pipeline setup.
+        QVERIFY(!view.grabWindow().isNull());
 
         bool resetObserved = false;
         bool oldImageAliveDuringReset = false;

@@ -83,12 +83,13 @@ QtObject {
     readonly property rect cursorChromeTargetRect:
         Qt.rect(cursorChromeTargetX, cursorChromeTargetY,
                 cursorChromeTargetWidth, cursorChromeTargetHeight)
-    // C++ publishes the actual snapped viewport translation. Reconstructing
-    // it from contentY would put the cursor back on the analytical fraction.
+    // C++ publishes the actual viewport translation, including its resting
+    // pixel-grid phase. Reconstructing it from contentY loses that correction.
     readonly property point cursorPixelGridViewportOrigin:
         galleryLayout.viewportSceneOrigin
     readonly property bool cursorPixelAlignmentSuspended:
         cursorChromeTransitionActive || panelScrollAnimation.running
+        || panel.autoScrollAnimationRunning
 
     function alignViewportItemRectToDevicePixels(item, rect) {
         if (!item || !rect)

@@ -14,6 +14,7 @@ Item {
     readonly property alias scrollingStarted: autoScroll.scrollingStarted
     readonly property alias scrollingStartedAtY: autoScroll.startCoordinate
     readonly property alias scrollingMode: autoScroll.scrollingMode
+    readonly property bool animationRunning: autoScroll.animationRunning
 
     signal wheelRequested(real x, real y, real pixelDeltaY,
                           real angleDeltaY, int modifiers,

@@ -117,6 +117,7 @@ void GalleryRuntime::registerTypes() {
         qmlRegisterType<GalleryNativeTextMetrics>(NativeModuleUri, 1, 0,
                                                 "GalleryNativeTextMetrics");
         qmlRegisterType<BrickItem>(NativeModuleUri, 1, 0, "BrickItem");
+        qmlRegisterType<GallerySceneItem>(NativeModuleUri, 1, 0, "GallerySceneItem");
         qmlRegisterType<VectorSourcePin>(NativeModuleUri, 1, 0, "VectorSourcePin");
         qmlRegisterType<ViewerWheelArea>(NativeModuleUri, 1, 0,
                                         "ViewerWheelArea");

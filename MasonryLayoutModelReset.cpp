@@ -556,6 +556,7 @@ void MasonryLayout::onModelAboutToBeReset() {
                 continue;
             }
             BrickItem *item = brick->item;
+            item->setRetainSceneWhenHidden(false);
             _resetSlotItems.insert(index, item);
             _resetSlotModels.insert(
                 index, item->property("model").value<ImageFile *>());
@@ -630,7 +631,11 @@ bool MasonryLayout::resetSlotLayoutMatches() const {
             && item && item->visualRow().value(
                 QStringLiteral("valid")).toBool()
             && item->viewIndex() == slot.key();
-        if (!item || item->parentItem() != _viewport
+        const auto *parent = item ? item->parentItem() : nullptr;
+        const bool ownedParent = parent == _viewport
+            || (_masonryVectorBranch && parent == _masonryVectorBranch)
+            || (_masonryRasterBranch && parent == _masonryRasterBranch);
+        if (!item || !ownedParent
             || (_visualSnapshotRole >= 0 && !validSnapshotSlot)
             || (_visualSnapshotRole < 0
                 && (expected.isNull()

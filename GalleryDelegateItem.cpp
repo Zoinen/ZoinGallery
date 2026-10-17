@@ -5,10 +5,52 @@
 #include <QAbstractAnimation>
 #include <QParallelAnimationGroup>
 #include <QPropertyAnimation>
+#include <QAccessible>
+#include <mutex>
+#if QT_CONFIG(accessibility)
+#include <QtQuick/private/qaccessiblequickitem_p.h>
+
+namespace {
+
+// The row supplies its name, selection and press action. Its drawing children
+// need no separate traversal unless the presentation adds independent controls.
+class AccessibleDelegate final : public QAccessibleQuickItem {
+public:
+    explicit AccessibleDelegate(GalleryDelegateItem *item) : QAccessibleQuickItem(item) {}
+    int childCount() const override {
+        return childrenDecorative() ? 0 : QAccessibleQuickItem::childCount();
+    }
+    QAccessibleInterface *child(int index) const override {
+        return childrenDecorative() ? nullptr : QAccessibleQuickItem::child(index);
+    }
+    QAccessibleInterface *childAt(int x, int y) const override {
+        return childrenDecorative() ? nullptr : QAccessibleQuickItem::childAt(x, y);
+    }
+    int indexOfChild(const QAccessibleInterface *child) const override {
+        return childrenDecorative() ? -1 : QAccessibleQuickItem::indexOfChild(child);
+    }
+private:
+    bool childrenDecorative() const {
+        return static_cast<GalleryDelegateItem *>(object())->accessibleChildrenDecorative();
+    }
+};
+
+QAccessibleInterface *accessibleDelegate(const QString &key, QObject *object) {
+    if (key != QLatin1String("GalleryDelegateItem")) return nullptr;
+    auto *item = qobject_cast<GalleryDelegateItem *>(object);
+    return item ? new AccessibleDelegate(item) : nullptr;
+}
+
+} // namespace
+#endif
 
 GalleryDelegateItem::GalleryDelegateItem(QQuickItem *parent)
-    : QQuickItem(parent),
+    : GallerySceneItem(parent),
       _visualModel(new GalleryEntryVisual(this)) {
+#if QT_CONFIG(accessibility)
+    static std::once_flag accessibilityFactory;
+    std::call_once(accessibilityFactory, [] { QAccessible::installFactory(accessibleDelegate); });
+#endif
     connect(_visualModel, &GalleryEntryVisual::identityChanged,
             this, &GalleryDelegateItem::visualIdentityChanged);
     connect(_visualModel, &GalleryEntryVisual::mediaChanged,
@@ -17,6 +59,18 @@ GalleryDelegateItem::GalleryDelegateItem(QQuickItem *parent)
             this, &GalleryDelegateItem::visualStateChanged);
     connect(_visualModel, &GalleryEntryVisual::styleChanged,
             this, &GalleryDelegateItem::visualStyleChanged);
+}
+
+void GalleryDelegateItem::setAccessibleChildrenDecorative(bool decorative) {
+    if (_accessibleChildrenDecorative == decorative) return;
+    _accessibleChildrenDecorative = decorative;
+    emit accessibleChildrenDecorativeChanged();
+#if QT_CONFIG(accessibility)
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(this, QAccessible::ObjectReorder);
+        QAccessible::updateAccessibility(&event);
+    }
+#endif
 }
 
 void GalleryDelegateItem::ensureGeometryAnimations() {

@@ -108,6 +108,14 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _preservedViewportAnchorOffset = 0;
 
     _quickSearch = new MasonryLayoutQuickSearch(this);
+    connect(this, &MasonryLayout::presentationModeChanged,
+            this, &MasonryLayout::updateSceneBranchParents);
+    connect(this, &MasonryLayout::containedPreviewChanged,
+            this, &MasonryLayout::updateSceneBranchParents);
+    connect(this, &QQuickItem::widthChanged,
+            this, &MasonryLayout::updateSceneBranchBounds);
+    connect(this, &QQuickItem::heightChanged,
+            this, &MasonryLayout::updateSceneBranchBounds);
 }
 
 MasonryLayout::~MasonryLayout() {
@@ -369,6 +377,7 @@ BrickItem *MasonryLayout::createComponent(
     object->setVisible(false);
     object->setParentItem(_viewport);
     object->setParent(_viewport);
+    watchSceneBranchChanges(object);
     return object;
 }
 

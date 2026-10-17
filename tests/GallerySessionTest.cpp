@@ -5199,6 +5199,37 @@ private slots:
         runtime->shutdown();
     }
 
+    void catalogMetadataUsesDenseRowsForNoncontiguousSourceIndexes() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QVariantList catalog;
+        const QList<int> sourceIndexes{17, 38, 91};
+        for (int row = 0; row < sourceIndexes.size(); ++row) {
+            const QString name = QString("dense-metadata-%1.png").arg(row);
+            const QString path = directory.filePath(name);
+            QImage image(32 + row, 24 + row, QImage::Format_RGB32);
+            image.fill(Qt::red);
+            QVERIFY(image.save(path));
+            auto value = entry(name, sourceIndexes[row], name, true);
+            value["localPath"] = path;
+            value["size"] = QFileInfo(path).size();
+            catalog.append(value);
+        }
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("dense-metadata-indexes");
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        model->requestImageMetadata({0}, true);
+        model->requestImageMetadata({}, false, true);
+        for (int row = 0; row < sourceIndexes.size(); ++row)
+            QTRY_COMPARE_WITH_TIMEOUT(model->imageOriginalSizeAt(row), QSize(32 + row, 24 + row), 3000);
+        runtime->shutdown();
+    }
+
     void coalescesVisibleAndCatalogMetadataIntoOneSubmission() {
         constexpr int imageCount = 128;
         constexpr int visibleCount = 16;
@@ -7192,6 +7223,336 @@ private slots:
         runtime->shutdown();
     }
 
+    void recycledPreviewKeepsCompatibleLeaves() {
+        QTemporaryDir directory;
+        const QString redPath = directory.filePath("red.png");
+        const QString bluePath = directory.filePath("blue.png");
+        QImage image(80, 40, QImage::Format_ARGB32);
+        image.fill(Qt::red);
+        QVERIFY(image.save(redPath));
+        image.fill(Qt::blue);
+        QVERIFY(image.save(bluePath));
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 320; height: 240
+                property alias slot: slot
+                GalleryPanel { id: panel; visible: false }
+                GalleryEntryDelegateBase {
+                    id: slot; panelRoot: panel; viewIndex: 0; sourceIndex: 0
+                    width: 160; height: 40; presentationMode: 1
+                }
+            }
+        )QML", QUrl("inline:RecycledPreviewTest.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        auto *slot = qobject_cast<GalleryDelegateItem *>(root->property("slot").value<QObject *>());
+        QVERIFY(slot);
+        QQuickWindow window;
+        window.resize(320, 240);
+        root->setParentItem(window.contentItem());
+        window.show();
+        QVariantMap row{{"valid", true}, {"entryId", "first"}, {"text", "first.txt"}, {"iconKey", "file"}};
+        slot->setVisualRow(row);
+        QQuickItem *icon = nullptr;
+        QTRY_VERIFY((icon = slot->findChild<QQuickItem *>("galleryFallbackIcon-0")));
+        QPointer<QQuickItem> originalIcon(icon);
+        row["entryId"] = "second";
+        row["text"] = "second.txt";
+        slot->setVisualRow(row);
+        QTest::qWait(10);
+        QVERIFY2(originalIcon, "Identity reset must clear the source without destroying a compatible icon leaf");
+        QCOMPARE(slot->findChild<QQuickItem *>("galleryFallbackIcon-0"), originalIcon.data());
+        row["isImage"] = true;
+        row["imageIdUrl"] = QUrl::fromLocalFile(redPath).toString();
+        slot->setVisualRow(row);
+        QQuickItem *pixels = nullptr;
+        QTRY_VERIFY((pixels = slot->findChild<QQuickItem *>("galleryThumbnailImage-0")));
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QPointer<QQuickItem> originalPixels(pixels);
+        row["entryId"] = "third";
+        row["imageIdUrl"] = QUrl::fromLocalFile(bluePath).toString();
+        slot->setVisualRow(row);
+        QTest::qWait(10);
+        QVERIFY2(originalPixels, "Bitmap-to-bitmap recycling must preserve the preview leaf");
+        QCOMPARE(slot->findChild<QQuickItem *>("galleryThumbnailImage-0"), originalPixels.data());
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QCOMPARE(pixels->property("source").toUrl(), QUrl::fromLocalFile(bluePath));
+        const auto bluePixels = [](const QImage &capture) {
+            int count = 0;
+            for (int y = 0; y < capture.height(); ++y)
+                for (int x = 0; x < capture.width(); ++x)
+                    count += capture.pixelColor(x, y) == QColor(Qt::blue);
+            return count;
+        };
+        QTRY_VERIFY(bluePixels(window.grabWindow()) > 0);
+        row["entryId"] = "missing";
+        row["imageIdUrl"] = QUrl::fromLocalFile(directory.filePath("missing.png")).toString();
+        slot->setVisualRow(row);
+        QTRY_COMPARE(pixels->property("status").toInt(), 3); // Image.Error
+        QVERIFY(!pixels->property("retainWhileLoading").toBool());
+        QCOMPARE(bluePixels(window.grabWindow()), 0);
+        QVERIFY(window.grabWindow().save("recycled-preview-cleared-175.png"));
+        runtime->shutdown();
+    }
+
+    void recycledPreviewNeverLoadsVectorAsBitmap_data() {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("masonry") << int(MasonryLayout::Masonry);
+        QTest::newRow("compact") << int(MasonryLayout::Columns);
+    }
+
+    void recycledPreviewNeverLoadsVectorAsBitmap() {
+        QFETCH(int, mode);
+        QTemporaryDir directory;
+        const QUrl photo = QUrl::fromLocalFile(directory.filePath("photo.png"));
+        const QUrl vector = QUrl::fromLocalFile(directory.filePath("vector.svg"));
+        QImage image(80, 40, QImage::Format_ARGB32);
+        image.fill(Qt::red);
+        QVERIFY(image.save(photo.toLocalFile()));
+        QFile svg(vector.toLocalFile());
+        QVERIFY(svg.open(QIODevice::WriteOnly));
+        svg.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><path d=\"M0 0H80V40H0Z\" fill=\"blue\"/></svg>");
+        svg.close();
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 320; height: 240
+                property alias slot: slot
+                GalleryPanel { id: panel; visible: false }
+                GalleryInteractiveEntryDelegate {
+                    id: slot; panelRoot: panel; viewIndex: 0; sourceIndex: 0
+                    width: 160; height: 160; masonryGeometryReady: true
+                }
+            }
+        )QML", QUrl("inline:RecycledVectorPreviewTest.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        auto *slot = qobject_cast<GalleryDelegateItem *>(root->property("slot").value<QObject *>());
+        QVERIFY(slot);
+        slot->setPresentationMode(mode);
+        QQuickWindow window;
+        window.resize(320, 240);
+        root->setParentItem(window.contentItem());
+        root->setX(13.2);
+        slot->property("panelRoot").value<QObject *>()->setProperty(
+            "devicePixelRatio", window.devicePixelRatio());
+        window.show();
+        QVariantMap row{{"valid", true}, {"entryId", "photo"}, {"text", "photo.png"},
+                        {"isImage", true}, {"imageIdUrl", photo.toString()}};
+        slot->setVisualRow(row);
+        QQuickItem *pixels = nullptr;
+        QTRY_VERIFY((pixels = slot->findChild<QQuickItem *>("galleryThumbnailImage-0")));
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QSignalSpy sources(pixels, SIGNAL(sourceChanged(QUrl)));
+        QVERIFY(sources.isValid());
+        auto *preview = qobject_cast<QQuickItem *>(
+            slot->property("previewContainerItem").value<QObject *>());
+        QVERIFY(preview);
+        // Raster Masonry surfaces already mask their own bounds. Additional
+        // clip nodes split renderer batches; vector crops still need a clip.
+        QCOMPARE(preview->clip(), mode != int(MasonryLayout::Masonry));
+        QTRY_VERIFY(window.isExposed());
+        auto *leaf = mode == int(MasonryLayout::Masonry)
+            ? slot->findChild<QQuickItem *>("galleryThumbnailShader-0") : pixels;
+        QVERIFY(leaf);
+        const QPointF origin = leaf->mapToScene(QPointF());
+        const qreal dpr = window.devicePixelRatio();
+        QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
+        QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+        QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+        QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        const QImage rendered = window.grabWindow();
+        const QRectF bounds = leaf->mapRectToScene(leaf->boundingRect());
+        int redPixels = 0;
+        for (int y = 0; y < rendered.height(); ++y) {
+            for (int x = 0; x < rendered.width(); ++x) {
+                if (rendered.pixelColor(x, y) != QColor(Qt::red)) continue;
+                ++redPixels;
+                QVERIFY(bounds.adjusted(-1 / dpr, -1 / dpr, 1 / dpr, 1 / dpr)
+                    .contains(QPointF((x + .5) / dpr, (y + .5) / dpr)));
+            }
+        }
+        QVERIFY(redPixels > 1000);
+        if (mode == int(MasonryLayout::Masonry))
+            QVERIFY(rendered.save("masonry-unclipped-raster-175.png"));
+        if (mode == int(MasonryLayout::Masonry)) {
+            auto *actions = slot->findChild<QQuickItem *>("galleryEntryActions-0");
+            QVERIFY(actions);
+            slot->setSceneVisible(false);
+            QVERIFY(!actions->isEnabled());
+            slot->setViewSourceIndexes(-1, -1);
+            QCOMPARE(pixels->property("source").toUrl(), QUrl{});
+            QVERIFY(preview->isVisible());
+            QVERIFY(!preview->property("sceneVisible").toBool());
+            slot->setViewSourceIndexes(0, 0);
+            slot->setSceneVisible(true);
+            QCOMPARE(pixels->property("source").toUrl(), photo);
+            QVERIFY(actions->isEnabled());
+            sources.clear();
+        }
+        row["entryId"] = "vector";
+        row["text"] = "vector.svg";
+        row["imageIdUrl"] = "";
+        row["isVector"] = true;
+        row["vectorSource"] = vector.toString();
+        slot->setVisualRow(row);
+        QVERIFY(preview->clip());
+        // Inspect synchronous source notifications before Qt.callLater replaces
+        // the old renderer. A final vector-only scene misses this regression.
+        for (const auto &change : sources)
+            QVERIFY2(change.at(0).toUrl().isEmpty(),
+                     qPrintable("Outgoing bitmap received " + change.at(0).toUrl().toString()));
+        QTRY_VERIFY(root->findChild<QQuickItem *>("galleryVectorSurface"));
+        row["entryId"] = "photo-again";
+        row["text"] = "photo.png";
+        row["isVector"] = false;
+        row["vectorSource"] = "";
+        row["imageIdUrl"] = photo.toString();
+        slot->setVisualRow(row);
+        QTRY_VERIFY((pixels = slot->findChild<QQuickItem *>("galleryThumbnailImage-0")));
+        QTRY_COMPARE(pixels->property("source").toUrl(), photo);
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QCOMPARE(preview->clip(), mode != int(MasonryLayout::Masonry));
+        runtime->shutdown();
+    }
+
+    void vectorPanelSceneCacheReusesAndBoundsSurfaces() {
+        QTemporaryDir directory;
+        const auto source = [&](const QString &name, const QString &color) {
+            const QString path = directory.filePath(name + ".svg");
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly)) return QUrl{};
+            file.write(QString("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><rect width=\"80\" height=\"40\" fill=\"%1\"/></svg>").arg(color).toUtf8());
+            return QUrl::fromLocalFile(path);
+        };
+        const QUrl red = source("red", "red");
+        const QUrl blue = source("blue", "blue");
+        const QUrl green = source("green", "green");
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 320; height: 240
+                property alias source: slot.source
+                property alias status: slot.sourceStatus
+                property alias surface: slot.surface
+                property alias admissionEnabled: cache.enabled
+                function invalidate() { cache.invalidate() }
+                GalleryVectorSceneCache { id: cache; idleLimit: 1 }
+                GalleryVectorPreview {
+                    id: slot; x: 8; y: 8; width: 160; height: 80
+                    sceneCache: cache
+                    devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+                }
+            }
+        )QML", QUrl("inline:VectorCacheTest.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        QQuickWindow window;
+        window.resize(320, 240);
+        root->setParentItem(window.contentItem());
+        window.show();
+        root->setProperty("source", red);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QPointer<QObject> first = root->property("surface").value<QObject *>();
+        QVERIFY(first);
+        auto *leaf = first->findChild<QQuickItem *>("galleryVectorSurface");
+        QVERIFY(leaf);
+        const QImage redImage = window.grabWindow();
+        root->setProperty("source", blue);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QPointer<QObject> second = root->property("surface").value<QObject *>();
+        QVERIFY(second && second != first);
+        root->setProperty("source", red);
+        QCOMPARE(root->property("surface").value<QObject *>(), first.data());
+        QCOMPARE(root->property("status").toInt(), 1);
+        QCOMPARE(first->findChild<QQuickItem *>("galleryVectorSurface"), leaf);
+        QCOMPARE(window.grabWindow(), redImage);
+        const QPointF origin = leaf->mapToScene(QPointF());
+        const qreal dpr = window.devicePixelRatio();
+        QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .001);
+        QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .001);
+        QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+        QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        QVERIFY(redImage.save("vector-cache-reuse-175.png"));
+        // Two idle scenes exceed the limit. The older blue revision is evicted.
+        root->setProperty("source", green);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QTRY_VERIFY(second.isNull());
+        QVERIFY(first);
+        QVERIFY(QMetaObject::invokeMethod(root, "invalidate"));
+        QTRY_VERIFY(first.isNull());
+        // A consumer that disappears before admission must never build a scene.
+        root->setProperty("source", QUrl{});
+        root->setProperty("admissionEnabled", false);
+        root->setProperty("source", red);
+        QPointer<QObject> cancelled = root->property("surface").value<QObject *>();
+        QVERIFY(cancelled);
+        QCOMPARE(cancelled->property("source").toUrl(), QUrl{});
+        root->setProperty("source", QUrl{});
+        root->setProperty("admissionEnabled", true);
+        QTRY_VERIFY(cancelled.isNull());
+        // The same path with a changed revision must get a fresh scene.
+        root->setProperty("source", red);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QPointer<QObject> oldRevision = root->property("surface").value<QObject *>();
+        QUrl revised = red;
+        revised.setQuery("revision=2");
+        root->setProperty("source", revised);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QVERIFY(root->property("surface").value<QObject *>() != oldRevision.data());
+        root->setProperty("source", QUrl{});
+        QVERIFY(QMetaObject::invokeMethod(root, "invalidate"));
+        ImageInfo info;
+        info.path = red.toLocalFile();
+        auto acquired = acquireVectorSource(info, {});
+        QVERIFY(acquired);
+        QWeakPointer<VectorSource> weak = acquired.toWeakRef();
+        root->setProperty("admissionEnabled", false);
+        root->setProperty("source", acquired->url);
+        acquired.clear();
+        QVERIFY(!weak.isNull()); // Pending admission pins the materialized revision.
+        root->setProperty("source", QUrl{});
+        QTRY_VERIFY(weak.isNull());
+        root->setProperty("admissionEnabled", true);
+        acquired = acquireVectorSource(info, {});
+        weak = acquired.toWeakRef();
+        root->setProperty("source", acquired->url);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        acquired.clear();
+        root->setProperty("source", QUrl{});
+        QVERIFY(!weak.isNull()); // An idle reusable scene still needs its lease.
+        QVERIFY(QMetaObject::invokeMethod(root, "invalidate"));
+        QTRY_VERIFY(weak.isNull());
+    }
+
     void vectorSurfaceKeepsGeometryAcrossResize() {
 #if defined(Q_OS_WIN)
         const int fontId = QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf");
@@ -7248,6 +7609,157 @@ private slots:
         QVERIFY(rendered.save("vector-surface-175.png"));
     }
 
+    void masonryVectorSceneSurvivesNativeVisibility() {
+#if defined(Q_OS_WIN)
+        QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
+#endif
+        QTemporaryDir directory;
+        const QString path = directory.filePath("retained.svg");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><path d=\"M1 1H79V39H1Z\" fill=\"orange\" stroke=\"blue\" stroke-width=\"1\"/></svg>");
+        file.close();
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("retained-vector-scene");
+        auto first = entry("vector", 0, "retained.svg", true);
+        first["localPath"] = path;
+        first["size"] = QFileInfo(path).size();
+        QVariantList catalog{first};
+        for (int row = 1; row < 140; ++row)
+            catalog.append(entry(QString::number(row), row, QString::number(row) + ".txt"));
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        engine.rootContext()->setContextProperty("retainedVectorSession", session);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            GalleryPanel {
+                width: 640; height: 480; session: retainedVectorSession
+                devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+                presentationMode: "masonry"; animateLayoutChanges: false; showCursor: false
+                metrics.panelFontFamily: "Segoe UI"
+            }
+        )QML", QUrl("inline:RetainedVectorSceneTest.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *panel = qobject_cast<QQuickItem *>(object.data());
+        QVERIFY(panel);
+        QQuickWindow window;
+        window.resize(640, 480);
+        panel->setParentItem(window.contentItem());
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QTRY_VERIFY_WITH_TIMEOUT(!session->vectorSourceAt(0).isEmpty(), 5000);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        auto *tile = layout->itemForIndex(0);
+        QVERIFY(tile);
+        QQuickItem *vector = nullptr;
+        QTRY_VERIFY((vector = panel->findChild<QQuickItem *>("galleryVectorSurface")));
+        QTRY_COMPARE(vector->parentItem()->property("sourceStatus").toInt(), 1);
+        QPointer<QQuickItem> retained(vector);
+        QTest::qWait(100);
+        const auto orangePixels = [](const QImage &image) {
+            int count = 0;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    count += image.pixelColor(x, y) == QColor("orange");
+            return count;
+        };
+        QTRY_VERIFY(orangePixels(window.grabWindow()) > 100);
+        QSignalSpy enabledChanges(vector, SIGNAL(enabledChanged()));
+        QVERIFY(enabledChanges.isValid());
+        tile->setProperty("sceneVisible", false);
+        QVERIFY(tile->isVisible());
+        QCOMPARE(enabledChanges.count(), 0);
+        QVERIFY(vector->isEnabled());
+        QCOMPARE(orangePixels(window.grabWindow()), 0);
+        tile->setProperty("sceneVisible", true);
+        QTRY_VERIFY(orangePixels(window.grabWindow()) > 100);
+        layout->setContentY(layout->indexGeometry(40).top());
+        QCOMPARE(layout->itemForIndex(0), tile);
+        QVERIFY(!layout->visibleIndexes().contains(0));
+        QVERIFY(tile->isVisible());
+        QVERIFY(!tile->property("sceneVisible").toBool());
+        QVERIFY(tile->property("retainSceneWhenHidden").toBool());
+        QCOMPARE(orangePixels(window.grabWindow()), 0);
+        layout->setContentY(layout->indexGeometry(130).top());
+        QTest::qWait(150);
+        QCOMPARE(layout->itemForIndex(0), tile);
+        QVERIFY(!tile->property("sceneVisible").toBool());
+        QVERIFY(tile->property("retainSceneWhenHidden").toBool());
+        QCOMPARE(orangePixels(window.grabWindow()), 0);
+        layout->setContentY(0);
+        QCOMPARE(layout->itemForIndex(0), tile);
+        QVERIFY(tile->property("sceneVisible").toBool());
+        QCOMPARE(panel->findChild<QQuickItem *>("galleryVectorSurface"), retained.data());
+        QTest::qWait(50);
+        const qreal dpr = window.devicePixelRatio();
+        auto *caption = tile->findChild<QQuickItem *>("galleryMasonryLabel-0");
+        QVERIFY(caption);
+        for (auto *leaf : {vector, caption}) {
+            const QPointF origin = leaf->mapToScene(QPointF());
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+            QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        }
+        const QImage restored = window.grabWindow();
+        QVERIFY(orangePixels(restored) > 100);
+        QVERIFY(restored.save("masonry-retained-vector-175.png"));
+        // A larger vector working set must evict old scenes at the same
+        // sixteen-item bound, rather than retaining every SVG in the folder.
+        for (int row = 1; row < 20; ++row) {
+            const QString name = QStringLiteral("retained-%1.svg").arg(row);
+            const QString copy = directory.filePath(name);
+            QVERIFY(QFile::copy(path, copy));
+            auto image = entry(QStringLiteral("vector-%1").arg(row), row, name, true);
+            image["localPath"] = copy;
+            image["size"] = QFileInfo(copy).size();
+            catalog[row] = image;
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 2));
+        for (int row = 0; row < 20; ++row) {
+            layout->setContentY(layout->indexGeometry(row).top());
+            QTRY_VERIFY_WITH_TIMEOUT(!session->vectorSourceAt(row).isEmpty(), 5000);
+            layout->setContentY(layout->indexGeometry(row).top());
+            QTRY_VERIFY(layout->visibleIndexes().contains(row));
+            QTest::qWait(30);
+        }
+        layout->setContentY(layout->indexGeometry(130).top());
+        const auto retainedRows = [&] {
+            QSet<int> rows;
+            for (int row=0;row<layout->count();++row) {
+                auto *item = layout->itemForIndex(row);
+                if (item && item->property("retainSceneWhenHidden").toBool())
+                    rows.insert(item->property("viewIndex").toInt());
+            }
+            return rows;
+        };
+        QTRY_COMPARE(retainedRows().size(), 16);
+        for (const int row : retainedRows()) {
+            QVERIFY(row >= 4 && row < 20);
+            auto *item = layout->itemForIndex(row);
+            QVERIFY(item && !item->property("sceneVisible").toBool() && item->isVisible());
+            QVERIFY(!layout->boundingRect().intersects(
+                item->mapRectToItem(layout, item->boundingRect())));
+        }
+        QCOMPARE(orangePixels(window.grabWindow()), 0);
+        QVariantList plain;
+        for (int row = 0; row < 20; ++row)
+            plain.append(entry(QStringLiteral("plain-%1").arg(row), row,
+                               QString::number(row) + ".txt"));
+        QVERIFY(session->applyExternalCatalog(plain, 3));
+        layout->setContentY(0);
+        QTRY_VERIFY(retainedRows().isEmpty());
+        runtime->shutdown();
+    }
+
     void vectorPanelModesStayAligned_data() {
         QTest::addColumn<QString>("mode");
         for (const QString &mode : {"details", "columns", "grid", "icons", "masonry"})
@@ -7290,6 +7802,7 @@ private slots:
         auto *panel = qobject_cast<QQuickItem *>(object.data());
         QVERIFY(panel);
         panel->setProperty("presentationMode", mode);
+        panel->setProperty("showCursor", false);
         QQuickWindow window;
         window.resize(640, 480);
         panel->setParentItem(window.contentItem());
@@ -7298,6 +7811,14 @@ private slots:
         QQuickItem *vector = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT((vector = panel->findChild<QQuickItem *>("galleryVectorSurface")), 5000);
         QTest::qWait(100);
+        if (mode == "grid") {
+            auto *selection = panel->findChild<QQuickItem *>("gallerySelectionSurface-0");
+            QVERIFY(selection);
+            QCOMPARE(selection->property("baseColor").value<QColor>().alpha(), 0);
+            auto *backdrop = panel->findChild<QQuickItem *>("galleryThumbnailBackdrop-0");
+            QVERIFY(backdrop);
+            QVERIFY(!backdrop->property("enabledForPresentation").toBool());
+        }
         const auto origin = vector->mapToScene(QPointF());
         const qreal dpr = window.devicePixelRatio();
         QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .001,

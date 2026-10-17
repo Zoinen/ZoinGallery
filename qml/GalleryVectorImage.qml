@@ -9,6 +9,7 @@ Item {
     id: root
     property url source
     property bool animate: false
+    property bool prepareWhenHidden: false
     property bool showCheckerboard: false
     property bool crop: false
     property real devicePixelRatio: 1
@@ -42,7 +43,7 @@ Item {
             sceneGenerationMs = Date.now() - loadStartedAt
         } else {
             sourceStatus = Image.Loading
-            if (visible) {
+            if (visible || prepareWhenHidden) {
                 readinessTimer.interval = 16
                 readinessTimer.start()
             }
@@ -59,7 +60,7 @@ Item {
             readinessTimer.interval = 0
             readinessTimer.restart()
         }
-        else if (!visible) readinessTimer.stop()
+        else if (!visible && !prepareWhenHidden) readinessTimer.stop()
     }
     Component.onCompleted: {
         readinessTimer.interval = 0

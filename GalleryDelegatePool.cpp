@@ -40,6 +40,7 @@ void GalleryDelegatePool::release(GalleryDelegateItem *item) {
         return;
     }
     item->stopGeometryAnimation();
+    item->setRetainSceneWhenHidden(false);
     _used.remove(item);
     _free.insert(item);
 }
@@ -54,12 +55,18 @@ void GalleryDelegatePool::resetTracking(
     _used.clear();
 }
 
-void GalleryDelegatePool::trimSurplus() {
-    const QSet<GalleryDelegateItem *> surplus = std::exchange(_free, {});
+void GalleryDelegatePool::trimSurplus(int spareLimit, quintptr delegateKey) {
+    const QSet<GalleryDelegateItem *> surplus = _free;
+    int retained = 0;
     for (GalleryDelegateItem *item : surplus) {
         if (!item) {
             continue;
         }
+        if (retained < spareLimit && _delegateKeys.value(item) == delegateKey) {
+            ++retained;
+            continue;
+        }
+        _free.remove(item);
         item->setVisible(false);
         item->setParentItem(nullptr);
         _delegateKeys.remove(item);

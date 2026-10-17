@@ -30,6 +30,7 @@ private slots:
     void densityPolicyIsPresentationSpecific();
     void geometryIndexBuildsOneSortedActiveBandSet();
     void delegatePoolRetainsOnlyClaimedViewportSlots();
+    void delegatePoolBoundsReusableSparesByComponent();
     void viewportMaterializationUsesBoundedOverscan();
 };
 
@@ -475,6 +476,32 @@ void GalleryLayoutEngineTest::delegatePoolRetainsOnlyClaimedViewportSlots() {
     QCOMPARE(pool.liveCount(), 0);
 }
 
+void GalleryLayoutEngineTest::delegatePoolBoundsReusableSparesByComponent() {
+    GalleryDelegatePool pool;
+    int allocations = 0;
+    const auto factory = [&] { ++allocations; return new GalleryDelegateItem; };
+    auto *active = pool.acquire(1, factory);
+    QPointer<GalleryDelegateItem> first = pool.acquire(1, factory);
+    QPointer<GalleryDelegateItem> second = pool.acquire(1, factory);
+    QPointer<GalleryDelegateItem> incompatible = pool.acquire(2, factory);
+    pool.release(first);
+    pool.release(second);
+    pool.release(incompatible);
+    pool.trimSurplus(1, 1);
+    QCOMPARE(pool.transientFreeCount(), 1);
+    QCOMPARE(pool.liveCount(), 1);
+    QVERIFY(incompatible.isNull());
+    QCOMPARE(int(!first.isNull()) + int(!second.isNull()), 1);
+    auto *reused = pool.acquire(1, factory);
+    QCOMPARE(allocations, 4);
+    QVERIFY(reused == first.data() || reused == second.data());
+    pool.release(active);
+    pool.release(reused);
+    pool.trimSurplus();
+    QCOMPARE(pool.transientFreeCount(), 0);
+    QCOMPARE(pool.liveCount(), 0);
+}
+
 void GalleryLayoutEngineTest::viewportMaterializationUsesBoundedOverscan() {
     const GalleryViewportWindow details = GalleryViewportMaterializer::plan(
         GalleryPresentationMode::Details, 1000, 900, 22);
@@ -503,6 +530,11 @@ void GalleryLayoutEngineTest::viewportMaterializationUsesBoundedOverscan() {
         GalleryPresentationMode::Masonry, 1000, 900, 140);
     QCOMPARE(masonry.delegateStart, 952.0);
     QCOMPARE(masonry.delegateEnd, 1948.0);
+
+    const auto smallMasonry = GalleryViewportMaterializer::plan(
+        GalleryPresentationMode::Masonry, 1000, 360, 150);
+    QCOMPARE(smallMasonry.metadataStart, 850.0);
+    QCOMPARE(smallMasonry.metadataEnd, 1510.0);
 }
 
 QTEST_MAIN(GalleryLayoutEngineTest)

@@ -2,15 +2,28 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls.impl
+import ZoinGallery.Native 1.0
 
-Item {
+GallerySceneItem {
     id: preview
+    accessibilityLeaf: true
 
     required property GalleryEntryDelegateBase entry
     required property bool shaderThumbnail
     required property bool activePresentation
     readonly property alias thumbnailItem: thumbnail
     readonly property bool isVector: entry.visualModel.isVector
+    readonly property bool motionActive: entry.motionActive
+    readonly property bool thumbnailEnabled:
+        activePresentation && entry.panelRoot.controller.thumbnailsEnabled
+        && (!entry.masonryMode || entry.masonryGeometryReady)
+    // Recycled renderers can survive until the deferred Loader exchange. Give
+    // each renderer a typed source, never the replacement's untyped URL.
+    readonly property url bitmapThumbnailSource:
+        thumbnailEnabled && !entry.visualModel.isVector ? entry.imageIdUrl : ""
+    readonly property url vectorThumbnailSource:
+        thumbnailEnabled && entry.visualModel.isVector
+        ? entry.visualModel.vectorSource : ""
     readonly property bool thumbnailHasSource:
         thumbnail.source.toString() !== ""
     readonly property bool thumbnailReady:
@@ -43,8 +56,11 @@ Item {
         return "qrc:/ZoinGallery/resources/VideoPlayFilled.svg"
     }
 
-    visible: activePresentation && !entry.folderPreviewActive
+    sceneVisible: activePresentation && !entry.folderPreviewActive
+    visible: (entry.masonryMode && nativeCullingAvailable) || sceneVisible
     onActivePresentationChanged: {
+        if (fallbackIcon) fallbackIcon.updateComponent()
+        if (previewContent) previewContent.updateComponent()
         if (entry.visualIdentityChanging && entry.panelRoot.benchmarkTracingEnabled) {
             entry.panelRoot.traceBenchmarkStage("[FIX] preview.identity-reset", {
                 "entryId": entry.entryId, "row": entry.viewIndex
@@ -56,89 +72,116 @@ Item {
     y: entry.effectivePreviewRect.y
     width: entry.effectivePreviewRect.width
     height: entry.effectivePreviewRect.height
-    clip: true
+    // Masonry's raster shader masks its quad already. A clip per tile splits
+    // renderer batches, including the bounded content layered above the image.
+    // SVGs can paint outside their viewBox and still require a crop.
+    clip: !entry.masonryMode || vectorThumbnailSource.toString() !== ""
 
-    Rectangle {
+    GallerySceneItem {
         id: previewBackdrop
         objectName: preview.activePresentation
                     ? "galleryThumbnailBackdrop-" + preview.entry.viewIndex
                     : ""
         readonly property bool enabledForPresentation:
-            preview.entry.masonryMode || preview.entry.gridMode
+            preview.entry.masonryMode
+        property alias color: backdropSurface.color
         anchors.fill: parent
-        radius: 4
-        color: preview.entry.panelRoot.previewBackdropColor
-        visible: enabledForPresentation
+        sceneVisible: enabledForPresentation
                  && !preview.thumbnailReady
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId
                          === preview.entry.entryId)
+        visible: (preview.entry.masonryMode && nativeCullingAvailable) || sceneVisible
+        Rectangle {
+            id: backdropSurface
+            objectName: "galleryThumbnailBackdropSurface-" + preview.entry.viewIndex
+            anchors.fill: parent
+            radius: 4
+            color: preview.entry.panelRoot.previewBackdropColor
+        }
     }
 
-    Loader {
-        id: fallbackIcon
-        // IconImage's empty source can fall back to its preceding URL. Own
-        // its lifetime here instead: only a new entry discards the old leaf;
-        // resizing the same entry keeps both the leaf and its loaded pixels.
-        active: preview.activePresentation
-        asynchronous: false
-        readonly property color effectiveIconColor:
-            preview.entry.fallbackIconColor
-        property url modelIconSource:
-            !preview.activePresentation ? "" : preview.entry.panelRoot.iconResolver.resolve(
-                        preview.entry.iconKey, preview.entry.iconPath,
-                        preview.entry.largePreviewMode,
-                        preview.entry.isFolder,
-                        preview.entry.isImage,
-                        preview.entry.effectiveDisplayName === "..")
-        readonly property bool lucideSource:
-            preview.entry.isLucideIconSource(modelIconSource)
-        readonly property bool systemFileSource:
-            preview.entry.isSystemFileIconSource(modelIconSource)
-        anchors.centerIn: parent
-        readonly property real nominalIconSize:
-            preview.entry.detailsMode || preview.entry.columnsMode
-            ? Math.max(0, Math.min(parent.width,
-                       lucideSource && preview.entry.panelRoot.density <= 30
-                           ? preview.entry.panelRoot.detailsIconSize : Infinity,
-                       preview.entry.height
-                       - 2 * preview.entry.panelRoot.metrics.detailsIconVerticalPadding))
-            : preview.entry.iconsMode || preview.entry.gridMode
-            ? Math.max(0, Math.min(parent.width, parent.height))
-            : Math.max(0, Math.min(parent.width, parent.height) * 0.55)
-        readonly property bool fullAreaIcon: preview.entry.iconsMode || preview.entry.gridMode
-        width: fullAreaIcon ? parent.width
-                                      : preview.entry.snapIconExtent(nominalIconSize)
-        height: fullAreaIcon ? parent.height : width
-        readonly property point pixelGridOffset:
-            preview.entry.iconPixelOffset(fallbackIcon)
-        transform: Translate {
-            x: fallbackIcon.pixelGridOffset.x
-            y: fallbackIcon.pixelGridOffset.y
-        }
-        opacity: preview.entry.detailsMode || preview.entry.columnsMode
-                 ? 1 : 0.78
-        visible: (lucideSource
-                  || (systemFileSource
+    GallerySceneItem {
+        id: fallbackGate
+        objectName: "galleryFallbackDrawingGate-" + preview.entry.viewIndex
+        anchors.fill: parent
+        sceneVisible: (fallbackIcon.lucideSource
+                  || (fallbackIcon.systemFileSource
                       && !preview.thumbnailReady
                       && (!previewContent.item
-                          || previewContent.item.sourceStatus
-                             !== Image.Ready)))
+                          || previewContent.item.sourceStatus !== Image.Ready)))
                  && !preview.thumbnailExpected
                  && fallbackIcon.modelIconSource.toString() !== ""
-                 && (!preview.entry.highlightMarker || lucideSource)
+                 && (!preview.entry.highlightMarker || fallbackIcon.lucideSource)
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId
                          === preview.entry.entryId)
-        readonly property bool useAspectRaster: fullAreaIcon
-                                               && rasterSource.toString().startsWith("image://")
-        readonly property real rasterExtent: fullAreaIcon
-                                                ? Math.max(width, height)
-                                                : Math.min(width, height)
-        readonly property url rasterSource: !Window.window ? "" : lucideSource
-            ? preview.entry.sourceColorIconAtSize(modelIconSource, rasterExtent, effectiveIconColor)
-            : (systemFileSource ? preview.entry.systemFileFallbackSource(rasterExtent) : "")
-        sourceComponent: useAspectRaster ? aspectRasterComponent : tintedRasterComponent
+        visible: (preview.entry.masonryMode && nativeCullingAvailable) || sceneVisible
+
+        Loader {
+            id: fallbackIcon
+            // Keep the primitive through identity resets, but clear its source.
+            property bool frameCreated: false
+            active: preview.activePresentation || frameCreated
+            onLoaded: frameCreated = true
+            readonly property Component requestedComponent:
+                useAspectRaster ? aspectRasterComponent : tintedRasterComponent
+            property Component retainedComponent: tintedRasterComponent
+            function updateComponent() {
+                Qt.callLater(commitComponent)
+            }
+            function commitComponent() {
+                if (preview.activePresentation) retainedComponent = requestedComponent
+            }
+            onRequestedComponentChanged: updateComponent()
+            Component.onCompleted: updateComponent()
+            asynchronous: false
+            readonly property color effectiveIconColor:
+                preview.entry.fallbackIconColor
+            property url modelIconSource:
+                !preview.activePresentation ? "" : preview.entry.panelRoot.iconResolver.resolve(
+                            preview.entry.iconKey, preview.entry.iconPath,
+                            preview.entry.largePreviewMode,
+                            preview.entry.isFolder,
+                            preview.entry.isImage,
+                            preview.entry.effectiveDisplayName === "..")
+            readonly property bool lucideSource:
+                preview.entry.isLucideIconSource(modelIconSource)
+            readonly property bool systemFileSource:
+                preview.entry.isSystemFileIconSource(modelIconSource)
+            anchors.centerIn: parent
+            readonly property real nominalIconSize:
+                preview.entry.detailsMode || preview.entry.columnsMode
+                ? Math.max(0, Math.min(parent.width,
+                           lucideSource && preview.entry.panelRoot.density <= 30
+                               ? preview.entry.panelRoot.detailsIconSize : Infinity,
+                           preview.entry.height
+                           - 2 * preview.entry.panelRoot.metrics.detailsIconVerticalPadding))
+                : preview.entry.iconsMode || preview.entry.gridMode
+                ? Math.max(0, Math.min(parent.width, parent.height))
+                : Math.max(0, Math.min(parent.width, parent.height) * 0.55)
+            readonly property bool fullAreaIcon: preview.entry.iconsMode || preview.entry.gridMode
+            width: fullAreaIcon ? parent.width
+                                          : preview.entry.snapIconExtent(nominalIconSize)
+            height: fullAreaIcon ? parent.height : width
+            readonly property point pixelGridOffset:
+                preview.entry.iconPixelOffset(fallbackIcon)
+            transform: Translate {
+                x: fallbackIcon.pixelGridOffset.x
+                y: fallbackIcon.pixelGridOffset.y
+            }
+            opacity: preview.entry.detailsMode || preview.entry.columnsMode
+                     ? 1 : 0.78
+            readonly property bool useAspectRaster: fullAreaIcon
+                                                   && rasterSource.toString().startsWith("image://")
+            readonly property real rasterExtent: fullAreaIcon
+                                                    ? Math.max(width, height)
+                                                    : Math.min(width, height)
+            readonly property url rasterSource: !Window.window ? "" : lucideSource
+                ? preview.entry.sourceColorIconAtSize(modelIconSource, rasterExtent, effectiveIconColor)
+                : (systemFileSource ? preview.entry.systemFileFallbackSource(rasterExtent) : "")
+            sourceComponent: retainedComponent
+        }
     }
 
     Component {
@@ -153,9 +196,9 @@ Item {
             sourceSize: Qt.size(Math.round(width), Math.round(height))
             fillMode: Image.PreserveAspectFit
             verticalAlignment: preview.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
-            smooth: false
+            smooth: preview.motionActive
             mipmap: false
-            retainWhileLoading: true
+            retainWhileLoading: false
         }
     }
 
@@ -179,15 +222,15 @@ Item {
             color: fallbackIcon.effectiveIconColor
             fillMode: Image.PreserveAspectFit
             verticalAlignment: preview.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
-            smooth: false
+            smooth: preview.motionActive
             mipmap: false
-            retainWhileLoading: true
+            retainWhileLoading: false
             readonly property point pixelGridOffset:
                 fallbackIcon.pixelGridOffset
         }
     }
 
-    Item {
+    GallerySceneItem {
         id: thumbnail
         objectName: preview.activePresentation
                     ? "galleryThumbnail-" + preview.entry.viewIndex : ""
@@ -198,19 +241,20 @@ Item {
         height: Math.round(parent.height * preview.entry.renderDpr)
                 / preview.entry.renderDpr
         property url source:
-            preview.activePresentation
-                && preview.entry.panelRoot.controller.thumbnailsEnabled
-                && (!preview.entry.masonryMode || preview.entry.masonryGeometryReady)
-                ? (preview.isVector ? preview.entry.visualModel.vectorSource : preview.entry.imageIdUrl) : ""
-        visible: thumbnail.source.toString() !== ""
+            preview.isVector ? preview.vectorThumbnailSource
+                             : preview.bitmapThumbnailSource
+        sceneVisible: thumbnail.source.toString() !== ""
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId
                          === preview.entry.entryId)
+        visible: (preview.entry.masonryMode && nativeCullingAvailable) || sceneVisible
     }
 
     Loader {
         id: previewContent
-        active: preview.activePresentation
+        property bool frameCreated: false
+        active: preview.activePresentation || frameCreated
+        onLoaded: frameCreated = true
         readonly property bool sourceColorIconNeeded:
             !fallbackIcon.lucideSource
             && !preview.thumbnailExpected
@@ -221,7 +265,7 @@ Item {
             && fallbackIcon.modelIconSource.toString() === ""
         anchors.fill: parent
         asynchronous: false
-        sourceComponent: thumbnail.source.toString() !== ""
+        readonly property Component requestedComponent: thumbnail.source.toString() !== ""
                          ? (preview.isVector ? vectorThumbnailComponent : preview.shaderThumbnail
                             ? shaderThumbnailComponent
                             : compactThumbnailComponent)
@@ -229,6 +273,16 @@ Item {
                             ? sourceColorIconComponent
                             : (markerNeeded
                                ? fallbackMarkerComponent : null))
+        property Component retainedComponent: null
+        function updateComponent() {
+            Qt.callLater(commitComponent)
+        }
+        function commitComponent() {
+            if (preview.activePresentation) retainedComponent = requestedComponent
+        }
+        onRequestedComponentChanged: updateComponent()
+        Component.onCompleted: updateComponent()
+        sourceComponent: retainedComponent
     }
 
     Component {
@@ -239,6 +293,11 @@ Item {
 
             Image {
                 id: sourceColorIcon
+                property string readyEntryId: ""
+                onStatusChanged: {
+                    if (status === Image.Ready && preview.activePresentation)
+                        readyEntryId = preview.entry.entryId
+                }
                 objectName: preview.activePresentation
                             ? "gallerySourceColorIcon-"
                               + preview.entry.viewIndex : ""
@@ -265,7 +324,8 @@ Item {
                 smooth: true
                 asynchronous: true
                 cache: true
-                retainWhileLoading: true
+                retainWhileLoading: preview.activePresentation
+                    && readyEntryId === preview.entry.entryId
                 visible: !(preview.entry.panelRoot.viewerTransitionActive
                            && preview.entry.panelRoot.viewerTransitionEntryId
                               === preview.entry.entryId)
@@ -300,9 +360,11 @@ Item {
 
     Component {
         id: vectorThumbnailComponent
-        GalleryVectorImage {
+        GalleryVectorPreview {
             id: vectorThumbnail
-            source: thumbnail.source
+            inViewport: preview.entry.sceneVisible
+            sceneCache: preview.entry.panelRoot.vectorSceneCache
+            source: preview.vectorThumbnailSource
             onSourceStatusChanged: {
                 if (sourceStatus !== Image.Error) return
                 const row = preview.entry.viewIndex
@@ -324,7 +386,7 @@ Item {
         id: shaderThumbnailComponent
         GalleryThumbnailShaderLayer {
             entry: preview.entry
-            imageSource: thumbnail.source
+            imageSource: preview.bitmapThumbnailSource
             activePresentation: preview.activePresentation
         }
     }
@@ -333,12 +395,12 @@ Item {
         id: compactThumbnailComponent
         GalleryThumbnailCompactLayer {
             entry: preview.entry
-            imageSource: thumbnail.source
+            imageSource: preview.bitmapThumbnailSource
             activePresentation: preview.activePresentation
         }
     }
 
-    Item {
+    GallerySceneItem {
         id: videoPlayBadge
         objectName: preview.activePresentation
                     ? "galleryVideoPlayBadge-" + preview.entry.viewIndex : ""
@@ -363,10 +425,11 @@ Item {
            / preview.entry.renderDpr
         width: badgeDiameter
         height: badgeDiameter
-        visible: preview.videoThumbnailReady && badgeDiameter >= 28
+        sceneVisible: preview.videoThumbnailReady && badgeDiameter >= 28
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId
                          === preview.entry.entryId)
+        visible: (preview.entry.masonryMode && nativeCullingAvailable) || sceneVisible
         transform: Translate {
             x: videoPlayBadge.pixelGridOffset.x
             y: videoPlayBadge.pixelGridOffset.y
@@ -374,7 +437,7 @@ Item {
 
         Rectangle {
             id: videoPlayBadgeCircle
-            objectName: videoPlayBadge.visible
+            objectName: videoPlayBadge.sceneVisible
                         ? "galleryVideoPlayBadgeCircle-"
                           + preview.entry.viewIndex : ""
             anchors.fill: parent
@@ -387,7 +450,7 @@ Item {
 
         Image {
             id: videoPlayGlyph
-            objectName: videoPlayBadge.visible
+            objectName: videoPlayBadge.sceneVisible
                         ? "galleryVideoPlayIcon-"
                           + preview.entry.viewIndex : ""
             x: Math.round((parent.width - width) * preview.entry.renderDpr / 2)
@@ -396,7 +459,7 @@ Item {
                / preview.entry.renderDpr
             width: videoPlayBadge.glyphExtent
             height: width
-            source: !videoPlayBadge.visible || !Window.window
+            source: !videoPlayBadge.sceneVisible || !Window.window
                     ? "" : preview.videoPlayIconSource(width)
             sourceSize: Qt.size(Math.round(width * preview.entry.renderDpr),
                                 Math.round(height * preview.entry.renderDpr))

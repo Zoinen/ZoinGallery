@@ -9,7 +9,8 @@ Item {
     readonly property real paintedHeight: Math.max(
         0, label.y + label.contentHeight + content.entry.cellVerticalInset)
 
-    Text {
+    GalleryMotionText {
+        motionActive: content.entry.motionActive
         id: label
         GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
         readonly property point pixelCorrection:

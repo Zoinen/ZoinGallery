@@ -9,6 +9,15 @@ BrickItem {
     id: entry
 
     required property Item panelRoot
+    Accessible.role: Accessible.ListItem
+    Accessible.ignored: !entry.masonryMode || entry.viewIndex < 0
+    Accessible.name: entry.effectiveDisplayName
+    Accessible.selected: entry.selected
+    accessibleChildrenDecorative: entry.masonryMode && !entry.panelRoot.controller.canRemoveEntries
+    Accessible.onPressAction: {
+        if (entry.masonryMode && entry.sceneVisible && entry.viewIndex >= 0)
+            entry.panelRoot.selectIndex(entry.viewIndex, true)
+    }
     property var model
     // Installed by the layout after committing the whole metadata-ready row.
     property bool masonryGeometryReady: false
@@ -70,36 +79,46 @@ BrickItem {
             Math.max(0, Math.floor((Math.round(height * renderDpr) - 1) / 2)) / renderDpr,
             Math.round(Math.max(0, panelRoot.metrics.cellVerticalPadding) * renderDpr) / renderDpr)
     }
-    readonly property point iconSceneOrigin: {
-        if (detailsMode)
-            return Qt.point(0, 0)
-        // mapToItem() does not register dependencies on ancestor geometry.
-        // Track geometry through the complete chain so host
-        // panel placement invalidates the correction without any scrolling.
-        let dependency = 0
-        let ancestor = entry
-        while (ancestor) {
-            dependency += ancestor.x + ancestor.y + ancestor.scale + ancestor.rotation
-            // Size does not affect an untransformed item's origin. Anchors
-            // publish x/y when resizing actually moves it; subscribing every
-            // row to every ancestor's size repeats the whole chain on resize.
-            if (ancestor.scale !== 1 || ancestor.rotation !== 0)
-                dependency += ancestor.width + ancestor.height + ancestor.transformOrigin
-            ancestor = ancestor.parent
+    readonly property bool iconPixelAlignmentActive:
+        visible && sceneVisible && !geometryAnimationRunning
+        && !panelRoot.cursorPixelAlignmentSuspended
+    readonly property bool motionActive:
+        geometryAnimationRunning || panelRoot.cursorPixelAlignmentSuspended
+    property point iconSceneOrigin: Qt.point(0, 0)
+    property real iconPixelAlignmentRevision: 0
+    // State bindings are removed during motion. Binding.when only suppresses
+    // publication of its value; the value expression can still track geometry.
+    states: State {
+        name: "pixelAligned"
+        when: entry.iconPixelAlignmentActive
+        PropertyChanges {
+            entry {
+                iconSceneOrigin: {
+                    if (entry.detailsMode) return Qt.point(0, 0)
+                    // mapToItem() does not track ancestor geometry itself.
+                    let dependency = 0
+                    let ancestor = entry
+                    while (ancestor) {
+                        dependency += ancestor.x + ancestor.y + ancestor.scale + ancestor.rotation
+                        if (ancestor.scale !== 1 || ancestor.rotation !== 0)
+                            dependency += ancestor.width + ancestor.height + ancestor.transformOrigin
+                        ancestor = ancestor.parent
+                    }
+                    return entry.mapToItem(null, dependency * 0, dependency * 0)
+                }
+                iconPixelAlignmentRevision: {
+                    const viewport = entry.detailsMode ? Qt.point(0, 0)
+                                        : entry.panelRoot.cursorPixelGridViewportOrigin
+                    const preview = entry.previewContainerItem
+                    return Number(viewport.x || 0) + Number(viewport.y || 0)
+                            + (entry.detailsMode ? 0 : entry.x + entry.y)
+                            + entry.width + entry.height
+                            + (preview ? preview.x + preview.y
+                                         + preview.width + preview.height : 0)
+                            + entry.presentationMode
+                }
+            }
         }
-        return entry.mapToItem(null, dependency * 0, dependency * 0)
-    }
-    readonly property real iconPixelAlignmentRevision: {
-        if (!visible)
-            return 0
-        const viewport = detailsMode ? Qt.point(0, 0)
-                                     : panelRoot.cursorPixelGridViewportOrigin
-        const preview = previewContainerItem
-        return Number(viewport.x || 0) + Number(viewport.y || 0)
-                + (detailsMode ? 0 : x + y) + width + height
-                + (preview ? preview.x + preview.y
-                             + preview.width + preview.height : 0)
-                + presentationMode
     }
 
     function snapIconExtent(value) {
@@ -111,7 +130,7 @@ BrickItem {
     }
 
     function iconPixelOffset(item) {
-        if (!visible || !item || !item.parent || !item.visible)
+        if (!iconPixelAlignmentActive || !item || !item.parent || !item.visible)
             return Qt.point(0, 0)
         const revision = iconPixelAlignmentRevision
         const origin = iconSceneOrigin
@@ -299,25 +318,30 @@ BrickItem {
         id: sharedPreview
         entry: entry
         shaderThumbnail: entry.masonryMode || entry.gridMode
-        activePresentation: entry.visualGeometryReady && !entry.visualIdentityChanging
+        activePresentation: entry.viewIndex >= 0
+            && entry.visualGeometryReady && !entry.visualIdentityChanging
             && (!entry.folderPreviewRequested
             || entry.visualModel.folderPreviewState !== 2)
         z: 1
     }
 
-    Loader {
-        id: modeVisual
-        active: entry.visualGeometryReady && !(entry.folderPreviewRequested
-            && (entry.visualModel.folderPreviewState === 2 || entry.folderPreviewActive))
-        visible: !entry.folderPreviewActive
+    GallerySceneItem {
         anchors.fill: parent
-        asynchronous: false
         z: 2
-        sourceComponent: entry.detailsMode ? detailsVisual
-                         : entry.columnsMode ? columnsVisual
-                         : entry.gridMode ? gridVisual
-                         : entry.iconsMode ? iconsVisual
-                         : masonryVisual
+        sceneVisible: !entry.folderPreviewActive
+        visible: (entry.masonryMode && nativeCullingAvailable) || sceneVisible
+        Loader {
+            id: modeVisual
+            active: entry.visualGeometryReady && !(entry.folderPreviewRequested
+                && (entry.visualModel.folderPreviewState === 2 || entry.folderPreviewActive))
+            anchors.fill: parent
+            asynchronous: false
+            sourceComponent: entry.detailsMode ? detailsVisual
+                             : entry.columnsMode ? columnsVisual
+                             : entry.gridMode ? gridVisual
+                             : entry.iconsMode ? iconsVisual
+                             : masonryVisual
+        }
     }
 
     Component {
@@ -328,18 +352,22 @@ BrickItem {
         }
     }
 
-    Loader {
-        id: folderLoader
-        // This small shell follows the existing bounded delegate pool. Its
-        // image grid has a separate lifetime inside GalleryFolderPreview.
-        property bool frameCreated: false
+    GallerySceneItem {
         anchors.fill: parent
         z: 2
-        active: entry.folderPreviewRequested || frameCreated
-        visible: entry.folderPreviewRequested
-        onLoaded: frameCreated = true
-        sourceComponent: Component {
-            GalleryFolderPreview { entry: entry }
+        sceneVisible: entry.folderPreviewRequested
+        visible: (entry.masonryMode && nativeCullingAvailable) || sceneVisible
+        Loader {
+            id: folderLoader
+            // This small shell follows the existing bounded delegate pool. Its
+            // image grid has a separate lifetime inside GalleryFolderPreview.
+            property bool frameCreated: false
+            anchors.fill: parent
+            active: entry.folderPreviewRequested || frameCreated
+            onLoaded: frameCreated = true
+            sourceComponent: Component {
+                GalleryFolderPreview { entry: entry }
+            }
         }
     }
 
@@ -374,5 +402,6 @@ BrickItem {
             entry: entry
         }
     }
+
 
 }

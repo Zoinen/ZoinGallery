@@ -12,7 +12,8 @@ Item {
         font: content.entry.panelRoot.iconLabelFont
     }
 
-    Text {
+    GalleryMotionText {
+        motionActive: content.entry.motionActive
         id: label
         GalleryLayoutDebugZone {
             objectName: "galleryGridTextZone-" + content.entry.viewIndex

@@ -36,7 +36,8 @@ Item {
             radius: 3
         }
 
-        Text {
+        GalleryMotionText {
+            motionActive: content.entry.motionActive
             id: masonryLabel
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             font: content.entry.panelRoot.iconLabelFont

@@ -33,6 +33,7 @@ void MasonryLayout::setIconLabelFont(const QFont &font) {
     if (_presentationMode == Icons)
         _preserveViewportAnchorForNextRewrap = true;
     _iconLabelFont = font;
+    invalidateIconCaptionMetrics();
     emit iconLabelFontChanged();
     if (_presentationMode == Icons || _presentationMode == Grid || _presentationMode == Details
         || _presentationMode == Columns) {

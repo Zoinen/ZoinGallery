@@ -2,6 +2,7 @@
 #define GALLERYDELEGATEITEM_H
 
 #include "GalleryEntryVisual.h"
+#include "GallerySceneItem.h"
 
 #include <QQuickItem>
 #include <QVariantMap>
@@ -9,7 +10,7 @@
 class QParallelAnimationGroup;
 class QPropertyAnimation;
 
-class GalleryDelegateItem : public QQuickItem {
+class GalleryDelegateItem : public GallerySceneItem {
     Q_OBJECT
     Q_PROPERTY(int presentationMode READ presentationMode
                WRITE setPresentationMode NOTIFY presentationModeChanged)
@@ -65,6 +66,8 @@ class GalleryDelegateItem : public QQuickItem {
                NOTIFY visualFacadeReadyChanged)
     Q_PROPERTY(bool geometryAnimationRunning READ geometryAnimationRunning
                NOTIFY geometryAnimationRunningChanged)
+    Q_PROPERTY(bool accessibleChildrenDecorative READ accessibleChildrenDecorative
+               WRITE setAccessibleChildrenDecorative NOTIFY accessibleChildrenDecorativeChanged)
 
 public:
     explicit GalleryDelegateItem(QQuickItem *parent = nullptr);
@@ -106,6 +109,8 @@ public:
     bool visualFacadeReady() const;
     bool geometryAnimationRunning() const;
     void stopGeometryAnimation();
+    bool accessibleChildrenDecorative() const { return _accessibleChildrenDecorative; }
+    void setAccessibleChildrenDecorative(bool decorative);
 
     int presentationMode() const;
     QString mode() const;
@@ -134,6 +139,7 @@ signals:
     void visualStyleChanged();
     void visualFacadeReadyChanged();
     void geometryAnimationRunningChanged();
+    void accessibleChildrenDecorativeChanged();
 
 protected:
 #if QT_VERSION < QT_VERSION_CHECK(6, 3, 0)
@@ -160,6 +166,7 @@ private:
     GalleryEntryVisual *_visualModel = nullptr;
     bool _visualIdentityChanging = false;
     bool _visualFacadeReady = false;
+    bool _accessibleChildrenDecorative = false;
 
     QParallelAnimationGroup *_geometryAnimationGroup = nullptr;
     QPropertyAnimation *_xAnimation = nullptr;

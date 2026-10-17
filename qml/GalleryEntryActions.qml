@@ -7,6 +7,7 @@ import QtQuick.Controls.impl
 Item {
     id: actions
     objectName: "galleryEntryActions-" + entry.viewIndex
+    enabled: entry.sceneVisible
 
     required property var entry
     readonly property var panelRoot: entry.panelRoot

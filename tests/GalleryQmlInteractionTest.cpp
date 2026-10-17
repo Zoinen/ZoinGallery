@@ -1720,6 +1720,62 @@ private slots:
         runtime->shutdown();
     }
 
+    void motionTextRestoresTheConfiguredRenderer() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QVERIFY(ZoinGallery::GalleryRuntime::install(view.engine()));
+#ifndef Q_MOC_RUN
+        auto *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryMotionText {
+                objectName: "motionText"
+                text: "A caption with small text"
+                renderType: Text.NativeRendering
+            }
+        )QML", QStringLiteral("MotionTextRenderer.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        for (int rendering : {0, 1, 2}) {
+            QVERIFY(root->setProperty("renderType", rendering));
+            QVERIFY(root->setProperty("motionActive", true));
+            QTRY_COMPARE(root->property("renderType").toInt(), rendering == 1 ? 0 : rendering);
+            QVERIFY(root->setProperty("motionActive", false));
+            QTRY_COMPARE(root->property("renderType").toInt(), rendering);
+        }
+        // A subsequent native scroll must still restore the user's choice.
+        QVERIFY(root->setProperty("renderType", 1));
+        QVERIFY(root->setProperty("motionActive", true));
+        QTRY_COMPARE(root->property("renderType").toInt(), 0);
+        QVERIFY(root->setProperty("motionActive", false));
+        QTRY_COMPARE(root->property("renderType").toInt(), 1);
+    }
+
+    void motionTextCreatedDuringScrollRestoresNativeRenderer() {
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QVERIFY(ZoinGallery::GalleryRuntime::install(view.engine()));
+#ifndef Q_MOC_RUN
+        auto *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryMotionText {
+                text: "A caption entering the viewport"
+                motionActive: true
+                renderType: Text.NativeRendering
+            }
+        )QML", QStringLiteral("MovingTextRenderer.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        QTRY_COMPARE(root->property("renderType").toInt(), 0);
+        QVERIFY(root->setProperty("motionActive", false));
+        QTRY_COMPARE(root->property("renderType").toInt(), 1);
+    }
+
     void autoScrollArmsWithoutAnimatingAndTracksTheDeadZone() {
         QQuickView view;
         view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));

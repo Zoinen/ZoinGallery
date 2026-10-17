@@ -29,6 +29,7 @@ Item {
     readonly property bool advancedEntryActions:
         controller.dragEnabled || controller.directoryDropEnabled
         || controller.canRemoveEntries
+    readonly property bool autoScrollAnimationRunning: pointerLayer.animationRunning
 
     GalleryNativeTextMetrics { id: nativeTextMetrics }
 
@@ -257,6 +258,8 @@ Item {
         objectName: "galleryViewportItem"
         clip: true
         persistSettings: false
+        scrollAnimationRunning: viewportRoot.panelRoot.panelScrollAnimationRunning
+                                || pointerLayer.animationRunning
         visible: !viewportRoot.panelRoot.presentationLayoutHidden
         opacity: viewportRoot.panelRoot.pathViewportPlacementPending ? 0 : 1
         anchors {
@@ -496,8 +499,10 @@ Item {
                 readonly property real topSpacing: snapLogical(8)
                 readonly property real interactiveWidth:
                     Math.max(0, snapLogical(width - viewportRoot.groupHeaderScrollClearance))
-                x: snappedX
-                y: snappedY
+                readonly property bool motionActive:
+                    galleryLayout.scrollAnimationRunning && !currentSticky
+                x: motionActive ? rawX : snappedX
+                y: motionActive ? rawY : snappedY
                 width: snapLogical(Number(modelData.width || 0))
                 height: snapLogical(Number(modelData.height || 0))
                 objectName: "galleryGroupHeader-"
@@ -597,7 +602,8 @@ Item {
                             groupHeader.horizontal ? 0
                             : viewportRoot.panelRoot.groupHeaderRightInset + 4))
 
-                    Text {
+                    GalleryMotionText {
+                        motionActive: groupHeader.motionActive
                         id: groupHeaderTitle
                         objectName: groupHeader.objectName + "-title"
                         anchors.left: parent.left
@@ -644,10 +650,11 @@ Item {
                         // physical pixels here scales twice and resamples the glyph.
                         sourceSize: Qt.size(14, 14)
                         fillMode: Image.PreserveAspectFit
-                        smooth: false
+                        smooth: groupHeader.motionActive
                         mipmap: false
                     }
-                    Text {
+                    GalleryMotionText {
+                        motionActive: groupHeader.motionActive
                         id: groupHeaderCount
                         objectName: groupHeader.objectName + "-count"
                         anchors.right: parent.right

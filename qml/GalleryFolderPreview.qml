@@ -42,9 +42,10 @@ Item {
         font: preview.panelRoot.iconLabelFont
     }
 
-    Item {
+    GallerySceneItem {
         id: content
-        opacity: preview.hasUsablePreview ? 1 : 0
+        sceneVisible: preview.hasUsablePreview
+        visible: (preview.entry.masonryMode && nativeCullingAvailable) || sceneVisible
         x: preview.snap(preview.sceneOrigin.x + preview.entry.cellHorizontalInset) - preview.sceneOrigin.x
         y: preview.snap(preview.sceneOrigin.y + preview.entry.effectivePreviewRect.y)
            - preview.sceneOrigin.y
@@ -83,7 +84,8 @@ Item {
                 color: preview.darkTheme ? "#304051" : "#60b0eb"
             }
         }
-        Text {
+        GalleryMotionText {
+            motionActive: preview.entry.motionActive
             id: title
             GalleryLayoutDebugZone {
                 objectName: "folderPreviewTitleZone"
@@ -142,7 +144,10 @@ Item {
                     id: children
                     objectName: "folderPreviewGrid"
                     anchors.fill: parent
-                    clip: true
+                    // The contained layout fits each cell inside these bounds.
+                    // Keeping an extra clip root in scrolling Masonry tiles
+                    // forces global batch rebuilds when their rows are culled.
+                    clip: !preview.entry.masonryMode
                     persistSettings: false
                     containedPreview: true
                     animateResizing: false

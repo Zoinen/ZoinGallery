@@ -40,6 +40,10 @@ QtObject {
         repeat: false
         onTriggered: {
             const panel = motion.panel
+            if (panel.panelScrollAnimationRunning || panel.scrollingMode) {
+                panel.viewportUpdatePendingAfterScroll = true
+                return
+            }
             const ensureCursor = panel.viewportUpdateEnsuresCursor
             const suppressAnimation = panel.viewportUpdateSuppressAnimation
             panel.viewportUpdateEnsuresCursor = false

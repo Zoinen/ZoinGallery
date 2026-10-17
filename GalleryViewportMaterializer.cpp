@@ -23,8 +23,10 @@ GalleryViewportWindow GalleryViewportMaterializer::plan(
     // Metadata/decode planning may lead visuals by a few rows. Columns use a
     // whole column because their primary axis advances in column-width steps;
     // every vertical presentation remains capped at four nominal rows.
+    // Masonry needs at least one row to prepare the next band in a short panel.
     const qreal metadataOverscan = mode == GalleryPresentationMode::Columns
-        ? itemExtent : qMin<qreal>(extent * 0.25, itemExtent * 4);
+        ? itemExtent : qMin<qreal>(mode == GalleryPresentationMode::Masonry
+            ? qMax(itemExtent, extent * 0.25) : extent * 0.25, itemExtent * 4);
 
     return {
         .visibleStart = contentOffset,

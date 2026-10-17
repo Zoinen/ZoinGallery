@@ -1,14 +1,17 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.Native 1.0
 
-Item {
+GallerySceneItem {
     id: layer
 
     required property GalleryEntryDelegateBase entry
     required property url imageSource
     required property bool activePresentation
     readonly property int sourceStatus: sourceImage.status
+    sceneVisible: imageSource.toString() !== ""
+    visible: (entry.masonryMode && nativeCullingAvailable) || sceneVisible
 
     Image {
         id: sourceImage
@@ -66,6 +69,5 @@ Item {
         property int checkerboardSize: 4 * layer.entry.renderDpr
         property real borderRadius: 4.1 * layer.entry.renderDpr
         fragmentShader: "qrc:/ZoinGallery/resources/shader.frag.qsb"
-        visible: layer.imageSource.toString() !== ""
     }
 }

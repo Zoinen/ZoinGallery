@@ -324,9 +324,21 @@ QtObject {
     }
 
     onScrollingModeChanged: {
-        if (!scrollingMode && controller) {
+        if (scrollingMode) {
+            // The pointer gesture supersedes any queued initial restoration.
+            viewportUpdateTimer.stop()
+            viewportUpdateEnsuresCursor = false
+            viewportUpdateSuppressAnimation = false
+            viewportUpdatePendingAfterScroll = false
+        } else if (controller) {
             controller.panelScrollOffset = galleryLayout.contentY
             controller.panelViewportCursorEntryId = controller.cursorEntryId
+            if (viewportUpdatePendingAfterScroll) {
+                const ensureCursor = viewportUpdateEnsuresCursor
+                viewportUpdatePendingAfterScroll = false
+                viewportUpdateEnsuresCursor = false
+                scheduleViewportUpdate(ensureCursor)
+            }
         }
     }
 
@@ -661,11 +673,11 @@ QtObject {
     function scheduleViewportUpdate(ensureCursor) {
         if (ensureCursor)
             viewportUpdateEnsuresCursor = true
-        // Catalog metadata may settle while a wheel animation is in flight.
+        // Catalog metadata may settle during wheel or middle-button motion.
         // Defer the resulting restore/ensure pass until the animation has
         // persisted its destination; running it now would call
         // setPanelContentY(), stop the animation, and snap to the old offset.
-        if (panelScrollAnimation.running) {
+        if (panelScrollAnimation.running || scrollingMode) {
             viewportUpdatePendingAfterScroll = true
             return
         }

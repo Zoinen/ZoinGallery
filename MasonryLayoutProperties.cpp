@@ -230,7 +230,7 @@ void MasonryLayout::setDevicePixelRatio(qreal value) {
     _devicePixelRatioOverride = normalized;
     emit devicePixelRatioChanged();
     // Every painted brick and the common viewport use the actual pixel grid.
-    positionViewport();
+    updatePixelGridOrigin();
     rewrap(false);
     reReadAndDecodeThumbnails();
 }

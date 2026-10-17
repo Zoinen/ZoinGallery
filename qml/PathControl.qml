@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls
@@ -188,25 +189,17 @@ Item {
     function snap(val) {
         return Math.round(Number(val || 0) * dpr) / dpr
     }
-    property real alignmentRevision:
-        pathRoot.Window.window
-        ? pathRoot.Window.window.width + pathRoot.Window.window.height + dpr
-        : width + height + dpr
-    function visualPixelOffsetX(item, geometryRevision) {
+    // Compatibility input for hosts; fitting is driven by the native dirty graph.
+    property real alignmentRevision: 0
+    function visualPixelOffsetX(item) {
         if (!item || !item.parent)
             return 0
-        const revision = alignmentRevision + pathRoot.x + pathRoot.y
-                       + Number(geometryRevision || 0)
-        const scenePoint = item.parent.mapToItem(null, item.x, item.y)
-        return snap(scenePoint.x) - scenePoint.x + revision * 0
+        return item.PixelGridAlignment.offset.x
     }
-    function visualPixelOffsetY(item, geometryRevision) {
+    function visualPixelOffsetY(item) {
         if (!item || !item.parent)
             return 0
-        const revision = alignmentRevision + pathRoot.x + pathRoot.y
-                       + Number(geometryRevision || 0)
-        const scenePoint = item.parent.mapToItem(null, item.x, item.y)
-        return snap(scenePoint.y) - scenePoint.y + revision * 0
+        return item.PixelGridAlignment.offset.y
     }
     readonly property real breadcrumbSeparatorSize: snap(12)
     readonly property real breadcrumbSeparatorHorizontalPadding: snap(6)
@@ -264,13 +257,6 @@ Item {
     }
     readonly property real driveIconLogicalSize: 18
     readonly property real driveIconSize: snap(driveIconLogicalSize)
-    readonly property real breadcrumbGeometryRevision:
-        alignmentRevision
-        + fixedPart.x + fixedPart.y + fixedPart.width + fixedPart.height
-        + dynamicPart.x + dynamicPart.y + dynamicPart.width + dynamicPart.height
-        + dynamicPart.contentX
-        + collapsiblePart.x + collapsiblePart.y
-        + collapsiblePart.width + collapsiblePart.height
 
     component FolderDelegate : Item {
         id: folderDelegate
@@ -296,10 +282,6 @@ Item {
         readonly property real horizontalTrailingInset:
             pathRoot.breadcrumbSeparatorHorizontalPadding
             - horizontalLeadingInset
-        readonly property real geometryRevision:
-            pathRoot.breadcrumbGeometryRevision
-            + x + y + width + height + folder.x + folder.y
-            + folder.width + folder.height + pathRoot.breadcrumbs.length
 
         signal clicked(index: int)
 
@@ -356,9 +338,9 @@ Item {
                 font.family: pathRoot.breadcrumbFontFamily
                 transform: Translate {
                     x: pathRoot.visualPixelOffsetX(
-                           folderText, folderDelegate.geometryRevision)
+                           folderText)
                     y: pathRoot.visualPixelOffsetY(
-                           folderText, folderDelegate.geometryRevision)
+                           folderText)
                 }
             }
 
@@ -399,9 +381,9 @@ Item {
                 source: pathRoot.breadcrumbSeparatorIconSource
                 transform: Translate {
                     x: pathRoot.visualPixelOffsetX(
-                           separatorIcon, folderDelegate.geometryRevision)
+                           separatorIcon)
                     y: pathRoot.visualPixelOffsetY(
-                           separatorIcon, folderDelegate.geometryRevision)
+                           separatorIcon)
                 }
             }
             Text {
@@ -420,9 +402,9 @@ Item {
                 verticalAlignment: Text.AlignVCenter
                 transform: Translate {
                     x: pathRoot.visualPixelOffsetX(
-                           rootSlashText, folderDelegate.geometryRevision)
+                           rootSlashText)
                     y: pathRoot.visualPixelOffsetY(
-                           rootSlashText, folderDelegate.geometryRevision)
+                           rootSlashText)
                 }
             }
         }
@@ -596,8 +578,8 @@ Item {
         visible: editMode
         font: pathRoot.breadcrumbFont
         transform: Translate {
-            x: pathRoot.visualPixelOffsetX(pathField, pathRoot.breadcrumbGeometryRevision)
-            y: pathRoot.visualPixelOffsetY(pathField, pathRoot.breadcrumbGeometryRevision)
+            x: pathRoot.visualPixelOffsetX(pathField)
+            y: pathRoot.visualPixelOffsetY(pathField)
         }
 
         leftPadding: 7

@@ -1,26 +1,20 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import QtQuick.Controls
 
 import ZoinGallery.Native 1.0
 
-Item {
+PixelGridScope {
     id: root
 
     required property Item viewer
 
     function alignedCenter(item) {
-        // Read the complete ancestor chain so host movement and resize both
-        // invalidate the scene-space correction, including fractional DPR.
-        let dependency = 0
-        for (let ancestor = root; ancestor; ancestor = ancestor.parent)
-            dependency += ancestor.x + ancestor.y + ancestor.width + ancestor.height
         const dpr = Math.max(0.5, root.viewer.devicePixelRatio)
-        const point = root.mapToItem(null, (root.width - item.width) / 2 + dependency * 0,
-                                     (root.height - item.height) / 2)
-        return root.mapFromItem(null, Math.round(point.x * dpr) / dpr,
-                                Math.round(point.y * dpr) / dpr)
+        return Qt.point(Math.floor((root.width - item.width) * dpr / 2) / dpr,
+                        Math.floor((root.height - item.height) * dpr / 2) / dpr)
     }
 
     readonly property alias viewport: viewportItem

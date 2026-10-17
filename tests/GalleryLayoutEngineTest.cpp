@@ -11,6 +11,7 @@ class GalleryLayoutEngineTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void cachedPlansPublishPhysicalEdges();
     void columnMajorUsesOnePhysicalPixelStride_data();
     void columnMajorUsesOnePhysicalPixelStride();
     void detailsPlanIncludesBottomAlignmentSlack();
@@ -34,6 +35,30 @@ private slots:
     void viewportMaterializationUsesBoundedOverscan();
 };
 
+void GalleryLayoutEngineTest::cachedPlansPublishPhysicalEdges() {
+    GalleryLayoutRequest request;
+    request.viewportSize = QSizeF(1001.3, 509.7);
+    request.density = 123.7;
+    request.insets = {.left = 3.3, .right = 4.2, .top = 7.1, .bottom = 9.3};
+    request.spacing = 5.3;
+    request.devicePixelRatio = 1.75;
+    QVector<GalleryLayoutEntry> entries(50);
+    for (int i = 0; i < entries.size(); ++i)
+        entries[i].originalSize = QSizeF(71 + i * 3, 53 + i);
+    for (auto mode : {GalleryPresentationMode::Details, GalleryPresentationMode::Columns,
+                      GalleryPresentationMode::Grid, GalleryPresentationMode::Icons,
+                      GalleryPresentationMode::Masonry}) {
+        request.mode = mode;
+        const auto result = GalleryLayoutEngine::layout(request, entries);
+        for (const auto &cell : result.cells) {
+            for (const auto &rect : {cell.geometry, cell.previewGeometry})
+                for (qreal edge : {rect.left(), rect.top(), rect.right(), rect.bottom()})
+                    QVERIFY2(qAbs(edge * 1.75 - std::round(edge * 1.75)) < .001,
+                        qPrintable(QString("mode %1 physical edge %2").arg(int(mode)).arg(edge * 1.75, 0, 'f', 6)));
+        }
+    }
+}
+
 void GalleryLayoutEngineTest::columnMajorUsesOnePhysicalPixelStride_data() {
     QTest::addColumn<qreal>("devicePixelRatio");
     QTest::newRow("dpr-100") << qreal(1.0);
@@ -53,14 +78,14 @@ void GalleryLayoutEngineTest::columnMajorUsesOnePhysicalPixelStride() {
 
     const GalleryFixedLayoutPlan plan =
         GalleryLayoutEngine::fixedPlan(request, 100);
-    QCOMPARE(plan.rowsPerColumn, 20);
+    QCOMPARE(plan.rowsPerColumn, int(std::floor(500 / plan.extent)));
     QCOMPARE(plan.columns, 3);
     const qreal expectedPhysicalStride = std::floor(
         std::floor(1001 * request.devicePixelRatio) / 3);
     QVERIFY(qAbs(plan.cellWidth * request.devicePixelRatio
                  - expectedPhysicalStride) < 0.001);
-    QVERIFY(qAbs(plan.geometryFor(20).x() - plan.cellWidth) < 0.001);
-    QVERIFY(qAbs(plan.geometryFor(40).x() - plan.cellWidth * 2) < 0.001);
+    QVERIFY(qAbs(plan.geometryFor(plan.rowsPerColumn).x() - plan.cellWidth) < 0.001);
+    QVERIFY(qAbs(plan.geometryFor(2 * plan.rowsPerColumn).x() - plan.cellWidth * 2) < 0.001);
     QVERIFY(qAbs(plan.geometryFor(40).width()
                  - plan.geometryFor(0).width()) < 0.001);
 }
@@ -74,11 +99,11 @@ void GalleryLayoutEngineTest::detailsPlanIncludesBottomAlignmentSlack() {
 
     const GalleryFixedLayoutPlan plan =
         GalleryLayoutEngine::fixedPlan(request, 101);
-    QCOMPARE(plan.geometryFor(100).top(), 7 + 100 * 23.5);
+    QCOMPARE(plan.geometryFor(100).top(), 7 + 100 * plan.extent);
     const qreal usableHeight = 479 - 7 - 13;
     const qreal remainder = usableHeight
-        - std::floor(usableHeight / 23.5) * 23.5;
-    QCOMPARE(plan.contentExtent, 7 + 101 * 23.5 + remainder + 13);
+        - std::floor(usableHeight / plan.extent) * plan.extent;
+    QCOMPARE(plan.contentExtent, 7 + 101 * plan.extent + remainder + 13);
 }
 
 void GalleryLayoutEngineTest::analyticalRangeIsBoundedByViewport() {
@@ -341,7 +366,9 @@ void GalleryLayoutEngineTest::graphicalCellPaddingKeepsPreviewsAndAspectRatios()
                     QVERIFY(preview.bottom() <= cell.geometry.bottom());
                     if (mode == GalleryPresentationMode::Masonry) {
                         const auto &size = entries[index].originalSize;
-                        QVERIFY(qAbs(preview.width() / preview.height() - size.width() / size.height()) < .001);
+                        // Committed physical edges approximate the authored ratio within one pixel.
+                        QVERIFY(qAbs(preview.width() - preview.height() * size.width() / size.height())
+                                <= (1 + size.width() / size.height()) / request.devicePixelRatio);
                         QVERIFY(qAbs(cell.geometry.bottom() - preview.bottom() - expectedVerticalInset) < .001);
                     }
                 }

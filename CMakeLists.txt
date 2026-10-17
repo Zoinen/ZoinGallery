@@ -197,6 +197,8 @@ set(ZOIN_CORE_SOURCES
     QmlAsyncImageProvider.h
     QmlAsyncImageProvider.cpp
     GalleryPixelGrid.h
+    include/ZoinGallery/PixelGrid.h
+    src/pixelgrid/PixelGrid.cpp
     GalleryNativeTextMetrics.h
     GalleryNativeTextMetrics.cpp
     GalleryLayoutEngine.h

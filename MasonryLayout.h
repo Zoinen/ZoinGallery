@@ -749,8 +749,10 @@ private:
     QQuickItem *_masonryRasterBranch = nullptr;
     bool _sceneBranchesSuspended = false;
     QPointF _parentPixelGridOffset;
+    QPointF _viewportPixelGridOffset;
     QPointF _viewportSceneOrigin;
     QVector<QMetaObject::Connection> _pixelGridConnections;
+    void updatePixelGridOrigin();
 
     const QSizeF GridView_Folder = QSizeF(1, 1);
 

@@ -9,14 +9,22 @@
 namespace ZoinGallery {
 namespace {
 
+GalleryInsets physicalInsets(const GalleryLayoutRequest &request) {
+    const GridMetrics grid(request.devicePixelRatio);
+    return {.left = grid.snap(request.insets.left), .right = grid.snap(request.insets.right),
+            .top = grid.snap(request.insets.top), .bottom = grid.snap(request.insets.bottom)};
+}
+
 qreal canvasWidth(const GalleryLayoutRequest &request) {
-    return qMax<qreal>(0, request.viewportSize.width()
-                             - request.insets.left - request.insets.right);
+    const auto insets = physicalInsets(request);
+    return qMax<qreal>(0, GridMetrics(request.devicePixelRatio).snap(request.viewportSize.width())
+                             - insets.left - insets.right);
 }
 
 qreal usableHeight(const GalleryLayoutRequest &request) {
+    const auto insets = physicalInsets(request);
     return qMax<qreal>(1, request.viewportSize.height()
-                             - request.insets.top - request.insets.bottom);
+                             - insets.top - insets.bottom);
 }
 
 int uniformColumnCount(const GalleryLayoutRequest &request) {
@@ -101,7 +109,8 @@ void buildFixedSections(const GalleryLayoutRequest &request,
             x += section.primaryCells * plan->cellWidth;
         }
         const qreal trailingCanvasRemainder = qMax<qreal>(
-            0, plan->canvasWidth - plan->columns * plan->cellWidth);
+            0, request.viewportSize.width() - plan->insets.left - plan->insets.right
+                - plan->columns * plan->cellWidth);
         plan->contentExtent = plan->insets.left + x
             + trailingCanvasRemainder + plan->insets.right;
         return;
@@ -334,15 +343,17 @@ QRectF GalleryFixedLayoutPlan::geometryFor(int index) const {
     }
     const int row = localIndex / columns;
     const int column = localIndex % columns;
+    const qreal left = columnEdges.isEmpty() ? column * cellWidth : columnEdges.at(column);
+    const qreal width = columnEdges.isEmpty() ? cellWidth : columnEdges.at(column + 1) - left;
     if (!iconRowTops.isEmpty()) {
         const int globalRow = section.firstIconRow + row;
-        return QRectF(column * cellWidth, iconRowTops.at(globalRow),
-                      cellWidth, iconRowHeights.at(globalRow));
+        return QRectF(left, iconRowTops.at(globalRow),
+                      width, iconRowHeights.at(globalRow));
     }
-    return QRectF(column * cellWidth,
+    return QRectF(left,
                   insets.top + section.contentOffset + headerHeight
                       + row * extent,
-                  cellWidth, extent);
+                  width, extent);
 }
 
 QRectF GalleryFixedLayoutPlan::previewGeometryFor(int index) const {
@@ -353,6 +364,7 @@ QRectF GalleryFixedLayoutPlan::previewGeometryForRect(const QRectF &geometry) co
     if (geometry.isEmpty()) {
         return {};
     }
+    const auto preview = [&]() -> QRectF {
     const qreal halfSpacing = spacing / 2;
     const qreal horizontalInset = cellHorizontalPadding < 0 ? halfSpacing
         : PixelGrid::cellHorizontalInset(geometry.width(), cellHorizontalPadding, devicePixelRatio);
@@ -386,6 +398,8 @@ QRectF GalleryFixedLayoutPlan::previewGeometryForRect(const QRectF &geometry) co
                 geometry.width() - spacing));
     return QRectF(geometry.x() + halfSpacing,
                   geometry.y() + halfSpacing, side, side);
+    };
+    return GridMetrics(devicePixelRatio).rect(preview());
 }
 
 QVector<int> GalleryFixedLayoutPlan::indexesIntersecting(
@@ -522,12 +536,13 @@ GalleryFixedLayoutPlan ColumnMajorStrategy::plan(
     result.mode = GalleryPresentationMode::Columns;
     result.entryCount = qMax(0, entryCount);
     result.columns = qBound(2, request.columnCount, 3);
-    result.extent = qMax<qreal>(1, request.density);
+    result.extent = qMax<qreal>(1, GridMetrics(request.devicePixelRatio).snap(request.density));
+    result.devicePixelRatio = request.devicePixelRatio;
     result.rowsPerColumn = qMax(1, static_cast<int>(std::floor(
         usableHeight(request) / result.extent)));
     result.canvasWidth = canvasWidth(request);
-    result.insets = request.insets;
-    result.spacing = request.spacing;
+    result.insets = physicalInsets(request);
+    result.spacing = GridMetrics(request.devicePixelRatio).snap(request.spacing);
     const qreal dpr = qMax<qreal>(0.01, request.devicePixelRatio);
     const qreal physicalCanvas = std::floor(result.canvasWidth * dpr
                                              + 0.000001);
@@ -538,7 +553,8 @@ GalleryFixedLayoutPlan ColumnMajorStrategy::plan(
         : (result.entryCount + result.rowsPerColumn - 1)
               / result.rowsPerColumn;
     const qreal trailingCanvasRemainder = qMax<qreal>(
-        0, result.canvasWidth - result.columns * result.cellWidth);
+        0, request.viewportSize.width() - result.insets.left - result.insets.right
+            - result.columns * result.cellWidth);
     result.contentExtent = request.insets.left
         + totalColumns * result.cellWidth + trailingCanvasRemainder
         + request.insets.right;
@@ -554,7 +570,8 @@ GalleryFixedLayoutPlan DetailsStrategy::plan(
     result.columns = 1;
     result.rowsPerColumn = result.entryCount;
     result.canvasWidth = canvasWidth(request);
-    result.extent = qMax<qreal>(1, request.density);
+    result.extent = qMax<qreal>(1, GridMetrics(request.devicePixelRatio).snap(request.density));
+    result.devicePixelRatio = request.devicePixelRatio;
     result.cellWidth = result.canvasWidth;
     const int completeVisibleRows = int(std::floor(
         usableHeight(request) / result.extent + 0.000000001));
@@ -565,8 +582,8 @@ GalleryFixedLayoutPlan DetailsStrategy::plan(
     result.contentExtent = request.insets.top
         + result.entryCount * result.extent + trailingViewportRemainder
         + request.insets.bottom;
-    result.insets = request.insets;
-    result.spacing = request.spacing;
+    result.insets = physicalInsets(request);
+    result.spacing = GridMetrics(request.devicePixelRatio).snap(request.spacing);
     buildFixedSections(request, &result);
     return result;
 }
@@ -586,15 +603,20 @@ GalleryFixedLayoutPlan UniformGridStrategy::analyticalPlan(
     result.canvasWidth = canvasWidth(request);
     result.extent = request.mode == GalleryPresentationMode::Icons
         && request.iconRowHeight > 0
-        ? request.iconRowHeight : qMax<qreal>(1, request.density);
+        ? GridMetrics(request.devicePixelRatio).snap(request.iconRowHeight)
+        : qMax<qreal>(1, GridMetrics(request.devicePixelRatio).snap(request.density));
     result.cellWidth = result.columns > 0
         ? result.canvasWidth / result.columns : result.canvasWidth;
+    result.columnEdges.reserve(result.columns + 1);
+    const GridMetrics grid(request.devicePixelRatio);
+    for (int column = 0; column <= result.columns; ++column)
+        result.columnEdges.append(grid.partition(result.canvasWidth, column, result.columns));
     const int rows = result.columns > 0
         ? (result.entryCount + result.columns - 1) / result.columns : 0;
     result.contentExtent = request.insets.top + rows * result.extent
         + request.insets.bottom;
-    result.insets = request.insets;
-    result.spacing = request.spacing;
+    result.insets = physicalInsets(request);
+    result.spacing = GridMetrics(request.devicePixelRatio).snap(request.spacing);
     buildFixedSections(request, &result);
     return result;
 }
@@ -656,6 +678,11 @@ GalleryLayoutResult UniformGridStrategy::layout(
             cell.previewGeometry = plan.previewGeometryFor(index);
             cell.displayLabel = entries.at(index).displayLabel;
         }
+    }
+    const GridMetrics grid(request.devicePixelRatio);
+    for (auto &cell : result.cells) {
+        cell.geometry = grid.rect(cell.geometry);
+        cell.previewGeometry = grid.rect(cell.previewGeometry);
     }
     result.bands = buildBands(result.cells);
     result.contentExtent = result.cells.isEmpty()
@@ -741,6 +768,11 @@ GalleryLayoutResult JustifiedMasonryStrategy::layout(
         ++currentColumn;
     }
 
+    const GridMetrics grid(request.devicePixelRatio);
+    for (auto &cell : result.cells) {
+        cell.geometry = grid.rect(cell.geometry);
+        cell.previewGeometry = grid.rect(cell.previewGeometry);
+    }
     result.bands = buildBands(result.cells);
     result.contentExtent = result.cells.isEmpty()
         ? request.insets.top + request.insets.bottom

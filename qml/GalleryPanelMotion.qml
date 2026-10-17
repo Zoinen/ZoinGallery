@@ -8,6 +8,7 @@ QtObject {
     id: motion
 
     required property GalleryPanel panel
+    property bool retargetingScroll: false
 
     property alias scrollAnimation: panelScrollObject
     property alias cursorAnimation: cursorAnimationObject
@@ -109,6 +110,8 @@ QtObject {
         easing.type: Easing.OutSine
         onRunningChanged: {
             const panel = motion.panel
+            if (motion.retargetingScroll)
+                return
             panel.traceBenchmarkStage("navigation.scroll.running-changed", {
                 "running": running,
                 "from": from,

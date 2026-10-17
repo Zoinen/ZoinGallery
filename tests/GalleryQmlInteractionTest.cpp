@@ -5,6 +5,7 @@
 #include "FileListModel.h"
 #include "ImageFile.h"
 #include "GalleryDelegateItem.h"
+#include <ZoinGallery/PixelGrid.h>
 
 #include <QDir>
 #include <QElapsedTimer>
@@ -145,6 +146,195 @@ class GalleryQmlInteractionTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void physicalGridMetricsUseSharedIntegerEdges() {
+        for (qreal dpr : {1.0, 1.25, 1.5, 1.75, 2.0}) {
+            const ZoinGallery::GridMetrics grid(dpr);
+            qreal previous = 0;
+            for (int index = 0; index <= 7; ++index) {
+                const qreal edge = grid.partition(103.7, index, 7);
+                QCOMPARE(grid.edge(edge), qint64(std::round(edge * dpr)));
+                QVERIFY(edge >= previous);
+                previous = edge;
+            }
+            QCOMPARE(previous, grid.snap(103.7));
+            const qreal centered = grid.center(28, 16);
+            QCOMPARE(centered * dpr, qreal(grid.edge(centered)));
+            QVERIFY(grid.logical(grid.capacity(22.953125)) >= 22.953125 - 1e-7);
+            const auto rect = grid.rect(QRectF(1.17, 2.29, 23.31, 17.71));
+            QCOMPARE(rect.right(), grid.snap(24.48));
+            QCOMPARE(rect.width(), grid.logical(grid.edge(24.48) - grid.edge(1.17)));
+        }
+    }
+
+    void physicalGridCachesLeavesAcrossMotionAndUnrelatedFrames() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto imagePath = directory.filePath("grid.png");
+        QImage image(16, 16, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        QVERIFY(image.save(imagePath));
+        QQuickView view;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        view.engine()->rootContext()->setContextProperty("gridImage", QUrl::fromLocalFile(imagePath));
+        auto *root = qobject_cast<ZoinGallery::PixelGridScope *>(createRoot(view, R"(
+            import QtQuick
+            import ZoinGallery.PixelGrid 1.0
+            PixelGridScope {
+                width: 500; height: 220; x: 13.2; y: 7.3
+                PixelGridScope {
+                    id: content; objectName: "gridMotionScope"
+                    x: 17.3; y: 23.4; width: 400; height: 180
+                    Text {
+                        id: caption
+                        objectName: "gridCaption"; x: 4.17; y: 6.29
+                        text: "Small caption"; font.family: "Segoe UI"; font.pixelSize: 11
+                        renderType: Text.NativeRendering; color: "white"
+                        transform: Translate { x: caption.PixelGridAlignment.offset.x; y: caption.PixelGridAlignment.offset.y }
+                    }
+                    TextInput {
+                        id: input
+                        objectName: "gridInput"; x: 4.17; y: 35.29
+                        text: "Editable text"; font.family: "Segoe UI"; font.pixelSize: 12
+                        renderType: TextInput.NativeRendering; color: "white"
+                        transform: Translate { x: input.PixelGridAlignment.offset.x; y: input.PixelGridAlignment.offset.y }
+                    }
+                    TextEdit {
+                        id: edit
+                        objectName: "gridEdit"; x: 4.17; y: 63.29
+                        text: "Second line\nsmall secondary label"; font.family: "Segoe UI"; font.pixelSize: 10
+                        renderType: TextEdit.NativeRendering; color: "white"
+                        transform: Translate { x: edit.PixelGridAlignment.offset.x; y: edit.PixelGridAlignment.offset.y }
+                    }
+                    Image {
+                        id: icon
+                        objectName: "gridIcon"; x: 150.17; y: 6.29
+                        width: 16 / content.gridDpr; height: width
+                        source: gridImage; smooth: false
+                        transform: Translate { x: icon.PixelGridAlignment.offset.x; y: icon.PixelGridAlignment.offset.y }
+                    }
+                }
+            }
+        )", "physicalGrid.qml"));
+        QVERIFY(root);
+        view.setColor(QColor("#181d25"));
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QTest::qWait(100);
+        qInfo() << "Physical grid test DPR" << view.devicePixelRatio();
+        auto *context = ZoinGallery::PixelGridContext::forWindow(&view);
+        auto *scope = root->findChild<ZoinGallery::PixelGridScope *>("gridMotionScope");
+        QVERIFY(context && scope);
+        const QStringList names{"gridCaption", "gridInput", "gridEdit", "gridIcon"};
+        auto verifyLeaves = [&] {
+            context->flush();
+            for (const auto &name : names) {
+                auto *leaf = root->findChild<QQuickItem *>(name);
+                QVERIFY(leaf && leaf->isVisible());
+                const QPointF point = leaf->mapToItem(view.contentItem(), QPointF());
+                for (qreal coordinate : {point.x(), point.y()})
+                    QVERIFY2(qAbs(coordinate * view.devicePixelRatio() - std::round(coordinate * view.devicePixelRatio())) < .001,
+                             qPrintable(QString("%1 physical position %2").arg(name).arg(coordinate * view.devicePixelRatio(), 0, 'f', 6)));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - point, QPointF(1, 0));
+                QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - point, QPointF(0, 1));
+            }
+        };
+        verifyLeaves();
+        context->resetCounters();
+        scope->setMotionActive(true);
+        int frames = 0;
+        QTimer frameRequests;
+        frameRequests.setInterval(4);
+        connect(&frameRequests, &QTimer::timeout, &view, [&] { view.update(); });
+        const auto connection = connect(&view, &QQuickWindow::afterAnimating, &view, [&] {
+            ++frames;
+            scope->setMotionOffset(QPointF(0, -frames * .37));
+            if (frames < 200) view.update();
+        });
+        view.update();
+        frameRequests.start();
+        QTRY_VERIFY_WITH_TIMEOUT(frames >= 200, 6000);
+        frameRequests.stop();
+        disconnect(connection);
+        QCOMPARE(context->counters().value("alignmentVisits").toULongLong(), 0);
+        QCOMPARE(context->counters().value("sceneMaps").toULongLong(), 0);
+        QCOMPARE(context->counters().value("topologyChanges").toULongLong(), 0);
+        QCOMPARE(root->findChild<QQuickItem *>("gridCaption")->property("renderType").toInt(), int(QQuickWindow::NativeTextRendering));
+        scope->setMotionActive(false);
+        verifyLeaves();
+        context->resetCounters();
+        root->setPosition(root->position() + QPointF(.17, .29));
+        verifyLeaves();
+        QVERIFY(context->counters().value("alignmentVisits").toULongLong() <= 2);
+        auto *caption = root->findChild<QQuickItem *>("gridCaption");
+        caption->setParentItem(root);
+        context->flush();
+        scope->setVisible(false);
+        root->findChild<QQuickItem *>("gridInput")->setX(7.31);
+        context->flush();
+        scope->setVisible(true);
+        QTest::qWait(40);
+        verifyLeaves();
+        scope->setMotionOffset(QPointF());
+        verifyLeaves();
+        QTest::qWait(40);
+        const auto capture = view.grabWindow();
+        QVERIFY(capture.save("pixel-grid-cached-leaves-175.png"));
+        int painted = 0;
+        for (int y = 0; y < capture.height(); ++y)
+            for (int x = 0; x < capture.width(); ++x)
+                painted += capture.pixelColor(x, y).lightness() > 80;
+        QVERIFY2(painted > 100, "The actual small text and icon must be rendered in the capture");
+        runtime->shutdown();
+    }
+
+    void physicalGridAdaptsQtOwnedMovingContent() {
+        QQuickView view;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *root = qobject_cast<QQuickItem *>(createRoot(view, R"(
+            import QtQuick
+            import ZoinGallery.PixelGrid 1.0
+            Flickable {
+                width: 320; height: 200; contentHeight: 4000; contentWidth: width
+                Text {
+                    id: label; objectName: "qtOwnedCaption"
+                    x: 13.27; y: 17.31; text: "Retained native text"
+                    font.pixelSize: 11; renderType: Text.NativeRendering
+                    transform: Translate { x: label.PixelGridAlignment.offset.x; y: label.PixelGridAlignment.offset.y }
+                }
+            }
+        )", "QtOwnedGrid.qml"));
+        QVERIFY(root);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QTest::qWait(40);
+        auto *content = root->property("contentItem").value<QQuickItem *>();
+        QVERIFY(content);
+        auto *scope = qobject_cast<ZoinGallery::PixelGridScopeAttached *>(
+            qmlAttachedPropertiesObject<ZoinGallery::PixelGridScope>(content, false));
+        QVERIFY2(scope, "A Qt-owned content root must receive the shared scope adapter");
+        auto *label = root->findChild<QQuickItem *>("qtOwnedCaption");
+        QVERIFY(label);
+        auto *alignment = ZoinGallery::PixelGridAlignment::forItem(label);
+        QSignalSpy corrections(alignment, &ZoinGallery::PixelGridAlignment::offsetChanged);
+        QVERIFY(QMetaObject::invokeMethod(root, "flick", Q_ARG(qreal, 0), Q_ARG(qreal, -1400)));
+        QTRY_VERIFY(root->property("moving").toBool());
+        QVERIFY(scope->motionActive());
+        auto *context = ZoinGallery::PixelGridContext::forWindow(&view);
+        context->resetCounters();
+        QTRY_VERIFY_WITH_TIMEOUT(!root->property("moving").toBool(), 6000);
+        QTest::qWait(40);
+        QVERIFY(!scope->motionActive());
+        QVERIFY(corrections.isEmpty());
+        QVERIFY(context->counters().value("alignmentVisits").toULongLong() <= 2);
+        QCOMPARE(context->counters().value("topologyChanges").toULongLong(), 0);
+        const auto point = label->mapToItem(view.contentItem(), QPointF()) * view.devicePixelRatio();
+        QVERIFY(qAbs(point.x() - std::round(point.x())) < .001);
+        QVERIFY(qAbs(point.y() - std::round(point.y())) < .001);
+        runtime->shutdown();
+    }
+
     void recycledDelegateClearsPreviewBeforeIdentityChanges() {
         GalleryDelegateItem item;
         QVERIFY2(item.metaObject()->indexOfProperty("visualIdentityChanging") >= 0,
@@ -1720,7 +1910,7 @@ private slots:
         runtime->shutdown();
     }
 
-    void motionTextRestoresTheConfiguredRenderer() {
+    void motionTextPreservesTheConfiguredRenderer() {
         QQuickView view;
         view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
         QVERIFY(ZoinGallery::GalleryRuntime::install(view.engine()));
@@ -1741,19 +1931,19 @@ private slots:
         for (int rendering : {0, 1, 2}) {
             QVERIFY(root->setProperty("renderType", rendering));
             QVERIFY(root->setProperty("motionActive", true));
-            QTRY_COMPARE(root->property("renderType").toInt(), rendering == 1 ? 0 : rendering);
+            QTRY_COMPARE(root->property("renderType").toInt(), rendering);
             QVERIFY(root->setProperty("motionActive", false));
             QTRY_COMPARE(root->property("renderType").toInt(), rendering);
         }
-        // A subsequent native scroll must still restore the user's choice.
+        // Repeated gestures preserve the user's renderer without invalidating text nodes.
         QVERIFY(root->setProperty("renderType", 1));
         QVERIFY(root->setProperty("motionActive", true));
-        QTRY_COMPARE(root->property("renderType").toInt(), 0);
+        QTRY_COMPARE(root->property("renderType").toInt(), 1);
         QVERIFY(root->setProperty("motionActive", false));
         QTRY_COMPARE(root->property("renderType").toInt(), 1);
     }
 
-    void motionTextCreatedDuringScrollRestoresNativeRenderer() {
+    void motionTextCreatedDuringScrollPreservesNativeRenderer() {
         QQuickView view;
         view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
         QVERIFY(ZoinGallery::GalleryRuntime::install(view.engine()));
@@ -1771,7 +1961,7 @@ private slots:
         QObject *root = nullptr;
 #endif
         QVERIFY(root);
-        QTRY_COMPARE(root->property("renderType").toInt(), 0);
+        QTRY_COMPARE(root->property("renderType").toInt(), 1);
         QVERIFY(root->setProperty("motionActive", false));
         QTRY_COMPARE(root->property("renderType").toInt(), 1);
     }

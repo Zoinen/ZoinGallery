@@ -15,19 +15,7 @@ Item {
     }
 
     function pixelOffset(item) {
-        // The row observes its complete ancestor chain once. Labels only
-        // need their local chain plus that shared scene-space origin.
-        const origin = content.entry.iconSceneOrigin
-        let revision = origin.x + origin.y
-        for (let parent = item.parent; parent && parent !== content.entry; parent = parent.parent) {
-            revision += parent.x + parent.y + parent.scale + parent.rotation
-            if (parent.scale !== 1 || parent.rotation !== 0)
-                revision += parent.width + parent.height + parent.transformOrigin
-        }
-        const point = item.parent.mapToItem(null, item.x, item.y)
-        const dpr = content.entry.renderDpr
-        return Qt.point(Math.round(point.x * dpr) / dpr - point.x + revision * 0,
-                        Math.round(point.y * dpr) / dpr - point.y)
+        return content.entry.iconPixelOffset(item)
     }
 
     Item {

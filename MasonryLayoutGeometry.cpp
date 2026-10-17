@@ -147,13 +147,14 @@ qreal MasonryLayout::viewportExtent() const {
     return _presentationMode == Columns ? width() : height();
 }
 
-void MasonryLayout::positionViewport() {
+void MasonryLayout::updatePixelGridOrigin() {
     // The scrolling surface owns the scene-space phase for every delegate.
     // Observe host placement once per panel; QML leaves need only local
     // insets/centering, with no dependency on contentY or the host hierarchy.
     const QPointF origin = mapToScene(QPointF());
     const QPointF offset = mapFromScene(
         ZoinGallery::PixelGrid::snapDevicePoint(origin, devicePixelRatio()));
+    _viewportPixelGridOffset = offset;
     const auto *parent = parentItem();
     const QPointF parentOffset = parent ? parent->mapFromScene(
         ZoinGallery::PixelGrid::snapDevicePoint(
@@ -162,14 +163,20 @@ void MasonryLayout::positionViewport() {
         _parentPixelGridOffset = parentOffset;
         emit parentPixelGridOffsetChanged();
     }
+    positionViewport();
+}
+
+void MasonryLayout::positionViewport() {
     if (!_viewport) {
         return;
     }
     const QPointF scrollPosition(
-        _paddingLeft - (_presentationMode == Columns ? _contentY : 0),
+        _presentationMode == Columns ? -_contentY : 0,
         _presentationMode == Columns ? 0 : -_contentY);
-    _viewport->setPosition(offset + (_scrollAnimationRunning ? scrollPosition
-        : ZoinGallery::PixelGrid::snapDevicePoint(scrollPosition, devicePixelRatio())));
+    auto *scope = static_cast<ZoinGallery::PixelGridScope *>(_viewport);
+    scope->setPosition(_viewportPixelGridOffset + QPointF(_paddingLeft, 0));
+    scope->setMotionActive(_scrollAnimationRunning);
+    scope->setMotionOffset(scrollPosition);
     const QPointF viewportOrigin = _viewport->mapToScene(QPointF());
     if (_viewportSceneOrigin != viewportOrigin) {
         _viewportSceneOrigin = viewportOrigin;
@@ -186,21 +193,21 @@ void MasonryLayout::observePixelGridAncestors() {
         _pixelGridConnections.append(connect(item, &QQuickItem::parentChanged,
             this, &MasonryLayout::observePixelGridAncestors));
         _pixelGridConnections.append(connect(item, &QQuickItem::xChanged,
-            this, &MasonryLayout::positionViewport));
+            this, &MasonryLayout::updatePixelGridOrigin));
         _pixelGridConnections.append(connect(item, &QQuickItem::yChanged,
-            this, &MasonryLayout::positionViewport));
+            this, &MasonryLayout::updatePixelGridOrigin));
         _pixelGridConnections.append(connect(item, &QQuickItem::widthChanged,
-            this, &MasonryLayout::positionViewport));
+            this, &MasonryLayout::updatePixelGridOrigin));
         _pixelGridConnections.append(connect(item, &QQuickItem::heightChanged,
-            this, &MasonryLayout::positionViewport));
+            this, &MasonryLayout::updatePixelGridOrigin));
         _pixelGridConnections.append(connect(item, &QQuickItem::scaleChanged,
-            this, &MasonryLayout::positionViewport));
+            this, &MasonryLayout::updatePixelGridOrigin));
         _pixelGridConnections.append(connect(item, &QQuickItem::rotationChanged,
-            this, &MasonryLayout::positionViewport));
+            this, &MasonryLayout::updatePixelGridOrigin));
         _pixelGridConnections.append(connect(item, &QQuickItem::transformOriginChanged,
-            this, &MasonryLayout::positionViewport));
+            this, &MasonryLayout::updatePixelGridOrigin));
     }
-    positionViewport();
+    updatePixelGridOrigin();
 }
 
 void MasonryLayout::calcFixedLayout() {

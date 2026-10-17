@@ -88,7 +88,7 @@ QtObject {
     readonly property point cursorPixelGridViewportOrigin:
         galleryLayout.viewportSceneOrigin
     readonly property bool cursorPixelAlignmentSuspended:
-        cursorChromeTransitionActive || panelScrollAnimation.running
+        cursorChromeTransitionActive || panel.panelScrollAnimationRunning
         || panel.autoScrollAnimationRunning
 
     function alignViewportItemRectToDevicePixels(item, rect) {

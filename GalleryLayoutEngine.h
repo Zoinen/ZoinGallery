@@ -122,6 +122,7 @@ struct GalleryFixedLayoutPlan {
     qreal gridLabelLineHeight = 16;
     QVector<GalleryLayoutSection> sections;
     QVector<GalleryGroupHeader> groupHeaders;
+    QVector<qreal> columnEdges;
     QVector<qreal> iconRowTops;
     QVector<qreal> iconRowHeights;
     qreal iconPreviewHeight = 0;

@@ -23,19 +23,7 @@ Item {
     property int readyImages: 0
     readonly property bool hasUsablePreview: entry.visualModel.folderPreviewState === 2 || readyImages > 0
         || Boolean(childModel && childModel.hasPublishedThumbnails)
-    readonly property point sceneOrigin: {
-        if (!entry.folderPreviewRequested) return Qt.point(0, 0)
-        // The entry already observes the complete ancestor chain. Only add
-        // the short chain inside it; repeating all ancestors makes every row
-        // reevaluate the same geometry bindings during a catalog transition.
-        let dependency = entry.iconSceneOrigin.x + entry.iconSceneOrigin.y
-        let ancestor = preview
-        while (ancestor && ancestor !== preview.entry) {
-            dependency += ancestor.x + ancestor.y + ancestor.scale + ancestor.rotation
-            ancestor = ancestor.parent
-        }
-        return preview.mapToItem(null, dependency * 0, dependency * 0)
-    }
+    readonly property point sceneOrigin: Qt.point(0, 0)
     function snap(value) { return Math.round(value * dpr) / dpr }
     FontMetrics {
         id: captionMetrics

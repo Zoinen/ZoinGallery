@@ -3571,13 +3571,14 @@ private slots:
         // The terminal clamp must land on the row lattice as well.  A
         // fractional viewport remainder used to shorten maximum contentY,
         // leaving the top row of the final screen lower than row zero.
+        const qreal detailsPitch = detailsLayout->indexGeometry(0).height();
         const qreal usableDetailsHeight = detailsLayout->height()
             - detailsLayout->paddingTop() - detailsLayout->paddingBottom();
         const int fullVisibleRows = qMax(
             1, int(std::floor(usableDetailsHeight
-                              / detailsLayout->density())));
+                              / detailsPitch)));
         const qreal trailingRowRemainder = usableDetailsHeight
-            - fullVisibleRows * detailsLayout->density();
+            - fullVisibleRows * detailsPitch;
         QVERIFY(trailingRowRemainder > 0.01);
         const int terminalTopIndex = qMax(0, entryCount - fullVisibleRows);
 
@@ -3590,12 +3591,12 @@ private slots:
             3000);
         QVERIFY2(
             qAbs(detailsLayout->contentY()
-                 - terminalTopIndex * detailsLayout->density()) < 0.0001,
+                 - terminalTopIndex * detailsPitch) < 0.0001,
             qPrintable(QStringLiteral(
                 "details: terminal offset left the row lattice: "
                 "contentY=%1 expected=%2 remainder=%3")
                 .arg(detailsLayout->contentY())
-                .arg(terminalTopIndex * detailsLayout->density())
+                .arg(terminalTopIndex * detailsPitch)
                 .arg(trailingRowRemainder)));
         QVERIFY2(
             qAbs(terminalTopRow->mapToItem(detailsLayout, QPointF()).y()
@@ -4222,19 +4223,19 @@ private slots:
         struct Sample { qreal requested; qreal painted; bool alignmentSuspended; };
         QList<Sample> samples;
         bool filteredForEveryFrame = true;
-        bool scalableTextForEveryFrame = true;
+        bool configuredTextForEveryFrame = true;
         const auto motionConnection = connect(layout, &MasonryLayout::contentYChanged, this, [&] {
             if (scroll->property("animationRunning").toBool()) {
                 samples.append({layout->contentY(), axis(layout->viewport()->mapToScene(QPointF())),
                                 panel->property("cursorPixelAlignmentSuspended").toBool()});
                 filteredForEveryFrame &= movingIcon->property("smooth").toBool();
-                scalableTextForEveryFrame &= movingText->property("renderType").toInt()
-                    != int(QQuickWindow::NativeTextRendering);
+                configuredTextForEveryFrame &= movingText->property("renderType").toInt()
+                    == int(QQuickWindow::NativeTextRendering);
                 if (grouped) {
-                    // The header snapshot replaces its repeater delegates on scroll.
+                    // Header leaves stay mounted while their snapshot changes.
                     auto *heading = findVisualItem(panel, "galleryGroupHeader-gallery-beta-title");
-                    scalableTextForEveryFrame &= heading && heading->property("renderType").toInt()
-                        != int(QQuickWindow::NativeTextRendering);
+                    configuredTextForEveryFrame &= heading && heading->property("renderType").toInt()
+                        == int(QQuickWindow::NativeTextRendering);
                 }
             }
         });
@@ -4260,7 +4261,7 @@ private slots:
                 << "samples" << samples.size() << "stationary frames" << stationaryFrames
                 << "max motion error" << maximumMotionError
                 << "filtered" << filteredForEveryFrame
-                << "scalable text" << scalableTextForEveryFrame
+                << "scalable text" << configuredTextForEveryFrame
                 << "first physical origin" << samples.first().painted * view.devicePixelRatio();
 
         int checkedLeaves = 0;
@@ -4287,7 +4288,7 @@ private slots:
         QVERIFY2(maximumMotionError < .001, "Viewport movement was quantized instead of following the frame's scroll delta");
         QVERIFY2(filteredForEveryFrame, "Nearest-neighbour sampling quantized the moving raster icon");
         QVERIFY(!movingIcon->property("smooth").toBool());
-        QVERIFY2(scalableTextForEveryFrame, "Qt's native glyph shader snapped the moving caption to pixels");
+        QVERIFY2(configuredTextForEveryFrame, "Scrolling changed the selected text renderer");
         QCOMPARE(movingText->property("renderType").toInt(), int(QQuickWindow::NativeTextRendering));
         QVERIFY(QMetaObject::invokeMethod(scroll, "end"));
         runtime->shutdown();
@@ -9255,6 +9256,9 @@ private slots:
                 (entryLeaf = findVisualItem(panelItem, entryLeafName))
                     && entryLeaf->isVisible(),
                 5000);
+            // Dirty fitting runs after layout and before scene sync, once per frame.
+            // Wait for the newly selected presentation's first settled frame.
+            QTest::qWait(40);
             verifyLeaf(entryLeaf, entryLeafName + QLatin1Char('/') + mode);
 
             QTest::qWait(40);
@@ -10353,7 +10357,7 @@ private slots:
         QVERIFY(session);
 
         constexpr int entryCount = 37;
-        constexpr qreal rowExtent = 24.2;
+        constexpr qreal requestedExtent = 24.2;
         QVERIFY(session->applyExternalCatalog(plainCatalog(entryCount), 1));
 
         QObject *panel = createPanel(
@@ -10361,7 +10365,7 @@ private slots:
             QStringLiteral("details"));
         QVERIFY(panel);
         panel->setProperty("showDetailsHeader", false);
-        panel->setProperty("density", rowExtent);
+        panel->setProperty("density", requestedExtent);
 
         auto *layout = panel->findChild<MasonryLayout *>(
             QStringLiteral("galleryViewportItem"));
@@ -10370,7 +10374,9 @@ private slots:
                                   MasonryLayout::Details, 3000);
         QTRY_COMPARE_WITH_TIMEOUT(layout->count(), entryCount, 3000);
         QTRY_VERIFY_WITH_TIMEOUT(
-            qAbs(layout->density() - rowExtent) < 0.0001, 3000);
+            qAbs(layout->density() - requestedExtent) < 0.0001, 3000);
+        const qreal rowExtent = qRound(requestedExtent * layout->devicePixelRatio())
+            / layout->devicePixelRatio();
         const qreal usableViewportHeight = layout->height()
             - layout->paddingTop() - layout->paddingBottom();
         const int completeVisibleRows = qMax(
@@ -10386,8 +10392,8 @@ private slots:
             3000);
 
         // Check both the strategy geometry and the instantiated QQuickItem.
-        // Density/content extent retain full precision. Painted edges snap
-        // independently, rather than rounding the pitch and accumulating drift.
+        // The configured density is retained; the cached physical row pitch
+        // drives both analytical geometry and instantiated delegates.
         const QList<int> visibleRows{0, 1, 4, 5, 10};
         for (const int index : visibleRows) {
             const QRectF geometry = layout->indexGeometry(index);

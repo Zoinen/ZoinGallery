@@ -1,4 +1,5 @@
 #include "MasonryLayout.h"
+#include <ZoinGallery/PixelGrid.h>
 #include "FileListModel.h"
 #include "GalleryPixelGrid.h"
 #include "MasonryLayoutQuickSearch.h"
@@ -174,7 +175,7 @@ void MasonryLayout::itemChange(ItemChange change, const ItemChangeData &data) {
     if (change == ItemDevicePixelRatioHasChanged && isComponentComplete()
         && _devicePixelRatioOverride <= 0) {
         emit devicePixelRatioChanged();
-        positionViewport();
+        updatePixelGridOrigin();
         rewrap(false);
     }
 }
@@ -325,20 +326,11 @@ void MasonryLayout::setScrollingMode(bool scrollingMode, int direction) {
 BrickItem *MasonryLayout::createComponent(
     PresentationMode mode, const QVariantMap &delegateProperties) {
     if (!_viewport) {
-        QQmlComponent component(qmlEngine(this));
-        component.setData(R"QML(
-        import QtQuick
-
-        Item {
-        }
-        )QML", QUrl());
-        if (component.status() != QQmlComponent::Ready) {
-            qDebug() << "Error in component:" << component.status() << component.errors();
-        }
-
-        _viewport = qobject_cast<QQuickItem*>(component.create(QQmlEngine::contextForObject(this)));
-        _viewport->setParentItem(this);
-        _viewport->setParent(this);
+        _viewport = new ZoinGallery::PixelGridScope(this);
+        QQmlEngine::setContextForObject(_viewport, QQmlEngine::contextForObject(this));
+        connect(ZoinGallery::PixelGridAlignment::forItem(_viewport),
+                &ZoinGallery::PixelGridAlignment::offsetChanged,
+                this, &MasonryLayout::positionViewport);
         positionViewport();
         emit viewportChanged();
     }

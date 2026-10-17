@@ -171,7 +171,8 @@ QtObject {
         }
 
         if (presentationMode === "details") {
-            const rowExtent = Math.max(1, Number(galleryLayout.density))
+            const rowExtent = Math.max(1, Number(
+                galleryLayout.indexGeometry(galleryLayout.currentIndex).height))
             const coordinate = target / rowExtent
             const row = revealDirection < 0
                     ? Math.floor(coordinate + epsilon)
@@ -213,10 +214,15 @@ QtObject {
             setPanelContentY(target, true)
             return target
         }
-        panelScrollAnimation.from = galleryLayout.contentY
-        panelScrollAnimation.to = target
-        panelScrollAnimation.duration = quickScroll ? 15 : 150
-        panelScrollAnimation.restart()
+        panel.motionController.retargetingScroll = panelScrollAnimation.running
+        try {
+            panelScrollAnimation.from = galleryLayout.contentY
+            panelScrollAnimation.to = target
+            panelScrollAnimation.duration = quickScroll ? 15 : 150
+            panelScrollAnimation.restart()
+        } finally {
+            panel.motionController.retargetingScroll = false
+        }
         return target
     }
 

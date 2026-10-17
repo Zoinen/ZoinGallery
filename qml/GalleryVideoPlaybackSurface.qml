@@ -1,8 +1,9 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 
-Item {
+PixelGridScope {
     id: root
     objectName: "galleryVideoPlaybackSurface"
     property var controller: null
@@ -45,20 +46,9 @@ Item {
         return Math.round(value * dpr) / dpr
     }
     function alignedOrigin(parentItem, x, y) {
-        // mapToItem itself does not notify when an ancestor moves. Include
-        // those dependencies, and the host's non-notifying Translate list.
-        let dependency = pixelAlignmentRevision
-        for (let ancestor = parentItem; ancestor; ancestor = ancestor.parent)
-            dependency += ancestor.x + ancestor.y + ancestor.width + ancestor.height
-                    + ancestor.scale + ancestor.rotation
-        if (!Number.isFinite(dependency))
-            return Qt.point(0, 0)
-        const dpr = Math.max(0.5, devicePixelRatio)
-        const scenePoint = parentItem.mapToItem(null, x, y)
-        const snappedPoint = Qt.point(Math.round(scenePoint.x * dpr) / dpr,
-                                      Math.round(scenePoint.y * dpr) / dpr)
-        return parentItem.mapFromItem(null, snappedPoint)
+        return Qt.point(snap(x), snap(y))
     }
+    onPixelAlignmentRevisionChanged: invalidate()
     function formatTime(value) {
         const seconds = Math.floor(Math.max(0, value) / 1000)
         const hours = Math.floor(seconds / 3600)

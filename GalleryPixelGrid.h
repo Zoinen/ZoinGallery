@@ -4,6 +4,7 @@
 #include <QPointF>
 #include <QRectF>
 #include <cmath>
+#include <ZoinGallery/PixelGrid.h>
 
 namespace ZoinGallery::PixelGrid {
 
@@ -13,9 +14,7 @@ inline QRectF snapLogicalRect(const QRectF &rect) {
 }
 
 inline QPointF snapDevicePoint(const QPointF &point, qreal devicePixelRatio) {
-    const qreal dpr = qMax<qreal>(0.01, devicePixelRatio);
-    return QPointF(qRound64(point.x() * dpr) / dpr,
-                   qRound64(point.y() * dpr) / dpr);
+    return GridMetrics(devicePixelRatio).snap(point);
 }
 
 // Round shared edges, not each width independently: adjacent bricks must

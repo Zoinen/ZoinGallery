@@ -32,6 +32,7 @@
 #include <qqml.h>
 
 #include <mutex>
+#include <ZoinGallery/PixelGrid.h>
 
 namespace ZoinGallery {
 
@@ -107,6 +108,7 @@ GalleryRuntime *GalleryRuntime::install(
 void GalleryRuntime::registerTypes() {
     static std::once_flag once;
     std::call_once(once, [] {
+        registerPixelGridTypes();
         // The public ZoinGallery module is finalized by the generated dynamic
         // QML plugin. Keep the explicitly registered implementation types in a
         // private companion module so GalleryRuntime::install() can register

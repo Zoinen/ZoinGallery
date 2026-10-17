@@ -90,7 +90,7 @@ GalleryPanelFacade {
         motionState.cursorAfterScrollTimer
     readonly property Timer densityCommitTimerObject: motionState.densityTimer
     readonly property bool panelScrollAnimationRunning:
-        motionState.scrollAnimation.running
+        motionState.scrollAnimation.running || motionState.retargetingScroll
 
     readonly property GalleryPanelMotion motionController: motionState
     GalleryPanelMotion {

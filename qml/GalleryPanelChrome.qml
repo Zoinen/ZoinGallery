@@ -1,11 +1,12 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import QtQuick.Window
 
 import ZoinGallery.Native 1.0
 
-Item {
+PixelGridScope {
     id: chromeRoot
 
     required property GalleryViewportItem layout
@@ -33,14 +34,10 @@ Item {
             const localX = chromeRoot.presentationMode === "details"
                     ? parent.width - width
                     : parent.width - (gap + width) / 2
-            let dependency = 0
-            for (let item = chromeRoot; item; item = item.parent)
-                dependency += item.x + item.y
-            const origin = chromeRoot.mapToItem(null, dependency * 0, 0).x
             const dpr = chromeRoot.Window.window
                 ? chromeRoot.Window.window.devicePixelRatio
                 : chromeRoot.Screen.devicePixelRatio
-            return Math.round((origin + localX) * dpr) / dpr - origin
+            return Math.round(localX * dpr) / dpr
         }
         y: chromeRoot.layoutOrigin.y
         height: chromeRoot.layout.height

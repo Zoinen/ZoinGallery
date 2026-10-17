@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import QtQuick.Controls
 
 import ZoinGallery.Native 1.0
@@ -400,15 +401,9 @@ Item {
     // Section headers are layout elements, not catalog rows. The native
     // layout only returns the viewport/overscan intersection, so this layer
     // stays bounded even for very large grouped catalogs.
-    Item {
+    PixelGridScope {
         id: groupHeaderLayer
-        readonly property point sceneOrigin: {
-            // mapToItem does not subscribe to ancestor translations itself.
-            let dependency = 0
-            for (let ancestor = groupHeaderLayer; ancestor; ancestor = ancestor.parent)
-                dependency += ancestor.x + ancestor.y + ancestor.scale + ancestor.rotation
-            return groupHeaderLayer.mapToItem(null, dependency * 0, dependency * 0)
-        }
+        readonly property point sceneOrigin: Qt.point(0, 0)
         objectName: "galleryGroupHeaderLayer"
         parent: viewportRoot
         x: galleryLayout.x
@@ -419,12 +414,12 @@ Item {
         clip: true
 
         Repeater {
-            model: galleryLayout.visibleGroupHeaders
+            model: galleryLayout.visibleGroupHeaders.length
 
-            delegate: Item {
+            delegate: PixelGridScope {
                 id: groupHeader
-                required property var modelData
                 required property int index
+                readonly property var modelData: galleryLayout.visibleGroupHeaders[index] || ({})
                 readonly property string groupKey:
                     String(modelData.key || "")
                 readonly property bool horizontal:
@@ -485,30 +480,22 @@ Item {
                    ? Math.min(-topSpacing,
                               nextHeaderViewportPosition - height)
                    : Number(modelData.y || 0)
-                readonly property point layerSceneOrigin:
-                    groupHeaderLayer.sceneOrigin
-                readonly property real snappedX:
-                    Math.round((layerSceneOrigin.x + rawX) * hostDpr)
-                        / hostDpr - layerSceneOrigin.x
-                readonly property real snappedY:
-                    Math.round((layerSceneOrigin.y + rawY) * hostDpr)
-                        / hostDpr - layerSceneOrigin.y
+                readonly property point layerSceneOrigin: Qt.point(0, 0)
                 function snapLogical(value) {
                     return Math.round(value * hostDpr) / hostDpr
                 }
                 readonly property real topSpacing: snapLogical(8)
                 readonly property real interactiveWidth:
                     Math.max(0, snapLogical(width - viewportRoot.groupHeaderScrollClearance))
-                readonly property bool motionActive:
-                    galleryLayout.scrollAnimationRunning && !currentSticky
-                x: motionActive ? rawX : snappedX
-                y: motionActive ? rawY : snappedY
+                motionActive: galleryLayout.scrollAnimationRunning && !currentSticky
+                x: rawX
+                y: rawY
                 width: snapLogical(Number(modelData.width || 0))
                 height: snapLogical(Number(modelData.height || 0))
                 objectName: "galleryGroupHeader-"
                             + viewportRoot.panelRoot.groupHeaderObjectSuffix
                             + "-" + groupKey
-                activeFocusOnTab: true
+                tabFocus: true
                 Accessible.role: Accessible.Button
                 Accessible.name: String(modelData.title || "")
                                  + ", " + String(modelData.count || 0)
@@ -552,19 +539,14 @@ Item {
 
                 Rectangle {
                     objectName: groupHeader.objectName + "-separator"
-                    parent: viewportRoot
+                    parent: groupHeaderLayer
                     visible: !groupHeader.currentSticky
-                    readonly property real viewportSceneX:
-                        groupHeader.layerSceneOrigin.x - galleryLayout.x
-                    readonly property real scrollClearance:
-                        viewportRoot.groupHeaderScrollClearance
-                    x: groupHeader.snapLogical(viewportSceneX) - viewportSceneX
-                    y: galleryLayout.y + groupHeader.y + groupHeader.topSpacing
+                    x: 0
+                    y: groupHeader.y + groupHeader.PixelGridAlignment.offset.y
+                       + groupHeader.topSpacing
                     width: Math.max(0, groupHeader.snapLogical(
-                        viewportSceneX + viewportRoot.width - scrollClearance)
-                        - groupHeader.snapLogical(viewportSceneX))
-                    height: groupHeader.hostDpr > 0
-                            ? 1 / groupHeader.hostDpr : 1
+                        viewportRoot.width - viewportRoot.groupHeaderScrollClearance))
+                    height: 1 / groupHeader.hostDpr
                     color: viewportRoot.panelRoot.separatorColor
                     z: groupHeaderLayer.z
                 }

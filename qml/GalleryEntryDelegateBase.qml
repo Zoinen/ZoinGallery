@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import ZoinGallery as ZG
 
 import ZoinGallery.Native 1.0
@@ -81,45 +82,12 @@ BrickItem {
     }
     readonly property bool iconPixelAlignmentActive:
         visible && sceneVisible && !geometryAnimationRunning
-        && !panelRoot.cursorPixelAlignmentSuspended
     readonly property bool motionActive:
         geometryAnimationRunning || panelRoot.cursorPixelAlignmentSuspended
-    property point iconSceneOrigin: Qt.point(0, 0)
-    property real iconPixelAlignmentRevision: 0
-    // State bindings are removed during motion. Binding.when only suppresses
-    // publication of its value; the value expression can still track geometry.
-    states: State {
-        name: "pixelAligned"
-        when: entry.iconPixelAlignmentActive
-        PropertyChanges {
-            entry {
-                iconSceneOrigin: {
-                    if (entry.detailsMode) return Qt.point(0, 0)
-                    // mapToItem() does not track ancestor geometry itself.
-                    let dependency = 0
-                    let ancestor = entry
-                    while (ancestor) {
-                        dependency += ancestor.x + ancestor.y + ancestor.scale + ancestor.rotation
-                        if (ancestor.scale !== 1 || ancestor.rotation !== 0)
-                            dependency += ancestor.width + ancestor.height + ancestor.transformOrigin
-                        ancestor = ancestor.parent
-                    }
-                    return entry.mapToItem(null, dependency * 0, dependency * 0)
-                }
-                iconPixelAlignmentRevision: {
-                    const viewport = entry.detailsMode ? Qt.point(0, 0)
-                                        : entry.panelRoot.cursorPixelGridViewportOrigin
-                    const preview = entry.previewContainerItem
-                    return Number(viewport.x || 0) + Number(viewport.y || 0)
-                            + (entry.detailsMode ? 0 : entry.x + entry.y)
-                            + entry.width + entry.height
-                            + (preview ? preview.x + preview.y
-                                         + preview.width + preview.height : 0)
-                            + entry.presentationMode
-                }
-            }
-        }
-    }
+    // Compatibility values for embedders; local placement is now owned by the
+    // cached grid scope rather than reactive scene-origin dependency walks.
+    readonly property point iconSceneOrigin: Qt.point(0, 0)
+    readonly property real iconPixelAlignmentRevision: 0
 
     function snapIconExtent(value) {
         // sourceSize is an integer logical QSize. Derive the displayed
@@ -132,16 +100,7 @@ BrickItem {
     function iconPixelOffset(item) {
         if (!iconPixelAlignmentActive || !item || !item.parent || !item.visible)
             return Qt.point(0, 0)
-        const revision = iconPixelAlignmentRevision
-        const origin = iconSceneOrigin
-        // Details' brick origin is already aligned by C++; only the short
-        // chain inside the brick can contribute a local centering offset.
-        const scenePoint = item.parent.mapToItem(detailsMode ? entry : null, item.x, item.y)
-        return Qt.point(
-            Math.round(scenePoint.x * renderDpr) / renderDpr
-                - scenePoint.x + revision * 0 + origin.x * 0,
-            Math.round(scenePoint.y * renderDpr) / renderDpr
-                - scenePoint.y + origin.y * 0)
+        return item.PixelGridAlignment.offset
     }
 
     readonly property bool current:

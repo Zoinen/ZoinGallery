@@ -86,7 +86,10 @@ void ImageReadRunner::run() {
             return;
         }
         backing.close();
-        imageData.vectorSource = acquireVectorSource(_request.info, lease);
+        const int priority = _request.viewerRequest && !_request.backgroundViewerRequest
+            ? (_request.viewerPriorityOrdinal <= 0 ? 0 : 100 + _request.viewerPriorityOrdinal)
+            : (_request.highPriority ? 200 : 1000);
+        imageData.vectorSource = acquireVectorSource(_request.info, lease, _cancellation, priority);
         if (!_cancellation->isCanceled()) {
             if (imageData.vectorSource) emit imageReadReady(imageData);
             else emit imageReadFailed(_request);

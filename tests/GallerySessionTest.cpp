@@ -30,6 +30,8 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QImage>
+#include <QPainter>
+#include <QSvgRenderer>
 #include <QFontDatabase>
 #include <QQmlProperty>
 #ifndef Q_MOC_RUN
@@ -7053,6 +7055,9 @@ private slots:
         info.path = path;
         auto source = acquireVectorSource(info, {});
         QVERIFY(source);
+        const QString preparedPath = source->componentUrl.toLocalFile();
+        QVERIFY(QFile::exists(preparedPath));
+        QCOMPARE(acquireVectorSource(info, {}), source);
         QWeakPointer<VectorSource> weak = source.toWeakRef();
         VectorSourcePin pin;
         pin.setSource(source->url);
@@ -7060,6 +7065,7 @@ private slots:
         QVERIFY(!weak.isNull());
         pin.setSource({});
         QVERIFY(weak.isNull());
+        QVERIFY(!QFile::exists(preparedPath));
 
         QQmlEngine engine;
         ZoinGallery::RuntimeOptions options;
@@ -7108,8 +7114,12 @@ private slots:
             QVERIFY(file.open(QIODevice::WriteOnly));
             QString geometry = color == "blue" ? "M0 0H80V80H0Z" : "M0 0H80V40H0Z";
             if (color == "blue") {
+                // Exercise asynchronous preparation with many curves, without
+                // 1000 coincident contours that also stall stock VectorImage's
+                // intersection solver and outlive the test at shutdown.
                 for (int i = 0; i < 1000; ++i)
-                    geometry += QString(" M%1 1C2 0 3 2 4 1C3 3 2 3 1 1Z").arg(1 + (i % 100) / 100.0);
+                    geometry += QString(" M%1 %2c0.25 -0.5 0.75 0.5 1 0c-0.25 0.75 -0.75 0.75 -1 0Z")
+                        .arg(1 + (i % 32) * 2).arg(1 + (i / 32) * 2);
             }
             file.write(QString("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"%3\"><path d=\"%1\" fill=\"%2\"/></svg>").arg(geometry, color).arg(color == "blue" ? 80 : 40).toUtf8());
         }
@@ -7376,10 +7386,19 @@ private slots:
         auto *leaf = mode == int(MasonryLayout::Masonry)
             ? slot->findChild<QQuickItem *>("galleryThumbnailShader-0") : pixels;
         QVERIFY(leaf);
+        qInfo() << "Recycled preview before next frame (physical)"
+                << leaf->mapToScene(QPointF()) * window.devicePixelRatio();
+        // Image.Ready may precede the GUI afterAnimating alignment flush.
+        // Check the settled rendered frame, not the image-loader callback.
+        QSignalSpy renderedFrames(&window, &QQuickWindow::frameSwapped);
+        window.update();
+        QTRY_VERIFY(!renderedFrames.isEmpty());
         const QPointF origin = leaf->mapToScene(QPointF());
         const qreal dpr = window.devicePixelRatio();
-        QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
-        QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+        QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01,
+                 qPrintable(QString::number(origin.x() * dpr, 'g', 12)));
+        QVERIFY2(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01,
+                 qPrintable(QString::number(origin.y() * dpr, 'g', 12)));
         QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
         QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
         const QImage rendered = window.grabWindow();
@@ -7553,6 +7572,42 @@ private slots:
         QTRY_VERIFY(weak.isNull());
     }
 
+    void vectorComponentCancellationPinsPreparedFiles() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("cancel.svg");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><rect width=\"80\" height=\"40\" fill=\"red\"/></svg>");
+        file.close();
+        ImageInfo info;
+        info.path = path;
+        auto prepared = acquireVectorSource(info, {});
+        QVERIFY(prepared);
+        const QString preparedPath = prepared->componentUrl.toLocalFile();
+        QWeakPointer<VectorSource> weak = prepared.toWeakRef();
+        QQmlEngine engine;
+        ZoinGallery::GalleryRuntime::install(&engine);
+        engine.rootContext()->setContextProperty("preparedTestSource", prepared->url);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import ZoinGallery.Native 1.0
+            VectorSourcePin { source: preparedTestSource; prepareComponent: true }
+        )QML", QUrl("inline:PreparedLifetime.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        QVERIFY(object->property("loading").toBool());
+        object.reset();
+        prepared.clear();
+        // The cancelled surface is gone, but the compiler may still read QML
+        // and companion assets. Its independent request keeps the lease alive.
+        QVERIFY(!weak.isNull());
+        QVERIFY(QFile::exists(preparedPath));
+        QTRY_VERIFY_WITH_TIMEOUT(weak.isNull(), 5000);
+        QVERIFY(!QFile::exists(preparedPath));
+    }
+
     void vectorSurfaceKeepsGeometryAcrossResize() {
 #if defined(Q_OS_WIN)
         const int fontId = QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf");
@@ -7585,6 +7640,8 @@ private slots:
         surface->setParentItem(window.contentItem());
         window.show();
         QTRY_COMPARE(surface->property("sourceStatus").toInt(), 1); // Image.Ready
+        if (qEnvironmentVariableIsSet("ZOIN_EXPECT_TEST_DPR"))
+            QCOMPARE(window.devicePixelRatio(), qEnvironmentVariable("ZOIN_EXPECT_TEST_DPR").toDouble());
         auto *vector = surface->findChild<QQuickItem *>("galleryVectorSurface");
         QVERIFY(vector);
         const auto assertAligned = [&window](QQuickItem *item) {
@@ -7596,8 +7653,17 @@ private slots:
             QCOMPARE(item->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
         };
         assertAligned(vector);
-        QCOMPARE(vector->property("preferredRendererType").toInt(), 1);
-        QVERIFY(vector->property("asynchronousShapes").toBool());
+        QVERIFY(vector->property("asynchronous").toBool());
+        int shapes = 0;
+        for (auto *child : vector->findChildren<QObject *>()) {
+            QVERIFY(!child->inherits("QQuickVectorImage"));
+            if (child->inherits("QQuickShape")) {
+                ++shapes;
+                QCOMPARE(child->property("preferredRendererType").toInt(), 4); // Shape.CurveRenderer
+                QVERIFY(child->property("asynchronous").toBool());
+            }
+        }
+        QVERIFY(shapes > 0);
         qInfo() << "Vector scene preparation ms" << surface->property("sceneGenerationMs").toInt();
         surface->setWidth(371);
         surface->setHeight(253);
@@ -7851,6 +7917,62 @@ private slots:
         QVERIFY(rendered.save("vector-panel-" + mode + "-175.png"));
         QCOMPARE(session->viewerSourcesAt(0).size(), 1);
         runtime->shutdown();
+    }
+
+    void vectorPreparedScenePreservesGradientAlphaAndEmbeddedImage() {
+        QTemporaryDir directory;
+        QImage pixels(2, 2, QImage::Format_ARGB32);
+        pixels.fill(Qt::magenta);
+        QByteArray png;
+        QBuffer buffer(&png);
+        QVERIFY(buffer.open(QIODevice::WriteOnly));
+        QVERIFY(pixels.save(&buffer, "PNG"));
+        const QString path = directory.filePath("assets.svg");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"120\" height=\"60\"><defs><linearGradient id=\"g\"><stop stop-color=\"red\"/><stop offset=\"1\" stop-color=\"blue\"/></linearGradient></defs><rect width=\"120\" height=\"60\" fill=\"url(#g)\" opacity=\"0.5\"/><image x=\"45\" y=\"15\" width=\"30\" height=\"30\" xlink:href=\"data:image/png;base64," + png.toBase64() + "\"/></svg>");
+        file.close();
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        engine.rootContext()->setContextProperty("vectorTestUrl", QUrl::fromLocalFile(path));
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            GalleryVectorImage { width: 240; height: 120; source: vectorTestUrl;
+                devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1 }
+        )QML", QUrl("inline:VectorAssets.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *surface = qobject_cast<QQuickItem *>(object.data());
+        QQuickWindow window;
+        window.setColor(Qt::white);
+        window.resize(240, 120);
+        surface->setParentItem(window.contentItem());
+        window.show();
+        QTRY_COMPARE(surface->property("sourceStatus").toInt(), 1);
+        const QImage rendered = window.grabWindow();
+        QVERIFY(!rendered.isNull());
+        QImage reference(rendered.size(), QImage::Format_ARGB32_Premultiplied);
+        reference.fill(Qt::white);
+        QSvgRenderer svg(path);
+        QPainter painter(&reference);
+        svg.render(&painter, QRectF(QPointF(), QSizeF(reference.size())));
+        painter.end();
+        for (const QPointF sample : {QPointF(.1, .7), QPointF(.5, .5), QPointF(.9, .7)}) {
+            const QPoint at(qRound(sample.x() * (rendered.width() - 1)),
+                            qRound(sample.y() * (rendered.height() - 1)));
+            const QColor actual = rendered.pixelColor(at);
+            const QColor expected = reference.pixelColor(at);
+            QVERIFY2(qAbs(actual.red() - expected.red()) <= 3
+                     && qAbs(actual.green() - expected.green()) <= 3
+                     && qAbs(actual.blue() - expected.blue()) <= 3,
+                     qPrintable(QStringLiteral("%1: %2 != %3")
+                         .arg(at.x()).arg(actual.name(), expected.name())));
+        }
+        QVERIFY(rendered.save("vector-prepared-assets-175.png"));
     }
 
     void vectorAnimationHonorsVisibilityAndAuthoredLoops() {

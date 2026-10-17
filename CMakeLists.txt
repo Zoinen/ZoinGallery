@@ -72,7 +72,7 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
 find_package(QT NAMES Qt6)
-set(ZOIN_QT_COMPONENTS Core Quick QuickPrivate Gui Qml Concurrent Svg QuickVectorImage QuickControls2)
+set(ZOIN_QT_COMPONENTS Core Quick QuickPrivate Gui Qml Concurrent Svg QuickVectorImage QuickVectorImageGeneratorPrivate QuickControls2)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     list(APPEND ZOIN_QT_COMPONENTS Multimedia)
 endif()
@@ -1240,7 +1240,9 @@ target_link_libraries(ZoinGalleryCore PUBLIC
     WebP::webp
     WebP::webpdemux
 )
-target_link_libraries(ZoinGalleryCore PRIVATE Qt${QT_VERSION_MAJOR}::QuickPrivate)
+target_link_libraries(ZoinGalleryCore PRIVATE
+    Qt${QT_VERSION_MAJOR}::QuickPrivate
+    Qt${QT_VERSION_MAJOR}::QuickVectorImageGeneratorPrivate)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     target_link_libraries(ZoinGalleryCore PUBLIC
         Qt${QT_VERSION_MAJOR}::Multimedia)

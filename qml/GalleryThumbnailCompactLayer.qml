@@ -35,5 +35,11 @@ Item {
         retainWhileLoading: layer.activePresentation && readyEntryId === layer.entry.entryId
         smooth: true
         visible: source.toString() !== ""
+        readonly property point pixelCorrection:
+            layer.entry.iconPixelOffset(sourceImage)
+        transform: Translate {
+            x: sourceImage.pixelCorrection.x
+            y: sourceImage.pixelCorrection.y
+        }
     }
 }

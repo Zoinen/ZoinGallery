@@ -2,7 +2,6 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Shapes
-import QtQuick.VectorImage
 import ZoinGallery.Native 1.0
 
 Item {
@@ -18,13 +17,13 @@ Item {
     property int sourceStatus: Image.Null
     readonly property real paintedWidth: vectorImage.width
     readonly property real paintedHeight: vectorImage.height
-    readonly property real aspect: vectorImage.implicitHeight > 0
-        ? vectorImage.implicitWidth / vectorImage.implicitHeight : 1
-    readonly property real fittedWidth: crop ? width : Math.min(width, height * aspect)
-    readonly property real fittedHeight: crop ? height : Math.min(height, width / aspect)
+    readonly property real aspect: sourcePin.sourceSize.height > 0
+        ? sourcePin.sourceSize.width / sourcePin.sourceSize.height : 1
+    readonly property real fittedWidth: crop ? Math.max(width, height * aspect) : Math.min(width, height * aspect)
+    readonly property real fittedHeight: crop ? Math.max(height, width / aspect) : Math.min(height, width / aspect)
 
-    // Qt 6.11 exposes asynchronous Shapes but no VectorImage.status. Inspect
-    // their preparation state once per pending frame; stop polling at rest.
+    // Component compilation/incubation and shape preparation are separate
+    // stages. Inspect pending Shapes only until their geometry is ready.
     function shapesReady(item) {
         let ready = !(item instanceof Shape) || item.status === Shape.Ready
         if (item instanceof Text) item.renderType = Text.CurveRendering
@@ -36,9 +35,9 @@ Item {
     function resolveState() {
         if (source.toString() === "") {
             sourceStatus = Image.Null
-        } else if (vectorImage.implicitWidth <= 0 || vectorImage.implicitHeight <= 0) {
+        } else if (sourcePin.failed || vectorImage.status === Loader.Error) {
             sourceStatus = Image.Error
-        } else if (shapesReady(vectorImage)) {
+        } else if (vectorImage.status === Loader.Ready && shapesReady(vectorImage.item)) {
             sourceStatus = Image.Ready
             sceneGenerationMs = Date.now() - loadStartedAt
         } else {
@@ -72,7 +71,15 @@ Item {
         onTriggered: root.resolveState()
     }
 
-    VectorSourcePin { source: root.source }
+    VectorSourcePin {
+        id: sourcePin
+        source: root.source
+        prepareComponent: true
+        onPreparedChanged: {
+            readinessTimer.interval = 0
+            readinessTimer.restart()
+        }
+    }
 
     ShaderEffect {
         objectName: "galleryVectorCheckerboard"
@@ -84,18 +91,28 @@ Item {
         property size viewportSize: Qt.size(width, height)
         fragmentShader: "qrc:/ZoinGallery/resources/vector_checkerboard.frag.qsb"
     }
-    VectorImage {
+    Loader {
         id: vectorImage
         objectName: "galleryVectorSurface"
         x: Math.round((root.width - width) * root.devicePixelRatio / 2) / root.devicePixelRatio
         y: Math.round((root.height - height) * root.devicePixelRatio / 2) / root.devicePixelRatio
         width: Math.round(root.fittedWidth * root.devicePixelRatio) / root.devicePixelRatio
         height: Math.round(root.fittedHeight * root.devicePixelRatio) / root.devicePixelRatio
-        source: root.source
-        fillMode: root.crop ? VectorImage.PreserveAspectCrop : VectorImage.Stretch
-        preferredRendererType: VectorImage.CurveRenderer
-        asynchronousShapes: true
-        animations.paused: !root.animate || !root.visible
+        asynchronous: true
+        sourceComponent: sourcePin.component
+        // The generated root exposes Qt's animation controls. Retain the
+        // authored loop count and freeze panel/hidden scenes before painting.
+        property QtObject animations: QtObject {
+            property bool paused: !root.animate || !root.visible
+            readonly property int loops: vectorImage.item ? vectorImage.item.loops : 1
+        }
+        onStatusChanged: root.resolveState()
         visible: root.sourceStatus !== Image.Error && root.sourceStatus !== Image.Null
+    }
+    Binding {
+        target: vectorImage.item
+        property: "paused"
+        value: vectorImage.animations.paused
+        when: vectorImage.status === Loader.Ready
     }
 }

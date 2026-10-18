@@ -205,7 +205,7 @@ GallerySceneItem {
 
     Component {
         id: tintedRasterComponent
-        IconImage {
+        GalleryIconImage {
             id: fallbackRaster
             objectName: preview.activePresentation
                         ? "galleryFallbackIcon-" + preview.entry.viewIndex : ""
@@ -224,8 +224,6 @@ GallerySceneItem {
             fillMode: Image.PreserveAspectFit
             verticalAlignment: preview.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
             smooth: preview.motionActive
-            mipmap: false
-            retainWhileLoading: false
             readonly property point pixelGridOffset:
                 fallbackIcon.pixelGridOffset
         }

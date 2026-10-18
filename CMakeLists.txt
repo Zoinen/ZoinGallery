@@ -72,7 +72,7 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
 find_package(QT NAMES Qt6)
-set(ZOIN_QT_COMPONENTS Core Quick QuickPrivate Gui Qml Concurrent Svg QuickVectorImage QuickVectorImageGeneratorPrivate QuickControls2)
+set(ZOIN_QT_COMPONENTS Core Quick QuickPrivate Gui Qml Concurrent Svg QuickVectorImage QuickVectorImageGeneratorPrivate QuickControls2 QuickControls2ImplPrivate)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     list(APPEND ZOIN_QT_COMPONENTS Multimedia)
 endif()
@@ -223,6 +223,8 @@ set(ZOIN_CORE_SOURCES
     GalleryDelegateItem.cpp
     GallerySceneItem.h
     GallerySceneItem.cpp
+    GalleryIconImage.h
+    GalleryIconImage.cpp
     GalleryVectorUploadGate.h
     GalleryVectorUploadGate.cpp
     VectorUploadGateProtocol.h
@@ -1245,6 +1247,7 @@ target_link_libraries(ZoinGalleryCore PUBLIC
 )
 target_link_libraries(ZoinGalleryCore PRIVATE
     Qt${QT_VERSION_MAJOR}::QuickPrivate
+    Qt${QT_VERSION_MAJOR}::QuickControls2ImplPrivate
     Qt${QT_VERSION_MAJOR}::QuickVectorImageGeneratorPrivate)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     target_link_libraries(ZoinGalleryCore PUBLIC

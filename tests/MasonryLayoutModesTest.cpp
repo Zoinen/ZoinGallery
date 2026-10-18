@@ -114,12 +114,15 @@ public:
         : QQuickImageProvider(QQuickImageProvider::Image), m_checker(checker) {}
     QSize lastRequestedSize;
     QSize chevronRequestedSize;
+    bool recordRequests = false;
+    QList<QPair<QString, QSize>> requests;
 
     QImage requestImage(const QString &id,
                         QSize *size,
                         const QSize &requestedSize) override {
         const QSize imageSize = requestedSize.isValid()
             ? requestedSize : QSize(16, 16);
+        if (recordRequests) requests.append({id, requestedSize});
         if (id.contains("chevron-"))
             chevronRequestedSize = requestedSize;
         if (size) {
@@ -2193,6 +2196,65 @@ private slots:
             QColor(QStringLiteral("#00ff00")), 3000);
         QCOMPARE(fileIcon->property("effectiveIconColor").value<QColor>(),
                  fileIconColor);
+    }
+
+    void iconRasterLoadsCoalesceBeforeDrawing() {
+#ifndef Q_MOC_RUN
+        QQuickView view;
+        ZoinGallery::GalleryRuntime::registerTypes();
+        auto *provider = new CompactIconProvider;
+        provider->recordRequests = true;
+        view.engine()->addImageProvider("coalesced-icon", provider);
+        QQmlComponent component(view.engine());
+        component.setData(QByteArrayLiteral(R"(
+            import QtQuick
+            import QtQuick.Controls.impl
+            import ZoinGallery.Native 1.0
+            Item {
+                width: 160; height: 96
+                GalleryIconImage {
+                    objectName: "coalescedRasterLeaf"
+                    x: 8; y: 8; width: 32; height: 32
+                    source: "image://coalesced-icon/initial"
+                    sourceSize: Qt.size(width, height)
+                    color: "red"
+                    cache: false
+                }
+            }
+        )"), QUrl());
+        QScopedPointer<QObject> root(component.create());
+        QVERIFY2(root, qPrintable(component.errorString()));
+        auto *item = qobject_cast<QQuickItem *>(root.data());
+        QVERIFY(item);
+        view.setContent(QUrl(), &component, item);
+        view.resize(160, 96);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        auto *icon = root->findChild<QQuickItem *>("coalescedRasterLeaf");
+        QVERIFY(icon);
+        QTRY_VERIFY(!provider->requests.isEmpty());
+        view.grabWindow();
+        provider->requests.clear();
+        icon->setProperty("source", QUrl("image://coalesced-icon/final"));
+        icon->setWidth(40);
+        icon->setHeight(48);
+        icon->setProperty("color", QColor(Qt::blue));
+        const QImage image = view.grabWindow();
+        QCOMPARE(provider->requests.size(), 1);
+        QCOMPARE(provider->requests.first().first, QString("final"));
+        const qreal dpr = view.devicePixelRatio();
+        QCOMPARE(provider->requests.first().second,
+                 QSize(qRound(40 * dpr), qRound(48 * dpr)));
+        const QPointF origin = icon->mapToScene(QPointF());
+        QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .001);
+        QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .001);
+        QCOMPARE(icon->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+        QCOMPARE(icon->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        QCOMPARE(image.pixelColor(qRound(24 * dpr), qRound(24 * dpr)), QColor(Qt::blue));
+        image.save("coalesced-raster-icon-175.png");
+        icon->setProperty("source", QUrl());
+        QCOMPARE(icon->property("status").toInt(), 0);
+#endif
     }
 
     void nearbyDelegatesArePreparedWithoutChangingVisibleRange_data() {

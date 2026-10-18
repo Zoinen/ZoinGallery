@@ -1943,6 +1943,64 @@ private slots:
         }
     }
 
+    void lateVideoThumbnailDoesNotFlushCachedMetadata_data() {
+        QTest::addColumn<bool>("cached");
+        QTest::newRow("decoded") << false;
+        QTest::newRow("cached-pixels") << true;
+    }
+
+    void lateVideoThumbnailDoesNotFlushCachedMetadata() {
+        QFETCH(bool, cached);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("late-video-dimensions");
+        auto video = entry("video", 0, "portrait.mp4");
+        video["thumbnailKind"] = "video";
+        video["contentVersion"] = "video-v1";
+        video["versionStrength"] = "strong";
+        video["sourceKey"] = "late-video-source";
+        QVERIFY(session->applyExternalCatalog({video}, 1));
+        auto *model = session->model();
+        auto *item = model->index(0, 0).data(FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(item);
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        ImageDecodeRequest request{
+            .info = item->info(), .targetSize = QSize(90, 160),
+            .requestNamespace = session->sessionId()};
+        request.info.isCached = cached;
+        request.info.imageSize = QSize(1080, 1920);
+        request.thumbnailTransformKey = "video-contact-sheet-2x2-display-v4";
+        QImage sheet(QSize(90, 160), QImage::Format_ARGB32_Premultiplied);
+        sheet.fill(Qt::red);
+        MasonryLayout layout;
+        QQmlEngine::setContextForObject(&layout, engine.rootContext());
+        layout.setSize(QSizeF(600, 400));
+        layout.setModel(model);
+        layout.componentComplete();
+        const quint64 revision = layout.layoutRevision();
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        decoder->imageReady(request, sheet, {});
+        QCOMPARE(layout.layoutRevision(), revision);
+        QCOMPARE(item->fullSize(), request.info.imageSize);
+        QCOMPARE(item->info().isCached, cached);
+        int geometryChanges = 0;
+        for (const auto &change : changes) {
+            const auto roles = change.at(2).value<QList<int>>();
+            if (!roles.contains(FileListModel::ImageFullSizeRole)) continue;
+            ++geometryChanges;
+            QVERIFY(!roles.contains(FileListModel::CachedMetadataBatchRole));
+        }
+        QCOMPARE(geometryChanges, 1);
+        QTRY_VERIFY(layout.layoutRevision() > revision);
+        const auto preview = layout.indexPreviewGeometry(0);
+        QVERIFY(preview.isValid());
+        QVERIFY(qAbs(preview.width() / preview.height() - 1080.0 / 1920) < .02);
+        runtime->shutdown();
+    }
+
     void cachedVideoThumbnailKeepsCompletedMetadataAndGeometry() {
         QQmlEngine engine;
         ZoinGallery::RuntimeOptions options;

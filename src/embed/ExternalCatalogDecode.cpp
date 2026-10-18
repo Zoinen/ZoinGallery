@@ -356,7 +356,13 @@ void ExternalCatalogModel::handleImageReady(
         info.orientation = ExifOrientation::Horizontal;
         info.requestNamespace = _sessionId;
         info.isLast = true;
-        handleImageInfo(info);
+        // A late frame can refine dimensions even when its pixels came from
+        // cache. Coalesce that geometry with other completions; only metadata
+        // restoration batches should request an immediate cached-layout flush.
+        ImageInfoBatchState state;
+        state.allChangedMetadataCached = false;
+        applyImageInfoResult(info, state);
+        publishImageInfoBatch(state);
     }
     if (request.viewerRequest) {
         publishViewerImage(decodedRows, request, image, decodedInfo);

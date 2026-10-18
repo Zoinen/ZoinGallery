@@ -8623,6 +8623,14 @@ private slots:
     }
 
     void videoFieldColumnsStaySharpAt175Percent() {
+        const QFont originalFont = QGuiApplication::font();
+        const auto restoreFont = qScopeGuard([originalFont] {
+            QGuiApplication::setFont(originalFont);
+        });
+#if defined(Q_OS_WIN)
+        QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
+        QGuiApplication::setFont(QFont(QStringLiteral("Segoe UI"), 9));
+#endif
         QQuickView view;
         if (qAbs(view.devicePixelRatio() - 1.75) > .001) QSKIP("Requires 175% scale");
         ZoinGallery::RuntimeOptions options;
@@ -8659,6 +8667,9 @@ private slots:
         QVERIFY(session->applyExternalCatalog(catalog, 1));
         auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "videoFieldSession", "details"));
         QVERIFY(panel);
+#if defined(Q_OS_WIN)
+        QVERIFY(setPanelObjectProperties(panel, "metrics", {{"panelFontFamily", "Segoe UI"}}));
+#endif
         panel->setProperty("devicePixelRatio", view.devicePixelRatio());
         panel->setProperty("animateLayoutChanges", false);
         panel->setProperty("fileFieldDescriptors", descriptors);
@@ -8691,8 +8702,25 @@ private slots:
             QVERIFY(leaves >= 20);
         };
         verify();
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        for (const auto &id : ids) {
+            auto *leaf = findVisualItem(panel, QString("galleryFileField-%1-0").arg(id));
+            QVERIFY(leaf);
+            const QRectF bounds = leaf->mapRectToItem(view.contentItem(), leaf->boundingRect());
+            const QRect pixels(qFloor(bounds.x() * 1.75), qFloor(bounds.y() * 1.75),
+                               qCeil(bounds.width() * 1.75), qCeil(bounds.height() * 1.75));
+            const QImage text = capture.copy(pixels.intersected(capture.rect()));
+            int ink = 0;
+            for (int y = 0; y < text.height(); ++y)
+                for (int x = 0; x < text.width(); ++x) {
+                    const QColor color = text.pixelColor(x, y);
+                    ink += color.red() > 150 && color.green() > 150 && color.blue() > 150;
+                }
+            QVERIFY2(ink > 4, qPrintable(id + " has no rendered text"));
+        }
         QTemporaryDir directory;
-        QVERIFY(view.grabWindow().save(visualCapturePath("gallery-video-fields-175.png", directory.filePath("video-fields.png"))));
+        QVERIFY(capture.save(visualCapturePath("gallery-video-fields-175.png", directory.filePath("video-fields.png"))));
         view.resize(1800, 600);
         QTest::qWait(150);
         verify();

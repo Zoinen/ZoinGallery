@@ -109,7 +109,8 @@ GallerySceneItem {
                   || (fallbackIcon.systemFileSource
                       && !preview.thumbnailReady
                       && (!previewContent.item
-                          || previewContent.item.sourceStatus !== Image.Ready)))
+                          || previewContent.item.sourceStatus !== Image.Ready)
+                      && !failedThumbnailIcon.ready))
                  && !preview.thumbnailExpected
                  && fallbackIcon.modelIconSource.toString() !== ""
                  && (!preview.entry.highlightMarker || fallbackIcon.lucideSource)
@@ -336,6 +337,30 @@ GallerySceneItem {
                     y: sourceColorIcon.pixelGridOffset.y
                 }
             }
+        }
+    }
+
+    Loader {
+        id: failedThumbnailIcon
+        anchors.fill: parent
+        // Keep the failed thumbnail alive so its Error status remains stable.
+        // Swapping that renderer for the icon would reset the status and retry
+        // the same unreadable thumbnail whenever the native icon becomes ready.
+        active: preview.activePresentation && preview.thumbnailHasSource
+                && previewContent.item
+                && previewContent.item.sourceStatus === Image.Error
+                && !fallbackIcon.lucideSource
+                && fallbackIcon.modelIconSource.toString() !== ""
+        readonly property bool ready: status === Loader.Ready && item
+                                      && item.sourceStatus === Image.Ready
+        sourceComponent: sourceColorIconComponent
+        onLoaded: {
+            if (preview.entry.panelRoot.benchmarkTracingEnabled)
+                preview.entry.panelRoot.traceBenchmarkStage(
+                    "[FIX] preview.thumbnail-icon-fallback", {
+                        "entryId": preview.entry.entryId,
+                        "row": preview.entry.viewIndex
+                    })
         }
     }
 

@@ -1125,7 +1125,8 @@ qreal MasonryLayout::contentY() const {
 }
 
 void MasonryLayout::setContentY(qreal newContentY) {
-    newContentY = qBound<qreal>(0, newContentY, maximumContentOffset());
+    newContentY = qBound<qreal>(-_overscrollLimit, newContentY,
+                               maximumContentOffset() + _overscrollLimit);
     if (_presentationMode == Columns) {
         const int nextTop = windowTopIndexForContentY(newContentY);
         if (nextTop != _windowTopIndex) {
@@ -1152,6 +1153,19 @@ void MasonryLayout::setContentY(qreal newContentY) {
     }
 //    _topItem = _visibleStart;
 //    setCurrentIndex(_topItem);
+}
+
+qreal MasonryLayout::overscrollLimit() const {
+    return _overscrollLimit;
+}
+
+void MasonryLayout::setOverscrollLimit(qreal limit) {
+    limit = qIsFinite(limit) ? qBound<qreal>(0, limit, 240) : 0;
+    if (qFuzzyCompare(_overscrollLimit, limit))
+        return;
+    _overscrollLimit = limit;
+    setContentY(_contentY);
+    emit overscrollLimitChanged();
 }
 
 void MasonryLayout::setContentYInternal(qreal newContentY) {

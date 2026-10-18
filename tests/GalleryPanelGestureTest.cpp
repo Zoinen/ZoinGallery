@@ -10,6 +10,7 @@
 #include <QQuickView>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QWheelEvent>
 #include <QtTest>
 
 #include <utility>
@@ -163,12 +164,211 @@ bool invokeWheel(QObject *target, qreal pixelY, qreal angleY,
         Q_ARG(QVariant, angleX)) && handled.toBool();
 }
 
+bool invokeTouchpad(QObject *target, qreal pixelY, Qt::ScrollPhase phase,
+                    qreal pixelX = 0) {
+    QVariant handled;
+    return QMetaObject::invokeMethod(
+        target, "handlePanelWheelEvent", Qt::DirectConnection,
+        Q_RETURN_ARG(QVariant, handled),
+        Q_ARG(QVariant, pixelY), Q_ARG(QVariant, 0),
+        Q_ARG(QVariant, int(Qt::NoModifier)), Q_ARG(QVariant, pixelX),
+        Q_ARG(QVariant, 0), Q_ARG(QVariant, int(phase))) && handled.toBool();
+}
+
 } // namespace
 
 class GalleryPanelGestureTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void touchpadOverscrollReturnsToBounds_data() {
+        preciseTrackpadPacketsMoveImmediately_data();
+    }
+
+    void touchpadOverscrollReturnsToBounds() {
+#if !defined(Q_OS_MACOS)
+        QSKIP("macOS touchpad gesture contract");
+#endif
+        QFETCH(QString, mode);
+        QVariantList catalog;
+        for (int index = 0; index < 120; ++index)
+            catalog.append(folderEntry(QString::number(index), index,
+                                       QStringLiteral("/tmp/folder-%1").arg(index)));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(QStringLiteral("touchpad-overscroll"));
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        view.engine()->rootContext()->setContextProperty(QStringLiteral("testSession"), session);
+        QObject *panel = createPanel(view);
+        QVERIFY(panel);
+        panel->setProperty("presentationMode", mode);
+        auto *layout = panel->findChild<QQuickItem *>(QStringLiteral("galleryViewportItem"));
+        QVERIFY(layout);
+        const auto maximum = [&] {
+            return qMax(qreal(0), layout->property("contentHeight").toReal()
+                        - (mode == "columns" ? layout->width() : layout->height()));
+        };
+        QTRY_VERIFY(maximum() > 400);
+        QVERIFY(invoke(panel, "setPanelContentY", 0.0, true));
+        view.show();
+        QTest::qWait(30);
+        // Exercise the real QWheelEvent -> MouseArea -> phase-aware facade
+        // route too, not just direct calls into the gesture implementation.
+        const QPointF pointer = layout->mapToScene(QPointF(30, 30));
+        const QPointF globalPointer = view.mapToGlobal(pointer.toPoint());
+        QWheelEvent update(pointer, globalPointer,
+                           mode == "columns" ? QPoint(25, 0) : QPoint(0, 25),
+                           QPoint(), Qt::NoButton, Qt::NoModifier,
+                           Qt::ScrollUpdate, false);
+        QCoreApplication::sendEvent(&view, &update);
+        QVERIFY(layout->property("contentY").toReal() < 0);
+        QWheelEvent end(pointer, globalPointer, QPoint(), QPoint(),
+                        Qt::NoButton, Qt::NoModifier, Qt::ScrollEnd, false);
+        QCoreApplication::sendEvent(&view, &end);
+        QTRY_COMPARE_WITH_TIMEOUT(layout->property("overscrollLimit").toReal(), qreal(0), 1000);
+        QCOMPARE(layout->property("contentY").toReal(), qreal(0));
+        // Column strips rubber-band on X; other modes use Y.
+        const auto gesture = [&](qreal delta, Qt::ScrollPhase phase) {
+            return mode == "columns" ? invokeTouchpad(panel, 0, phase, delta)
+                                     : invokeTouchpad(panel, delta, phase);
+        };
+        QVERIFY(gesture(80, Qt::ScrollUpdate));
+        const qreal first = layout->property("contentY").toReal();
+        // Like the viewer edge, resist immediately (at most 1/4 of the
+        // finger distance), not only after stretching nearly to the limit.
+        QVERIFY(first < 0 && first > -20);
+        QCOMPARE(session->panelScrollOffset(), qreal(0));
+        auto *scrollBar = panel->findChild<QObject *>(mode == "columns"
+            ? QStringLiteral("galleryPanelColumnsScrollBar")
+            : QStringLiteral("galleryPanelScrollBar"));
+        QVERIFY(scrollBar);
+        QCOMPARE(scrollBar->property("position").toReal(), qreal(0));
+        QVERIFY(gesture(80, Qt::ScrollUpdate));
+        const qreal second = layout->property("contentY").toReal();
+        QVERIFY(second < first && first - second < -first);
+        // Reversal must unwind immediately, before any timer/animation tick.
+        QVERIFY(gesture(-40, Qt::ScrollUpdate));
+        QVERIFY(layout->property("contentY").toReal() > second);
+        QVERIFY(gesture(0, Qt::ScrollEnd));
+        auto *restore = panel->findChild<QObject *>(QStringLiteral("galleryOverscrollReturnAnimation"));
+        QVERIFY(restore);
+        QVERIFY(restore->property("running").toBool());
+        const qreal released = layout->property("contentY").toReal();
+        // Cocoa can introduce its old momentum stream with another Begin.
+        QVERIFY(gesture(120, Qt::ScrollBegin));
+        QCOMPARE(layout->property("contentY").toReal(), released);
+        QVERIFY(gesture(120, Qt::ScrollMomentum));
+        QCOMPARE(layout->property("contentY").toReal(), released);
+        QVERIFY(restore->property("running").toBool());
+        QTest::qWait(35);
+        QVERIFY(layout->property("contentY").toReal() > released);
+        // Touching the trackpad again owns the visible position immediately,
+        // even when Begin and the first Update carry no movement yet.
+        const qreal grabbed = layout->property("contentY").toReal();
+        QVERIFY(gesture(0, Qt::ScrollBegin));
+        QTest::qWait(40);
+        QCOMPARE(layout->property("contentY").toReal(), grabbed);
+        gesture(0, Qt::ScrollUpdate);
+        QVERIFY(!restore->property("running").toBool());
+        QVERIFY(gesture(40, Qt::ScrollUpdate));
+        QVERIFY(layout->property("contentY").toReal() < grabbed);
+        QVERIFY(gesture(0, Qt::ScrollEnd));
+        QVERIFY(restore->property("running").toBool());
+        QTRY_COMPARE_WITH_TIMEOUT(layout->property("overscrollLimit").toReal(), qreal(0), 1000);
+        QCOMPARE(layout->property("contentY").toReal(), qreal(0));
+        // Late momentum must not start a fresh stretch after the spring ends.
+        QVERIFY(gesture(120, Qt::ScrollMomentum));
+        QCOMPARE(layout->property("contentY").toReal(), qreal(0));
+
+        QVERIFY(invoke(panel, "setPanelContentY", maximum() - 10, true));
+        QVERIFY(gesture(0, Qt::ScrollBegin));
+        QVERIFY(gesture(-1, Qt::ScrollUpdate));
+        QVERIFY(gesture(-80, Qt::ScrollMomentum));
+        QVERIFY(layout->property("contentY").toReal() > maximum());
+        QCOMPARE(session->panelScrollOffset(), maximum());
+        QVERIFY(qAbs(scrollBar->property("position").toReal()
+                     - (1 - scrollBar->property("size").toReal())) < 0.001);
+        // Momentum reaching an edge starts restoring immediately too.
+        QVERIFY(restore->property("running").toBool());
+        QTRY_COMPARE_WITH_TIMEOUT(layout->property("overscrollLimit").toReal(), qreal(0), 1000);
+        QCOMPARE(layout->property("contentY").toReal(), maximum());
+
+        QVERIFY(invoke(panel, "setPanelContentY", 0.0, true));
+        QVERIFY(gesture(80, Qt::ScrollUpdate));
+        // Keyboard/programmatic placement owns the viewport immediately and
+        // must not be overwritten later by the old spring animation.
+        QVERIFY(invoke(panel, "setPanelContentY", 100.0, true));
+        QTRY_COMPARE_WITH_TIMEOUT(layout->property("contentY").toReal(), qreal(100), 1000);
+        QCOMPARE(layout->property("overscrollLimit").toReal(), qreal(0));
+        QTest::qWait(400);
+        QCOMPARE(layout->property("contentY").toReal(), qreal(100));
+    }
+
+    void preciseTrackpadPacketsMoveImmediately_data() {
+        QTest::addColumn<QString>("mode");
+        for (const auto &mode : {"masonry", "icons", "grid", "details", "columns"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void preciseTrackpadPacketsMoveImmediately() {
+#if !defined(Q_OS_MACOS)
+        QSKIP("macOS pixel-delta scrolling contract");
+#endif
+        QFETCH(QString, mode);
+        QVariantList catalog;
+        for (int index = 0; index < 120; ++index)
+            catalog.append(folderEntry(QString::number(index), index,
+                                       QStringLiteral("/tmp/folder-%1").arg(index)));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(QStringLiteral("trackpad-packets"));
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        view.engine()->rootContext()->setContextProperty(QStringLiteral("testSession"), session);
+        QObject *panel = createPanel(view);
+        QVERIFY(panel);
+        panel->setProperty("presentationMode", mode);
+        auto *layout = panel->findChild<QQuickItem *>(QStringLiteral("galleryViewportItem"));
+        auto *animation = panel->findChild<QObject *>(QStringLiteral("galleryPanelScrollAnimation"));
+        QVERIFY(layout);
+        QVERIFY(animation);
+        const auto maximum = [&] {
+            return qMax(qreal(0), layout->property("contentHeight").toReal()
+                        - (mode == "columns" ? layout->width() : layout->height()));
+        };
+        QTRY_VERIFY(maximum() > 400);
+        QVERIFY(invoke(panel, "setPanelContentY", 100.0, true));
+        // Simulate a packet of precision/momentum deltas delivered before the
+        // next animation tick. No processing events or waits between deltas:
+        // position must already reflect all of them, even at a low frame rate.
+        qreal expected = 100;
+        for (qreal delta : {-17.25, -9.5, -4.25, 6.0}) {
+            QVERIFY(invokeWheel(panel, delta, -120, int(Qt::NoModifier), 0, 0));
+            expected -= delta;
+            QCOMPARE(layout->property("contentY").toReal(), expected);
+            QVERIFY(!animation->property("running").toBool());
+            QCOMPARE(session->panelScrollOffset(), expected);
+        }
+        QVERIFY(invokeWheel(panel, 100000, 120, int(Qt::NoModifier), 0, 0));
+        QCOMPARE(layout->property("contentY").toReal(), qreal(0));
+        QVERIFY(invokeWheel(panel, -100000, -120, int(Qt::NoModifier), 0, 0));
+        QCOMPARE(layout->property("contentY").toReal(), maximum());
+        // A new trackpad gesture cancels an unfinished discrete-wheel ease;
+        // it must start at the visible offset, not jump to its old endpoint.
+        QVERIFY(invoke(panel, "setPanelContentY", 100.0, true));
+        QVERIFY(invokeWheel(panel, 0, -120, int(Qt::NoModifier), 0, 0));
+        QVERIFY(animation->property("running").toBool());
+        const qreal visibleOffset = layout->property("contentY").toReal();
+        QVERIFY(invokeWheel(panel, -5, -120, int(Qt::NoModifier), 0, 0));
+        QCOMPARE(layout->property("contentY").toReal(), visibleOffset + 5);
+        QVERIFY(!animation->property("running").toBool());
+        QTest::qWait(200);
+        QCOMPARE(layout->property("contentY").toReal(), visibleOffset + 5);
+    }
+
     void gridAndIconsWheelZoomChangesCellCountAndCompactModesUseRowSteps() {
         QVariantList catalog;
         for (int index = 0; index < 120; ++index) {
@@ -781,10 +981,10 @@ private slots:
             layout->property("contentHeight").toReal() > layout->height(),
             5000);
 
-        // The old MasonryMode accumulates wheel input against the animation's
-        // destination and animates to it instead of jumping contentY directly.
+        // Discrete mouse-wheel input still eases toward its destination;
+        // precision trackpad packets have a separate immediate contract.
         const qreal beforeScroll = layout->property("contentY").toReal();
-        QVERIFY(invokeWheel(panel, -120, -120, int(Qt::NoModifier), 0, 0));
+        QVERIFY(invokeWheel(panel, 0, -120, int(Qt::NoModifier), 0, 0));
         QCOMPARE(layout->property("contentY").toReal(), beforeScroll);
         QTRY_VERIFY_WITH_TIMEOUT(
             layout->property("contentY").toReal() > beforeScroll, 1000);

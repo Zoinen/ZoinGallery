@@ -58,6 +58,106 @@ QtObject {
     property bool suppressScrollAnimationPersistence: false
     property bool presentationLayoutHidden: false
     property bool presentationStateHidesLayout: false
+    readonly property real touchpadOverscrollLimit: 120
+    readonly property real touchpadEdgeResistance: 0.25
+    property bool suppressTouchpadMomentum: false
+    property Timer overscrollIdleTimer: Timer {
+        interval: 140
+        onTriggered: root.releaseOverscroll()
+    }
+    property NumberAnimation overscrollReturnAnimation: NumberAnimation {
+        objectName: "galleryOverscrollReturnAnimation"
+        target: root.galleryLayout
+        property: "contentY"
+        duration: 280
+        easing.type: Easing.OutCubic
+        onFinished: root.cancelOverscroll()
+    }
+
+    function maximumScrollOffset() {
+        const extent = presentationMode === "columns"
+                ? galleryLayout.width : galleryLayout.height
+        return Math.max(0, galleryLayout.contentHeight - extent)
+    }
+
+    function cancelOverscroll() {
+        overscrollIdleTimer.stop()
+        overscrollReturnAnimation.stop()
+        if (galleryLayout)
+            galleryLayout.overscrollLimit = 0
+    }
+
+    function releaseOverscroll() {
+        overscrollIdleTimer.stop()
+        const target = Math.max(0, Math.min(maximumScrollOffset(), galleryLayout.contentY))
+        if (target === galleryLayout.contentY) {
+            cancelOverscroll()
+            return
+        }
+        // Once released, the old OS momentum stream no longer owns this edge,
+        // even after the return has finished. Only a new finger gesture does.
+        suppressTouchpadMomentum = true
+        if (overscrollReturnAnimation.running) {
+            if (overscrollReturnAnimation.paused)
+                overscrollReturnAnimation.resume()
+            return
+        }
+        overscrollReturnAnimation.from = galleryLayout.contentY
+        overscrollReturnAnimation.to = target
+        overscrollReturnAnimation.restart()
+    }
+
+    function scrollTouchpadBy(delta, phase) {
+        overscrollReturnAnimation.stop()
+        galleryLayout.overscrollLimit = touchpadOverscrollLimit
+        const maximum = maximumScrollOffset()
+        const current = galleryLayout.contentY
+        let target = current + delta
+        // Integrate edge resistance in raw-distance space: packet size must
+        // not change the rubber-band curve. Reversing unwinds that distance.
+        const limit = touchpadOverscrollLimit
+        const resistance = touchpadEdgeResistance
+        const unbend = distance => limit * distance
+                / (resistance * Math.max(0.01, limit - distance))
+        const bend = distance => limit * resistance * distance
+                / (limit + resistance * distance)
+        let raw = current < 0 ? -unbend(-current)
+                : current > maximum ? maximum + unbend(current - maximum) : current
+        raw += delta
+        target = raw < 0 ? -bend(-raw)
+                : raw > maximum ? maximum + bend(raw - maximum) : raw
+        viewportUpdateTimer.stop()
+        viewportUpdateEnsuresCursor = false
+        viewportUpdateSuppressAnimation = false
+        viewportUpdatePendingAfterScroll = false
+        setPanelContentY(target, true, true)
+        if (phase === Qt.ScrollMomentum && (target < 0 || target > maximum)) {
+            releaseOverscroll()
+            return
+        }
+        // Explicit phase ends usually arrive; the idle fallback covers lost
+        // ends and devices which stop producing events after lifting fingers.
+        overscrollIdleTimer.interval = phase === Qt.ScrollMomentum ? 140 : 500
+        overscrollIdleTimer.restart()
+    }
+
+    onPresentationModeChanged: cancelOverscroll()
+    onControllerReadyChanged: {
+        if (!controllerReady)
+            cancelOverscroll()
+    }
+    property Connections overscrollLifecycle: Connections {
+        target: root.panel
+        function onVisibleChanged() {
+            if (!root.panel.visible)
+                root.cancelOverscroll()
+        }
+        function onSessionChanged() { root.cancelOverscroll() }
+    }
+    property Connections overscrollPathLifecycle: Connections {
+        target: root.controller
+        function onCurrentPathChanged() { root.cancelOverscroll() }
+    }
 
     function densityChangeRequested(mode, density, finalChange) {
         panel.densityChangeRequested(mode, density, finalChange)
@@ -185,6 +285,7 @@ QtObject {
 
     function animatePanelScrollTo(targetY, quickScroll, keyboardReveal,
                                   keyboardRevealDirection) {
+        cancelOverscroll()
         if (!keyboardReveal)
             cancelCursorChromeTransition()
         // An embedded session can queue a zero-delay offset restoration while
@@ -206,23 +307,24 @@ QtObject {
         target = Math.max(0, Math.min(maximum, target))
         const compactRows = presentationMode === "columns"
                 || presentationMode === "details"
-        if (compactRows && keyboardReveal) {
+        if (quickScroll || (compactRows && keyboardReveal)) {
             // Keyboard/path placement in compact rows remains an immediate
-            // reveal. Wheel input, however, must use the same animation as
-            // Masonry so every presentation has one GUI scrolling contract.
+            // reveal. Precision trackpad deltas already include OS momentum:
+            // apply them without restarting a sub-frame animation. At reduced
+            // frame rates repeated restarts otherwise postpone visible motion.
             setPanelContentY(target, true)
             return target
         }
         panelScrollAnimation.from = galleryLayout.contentY
         panelScrollAnimation.to = target
-        panelScrollAnimation.duration = quickScroll ? 15 : 150
+        panelScrollAnimation.duration = 150
         panelScrollAnimation.restart()
         return target
     }
 
     function scrollBy(deltaY, quickScroll, keyboardReveal,
                       keyboardRevealDirection) {
-        const plannedContentY = panelScrollAnimation.running
+        const plannedContentY = !quickScroll && panelScrollAnimation.running
                 ? panelScrollAnimation.to : galleryLayout.contentY
         return animatePanelScrollTo(plannedContentY + deltaY,
                                     quickScroll, keyboardReveal,
@@ -230,6 +332,7 @@ QtObject {
     }
 
     function handlePanelMiddlePress(x, y, modifiers) {
+        cancelOverscroll()
         if (mouseWheelMode === "console") {
             consoleMouseButtonRequested(x, y, Qt.MiddleButton, true,
                                         modifiers)
@@ -293,11 +396,57 @@ QtObject {
     }
 
     function handlePanelWheel(pixelDeltaY, angleDeltaY, modifiers,
-                              pixelDeltaX, angleDeltaX) {
+                              pixelDeltaX, angleDeltaX, phase) {
         const macPlatform = Qt.platform.os === "osx"
-        const verticalDelta = macPlatform
+        if (macPlatform) {
+            if (phase === Qt.ScrollUpdate) {
+                suppressTouchpadMomentum = false
+                // Direct finger ownership starts even on a zero-delta update.
+                // Stop without clamping: the next delta uses the visible pose.
+                overscrollReturnAnimation.stop()
+                overscrollIdleTimer.interval = 500
+                overscrollIdleTimer.restart()
+            }
+            if (phase === Qt.ScrollBegin) {
+                // Freeze immediately on contact. Cocoa also emits Begin for
+                // momentum, so retain the old stream's suppression until the
+                // following Update/Momentum resolves ownership. Pause/resume
+                // preserves the spring's progress for an inertial Begin.
+                if (overscrollReturnAnimation.running
+                        && !overscrollReturnAnimation.paused)
+                    overscrollReturnAnimation.pause()
+                overscrollIdleTimer.interval = 500
+                overscrollIdleTimer.restart()
+                if (suppressTouchpadMomentum)
+                    return true
+                overscrollReturnAnimation.stop()
+            }
+            if (phase === Qt.ScrollEnd && galleryLayout.overscrollLimit > 0) {
+                releaseOverscroll()
+                return true
+            }
+            if (phase === Qt.ScrollMomentum) {
+                if (suppressTouchpadMomentum) {
+                    if (overscrollReturnAnimation.paused)
+                        overscrollReturnAnimation.resume()
+                    return true
+                }
+                // Some native sequences go straight from finger updates to
+                // momentum without a separate Qt ScrollEnd. Do not let that
+                // first inertial packet pull an already-stretched edge again.
+                if (galleryLayout.contentY < 0
+                        || galleryLayout.contentY > maximumScrollOffset()) {
+                    releaseOverscroll()
+                    return true
+                }
+            }
+        }
+        const preciseScroll = macPlatform
+                && (Number(pixelDeltaY || 0) !== 0
+                    || Number(pixelDeltaX || 0) !== 0)
+        const verticalDelta = preciseScroll
                 ? Number(pixelDeltaY || 0) : Number(angleDeltaY || 0)
-        const horizontalDelta = macPlatform
+        const horizontalDelta = preciseScroll
                 ? Number(pixelDeltaX || 0) : Number(angleDeltaX || 0)
         // Trackpads report a real horizontal axis. In Columns it is the
         // authoritative gesture; Y remains a fallback for mouse wheels that
@@ -305,7 +454,7 @@ QtObject {
         const delta = presentationMode === "columns" && horizontalDelta !== 0
                 ? horizontalDelta : verticalDelta
         if (delta === 0)
-            return false
+            return macPlatform && phase === Qt.ScrollBegin
         if (modifiers & Qt.ControlModifier) {
             if (densityAdjustmentEnabled)
                 stepDensity(delta > 0)
@@ -313,12 +462,21 @@ QtObject {
             cancelCursorChromeTransition()
             // Columns consumes the vertical wheel/trackpad gesture as
             // horizontal movement through its column-major strip.
-            scrollBy(-delta, macPlatform)
+            if (preciseScroll && phase !== Qt.NoScrollPhase)
+                scrollTouchpadBy(-delta, phase)
+            else
+                scrollBy(-delta, preciseScroll)
+            if (panel.benchmarkTracingEnabled)
+                traceBenchmarkStage("[FIX:precise-trackpad-scroll]", {
+                    precise: preciseScroll, delta: delta,
+                    contentY: galleryLayout.contentY
+                })
         }
         return true
     }
 
     onMouseWheelModeChanged: {
+        cancelOverscroll()
         if (mouseWheelMode !== "gui" && scrollingMode)
             pointerLayer.endAutoScroll()
     }
@@ -366,7 +524,9 @@ QtObject {
         return true
     }
 
-    function setPanelContentY(value, persist) {
+    function setPanelContentY(value, persist, allowOverscroll) {
+        if (!allowOverscroll)
+            cancelOverscroll()
         resetGridPageLattice()
         resetMasonryPageSequence()
         cancelCursorChromeTransition()
@@ -377,7 +537,8 @@ QtObject {
         galleryLayout.contentY = value
         restoringScrollOffset = false
         if (persist && controller) {
-            controller.panelScrollOffset = galleryLayout.contentY
+            controller.panelScrollOffset = Math.max(0, Math.min(
+                maximumScrollOffset(), galleryLayout.contentY))
             controller.panelViewportCursorEntryId = controller.cursorEntryId
         }
     }

@@ -720,10 +720,10 @@ Item {
                              ? galleryLayout.width : galleryLayout.height)
 
         onWheelRequested: (x, y, pixelDeltaY, angleDeltaY, modifiers,
-                           pixelDeltaX, angleDeltaX) =>
-            viewportRoot.panelRoot.handlePanelWheel(
+                           pixelDeltaX, angleDeltaX, phase) =>
+            viewportRoot.panelRoot.handlePanelWheelEvent(
                 pixelDeltaY, angleDeltaY, modifiers,
-                pixelDeltaX, angleDeltaX)
+                pixelDeltaX, angleDeltaX, phase)
         onConsoleWheelRequested: (x, y, angleDeltaY, modifiers) =>
             viewportRoot.panelRoot.consoleWheelRequested(
                 x, y, angleDeltaY, modifiers)

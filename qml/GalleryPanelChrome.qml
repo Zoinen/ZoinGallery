@@ -18,6 +18,9 @@ Item {
         verticalScroll.visible ? width - verticalScroll.x : 0
     readonly property point layoutOrigin:
         layout ? layout.mapToItem(chromeRoot, 0, 0) : Qt.point(0, 0)
+    readonly property real boundedScrollOffset: Math.max(0, Math.min(
+        layout.contentHeight - (presentationMode === "columns" ? layout.width : layout.height),
+        layout.contentY))
 
     signal seekRequested(real contentOffset)
 
@@ -72,7 +75,7 @@ Item {
             function onContentYChanged() {
                 const extent = chromeRoot.layout.contentHeight
                 verticalScroll.position = extent > 0
-                        ? chromeRoot.layout.contentY / extent : 0
+                        ? chromeRoot.boundedScrollOffset / extent : 0
             }
             function onContentHeightChanged() { verticalScroll.updateSize() }
             function onHeightChanged() { verticalScroll.updateSize() }
@@ -82,7 +85,7 @@ Item {
             const extent = chromeRoot.layout.contentHeight
             size = extent > 0
                     ? Math.min(1, chromeRoot.layout.height / extent) : 1
-            position = extent > 0 ? chromeRoot.layout.contentY / extent : 0
+            position = extent > 0 ? chromeRoot.boundedScrollOffset / extent : 0
         }
     }
 
@@ -103,7 +106,7 @@ Item {
               ? Math.min(1, chromeRoot.layout.width
                          / chromeRoot.layout.contentHeight) : 1
         position: chromeRoot.layout.contentHeight > 0
-                  ? chromeRoot.layout.contentY
+                  ? chromeRoot.boundedScrollOffset
                     / chromeRoot.layout.contentHeight : 0
         onPositionChanged: {
             if (pressed) {

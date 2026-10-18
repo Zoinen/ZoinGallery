@@ -58,6 +58,7 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(quint64 iconCaptionMeasurementCount READ iconCaptionMeasurementCount)
     Q_PROPERTY(int targetHeight READ targetHeight WRITE setTargetHeight NOTIFY targetHeightChanged)
     Q_PROPERTY(qreal contentY READ contentY WRITE setContentY NOTIFY contentYChanged)
+    Q_PROPERTY(qreal overscrollLimit READ overscrollLimit WRITE setOverscrollLimit NOTIFY overscrollLimitChanged)
     Q_PROPERTY(qreal contentHeight READ contentHeight NOTIFY contentHeightChanged)
     Q_PROPERTY(QAbstractItemModel *model READ model WRITE setModel NOTIFY modelChanged)
     Q_PROPERTY(QQmlComponent *delegate MEMBER _delegate)
@@ -225,6 +226,8 @@ public:
 
     qreal contentY() const;
     void setContentY(qreal newContentY);
+    qreal overscrollLimit() const;
+    void setOverscrollLimit(qreal limit);
 
     qreal contentHeight() const;
 
@@ -312,6 +315,7 @@ signals:
     void layoutRevisionChanged();
     void targetHeightChanged();
     void contentYChanged();
+    void overscrollLimitChanged();
     void contentHeightChanged();
     void modelChanged();
 
@@ -755,6 +759,7 @@ private:
     qreal _preparedResetScrollOffset = 0;
     qreal _modeDensities[5] = {150.0, 30.0, 30.0, 160.0, 128.0};
     qreal _contentY;
+    qreal _overscrollLimit = 0;
     qreal _contentHeight;
     QRect _lastViewportGeometry;
     QQmlComponent *_delegate = nullptr;

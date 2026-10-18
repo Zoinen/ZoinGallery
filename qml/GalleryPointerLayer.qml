@@ -17,7 +17,7 @@ Item {
 
     signal wheelRequested(real x, real y, real pixelDeltaY,
                           real angleDeltaY, int modifiers,
-                          real pixelDeltaX, real angleDeltaX)
+                          real pixelDeltaX, real angleDeltaX, int phase)
     signal consoleWheelRequested(real x, real y, real angleDeltaY,
                                  int modifiers)
     signal hoverMoved(real x, real y)
@@ -53,7 +53,7 @@ Item {
                 pointerLayer.wheelRequested(
                     wheel.x, wheel.y, wheel.pixelDelta.y,
                     wheel.angleDelta.y, wheel.modifiers,
-                    wheel.pixelDelta.x, wheel.angleDelta.x)
+                    wheel.pixelDelta.x, wheel.angleDelta.x, wheel.phase)
             }
             wheel.accepted = true
         }

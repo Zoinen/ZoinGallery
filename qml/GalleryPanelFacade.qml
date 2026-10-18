@@ -75,7 +75,14 @@ FocusScope {
                               pixelDeltaX, angleDeltaX) {
         return panelFacade.viewportController.handlePanelWheel(
                     pixelDeltaY, angleDeltaY, modifiers,
-                    pixelDeltaX, angleDeltaX)
+                    pixelDeltaX, angleDeltaX, Qt.NoScrollPhase)
+    }
+
+    function handlePanelWheelEvent(pixelDeltaY, angleDeltaY, modifiers,
+                                  pixelDeltaX, angleDeltaX, phase) {
+        return panelFacade.viewportController.handlePanelWheel(
+                    pixelDeltaY, angleDeltaY, modifiers,
+                    pixelDeltaX, angleDeltaX, phase)
     }
 
     function beginThumbnailPinch() {

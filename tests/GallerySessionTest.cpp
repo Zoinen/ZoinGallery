@@ -7561,12 +7561,16 @@ private slots:
                 property alias source: slot.source
                 property alias status: slot.sourceStatus
                 property alias surface: slot.surface
+                property alias crop: slot.crop
+                property alias checkerboard: slot.showCheckerboard
                 property alias admissionEnabled: cache.enabled
                 function invalidate() { cache.invalidate() }
                 GalleryVectorSceneCache { id: cache; idleLimit: 1 }
                 GalleryVectorPreview {
                     id: slot; x: 8; y: 8; width: 160; height: 80
                     sceneCache: cache
+                    crop: true
+                    showCheckerboard: true
                     devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
                 }
             }
@@ -7587,15 +7591,35 @@ private slots:
         auto *leaf = first->findChild<QQuickItem *>("galleryVectorSurface");
         QVERIFY(leaf);
         const QImage redImage = window.grabWindow();
+        auto *firstItem = qobject_cast<QQuickItem *>(first.data());
+        QVERIFY(firstItem);
+        const QSizeF cachedSize = firstItem->size();
+        const qreal cachedDpr = firstItem->property("devicePixelRatio").toReal();
+        QSignalSpy widthChanges(firstItem, &QQuickItem::widthChanged);
+        QSignalSpy heightChanges(firstItem, &QQuickItem::heightChanged);
         root->setProperty("source", blue);
         QTRY_COMPARE(root->property("status").toInt(), 1);
         QPointer<QObject> second = root->property("surface").value<QObject *>();
         QVERIFY(second && second != first);
+        QCOMPARE(firstItem->size(), cachedSize);
+        QCOMPARE(firstItem->property("devicePixelRatio").toReal(), cachedDpr);
+        QVERIFY(firstItem->property("crop").toBool());
+        QVERIFY(firstItem->property("showCheckerboard").toBool());
+        QCOMPARE(widthChanges.count(), 0);
+        QCOMPARE(heightChanges.count(), 0);
         root->setProperty("source", red);
         QCOMPARE(root->property("surface").value<QObject *>(), first.data());
         QCOMPARE(root->property("status").toInt(), 1);
         QCOMPARE(first->findChild<QQuickItem *>("galleryVectorSurface"), leaf);
         QCOMPARE(window.grabWindow(), redImage);
+        QCOMPARE(widthChanges.count(), 0);
+        QCOMPARE(heightChanges.count(), 0);
+        root->setProperty("crop", false);
+        root->setProperty("checkerboard", false);
+        QVERIFY(!firstItem->property("crop").toBool());
+        QVERIFY(!firstItem->property("showCheckerboard").toBool());
+        root->setProperty("crop", true);
+        root->setProperty("checkerboard", true);
         const QPointF origin = leaf->mapToScene(QPointF());
         const qreal dpr = window.devicePixelRatio();
         QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .001);

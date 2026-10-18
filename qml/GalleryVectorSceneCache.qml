@@ -34,6 +34,10 @@ GallerySceneItem {
 
     function release(surface) {
         if (!surface) return
+        surface.idleSize = Qt.size(surface.width, surface.height)
+        surface.idleDpr = surface.devicePixelRatio
+        surface.idleCrop = surface.crop
+        surface.idleCheckerboard = surface.showCheckerboard
         surface.host = null
         surface.parent = cache
         // Pending requests must not parse after their consumer leaves view.
@@ -83,14 +87,18 @@ GallerySceneItem {
             property Item host
             property url requestedSource
             property int generation
+            property size idleSize: Qt.size(64, 64)
+            property real idleDpr: 1
+            property bool idleCrop: false
+            property bool idleCheckerboard: false
             // Hold the materialized revision even before scene admission.
             VectorSourcePin { source: cachedSurface.requestedSource }
-            width: host ? host.width : 64
-            height: host ? host.height : 64
+            width: host ? host.width : idleSize.width
+            height: host ? host.height : idleSize.height
             visible: host !== null && host.visible
-            devicePixelRatio: host ? host.devicePixelRatio : 1
-            crop: host ? host.crop : false
-            showCheckerboard: host ? host.showCheckerboard : false
+            devicePixelRatio: host ? host.devicePixelRatio : idleDpr
+            crop: host ? host.crop : idleCrop
+            showCheckerboard: host ? host.showCheckerboard : idleCheckerboard
             prepareWhenHidden: true
             uploadPriority: host && host.inViewport ? 100 : 200
         }

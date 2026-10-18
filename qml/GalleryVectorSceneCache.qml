@@ -92,6 +92,7 @@ GallerySceneItem {
             crop: host ? host.crop : false
             showCheckerboard: host ? host.showCheckerboard : false
             prepareWhenHidden: true
+            uploadPriority: host && host.inViewport ? 100 : 200
         }
     }
 }

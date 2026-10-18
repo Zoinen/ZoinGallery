@@ -223,6 +223,9 @@ set(ZOIN_CORE_SOURCES
     GalleryDelegateItem.cpp
     GallerySceneItem.h
     GallerySceneItem.cpp
+    GalleryVectorUploadGate.h
+    GalleryVectorUploadGate.cpp
+    VectorUploadGateProtocol.h
     MasonryLayout.h
     MasonryLayout.cpp
     MasonryLayoutDelegateCommit.cpp

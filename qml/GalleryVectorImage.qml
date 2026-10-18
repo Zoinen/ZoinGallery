@@ -4,7 +4,7 @@ import QtQuick
 import QtQuick.Shapes
 import ZoinGallery.Native 1.0
 
-Item {
+GalleryVectorUploadGate {
     id: root
     property url source
     property bool animate: false
@@ -14,7 +14,15 @@ Item {
     property real devicePixelRatio: 1
     property double loadStartedAt: Date.now()
     property int sceneGenerationMs: 0
-    property int sourceStatus: Image.Null
+    property bool displayEnabled: true
+    property int cpuSourceStatus: Image.Null
+    sourceKey: String(source)
+    cpuComplete: cpuSourceStatus === Image.Ready
+    present: displayEnabled && sourceStatus === Image.Ready
+    readonly property int sourceStatus: nativeFailed ? Image.Error
+        : cpuSourceStatus === Image.Ready && (!nativeKnown || (nativeAvailable && !nativeReady))
+          ? Image.Loading : cpuSourceStatus
+    opacity: nativeKnown && nativeAvailable ? 1 : (sourceStatus === Image.Ready ? 1 : 0)
     readonly property real paintedWidth: vectorImage.width
     readonly property real paintedHeight: vectorImage.height
     readonly property real aspect: sourcePin.sourceSize.height > 0
@@ -34,14 +42,14 @@ Item {
     }
     function resolveState() {
         if (source.toString() === "") {
-            sourceStatus = Image.Null
+            cpuSourceStatus = Image.Null
         } else if (sourcePin.failed || vectorImage.status === Loader.Error) {
-            sourceStatus = Image.Error
+            cpuSourceStatus = Image.Error
         } else if (vectorImage.status === Loader.Ready && shapesReady(vectorImage.item)) {
-            sourceStatus = Image.Ready
+            cpuSourceStatus = Image.Ready
             sceneGenerationMs = Date.now() - loadStartedAt
         } else {
-            sourceStatus = Image.Loading
+            cpuSourceStatus = Image.Loading
             if (visible || prepareWhenHidden) {
                 readinessTimer.interval = 16
                 readinessTimer.start()
@@ -50,12 +58,12 @@ Item {
     }
     onSourceChanged: {
         loadStartedAt = Date.now()
-        sourceStatus = source.toString() === "" ? Image.Null : Image.Loading
+        cpuSourceStatus = source.toString() === "" ? Image.Null : Image.Loading
         readinessTimer.interval = 0
         readinessTimer.restart()
     }
     onVisibleChanged: {
-        if (visible && sourceStatus === Image.Loading) {
+        if (visible && cpuSourceStatus === Image.Loading) {
             readinessTimer.interval = 0
             readinessTimer.restart()
         }
@@ -87,7 +95,9 @@ Item {
         y: vectorImage.y
         width: vectorImage.width
         height: vectorImage.height
-        visible: root.showCheckerboard && root.sourceStatus === Image.Ready
+        visible: root.showCheckerboard && (root.nativeAvailable
+            ? root.cpuSourceStatus !== Image.Null && root.cpuSourceStatus !== Image.Error
+            : root.sourceStatus === Image.Ready)
         property size viewportSize: Qt.size(width, height)
         fragmentShader: "qrc:/ZoinGallery/resources/vector_checkerboard.frag.qsb"
     }

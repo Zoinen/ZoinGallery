@@ -23,6 +23,7 @@
 #include "ThumbnailMemoryCache.h"
 #include "ViewerWheelArea.h"
 #include "VectorSource.h"
+#include "GalleryVectorUploadGate.h"
 
 #include <QDebug>
 #include <QPointer>
@@ -120,6 +121,7 @@ void GalleryRuntime::registerTypes() {
                                                 "GalleryNativeTextMetrics");
         qmlRegisterType<BrickItem>(NativeModuleUri, 1, 0, "BrickItem");
         qmlRegisterType<GallerySceneItem>(NativeModuleUri, 1, 0, "GallerySceneItem");
+        qmlRegisterType<GalleryVectorUploadGate>(NativeModuleUri, 1, 0, "GalleryVectorUploadGate");
         qmlRegisterType<VectorSourcePin>(NativeModuleUri, 1, 0, "VectorSourcePin");
         qmlRegisterType<ViewerWheelArea>(NativeModuleUri, 1, 0,
                                         "ViewerWheelArea");

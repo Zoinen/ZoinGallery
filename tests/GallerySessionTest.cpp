@@ -38,6 +38,7 @@
 #include <QQuickWindow>
 #include <QQuickItem>
 #include "VectorSource.h"
+#include "GalleryVectorUploadGate.h"
 #include "Runners/ImageReadRunner.h"
 #endif
 #include <QMutex>
@@ -7240,9 +7241,27 @@ private slots:
                 Q_ARG(QVariant, QVariant(true)), Q_ARG(QVariant, QVariant(true))));
         }
         QTRY_COMPARE(colorAtCenter(), QColor(Qt::red));
+        if (qEnvironmentVariableIsSet("ZOIN_EXPECT_UPLOAD_GATE")) {
+            const bool expected = qEnvironmentVariableIntValue("ZOIN_EXPECT_UPLOAD_GATE") != 0;
+            const auto gates = viewport->findChildren<GalleryVectorUploadGate *>();
+            QVERIFY(!gates.isEmpty());
+            bool observed = false;
+            for (auto *gate : gates) {
+                if (gate->sourceKey().isEmpty() || !gate->isVisible()) continue;
+                QVERIFY(gate->nativeKnown());
+                QCOMPARE(gate->nativeAvailable(), expected);
+                if (expected) QVERIFY(gate->nativeReady());
+                observed = true;
+            }
+            QVERIFY(observed);
+        }
         const QUrl blue = QUrl::fromLocalFile(directory.filePath("blue.svg"));
         const QUrl red = QUrl::fromLocalFile(directory.filePath("red.svg"));
         for (int swap = 0; swap < 4; ++swap) {
+            QElapsedTimer swapClock;
+            swapClock.start();
+            qint64 firstCompleteFrameMs = -1;
+            const auto targetColor = QColor(swap % 2 == 0 ? Qt::blue : Qt::red);
             const QSizeF oldSize = viewport->property("originalSize").toSizeF();
             if (catalog) {
                 QVERIFY(QMetaObject::invokeMethod(rootItem, "setPresentedIndex",
@@ -7259,11 +7278,16 @@ private slots:
                 QCOMPARE(viewport->property("originalSize").toSizeF(), oldSize);
             for (int frame = 0; frame < 12; ++frame) {
                 const QColor color = colorAtCenter();
+                if (color == targetColor && firstCompleteFrameMs < 0)
+                    firstCompleteFrameMs = swapClock.elapsed();
                 QVERIFY2(color == QColor(Qt::red) || color == QColor(Qt::blue),
                          qPrintable(QString("Blank SVG swap frame %1: %2").arg(frame).arg(color.name())));
                 QTest::qWait(1);
             }
-            QTRY_COMPARE(colorAtCenter(), QColor(swap % 2 == 0 ? Qt::blue : Qt::red));
+            QTRY_COMPARE(colorAtCenter(), targetColor);
+            if (firstCompleteFrameMs < 0) firstCompleteFrameMs = swapClock.elapsed();
+            qInfo() << "SVG swap request to first target frame" << firstCompleteFrameMs << "ms"
+                    << "catalog" << catalog << "swap" << swap;
         }
         if (catalog) {
             QVERIFY(QMetaObject::invokeMethod(rootItem, "setPresentedIndex",

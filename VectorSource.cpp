@@ -233,7 +233,7 @@ void VectorSourcePin::setPrepareComponent(bool prepare) {
     _prepareComponent = prepare;
     if (prepare && !_source.isEmpty() && !_pin) {
         const QUrl source = _source;
-        _source = {};
+        _source = QUrl{};
         setSource(source);
     } else {
         loadComponent();

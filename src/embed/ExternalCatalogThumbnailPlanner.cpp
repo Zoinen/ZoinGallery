@@ -60,7 +60,7 @@ void ExternalCatalogThumbnailPlanner::configureRequest(
     request.expandToCacheResolution = false;
     request.storeInPersistentCache = true;
     request.thumbnailTransformKey = entry.thumbnailKind == QStringLiteral("video")
-        ? QStringLiteral("video-contact-sheet-2x2-display-v4")
+        ? QStringLiteral("video-contact-sheet-2x2-display-v6")
         : thumbnailTransformKey(request);
     // Video entries expose a 16x9 placeholder until Qt Multimedia opens the
     // stream.  Do not pass that placeholder as a native pixel size: the

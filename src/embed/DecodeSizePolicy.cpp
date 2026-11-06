@@ -8,7 +8,7 @@ namespace ZoinGallery {
 namespace {
 
 constexpr std::array<int, 7> ThumbnailTiers = {
-    128, 192, 256, 384, 512, 768, 1024,
+    128, 192, 256, 384, 512, 768, MaximumPanelThumbnailEdge,
 };
 constexpr std::array<int, 9> ViewerFitTiers = {
     512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192,
@@ -48,6 +48,34 @@ QSize aspectSizeForLongEdge(const QSize &aspectSource, int edge)
 
 } // namespace
 
+QSize boundedPanelThumbnailSize(const QSize &size)
+{
+    if (longEdge(size) <= MaximumPanelThumbnailEdge) {
+        return size;
+    }
+    const QSize fitted = size.scaled(MaximumPanelThumbnailEdge,
+                                     MaximumPanelThumbnailEdge,
+                                     Qt::KeepAspectRatio);
+    return fitted.expandedTo(QSize(1, 1));
+}
+
+bool panelThumbnailCovers(const QSize &available, const QSize &bounds,
+                          bool preserveAspect)
+{
+    if (available.isEmpty() || bounds.isEmpty()) {
+        return false;
+    }
+    if (longEdge(available) >= MaximumPanelThumbnailEdge) {
+        return true;
+    }
+    // A panel target is a bounding box for aspect-preserving frames.
+    const QSize required = preserveAspect
+        ? available.scaled(bounds, Qt::KeepAspectRatio).expandedTo(QSize(1, 1))
+        : bounds;
+    return available.width() >= required.width()
+        && available.height() >= required.height();
+}
+
 QSize stableDecodeTarget(const QSize &requestedTarget,
                          const QSize &nativeSourceSize,
                          const QSize &previousPreparedTarget,
@@ -68,17 +96,20 @@ QSize stableDecodeTarget(const QSize &requestedTarget,
     }
 
     const int previousEdge = longEdge(previousPreparedTarget);
+    const bool previousCovers = previousPreparedTarget.width() >= requestedTarget.width()
+        && previousPreparedTarget.height() >= requestedTarget.height();
+    const bool viewerCanReuse = family == DecodeSizeFamily::ViewerFit
+        && requestedEdge <= qFloor(previousEdge * GrowthHysteresis);
     if (previousPreparedTarget.isValid()
-        && requestedEdge <= qFloor(previousEdge * GrowthHysteresis)
+        && (previousCovers || viewerCanReuse)
         && (!nativeSourceSize.isValid() || previousEdge <= nativeEdge)) {
-        // A small growth is rendered by a correspondingly tiny upscale. This
-        // is deliberate for a slow source and prevents a +1 px layout change
-        // from triggering another source read/decode.
+        // Preserve the viewer's hysteresis on slow sources. Panel thumbnails
+        // reuse a prepared tier only when it covers the displayed pixels.
         return previousPreparedTarget;
     }
 
     int tier = family == DecodeSizeFamily::Thumbnail
-        ? coveringTier(requestedEdge, ThumbnailTiers)
+        ? qMax(requestedEdge, coveringTier(requestedEdge, ThumbnailTiers))
         : coveringTier(requestedEdge, ViewerFitTiers);
     if (nativeSourceSize.isValid()) {
         tier = qMin(tier, nativeEdge);

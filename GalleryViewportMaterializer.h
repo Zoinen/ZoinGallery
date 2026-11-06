@@ -21,6 +21,11 @@ public:
         qreal contentOffset,
         qreal viewportExtent,
         qreal primaryItemExtent);
+    // Native motion can lead the GUI pose. Prepare toward its input target,
+    // by shifting unused trailing metadata budget ahead, retaining the normal
+    // trailing delegate margin and the existing total metadata-window extent.
+    [[nodiscard]] static GalleryViewportWindow withMotionTarget(
+        GalleryViewportWindow window, qreal targetOffset);
 };
 
 } // namespace ZoinGallery

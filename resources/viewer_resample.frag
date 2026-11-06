@@ -30,6 +30,9 @@ layout(std140, binding = 0) uniform buf {
     vec4 framebufferRect;
     float framebufferYDirection;
 #ifdef ZOIN_VIDEO_SHADER
+    float videoMasteringWhite;
+    float videoMaxLum;
+    int videoTransfer;
     mat4 videoColorMatrix;
     vec2 videoFrameSize;
     vec4 videoViewport;
@@ -223,7 +226,78 @@ vec4 videoColor(vec2 uv, ivec2 pixel, ivec2 rawSize)
         }
     }
 
-    return clamp(ubuf.videoColorMatrix * vec4(y, chroma, 1.0), 0.0, 1.0);
+    vec3 rgb = (ubuf.videoColorMatrix * vec4(y, chroma, 1.0)).rgb;
+#ifdef ZOIN_HDR_VIDEO_OUTPUT
+    // Decode the actual 8/10/16-bit code ranges. An 8-bit chroma-center
+    // approximation becomes a visible color cast after the HDR EOTF.
+    bool deep = format == VideoFormatP010 || format == VideoFormatP016 || format == VideoFormatYuv420P10;
+    bool full = ubuf.videoMasteringWhite > 0.5;
+    float maximum = deep ? 1023.0 : 255.0;
+    float codes = deep ? 65535.0 / 64.0 : 255.0;
+    float luma = (y * codes - (full ? 0.0 : (deep ? 64.0 : 16.0)))
+        / (full ? maximum : (deep ? 876.0 : 219.0));
+    vec2 cbcr = (chroma * codes - (deep ? 512.0 : 128.0))
+        / (full ? maximum : (deep ? 896.0 : 224.0));
+    vec3 weights = ubuf.videoMaxLum > 0.5 ? vec3(0.2627, 0.6780, 0.0593) : vec3(0.2126, 0.7152, 0.0722);
+    rgb.r = luma + 2.0 * (1.0 - weights.r) * cbcr.y;
+    rgb.b = luma + 2.0 * (1.0 - weights.b) * cbcr.x;
+    rgb.g = (luma - weights.r * rgb.r - weights.b * rgb.b) / weights.g;
+#endif
+    if (ubuf.videoTransfer == 0)
+#ifdef ZOIN_HDR_VIDEO_OUTPUT
+        return vec4(linearize(clamp(rgb, 0.0, 1.0)), 1.0);
+
+    // Windows scRGB uses linear BT.709 primaries with 1.0 = 80 cd/m².
+    // Preserve HDR highlights and out-of-sRGB gamut (including negatives).
+    rgb = max(rgb, vec3(0.0));
+    if (ubuf.videoTransfer == 1) {
+        vec3 dark = rgb * rgb / 3.0;
+        vec3 bright = (exp((rgb - 0.55991073) / 0.17883277) + 0.28466892) / 12.0;
+        rgb = mix(dark, bright, step(vec3(0.5), rgb));
+        rgb *= 1000.0 * pow(max(dot(rgb, weights), 0.0), 0.2);
+    } else {
+        vec3 power = pow(rgb, vec3(32.0 / 2523.0));
+        rgb = 10000.0 * pow(max(power - 107.0 / 128.0, vec3(0.0))
+            / max(2413.0 / 128.0 - 2392.0 / 128.0 * power, vec3(0.000001)),
+            vec3(8192.0 / 1305.0));
+    }
+    vec3 display = ubuf.videoMaxLum > 0.5 ? vec3(dot(rgb, vec3(1.6605, -0.5876, -0.0728)),
+                     dot(rgb, vec3(-0.1246, 1.1329, -0.0083)),
+                     dot(rgb, vec3(-0.0182, -0.1006, 1.1187))) : rgb;
+    return vec4(display / 80.0, 1.0);
+#else
+        return vec4(clamp(rgb, 0.0, 1.0), 1.0);
+
+    // Match Qt Multimedia's 100-nit SDR presentation: BT.2390 roll-off in
+    // source signal space, then HLG/PQ decoding and linear BT.2020 -> sRGB.
+    // Preserve opaque alpha throughout; source luminance is not transparency.
+    float signal = (y - 16.0 / 256.0) * 256.0 / 219.0;
+    float relative = signal / ubuf.videoMasteringWhite;
+    float knee = 1.5 * ubuf.videoMaxLum - 0.5;
+    if (signal > 0.0 && relative >= knee && knee < 1.0) {
+        float t = (relative - knee) / (1.0 - knee);
+        float mapped = knee + (1.0 - knee) * t
+            + (3.0 * ubuf.videoMaxLum - knee - 2.0) * t * t
+            + (knee + 1.0 - 2.0 * ubuf.videoMaxLum) * t * t * t;
+        rgb *= mapped / relative;
+    }
+    rgb = max(rgb, vec3(0.0));
+    if (ubuf.videoTransfer == 1) {
+        vec3 dark = rgb * rgb / 3.0;
+        vec3 bright = (exp((rgb - 0.55991073) / 0.17883277) + 0.28466892) / 12.0;
+        rgb = mix(dark, bright, step(vec3(0.5), rgb));
+        rgb *= ubuf.videoMaxLum * pow(max(dot(rgb, vec3(0.2627, 0.6780, 0.0593)), 0.0), 0.2);
+    } else {
+        vec3 power = pow(rgb, vec3(32.0 / 2523.0));
+        rgb = 100.0 * pow(max(power - 107.0 / 128.0, vec3(0.0))
+            / max(2413.0 / 128.0 - 2392.0 / 128.0 * power, vec3(0.000001)),
+            vec3(8192.0 / 1305.0));
+    }
+    vec3 display = vec3(dot(rgb, vec3(1.6605, -0.5876, -0.0728)),
+                        dot(rgb, vec3(-0.1246, 1.1329, -0.0083)),
+                        dot(rgb, vec3(-0.0182, -0.1006, 1.1187)));
+    return vec4(encode(clamp(display, 0.0, 1.0)), 1.0);
+#endif
 }
 
 vec4 videoTexel(ivec2 displayPixel)
@@ -296,10 +370,14 @@ vec4 linearSample(ivec2 pixel)
         return texelFetch(linearVideoSource, pixel, 0);
 #endif
     vec4 color = sourceTexel(pixel);
+#ifdef ZOIN_HDR_VIDEO_OUTPUT
+    return color;
+#else
     if (color.a <= 0.0)
         return vec4(0.0);
     return vec4(linearize(clamp(color.rgb / color.a, 0.0, 1.0)) * color.a,
                 color.a);
+#endif
 }
 
 float dither(vec2 outputPosition)
@@ -361,6 +439,9 @@ vec4 magnify(vec2 position, vec2 size)
 
 vec4 encodeFilteredColor(vec4 color, vec2 outputPosition)
 {
+#ifdef ZOIN_HDR_VIDEO_OUTPUT
+    return vec4(color.rgb, clamp(color.a, 0.0, 1.0));
+#else
     // Negative cubic lobes must not escape the premultiplied RGBA domain.
     color.a = clamp(color.a, 0.0, 1.0);
     color.rgb = clamp(color.rgb, vec3(0.0), vec3(color.a));
@@ -372,6 +453,7 @@ vec4 encodeFilteredColor(vec4 color, vec2 outputPosition)
     color.rgb = clamp(color.rgb + dither(outputPosition),
                       vec3(0.0), vec3(color.a));
     return color;
+#endif
 }
 
 vec4 resample(vec2 uv)

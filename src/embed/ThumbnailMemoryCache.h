@@ -87,6 +87,7 @@ public:
                         const QSet<QString> &sourceIdentities);
     void clear();
 
+    void setByteBudget(qint64 byteBudget);
     qint64 byteBudget() const;
     qint64 retainedBytes() const;
     qsizetype frameCount() const;
@@ -98,6 +99,7 @@ public:
     quint64 evictionCount() const;
 
 signals:
+    void byteBudgetChanged();
     void frameAvailable(const QString &sourceIdentity,
                         const QString &versionToken, qint64 sourceFileSize,
                         const QSize &requestedSize,
@@ -152,7 +154,7 @@ private:
                                  const QString &versionToken,
                                  qint64 sourceFileSize,
                                  const QSize &decodedSize);
-    QStringList pruneLocked();
+    QStringList pruneLocked(bool bulk = false);
     void removeProviderIds(const QStringList &providerIds,
                            bool notifyEviction);
 

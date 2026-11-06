@@ -24,6 +24,18 @@ QtObject {
     property alias thumbnailResizeTimer: thumbnailResizeObject
     property alias densityTimer: densityTimerObject
 
+    function restartScroll() {
+        panelScrollObject.retarget(0)
+    }
+
+    function restartPageScroll() {
+        panelScrollObject.retargetPage()
+    }
+
+    function restartEdgeScroll(direction) {
+        panelScrollObject.retarget(direction)
+    }
+
     property Timer pathViewportPlacementTimer: Timer {
         id: pathPlacementObject
         objectName: "galleryPathViewportPlacementTimer"
@@ -101,9 +113,11 @@ QtObject {
         onTriggered: motion.panel.noteDensityChanged(true)
     }
 
-    property NumberAnimation panelScrollAnimation: NumberAnimation {
+    property NumberAnimation panelScrollAnimation: GalleryScrollAnimation {
         id: panelScrollObject
         objectName: "galleryPanelScrollAnimation"
+        nativeEnabled: true
+        scrollBar: motion.panel.scrollBars ? motion.panel.scrollBars[0] : null
         target: motion.panel.galleryLayout
         property: "contentY"
         duration: 150

@@ -35,7 +35,7 @@ Item {
         sceneVisible: preview.hasUsablePreview
         visible: (preview.entry.masonryMode && nativeCullingAvailable) || sceneVisible
         x: preview.snap(preview.sceneOrigin.x + preview.entry.cellHorizontalInset) - preview.sceneOrigin.x
-        y: preview.snap(preview.sceneOrigin.y + preview.entry.effectivePreviewRect.y)
+        y: preview.snap(preview.sceneOrigin.y + preview.entry.effectivePreviewY)
            - preview.sceneOrigin.y
         width: preview.entry.cellContentWidth
         height: Math.max(0, preview.snap(preview.height - y - preview.contentMargin))
@@ -58,7 +58,7 @@ Item {
             y: preview.folderTopOffset
             width: content.width
             height: preview.entry.iconsMode
-                    ? Math.max(0, preview.snap(preview.entry.effectivePreviewRect.height - y))
+                    ? Math.max(0, preview.snap(preview.entry.effectivePreviewHeight - y))
                     : Math.max(0, content.height - y - title.height - preview.entry.cellCaptionSpacing)
             radius: 4
             color: preview.folderColor
@@ -84,8 +84,8 @@ Item {
             x: preview.snap(preview.sceneOrigin.x + preview.entry.cellHorizontalInset)
                - preview.sceneOrigin.x - content.x
             y: preview.entry.gridMode || preview.entry.iconsMode
-               ? preview.snap(preview.sceneOrigin.y + preview.entry.effectivePreviewRect.y
-                              + preview.entry.effectivePreviewRect.height + preview.entry.cellCaptionSpacing)
+               ? preview.snap(preview.sceneOrigin.y + preview.entry.effectivePreviewY
+                              + preview.entry.effectivePreviewHeight + preview.entry.cellCaptionSpacing)
                  - preview.sceneOrigin.y - content.y
                : preview.snap(preview.sceneOrigin.y + content.y + content.height
                               - height)
@@ -117,7 +117,7 @@ Item {
                 objectName: "folderPreviewThumbnailsZone"
                 visible: preview.entry.debugLayoutZones
                 color: "#22cc77ee"
-                border.color: "#aacc77ee"
+                borderColor: "#aacc77ee"
             }
             objectName: "folderPreviewGridLoader"
             asynchronous: true
@@ -148,7 +148,7 @@ Item {
                             id: cell
                             property var model
                             property bool masonryGeometryReady: false
-                            Image {
+                            GalleryThumbnailImage {
                                 id: thumbnail
                                 objectName: "folderPreviewImage-" + cell.viewIndex
                                 property bool countedReady: false
@@ -166,7 +166,9 @@ Item {
                                 anchors.fill: parent
                                 source: cell.masonryGeometryReady && cell.model ? cell.model.imageIdUrl : ""
                                 fillMode: Image.Stretch
-                                cache: false
+                                cache: preview.entry.masonryMode
+                                    && source.toString().startsWith("image://")
+                                    && source.toString().indexOf("/zg-thumb-") >= 0
                             }
                         }
                     }

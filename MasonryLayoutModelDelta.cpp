@@ -1,5 +1,6 @@
 #include "MasonryLayout.h"
 #include "FileListModel.h"
+#include <QTimer>
 
 #include <algorithm>
 #include <limits>
@@ -112,6 +113,8 @@ void MasonryLayout::onDataChanged(
 
 void MasonryLayout::applySparseModelDelta(const ModelDelta &delta)
 {
+    if (delta.sizeRoleChanged)
+        invalidateSparseMasonryGeometry(delta.first, delta.last);
     for (int row = delta.first; row <= delta.last; ++row) {
         MasonryBrick *existing = brickAt(row);
         if (!existing && !_activeBrickIndexes.contains(row)) {
@@ -160,10 +163,32 @@ void MasonryLayout::applySparseModelDelta(const ModelDelta &delta)
     if (delta.semanticRolesChanged) {
         refreshImageCountFromCatalog();
     }
-    if (delta.roleChanged(FileListModel::ImageFullSizeRole)
-        || delta.roleChanged(FileListModel::ImageIdUrlRole)) {
+    if (!(sparseMasonryLayout() && _sparseMasonryRewrapPending)
+        && (delta.sizeRoleChanged || delta.roleChanged(FileListModel::ImageIdUrlRole))) {
         planDeltaThumbnails(delta);
     }
+}
+
+void MasonryLayout::invalidateSparseMasonryGeometry(int first, int last) {
+    const auto end = _sparseMasonryBlocks.end();
+    auto block = std::lower_bound(_sparseMasonryBlocks.begin(), end, first,
+        [](const SparseMasonryBlock &candidate, int row) {
+            // The first entry after a block is what closed its last row.
+            return candidate.end() < row
+                || (candidate.endsRange && candidate.end() == row);
+        });
+    for (; block != end && block->first <= last; ++block)
+        block->dirty = true;
+    if (!sparseMasonryLayout() || _sparseMasonryRewrapPending || !thumbnailsEnabled())
+        return;
+    _sparseMasonryRewrapPending = true;
+    QTimer::singleShot(16, this, [this] {
+        if (!_sparseMasonryRewrapPending) return;
+        _sparseMasonryRewrapPending = false;
+        if (!sparseMasonryLayout()) return;
+        requestRewrap(false);
+        planViewportThumbnails(_overscanIndexSet);
+    });
 }
 
 void MasonryLayout::updateMaterializedBrickState(const ModelDelta &delta)

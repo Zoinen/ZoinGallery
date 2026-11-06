@@ -27,12 +27,37 @@ GalleryDelegateItem *GalleryDelegatePool::acquire(
     return item;
 }
 
+GalleryDelegateItem *GalleryDelegatePool::acquire(
+    quintptr delegateKey, GalleryDelegateItem *prepared, const Factory &factory) {
+    if (!prepared) {
+        return acquire(delegateKey, factory);
+    }
+    prepared->stopGeometryAnimation();
+    _free.remove(prepared);
+    _delegateKeys.insert(prepared, delegateKey);
+    _used.insert(prepared);
+    return prepared;
+}
+
 void GalleryDelegatePool::adopt(GalleryDelegateItem *item) {
     if (!item) {
         return;
     }
     _free.remove(item);
     _used.insert(item);
+}
+
+GalleryDelegateItem *GalleryDelegatePool::findFree(
+    quintptr delegateKey, const QString &entryId) const {
+    if (entryId.isEmpty()) {
+        return nullptr;
+    }
+    for (GalleryDelegateItem *item : _free) {
+        if (_delegateKeys.value(item) == delegateKey && item->entryId() == entryId) {
+            return item;
+        }
+    }
+    return nullptr;
 }
 
 void GalleryDelegatePool::release(GalleryDelegateItem *item) {
@@ -76,6 +101,10 @@ void GalleryDelegatePool::trimSurplus(int spareLimit, quintptr delegateKey) {
 
 const QSet<GalleryDelegateItem *> &GalleryDelegatePool::usedItems() const {
     return _used;
+}
+
+quintptr GalleryDelegatePool::delegateKey(GalleryDelegateItem *item) const {
+    return _delegateKeys.value(item);
 }
 
 int GalleryDelegatePool::liveCount() const {

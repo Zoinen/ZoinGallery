@@ -20,6 +20,7 @@ namespace ZoinGallery {
 class GalleryRuntime;
 class ThumbnailMemoryCache;
 class VideoPlaybackController;
+class VideoMutePreference;
 class ImageSourceProvider;
 
 class GallerySession final : public QObject {
@@ -188,6 +189,7 @@ public:
     Q_INVOKABLE void ensurePreviews();
     Q_INVOKABLE void requestViewer(int width, int height);
     Q_INVOKABLE void requestViewerAt(int index, int width, int height);
+    Q_INVOKABLE void requestPresentedViewerAt(int index, int width, int height);
 
     Q_INVOKABLE void setViewerPreviousState(
         const QString &previousEntryId,
@@ -255,6 +257,7 @@ private:
                    ::DecodeManager *decodeManager,
                    const QSharedPointer<ImageSourceProvider> &imageSourceProvider,
                    bool enableVideoPlayback,
+                   VideoMutePreference *videoMutePreference,
                    qint64 viewerFitCacheByteBudget,
                    qint64 viewerNativeCacheByteBudget,
                    QObject *parent);

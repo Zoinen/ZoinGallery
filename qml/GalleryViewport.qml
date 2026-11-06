@@ -325,6 +325,7 @@ Item {
             viewportRoot.panelRoot.publishMetadataVisibleRange()
             viewportRoot.panelRoot.refreshHoveredIndex()
         }
+        onMetadataDemandChanged: viewportRoot.panelRoot.publishMetadataVisibleRange()
         onCountChanged: {
             const panel = viewportRoot.panelRoot
             panel.traceBenchmarkStage("layout.count.changed", {})
@@ -344,7 +345,8 @@ Item {
         onContentHeightChanged: {
             const panel = viewportRoot.panelRoot
             panel.traceBenchmarkStage("layout.content-height.changed", {})
-            panel.resetMasonryPageSequence()
+            if (galleryLayout.presentationMode === GalleryViewportItem.Masonry)
+                panel.invalidateMasonryPageGeometry()
             if (panel.pathViewportPlacementPending)
                 panel.schedulePathViewportPlacement("content-height-changed")
             else if (!panel.densityViewportTransaction)
@@ -357,6 +359,15 @@ Item {
                 viewportRoot.panelRoot.traceBenchmarkStage(
                             "layout.content-y.changed", {})
             }
+        }
+        onRewrapFinished: {
+            const panel = viewportRoot.panelRoot
+            // Native reflow has already preserved the row anchor. Publish its
+            // new offset before a queued content-height update restores the
+            // previous layout's numeric scroll position.
+            if (galleryLayout.presentationMode === GalleryViewportItem.Masonry
+                    && !panel.panelScrollAnimationRunning && !panel.scrollingMode)
+                panel.viewportController.persistCommittedViewport()
         }
         onWidthChanged: {
             viewportRoot.panelRoot.refreshHoveredIndex()
@@ -692,6 +703,7 @@ Item {
 
     GalleryPointerLayer {
         id: pointerLayer
+        nativeScrollAnimation: viewportRoot.panelRoot.panelScrollAnimationObject
         anchors.fill: parent
         layout: galleryLayout
         wheelMode: viewportRoot.panelRoot.mouseWheelMode

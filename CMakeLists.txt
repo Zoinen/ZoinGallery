@@ -72,7 +72,7 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/BuildInfo.h"
     @ONLY)
 find_package(QT NAMES Qt6)
-set(ZOIN_QT_COMPONENTS Core Quick QuickPrivate Gui Qml Concurrent Svg QuickVectorImage QuickVectorImageGeneratorPrivate QuickControls2 QuickControls2ImplPrivate)
+set(ZOIN_QT_COMPONENTS Core Quick QuickPrivate Gui Qml Concurrent Svg QuickShapesPrivate QuickVectorImage QuickVectorImageGeneratorPrivate QuickControls2 QuickControls2ImplPrivate)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     list(APPEND ZOIN_QT_COMPONENTS Multimedia)
 endif()
@@ -223,8 +223,14 @@ set(ZOIN_CORE_SOURCES
     GalleryDelegateItem.cpp
     GallerySceneItem.h
     GallerySceneItem.cpp
+    GalleryScrollAnimation.h
+    GalleryScrollAnimation.cpp
     GalleryIconImage.h
     GalleryIconImage.cpp
+    GalleryThumbnailImage.h
+    GalleryThumbnailImage.cpp
+    GalleryComponentHost.h
+    GalleryComponentHost.cpp
     GalleryVectorUploadGate.h
     GalleryVectorUploadGate.cpp
     VectorUploadGateProtocol.h
@@ -541,6 +547,9 @@ if(BUILD_TESTING)
         ZoinGallery::Core
         Qt${QT_VERSION_MAJOR}::Test
     )
+    if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        target_link_libraries(ZoinGalleryViewerCacheTests PRIVATE ZoinGallery::Qml)
+    endif()
     add_test(NAME ViewerImageCacheTest COMMAND ZoinGalleryViewerCacheTests)
 
     add_executable(ViewerResamplerTests
@@ -570,6 +579,10 @@ if(BUILD_TESTING)
     target_link_libraries(ZoinGalleryThumbnailMemoryCacheTests PRIVATE
         ZoinGallery::Core
         Qt${QT_VERSION_MAJOR}::Test)
+    if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        target_link_libraries(ZoinGalleryThumbnailMemoryCacheTests PRIVATE
+            ZoinGallery::Qml)
+    endif()
     add_test(NAME ThumbnailMemoryCacheTest
         COMMAND ZoinGalleryThumbnailMemoryCacheTests)
 
@@ -600,6 +613,10 @@ if(BUILD_TESTING)
     target_link_libraries(ZoinGalleryPersistentDerivedImageCacheTests PRIVATE
         ZoinGallery::Core
         Qt${QT_VERSION_MAJOR}::Test)
+    if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        target_link_libraries(ZoinGalleryPersistentDerivedImageCacheTests PRIVATE
+            ZoinGallery::Qml)
+    endif()
     add_test(NAME PersistentDerivedImageCacheTest
         COMMAND ZoinGalleryPersistentDerivedImageCacheTests)
 
@@ -613,6 +630,10 @@ if(BUILD_TESTING)
         ZoinGallery::Core
         Qt${QT_VERSION_MAJOR}::Test
     )
+    if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        target_link_libraries(ZoinGalleryDecodeLifecycleTests PRIVATE
+            ZoinGallery::Qml)
+    endif()
     add_test(NAME DecodeLifecycleTest COMMAND ZoinGalleryDecodeLifecycleTests)
 
     add_executable(ZoinGallerySessionTests
@@ -626,6 +647,7 @@ if(BUILD_TESTING)
     target_include_directories(ZoinGallerySessionTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(ZoinGallerySessionTests PRIVATE
+        Qt${QT_VERSION_MAJOR}::QuickPrivate
         ZoinGallery::Core
         ZoinGallery::Qml
         Qt${QT_VERSION_MAJOR}::Test)
@@ -686,6 +708,12 @@ if(BUILD_TESTING)
     set_tests_properties(ViewerResampleGpuTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;QT_QUICK_CONTROLS_STYLE=Basic"
         LABELS "gpu;numeric")
+    if(WIN32 AND ZOIN_ENABLE_VIDEO_PLAYBACK)
+        add_test(NAME ViewerVideoColorTest COMMAND ViewerResampleGpuTests hdrVideoMatchesQtSdrConversion)
+        set_tests_properties(ViewerVideoColorTest PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=windows;ZOIN_TEST_NATIVE_RENDERER=1;QT_QUICK_CONTROLS_STYLE=Basic"
+            LABELS "gpu;numeric")
+    endif()
 
     add_executable(ZoinGalleryEntryHoverTests
         tests/GalleryEntryHoverTest.cpp)
@@ -713,6 +741,60 @@ if(BUILD_TESTING)
     set_tests_properties(GalleryPanelGestureTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
+    qt_add_executable(ZoinGalleryComponentHostStagingTests
+        tests/GalleryComponentHostStagingTest.cpp
+        GalleryComponentHost.cpp
+        GalleryComponentHost.h
+        GallerySceneItem.cpp
+        GallerySceneItem.h)
+    set_property(TARGET ZoinGalleryComponentHostStagingTests PROPERTY
+        QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+    target_include_directories(ZoinGalleryComponentHostStagingTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGalleryComponentHostStagingTests PRIVATE
+        Qt${QT_VERSION_MAJOR}::QuickPrivate
+        Qt${QT_VERSION_MAJOR}::Test)
+    get_target_property(_galleryStagingQtType Qt${QT_VERSION_MAJOR}::Core TYPE)
+    if(_galleryStagingQtType STREQUAL "STATIC_LIBRARY")
+        target_link_libraries(ZoinGalleryComponentHostStagingTests PRIVATE
+            Qt6::qtquick2plugin
+            Qt6::quickwindow
+            Qt6::qmlplugin
+            Qt6::modelsplugin
+            Qt6::workerscriptplugin)
+    endif()
+    if(WIN32)
+        target_link_libraries(ZoinGalleryComponentHostStagingTests PRIVATE Usp10 Rpcrt4)
+    endif()
+    add_test(NAME GalleryComponentHostStagingTest
+        COMMAND ZoinGalleryComponentHostStagingTests)
+    set_tests_properties(GalleryComponentHostStagingTest PROPERTIES
+        ENVIRONMENT "QT_SCALE_FACTOR=1.75;QT_ENABLE_HIGHDPI_SCALING=0;QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough;QT_QUICK_CONTROLS_STYLE=Basic"
+        LABELS "visual;dpr;native"
+        TIMEOUT 30)
+
+    qt_add_executable(ZoinGallerySceneItemMotionTests
+        tests/GallerySceneItemMotionTest.cpp
+        GallerySceneItem.cpp
+        GallerySceneItem.h)
+    # This native scene fixture does not load the application's QML modules.
+    set_property(TARGET ZoinGallerySceneItemMotionTests PROPERTY
+        QT_QML_MODULE_NO_IMPORT_SCAN TRUE)
+    target_include_directories(ZoinGallerySceneItemMotionTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(ZoinGallerySceneItemMotionTests PRIVATE
+        Qt${QT_VERSION_MAJOR}::QuickPrivate
+        Qt${QT_VERSION_MAJOR}::Test)
+    if(WIN32)
+        target_link_libraries(ZoinGallerySceneItemMotionTests PRIVATE Usp10 Rpcrt4)
+    endif()
+    add_test(NAME GallerySceneItemMotionTest
+        COMMAND ZoinGallerySceneItemMotionTests)
+    set_tests_properties(GallerySceneItemMotionTest PROPERTIES
+        ENVIRONMENT "QT_SCALE_FACTOR=1.75;QT_ENABLE_HIGHDPI_SCALING=0;QT_SCALE_FACTOR_ROUNDING_POLICY=PassThrough;QT_QUICK_CONTROLS_STYLE=Basic"
+        LABELS "visual;dpr;native"
+        TIMEOUT 30)
+
     add_executable(ZoinGalleryMasonryLayoutModesTests
         tests/MasonryLayoutModesTest.cpp)
     target_compile_definitions(ZoinGalleryMasonryLayoutModesTests PRIVATE
@@ -720,6 +802,7 @@ if(BUILD_TESTING)
     target_include_directories(ZoinGalleryMasonryLayoutModesTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(ZoinGalleryMasonryLayoutModesTests PRIVATE
+        Qt${QT_VERSION_MAJOR}::QuickPrivate
         ZoinGallery::Core
         ZoinGallery::Qml
         Qt${QT_VERSION_MAJOR}::Test)
@@ -966,6 +1049,12 @@ set(ZOIN_QML_FILES
     qml/DetailsEntryDelegate.qml
     qml/GridEntryDelegate.qml
     qml/GalleryLayoutDebugZone.qml
+    qml/GalleryLayoutDebugPaint.qml
+    qml/GalleryVisualHost.qml
+    qml/GalleryPreviewVisualHost.qml
+    qml/GalleryPreviewLoader.qml
+    qml/GalleryFallbackIconHost.qml
+    qml/GalleryEntryVisualFactories.qml
     qml/IconsEntryDelegate.qml
       qml/GalleryViewer.qml
       qml/GalleryViewerOsd.qml
@@ -1030,11 +1119,8 @@ if(ZOIN_BUILD_STANDALONE)
 
 endif()
 
-if(WIN32)
-    set(SHADER_GLSL_FLAGS NOGLSL)
-else()
-    set(SHADER_GLSL_FLAGS GLSL "150,300es")
-endif()
+# Windows can select the OpenGL RHI as well as Direct3D.
+set(SHADER_GLSL_FLAGS GLSL "150,300es")
 qt_add_shaders(ZoinGalleryQml zoin_gallery_shaders
     BATCHABLE
     ${SHADER_GLSL_FLAGS}
@@ -1048,8 +1134,11 @@ qt_add_shaders(ZoinGalleryQml zoin_gallery_shaders
         "resources/outline.frag")
 
 if(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    # Compile HLSL to DXBC at build time on Windows. Compiling the video
+    # resampler during its first Direct3D draw can block the UI for seconds.
     qt_add_shaders(ZoinGalleryQml zoin_gallery_video_shader
         BATCHABLE
+        PRECOMPILE
         ${SHADER_GLSL_FLAGS}
         PREFIX "/ZoinGallery"
         OUTPUTS "resources/viewer_resample_video.vert.qsb"
@@ -1059,6 +1148,7 @@ if(ZOIN_ENABLE_VIDEO_PLAYBACK)
     # Retain the original sampling path for numerical A/B regressions and
     # opt-in diagnostics. It shares the production vertex/uniform interface.
     qt_add_shaders(ZoinGalleryQml zoin_gallery_video_reference_shader
+        PRECOMPILE
         ${SHADER_GLSL_FLAGS}
         PREFIX "/ZoinGallery"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}"
@@ -1066,10 +1156,18 @@ if(ZOIN_ENABLE_VIDEO_PLAYBACK)
         DEFINES ZOIN_VIDEO_SHADER=1 ZOIN_REFERENCE_SAMPLING=1
         FILES "resources/viewer_resample.frag")
     qt_add_shaders(ZoinGalleryQml zoin_gallery_video_linear_shader
+        PRECOMPILE
         ${SHADER_GLSL_FLAGS}
         PREFIX "/ZoinGallery"
         OUTPUTS "resources/viewer_video_linear.frag.qsb"
         DEFINES ZOIN_VIDEO_SHADER=1 ZOIN_LINEAR_VIDEO_PASS=1
+        FILES "resources/viewer_resample.frag")
+    qt_add_shaders(ZoinGalleryQml zoin_gallery_video_hdr_shader
+        PRECOMPILE
+        ${SHADER_GLSL_FLAGS}
+        PREFIX "/ZoinGallery"
+        OUTPUTS "resources/viewer_resample_video_hdr.frag.qsb"
+        DEFINES ZOIN_VIDEO_SHADER=1 ZOIN_HDR_VIDEO_OUTPUT=1
         FILES "resources/viewer_resample.frag")
 endif()
 
@@ -1131,7 +1229,8 @@ set(QT_QML_GENERATE_QMLLS_INI ${ZOIN_GENERATE_QMLLS_INI})
 
 if(ZOIN_ENABLE_VIDEO_PLAYBACK)
     list(APPEND ZOIN_QML_FILES
-        qml/GalleryVideoPlaybackSurface.qml)
+        qml/GalleryVideoPlaybackSurface.qml
+        qml/GalleryHdrVideoWindow.qml)
 endif()
 
 # Set QTP0004 policy to NEW to generate qmldir files for each directory with QML files
@@ -1148,7 +1247,15 @@ if(ZOIN_ENABLE_VIDEO_PLAYBACK)
         ViewerLinearVideoTexture.h
         ViewerLinearVideoTexture.cpp
         ViewerVideoFrameSource.h
-        ViewerVideoFrameSource.cpp)
+        ViewerVideoFrameSource.cpp
+        HdrDisplay.h
+        HdrVideoOutput.h
+        HdrVideoOutput.cpp)
+    if(WIN32)
+        list(APPEND ZOIN_QML_CPP_SOURCES HdrDisplayWindows.cpp)
+    else()
+        list(APPEND ZOIN_QML_CPP_SOURCES HdrDisplayUnsupported.cpp)
+    endif()
 endif()
 qt6_add_qml_module(ZoinGalleryQml
     URI ZoinGallery
@@ -1247,6 +1354,8 @@ target_link_libraries(ZoinGalleryCore PUBLIC
 )
 target_link_libraries(ZoinGalleryCore PRIVATE
     Qt${QT_VERSION_MAJOR}::QuickPrivate
+    Qt${QT_VERSION_MAJOR}::QuickShapesPrivate
+    Qt${QT_VERSION_MAJOR}::QuickControls2Impl
     Qt${QT_VERSION_MAJOR}::QuickControls2ImplPrivate
     Qt${QT_VERSION_MAJOR}::QuickVectorImageGeneratorPrivate)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)

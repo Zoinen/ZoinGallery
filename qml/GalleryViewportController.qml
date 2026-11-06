@@ -185,7 +185,7 @@ QtObject {
     }
 
     function animatePanelScrollTo(targetY, quickScroll, keyboardReveal,
-                                  keyboardRevealDirection) {
+                                  keyboardRevealDirection, page) {
         if (!keyboardReveal)
             cancelCursorChromeTransition()
         // An embedded session can queue a zero-delay offset restoration while
@@ -219,7 +219,10 @@ QtObject {
             panelScrollAnimation.from = galleryLayout.contentY
             panelScrollAnimation.to = target
             panelScrollAnimation.duration = quickScroll ? 15 : 150
-            panelScrollAnimation.restart()
+            if (page)
+                panel.motionController.restartPageScroll()
+            else
+                panel.motionController.restartScroll()
         } finally {
             panel.motionController.retargetingScroll = false
         }
@@ -312,6 +315,8 @@ QtObject {
                 ? horizontalDelta : verticalDelta
         if (delta === 0)
             return false
+        if (scrollingMode)
+            pointerLayer.endAutoScroll()
         if (modifiers & Qt.ControlModifier) {
             if (densityAdjustmentEnabled)
                 stepDensity(delta > 0)

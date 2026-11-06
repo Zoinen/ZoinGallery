@@ -26,6 +26,7 @@ PixelGridScope {
         id: verticalScroll
         objectName: "galleryPanelScrollBar"
         theme: chromeRoot.theme
+        pixelAlignmentSuspended: chromeRoot.layout.scrollAnimationRunning
         x: {
             // Tiles stop at the content padding plus half their inter-item
             // spacing. Center the thumb in that lane, not at a fixed inset.
@@ -87,6 +88,7 @@ PixelGridScope {
         id: horizontalScroll
         objectName: "galleryPanelColumnsScrollBar"
         theme: chromeRoot.theme
+        pixelAlignmentSuspended: chromeRoot.layout.scrollAnimationRunning
         x: chromeRoot.layoutOrigin.x
         y: parent.height - height
         width: chromeRoot.layout.width
@@ -99,7 +101,7 @@ PixelGridScope {
         size: chromeRoot.layout.contentHeight > 0
               ? Math.min(1, chromeRoot.layout.width
                          / chromeRoot.layout.contentHeight) : 1
-        position: chromeRoot.layout.contentHeight > 0
+        position: visible && chromeRoot.layout.contentHeight > 0
                   ? chromeRoot.layout.contentY
                     / chromeRoot.layout.contentHeight : 0
         onPositionChanged: {

@@ -1,8 +1,11 @@
 #pragma once
 #include <QQuickItem>
 #include <QSharedPointer>
+#include <memory>
 
 struct GalleryVectorUploadState;
+struct GalleryViewportMotionState;
+class QSGTransformNode;
 
 class GalleryVectorUploadGate : public QQuickItem {
     Q_OBJECT
@@ -15,6 +18,15 @@ class GalleryVectorUploadGate : public QQuickItem {
     Q_PROPERTY(bool nativeReady READ nativeReady NOTIFY nativeStateChanged)
     Q_PROPERTY(bool nativeFailed READ nativeFailed NOTIFY nativeStateChanged)
 public:
+    // Render-thread API for cached panel SVGs whose ordinary presentation flag
+    // follows GUI viewport membership. readySnapshot must come from GUI state
+    // during synchronization, after dependent drawing gates have committed.
+    static void setNodeViewportMotion(QSGTransformNode *node,
+        std::shared_ptr<GalleryViewportMotionState> state, const QRectF &bounds,
+        bool readySnapshot);
+    static void updateNodeViewportMotion(QSGTransformNode *node);
+    static void clearNodeViewportMotion(QSGTransformNode *node,
+        const std::shared_ptr<GalleryViewportMotionState> &owner);
     explicit GalleryVectorUploadGate(QQuickItem *parent = nullptr);
     ~GalleryVectorUploadGate() override;
     QString sourceKey() const { return _sourceKey; }

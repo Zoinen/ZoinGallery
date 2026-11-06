@@ -1,6 +1,7 @@
 #include "ExternalCatalogSparseExtension.h"
 
 #include "ExternalCatalogModelPrivate.h"
+#include "ImageFile.h"
 
 namespace ZoinGallery {
 
@@ -11,11 +12,12 @@ ExternalCatalogSparseExtension::ExternalCatalogSparseExtension(
       m_values(values),
       m_metadataDeferred(metadataDeferred),
       m_totalCount(totalCount),
-      m_previousCount(model._virtualRowCount) {
+      m_previousCount(model.logicalRowCount()) {
 }
 
 bool ExternalCatalogSparseExtension::validateEnvelope() const {
-    return !m_model._shutdown && m_previousCount >= 0
+    return !m_model._shutdown
+        && (m_model._virtualRowCount >= 0 || m_totalCount > m_previousCount)
         && m_totalCount >= m_previousCount
         && m_values.size() <= m_totalCount;
 }
@@ -28,7 +30,6 @@ bool ExternalCatalogSparseExtension::sameBaseEntry(
         && current.name == incoming.name
         && current.localPath == incoming.localPath
         && current.directory == incoming.directory
-        && current.directorySource == incoming.directorySource
         && current.image == incoming.image
         && current.source.resourceId == incoming.source.resourceId
         && current.source.sourceKey == incoming.source.sourceKey
@@ -66,6 +67,10 @@ bool ExternalCatalogSparseExtension::parseValue(const QVariant &value) {
             return false;
         }
         if (current) {
+            if (current->directorySource != parsed.directorySource) {
+                m_directoryUpdates.append({row, std::move(parsed.directorySource),
+                                           parsed.directoryPreviewState});
+            }
             return true;
         }
         if (m_model._idToRow.contains(id)) {
@@ -149,6 +154,12 @@ void ExternalCatalogSparseExtension::commit() {
     if (grows) {
         m_model.beginInsertRows(
             QModelIndex(), m_previousCount, m_totalCount - 1);
+        if (m_model._virtualRowCount < 0) {
+            m_model._sparseRowToOffset.reserve(m_previousCount + m_appended.size());
+            for (int row = 0; row < m_previousCount; ++row) {
+                m_model._sparseRowToOffset.insert(row, row);
+            }
+        }
         m_model._virtualRowCount = m_totalCount;
     }
     for (Entry &entry : m_appended) {
@@ -158,6 +169,18 @@ void ExternalCatalogSparseExtension::commit() {
         ? qBound(0, m_model._cursorRow, m_totalCount - 1) : -1;
     if (grows) {
         m_model.endInsertRows();
+    }
+    for (const auto &update : std::as_const(m_directoryUpdates)) {
+        Entry *entry = m_model.entryAt(update.row);
+        entry->directorySource = update.source;
+        entry->directoryPreviewState = update.state;
+        ++entry->directoryPreviewRevision;
+        if (entry->item) {
+            entry->item->setIsFolderView(update.state == DirectoryPreviewState::HasImages);
+        }
+        const QModelIndex index = m_model.index(update.row, 0);
+        emit m_model.dataChanged(index, index, {ExternalCatalogModel::VisualSnapshotRole,
+                                               FileListModel::FolderViewRole});
     }
     emitMaterializedRows();
 }

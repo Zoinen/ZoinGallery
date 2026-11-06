@@ -1,4 +1,5 @@
 #include "MasonryLayout.h"
+#include "GalleryViewportMotion.h"
 #include "GalleryPixelGrid.h"
 
 #include <ZoinGallery/GalleryCatalogSource.h>
@@ -128,7 +129,7 @@ void MasonryLayout::updateNeedScroll() {
     }
     // Grouped geometry includes headers and independent rows per section.
     // Repacking those bricks as one ungrouped list can incorrectly hide the bar.
-    if (groupingActive() || _presentationMode != Masonry || sparseVirtualLayout()) {
+    if (groupingActive() || _presentationMode != Masonry || sparseMasonryLayout()) {
         const bool newNeedScroll = _contentHeight > viewportExtent();
         if (newNeedScroll != _needScroll && height() > 0) {
             _needScroll = newNeedScroll;
@@ -175,27 +176,21 @@ void MasonryLayout::pushBrickItem(BrickItem *item) {
     _delegatePool.release(item);
 }
 
-BrickItem *MasonryLayout::popBrickItem(
-    int viewIndex, const QVariantMap &initialProperties) {
-    Q_UNUSED(viewIndex)
-    // A delegate is a viewport slot, not a cached row or presentation. Reuse
-    // any free slot and bind its final mode/row in updateProperties(). This
-    // keeps allocation bounded by the largest live viewport rather than the
-    // number of visited modes.
-    return _delegatePool.acquire(
-        reinterpret_cast<quintptr>(delegateComponent(_presentationMode)),
-        [this, &initialProperties]() {
-            return createComponent(_presentationMode,
-                                   initialProperties);
-        });
+bool MasonryLayout::keepsMasonryResetSpares() const {
+    return _presentationMode == Masonry && !_containedPreview
+        && _visualSnapshotRole >= 0 && !_presentationModeCommitInProgress;
 }
 
 void MasonryLayout::trimFreeDelegatePool() {
     // Adjacent columns enter before the old column leaves. Keep anonymous
     // spares across commits instead of rebuilding that entire column next time.
-    // The cap follows the live viewport and never retains another component.
+    // A small parent folder must not shrink Masonry's spare pool on return.
+    // Only slots of the current component can remain in the bounded pool.
+    constexpr int spareLimit = 64;
+    const int retained = keepsMasonryResetSpares()
+        ? spareLimit : qMin(spareLimit, _delegatePool.liveCount());
     _delegatePool.trimSurplus(_presentationModeCommitInProgress
-        ? 0 : qMin(64, _delegatePool.liveCount()),
+        ? 0 : retained,
         reinterpret_cast<quintptr>(delegateComponent(_presentationMode)));
 }
 
@@ -710,7 +705,7 @@ void MasonryLayout::setGroupRanges(const QVariantList &ranges) {
 
 QVector<ZoinGallery::GalleryGroupHeader>
 MasonryLayout::groupHeaderGeometryVector() const {
-    if (_presentationMode == Masonry && !sparseVirtualLayout()) {
+    if (_presentationMode == Masonry) {
         return _masonryGroupHeaders;
     }
     return fixedLayoutPlan().groupHeaders;
@@ -1151,11 +1146,39 @@ void MasonryLayout::setContentY(qreal newContentY) {
     }
     setContentYInternal(newContentY);
     constexpr qreal edgeEpsilon = 0.001;
-    const qreal probe = qMax(_paddingTop + edgeEpsilon,
-                             _contentY + edgeEpsilon);
-    const QList<int> leadingIndexes = indexesForVerticalRange(probe, probe);
-    if (!leadingIndexes.isEmpty()) {
-        _topItem = leadingIndexes.constFirst();
+    if (_presentationMode == Masonry && !sparseMasonryLayout()) {
+        // Preserve the first fully visible row, as in the original gallery.
+        // A clipped row can change height on reflow and move the row below
+        // it even when that clipped row retains its own viewport offset.
+        const auto band = std::lower_bound(
+            _layoutBands.cbegin(), _layoutBands.cend(), _contentY,
+            [](const LayoutBand &candidate, qreal position) {
+                return candidate.top + edgeEpsilon < position;
+            });
+        if (band != _layoutBands.cend() && !band->indexes.isEmpty()
+            && band->top < _contentY + height()) {
+            _topItem = band->indexes.constFirst();
+        } else {
+            const int clipped = bandIndexAt(_contentY);
+            if (clipped >= 0 && !_layoutBands[clipped].indexes.isEmpty())
+                _topItem = _layoutBands[clipped].indexes.constFirst();
+        }
+    } else {
+        const qreal probe = qMax(_paddingTop + edgeEpsilon,
+                                 _contentY + edgeEpsilon);
+        const QList<int> leadingIndexes = indexesForVerticalRange(probe, probe);
+        if (!leadingIndexes.isEmpty()) {
+            _topItem = leadingIndexes.constFirst();
+            if (_presentationMode == Masonry) {
+                const int following = leadingIndexes.constLast() + 1;
+                const QRectF followingGeometry = indexGeometry(following);
+                if (following < logicalBrickCount() && followingGeometry.isValid()
+                    && indexGeometry(_topItem).top() + edgeEpsilon < _contentY
+                    && followingGeometry.top() + edgeEpsilon >= _contentY
+                    && followingGeometry.top() < _contentY + height())
+                    _topItem = following;
+            }
+        }
     }
     if (_topItem != -1 && _topItem < logicalBrickCount()) {
         _topItemOffset = indexGeometry(_topItem).y() - _contentY;
@@ -1196,9 +1219,18 @@ void MasonryLayout::setContentYInternal(qreal newContentY) {
             && previousLayoutRevision == _layoutRevision
             && previousVisible == _visibleIndexSet
             && previousDelegates == delegateIndexesForCurrentViewport();
-        if (!sameWindow) updateProperties();
+        const bool prepared = !sameWindow && scrollingMasonry
+            && preparingViewportMotion() && _viewportMotionState->page
+            && previousGeneration == _delegateCatalogGeneration
+            && previousLayoutRevision == _layoutRevision
+            && commitPreparedMotionViewport(previousVisible);
+        if (!sameWindow && !prepared) updateProperties();
         emit contentYChanged();
-        emit groupHeaderGeometriesChanged();
+        // An empty header list cannot change when only the viewport moves.
+        // Keep rewrap notifications intact so removing groups clears delegates.
+        if (!_groupRanges.isEmpty() || groupingActive()) {
+            emit groupHeaderGeometriesChanged();
+        }
         if (groupingActive()) {
             emit groupHeadersChanged();
         }

@@ -29,7 +29,15 @@ private:
         QVariantMap displayFields;
         QVariantMap highlightStyle;
         QString iconPath;
+        QSize originalSize;
+        bool metadataSettled = false;
     };
+
+    struct ChangedRow {
+        int row;
+        int changes;
+    };
+    enum Change { Source = 1, LocalPath = 2, Timestamp = 4, Geometry = 8 };
 
     bool validate();
     static RowState captureState(const ExternalCatalogModel::Entry &entry);
@@ -59,7 +67,7 @@ private:
     ExternalCatalogModel &_model;
     const QVariantList &_values;
     QList<RowUpdate> _updates;
-    QList<int> _changedRows;
+    QList<ChangedRow> _changedRows;
     bool _viewerSourceInvalidated = false;
 };
 
@@ -102,6 +110,8 @@ ExternalCatalogMetadataTransaction::captureState(
         .displayFields = entry.displayFields,
         .highlightStyle = entry.highlightStyle,
         .iconPath = entry.iconPath,
+        .originalSize = entry.originalSize,
+        .metadataSettled = entry.metadataSettled,
     };
 }
 
@@ -184,6 +194,12 @@ void ExternalCatalogMetadataTransaction::reconcileSource(
     entry.sourceIdentity = entry.source.isValid()
         ? entry.source.runtimeIdentity()
         : ThumbnailMemoryCache::canonicalSourceIdentity(entry.localPath);
+    ImageInfo classification;
+    classification.path = entry.sourceIdentity;
+    classification.source = entry.source;
+    if (!entry.directory && isVectorSource(classification)) {
+        entry.image = true;
+    }
 }
 
 bool ExternalCatalogMetadataTransaction::sourceChanged(
@@ -336,22 +352,45 @@ void ExternalCatalogMetadataTransaction::applyRow(
     }
     updateImageInfo(entry, update.value, changedSource);
     updateAppearance(entry, update.value, previous);
-    if (changedSource || previous.displayFields != entry.displayFields
+    const int changes = (changedSource ? Source : 0)
+        | (previous.localPath != entry.localPath ? LocalPath : 0)
+        | (previous.mtimeNs != entry.mtimeNs ? Timestamp : 0)
+        | (previous.originalSize != entry.originalSize
+            || previous.metadataSettled != entry.metadataSettled ? Geometry : 0);
+    if (changes || previous.displayFields != entry.displayFields
         || previous.highlightStyle != entry.highlightStyle
         || previous.iconPath != entry.iconPath) {
-        _changedRows.append(update.row);
+        _changedRows.append({update.row, changedSource ? Source : changes});
     }
 }
 
 void ExternalCatalogMetadataTransaction::emitChangedRows() {
-    std::sort(_changedRows.begin(), _changedRows.end());
+    std::sort(_changedRows.begin(), _changedRows.end(),
+              [](const ChangedRow &a, const ChangedRow &b) { return a.row < b.row; });
     for (qsizetype offset = 0; offset < _changedRows.size();) {
-        const int first = _changedRows.at(offset);
+        const int changes = _changedRows.at(offset).changes;
+        const int first = _changedRows.at(offset).row;
         int last = first;
         ++offset;
         while (offset < _changedRows.size()
-               && _changedRows.at(offset) == last + 1) {
-            last = _changedRows.at(offset++);
+               && _changedRows.at(offset).row == last + 1
+               && _changedRows.at(offset).changes == changes) {
+            last = _changedRows.at(offset++).row;
+        }
+        // Enriching the same opaque revision updates its path/display fields,
+        // without invalidating pixels, image classification or settled geometry.
+        if (!(changes & Source)) {
+            QList<int> roles{ExternalCatalogModel::VisualSnapshotRole};
+            if (changes & LocalPath) roles.append(ExternalCatalogModel::LocalPathRole);
+            if (changes & Timestamp) roles.append(FileListModel::LastModifiedRole);
+            if (changes & Geometry) {
+                roles.append(FileListModel::ImageFullSizeRole);
+                roles.append(ExternalCatalogModel::KnownImageSizeRole);
+                roles.append(ExternalCatalogModel::MetadataSettledRole);
+            }
+            emit _model.dataChanged(_model.index(first, 0), _model.index(last, 0),
+                                    roles);
+            continue;
         }
         emit _model.dataChanged(
             _model.index(first, 0), _model.index(last, 0),

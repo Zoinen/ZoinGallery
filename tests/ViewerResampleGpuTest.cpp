@@ -27,6 +27,12 @@ private slots:
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
     void videoFramesRenderAndUpdate_data();
     void videoFramesRenderAndUpdate();
+    void hdrVideoMatchesQtSdrConversion_data();
+    void hdrVideoMatchesQtSdrConversion();
+    void hdrOutputPreservesAbsoluteLuminance_data();
+    void hdrOutputPreservesAbsoluteLuminance();
+    void videoSurfaceOrientationMatchesPixels_data();
+    void videoSurfaceOrientationMatchesPixels();
     void videoResampleMatchesReference_data();
     void videoResampleMatchesReference();
     void videoConversionSurvivesPanning_data();
@@ -55,6 +61,7 @@ private slots:
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
 #include "ViewerVideoFrameSource.h"
 #include "ViewerLinearVideoTexture.h"
+#include "VideoFrameGeometry.h"
 #include <QtQuick/private/qquickwindow_p.h>
 #include <QtQuick/private/qsgdefaultrendercontext_p.h>
 #include <QVideoFrameFormat>
@@ -229,6 +236,7 @@ private:
 class GpuFixture {
 public:
     GpuFixture() : window(&control) { window.setColor(Qt::transparent); }
+    bool floatingOutput = false;
 
     ~GpuFixture() {
         root.reset();
@@ -372,7 +380,7 @@ public:
             error = QStringLiteral("GPU regression requires an actual RHI shader backend");
             return false;
         }
-        texture.reset(rhi->newTexture(QRhiTexture::RGBA8, outputSize, 1,
+        texture.reset(rhi->newTexture(floatingOutput ? QRhiTexture::RGBA32F : QRhiTexture::RGBA8, outputSize, 1,
             QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource));
         depth.reset(rhi->newRenderBuffer(QRhiRenderBuffer::DepthStencil, outputSize));
         if (!texture->create() || !depth->create()) {
@@ -413,7 +421,7 @@ public:
                 const QImage bytes(
                     reinterpret_cast<const uchar *>(readback.data.constData()),
                     readback.pixelSize.width(), readback.pixelSize.height(),
-                    QImage::Format_RGBA8888_Premultiplied);
+                    floatingOutput ? QImage::Format_RGBA32FPx4 : QImage::Format_RGBA8888_Premultiplied);
                 result = rhi->isYUpInFramebuffer() ? bytes.mirrored() : bytes.copy();
                 completed = true;
             };
@@ -426,7 +434,7 @@ public:
                 return {};
             }
         }
-        return result.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        return floatingOutput ? result : result.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
 
     QObject *filtered() const { return root->property("filtered").value<QObject *>(); }
@@ -808,12 +816,18 @@ QVideoFrame independentVideoFrame(QVideoFrame original, qint64 startTime) {
 
 QVideoFrame conversionInputFrame(QVideoFrameFormat::PixelFormat pixelFormat,
                                  bool cropped, bool alpha, int revision,
-                                 QtVideo::Rotation rotation, bool mirrored) {
+                                 QtVideo::Rotation rotation, bool mirrored,
+                                 QtVideo::Rotation surfaceRotation = QtVideo::Rotation::None,
+                                 bool surfaceMirror = false, bool bottomToTop = false) {
     const QSize size = cropped ? QSize(96, 80) : QSize(84, 63);
     if (pixelFormat == QVideoFrameFormat::Format_NV12
         || pixelFormat == QVideoFrameFormat::Format_YUV420P) {
         QVideoFrame original = syntheticVideoFrame(size, true, revision);
         QVideoFrameFormat format(size, pixelFormat);
+        format.setRotation(surfaceRotation);
+        format.setMirrored(surfaceMirror);
+        format.setScanLineDirection(bottomToTop ? QVideoFrameFormat::BottomToTop
+                                               : QVideoFrameFormat::TopToBottom);
         format.setColorSpace(original.surfaceFormat().colorSpace());
         format.setColorRange(original.surfaceFormat().colorRange());
         format.setColorTransfer(original.surfaceFormat().colorTransfer());
@@ -848,6 +862,10 @@ QVideoFrame conversionInputFrame(QVideoFrameFormat::PixelFormat pixelFormat,
         return frame;
     }
     QVideoFrameFormat format(size, pixelFormat);
+    format.setRotation(surfaceRotation);
+    format.setMirrored(surfaceMirror);
+    format.setScanLineDirection(bottomToTop ? QVideoFrameFormat::BottomToTop
+                                           : QVideoFrameFormat::TopToBottom);
     if (cropped)
         format.setViewport({7, 9, 84, 63});
     const bool tenBit = pixelFormat == QVideoFrameFormat::Format_P010;
@@ -1418,6 +1436,289 @@ void ViewerResampleGpuTest::transparencyFiltersPremultipliedLinearColor() {
         comparePixels(actual, ZoinGallery::ViewerResampler::downsample(input, {32, 32}), 2);
     }
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+void ViewerResampleGpuTest::hdrOutputPreservesAbsoluteLuminance_data() {
+    QTest::addColumn<int>("transfer");
+    QTest::addColumn<double>("nits");
+    QTest::addColumn<bool>("redPrimary");
+    QTest::newRow("pq-reference-white") << int(QVideoFrameFormat::ColorTransfer_ST2084) << 100.0 << false;
+    QTest::newRow("pq-1000-nit-highlight") << int(QVideoFrameFormat::ColorTransfer_ST2084) << 1000.0 << false;
+    QTest::newRow("pq-4000-nit-highlight") << int(QVideoFrameFormat::ColorTransfer_ST2084) << 4000.0 << false;
+    QTest::newRow("pq-wide-gamut-red") << int(QVideoFrameFormat::ColorTransfer_ST2084) << 1000.0 << true;
+    QTest::newRow("hlg-reference-white") << int(QVideoFrameFormat::ColorTransfer_STD_B67) << 203.0 << false;
+    QTest::newRow("hlg-1000-nit-white") << int(QVideoFrameFormat::ColorTransfer_STD_B67) << 1000.0 << false;
+}
+
+void ViewerResampleGpuTest::hdrOutputPreservesAbsoluteLuminance() {
+    QFETCH(int, transfer);
+    QFETCH(double, nits);
+    QFETCH(bool, redPrimary);
+    const bool hlg = transfer == int(QVideoFrameFormat::ColorTransfer_STD_B67);
+    const double scene = std::pow(nits / 1000.0, 1.0 / 1.2);
+    const double encoded = hlg
+        ? (scene <= 1.0 / 12.0 ? std::sqrt(3.0 * scene)
+            : .17883277 * std::log(12.0 * scene - .28466892) + .55991073)
+        : std::pow((.8359375 + 18.8515625 * std::pow(nits / 10000.0, .1593017578125))
+            / (1.0 + 18.6875 * std::pow(nits / 10000.0, .1593017578125)), 78.84375);
+    const QSize size(32, 24);
+    QVideoFrameFormat format(size, QVideoFrameFormat::Format_P010);
+    format.setColorRange(QVideoFrameFormat::ColorRange_Video);
+    format.setColorSpace(QVideoFrameFormat::ColorSpace_BT2020);
+    format.setColorTransfer(static_cast<QVideoFrameFormat::ColorTransfer>(transfer));
+    QVideoFrame frame(format);
+    QVERIFY(frame.map(QVideoFrame::WriteOnly));
+    const double signalY = redPrimary ? .2627 * encoded : encoded;
+    const quint16 luma = quint16(qRound(64 + 876 * signalY) << 6);
+    for (int y = 0; y < size.height(); ++y) {
+        auto *row = reinterpret_cast<quint16 *>(frame.bits(0) + y * frame.bytesPerLine(0));
+        std::fill(row, row + size.width(), luma);
+    }
+    for (int y = 0; y < size.height() / 2; ++y) {
+        auto *row = reinterpret_cast<quint16 *>(frame.bits(1) + y * frame.bytesPerLine(1));
+        const auto cb = quint16(qRound(512 + 896 * (redPrimary ? -signalY / 1.8814 : 0)) << 6);
+        const auto cr = quint16(qRound(512 + 896 * (redPrimary ? (encoded - signalY) / 1.4746 : 0)) << 6);
+        for (int x = 0; x < size.width(); x += 2) { row[x] = cb; row[x + 1] = cr; }
+    }
+    frame.unmap();
+    ZoinGallery::ViewerVideoFrameSource source;
+    auto *sink = qobject_cast<QVideoSink *>(source.sink());
+    QVERIFY(sink);
+    sink->setVideoFrame(frame);
+    QVERIFY(source.hdr());
+    QImage blank(size, QImage::Format_RGBA8888);
+    blank.fill(Qt::black);
+    GpuFixture fixture;
+    fixture.floatingOutput = true;
+    QVERIFY2(fixture.initialize(blank, size, 1.75), qPrintable(fixture.error));
+    QVERIFY(fixture.filtered()->setProperty("videoFrameSource", QVariant::fromValue(static_cast<QObject *>(&source))));
+    QVERIFY(fixture.filtered()->setProperty("cacheVideoConversion", false));
+    QVERIFY(fixture.filtered()->setProperty("cacheVideoPresentation", false));
+    QVERIFY(fixture.filtered()->setProperty("hdrOutput", true));
+    for (bool hardware : {true, false}) {
+        QVERIFY(fixture.filtered()->setProperty("hardwareSampling", hardware));
+        const QImage actual = fixture.render();
+        QVERIFY(!actual.isNull());
+        const QColor color = actual.pixelColor(size.width() / 2, size.height() / 2);
+        const double expected = nits / 80.0;
+        qInfo() << "scRGB luminance" << nits << "nits:" << color.redF() << color.greenF() << color.blueF();
+        const std::array<float, 3> actualRgb{color.redF(), color.greenF(), color.blueF()};
+        const std::array<double, 3> expectedRgb = redPrimary
+            ? std::array<double, 3>{1.6605 * expected, -.1246 * expected, -.0182 * expected}
+            : std::array<double, 3>{expected, expected, expected};
+        for (int channel = 0; channel < 3; ++channel)
+            QVERIFY2(std::abs(actualRgb[channel] - expectedRgb[channel]) <= std::abs(expectedRgb[channel]) * .025,
+                qPrintable(QString("Expected %1 scRGB, got %2").arg(expectedRgb[channel]).arg(actualRgb[channel])));
+        QCOMPARE(color.alphaF(), 1.0f);
+    }
+}
+
+void ViewerResampleGpuTest::hdrVideoMatchesQtSdrConversion_data() {
+    QTest::addColumn<int>("transfer");
+    QTest::addColumn<int>("peakNits");
+    QTest::newRow("sdr-control") << int(QVideoFrameFormat::ColorTransfer_BT709) << 100;
+    for (auto transfer : {QVideoFrameFormat::ColorTransfer_STD_B67,
+                          QVideoFrameFormat::ColorTransfer_ST2084})
+        for (int peak : {1000, 4000}) {
+            const QByteArray name = QByteArray::number(transfer) + '-' + QByteArray::number(peak);
+            QTest::newRow(name.constData()) << int(transfer) << peak;
+        }
+}
+
+void ViewerResampleGpuTest::hdrVideoMatchesQtSdrConversion() {
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen"))
+        QSKIP("Use ZOIN_TEST_NATIVE_RENDERER=1 and native QPA for Qt's GPU HDR conversion");
+    QFETCH(int, transfer);
+    QFETCH(int, peakNits);
+    const QSize size(112, 84);
+    QVideoFrameFormat format(size, QVideoFrameFormat::Format_P010);
+    format.setColorRange(QVideoFrameFormat::ColorRange_Video);
+    format.setColorSpace(peakNits == 100 ? QVideoFrameFormat::ColorSpace_BT709
+                                       : QVideoFrameFormat::ColorSpace_BT2020);
+    format.setColorTransfer(static_cast<QVideoFrameFormat::ColorTransfer>(transfer));
+    format.setMaxLuminance(peakNits);
+    QVideoFrame frame(format);
+    QVERIFY(frame.map(QVideoFrame::WriteOnly));
+    for (int y = 0; y < size.height(); ++y) {
+        auto *row = reinterpret_cast<quint16 *>(frame.bits(0) + y * frame.bytesPerLine(0));
+        for (int x = 0; x < size.width(); ++x)
+            row[x] = quint16((y < 42 ? 64 + x * 876 / (size.width() - 1) : 480) << 6);
+    }
+    for (int y = 0; y < size.height() / 2; ++y) {
+        auto *row = reinterpret_cast<quint16 *>(frame.bits(1) + y * frame.bytesPerLine(1));
+        for (int x = 0; x < size.width() / 2; ++x) {
+            row[2*x] = quint16((y < 21 ? 512 : 480) << 6);
+            row[2*x+1] = quint16((y < 21 ? 512 : 560) << 6);
+        }
+    }
+    frame.unmap();
+    // Native QPA makes toImage execute Qt's SDR HDR shader, rather than its
+    // CPU fallback, which only applies the YUV matrix and misses tone mapping.
+    QImage expected = frame.toImage();
+    expected.reinterpretAsFormat(QImage::Format_RGBX8888);
+    expected = expected.convertToFormat(QImage::Format_RGB32);
+    QCOMPARE(expected.size(), size);
+    comparePixels(ZoinGallery::VideoFrameGeometry::displayImage(frame), expected, 0);
+    if (peakNits != 100) {
+        const QImage cpu = ZoinGallery::VideoColorSpace::cpuHdrToSdr(frame);
+        quint64 error = 0;
+        for (int y = 0; y < size.height(); ++y)
+            for (int x = 0; x < size.width(); ++x) {
+                const QRgb a = cpu.pixel(x, y), b = expected.pixel(x, y);
+                QCOMPARE(qAlpha(a), 255);
+                error += std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b))
+                    + std::abs(qBlue(a) - qBlue(b));
+            }
+        const double mean = double(error) / (size.width() * size.height() * 3);
+        qInfo() << "CPU HDR fallback mean RGB error" << mean;
+        QVERIFY(mean <= 2.0);
+    }
+    for (bool conversionCache : {false, true}) {
+        ScopedEnvironmentVariable cache("F4_VIEWER_DISABLE_LINEAR_VIDEO_CACHE",
+                                         conversionCache ? QByteArray() : QByteArray("1"));
+        ZoinGallery::ViewerVideoFrameSource source;
+        auto *sink = qobject_cast<QVideoSink *>(source.sink());
+        QVERIFY(sink);
+        sink->setVideoFrame(frame);
+        GpuFixture fixture;
+        constexpr qreal dpr = 1.75;
+        QVERIFY2(fixture.initialize(expected, size, dpr), qPrintable(fixture.error));
+        QVERIFY(fixture.filtered()->setProperty("videoFrameSource",
+            QVariant::fromValue(static_cast<QObject *>(&source))));
+        QVERIFY(fixture.filtered()->setProperty("pixelAligned", true));
+        const QImage actual = fixture.render();
+        comparePixels(actual, expected, 2);
+        QVERIFY(fixture.filtered()->setProperty("hardwareSampling", true));
+        comparePixels(fixture.render(), expected, 2);
+        QVERIFY(fixture.filtered()->setProperty("hardwareSampling", false));
+        const QSize reduced(28, 21);
+        QVERIFY(fixture.setEffectPhysicalSize(reduced));
+        const QImage small = fixture.render().copy(QRect(QPoint(), reduced));
+        const QImage reference = ZoinGallery::ViewerResampler::downsample(expected, reduced);
+        quint64 error = 0;
+        for (int y = 0; y < reduced.height(); ++y)
+            for (int x = 0; x < reduced.width(); ++x) {
+                const QRgb a = small.pixel(x, y), b = reference.pixel(x, y);
+                error += std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b))
+                    + std::abs(qBlue(a) - qBlue(b));
+            }
+        const double mean = double(error) / (reduced.width() * reduced.height() * 3);
+        qInfo() << "HDR reduction mean RGB error" << mean << "cached" << conversionCache;
+        QVERIFY(mean <= 1.0);
+        const QPointF origin = fixture.scenePoint();
+        QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.001);
+        QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.001);
+        QCOMPARE(fixture.scenePoint({1, 0}) - origin, QPointF(1, 0));
+        QCOMPARE(fixture.scenePoint({0, 1}) - origin, QPointF(0, 1));
+        if (transfer == QVideoFrameFormat::ColorTransfer_STD_B67 && !conversionCache) {
+            QVERIFY(actual.save(QString("video-hlg-%1-actual-175.png").arg(peakNits)));
+            QVERIFY(expected.save(QString("video-hlg-%1-qt-175.png").arg(peakNits)));
+        }
+    }
+}
+
+void ViewerResampleGpuTest::videoSurfaceOrientationMatchesPixels_data() {
+    QTest::addColumn<int>("pixelFormat");
+    QTest::addColumn<int>("surfaceRotation");
+    QTest::addColumn<int>("combination");
+    for (auto format : {QVideoFrameFormat::Format_BGRA8888, QVideoFrameFormat::Format_NV12})
+        for (int rotation : {0, 90, 180, 270})
+            for (int combination : {0, 1, 2}) {
+                const QByteArray name = QByteArray::number(format) + '-'
+                    + QByteArray::number(rotation) + '-' + QByteArray::number(combination);
+                QTest::newRow(name.constData()) << int(format) << rotation << combination;
+            }
+}
+
+void ViewerResampleGpuTest::videoSurfaceOrientationMatchesPixels() {
+    QFETCH(int, pixelFormat);
+    QFETCH(int, surfaceRotation);
+    QFETCH(int, combination);
+    const auto format = static_cast<QVideoFrameFormat::PixelFormat>(pixelFormat);
+    const int frameRotation = combination == 1 ? 90 : combination == 2 ? 270 : 0;
+    const bool surfaceMirror = combination == 1;
+    const bool frameMirror = combination == 1;
+    const bool bottomToTop = combination == 2;
+    const auto raw = conversionInputFrame(format, true, false, 0,
+                                          QtVideo::Rotation::None, false);
+    QImage expected;
+    constexpr qreal dpr = 1.75;
+    {
+        // Keep Qt's CPU/GPU chroma conversion differences outside this
+        // orientation regression. Rotate an untransformed GPU reference.
+        ZoinGallery::ViewerVideoFrameSource rawSource;
+        auto *rawSink = qobject_cast<QVideoSink *>(rawSource.sink());
+        QVERIFY(rawSink);
+        rawSink->setVideoFrame(raw);
+        QImage fallback(raw.surfaceFormat().viewport().size(), QImage::Format_ARGB32);
+        fallback.fill(Qt::magenta);
+        GpuFixture reference;
+        QVERIFY2(reference.initialize(fallback, fallback.size(), dpr), qPrintable(reference.error));
+        QVERIFY(reference.filtered()->setProperty("videoFrameSource",
+            QVariant::fromValue(static_cast<QObject *>(&rawSource))));
+        QVERIFY(reference.filtered()->setProperty("pixelAligned", true));
+        expected = reference.render();
+        QVERIFY(!expected.isNull());
+    }
+    if (bottomToTop)
+        expected = expected.mirrored(false, true);
+    expected = expected.transformed(QTransform().rotate(surfaceRotation));
+    if (surfaceMirror)
+        expected = expected.mirrored(true, false);
+    expected = expected.transformed(QTransform().rotate(frameRotation));
+    if (frameMirror)
+        expected = expected.mirrored(true, false);
+    const auto frame = conversionInputFrame(format, true, false, 0,
+        static_cast<QtVideo::Rotation>(frameRotation), frameMirror,
+        static_cast<QtVideo::Rotation>(surfaceRotation), surfaceMirror, bottomToTop);
+    QVERIFY(frame.isValid());
+    ZoinGallery::ViewerVideoFrameSource source;
+    auto *sink = qobject_cast<QVideoSink *>(source.sink());
+    QVERIFY(sink);
+    sink->setVideoFrame(frame);
+    QCOMPARE(source.frameSize(), expected.size());
+    QImage fallback(expected.size(), QImage::Format_ARGB32);
+    fallback.fill(Qt::magenta);
+    GpuFixture fixture;
+    QVERIFY2(fixture.initialize(fallback, expected.size(), dpr), qPrintable(fixture.error));
+    QVERIFY(fixture.filtered()->setProperty("videoFrameSource",
+        QVariant::fromValue(static_cast<QObject *>(&source))));
+    QVERIFY(fixture.filtered()->setProperty("pixelAligned", true));
+    comparePixels(fixture.render(), expected, 2);
+    QVERIFY(fixture.filtered()->setProperty("hardwareSampling", true));
+    comparePixels(fixture.render(), expected, 2);
+    QVERIFY(fixture.filtered()->setProperty("hardwareSampling", false));
+    const QSize reduced = expected.size() / 3;
+    QVERIFY(fixture.setEffectPhysicalSize(reduced));
+    const QImage reducedFrame = fixture.render().copy(QRect(QPoint(), reduced));
+    const QImage reducedReference = ZoinGallery::ViewerResampler::downsample(expected, reduced);
+    if (format == QVideoFrameFormat::Format_NV12) {
+        // The reference above is quantized RGB8, while the YUV conversion
+        // cache retains linear floating-point channels until after filtering.
+        QCOMPARE(reducedFrame.size(), reducedReference.size());
+        quint64 error = 0;
+        for (int y = 0; y < reduced.height(); ++y)
+            for (int x = 0; x < reduced.width(); ++x) {
+                const QRgb actual = reducedFrame.pixel(x, y);
+                const QRgb reference = reducedReference.pixel(x, y);
+                QCOMPARE(qAlpha(actual), 255);
+                error += std::abs(qRed(actual) - qRed(reference))
+                    + std::abs(qGreen(actual) - qGreen(reference))
+                    + std::abs(qBlue(actual) - qBlue(reference));
+            }
+        const double mean = double(error) / (reduced.width() * reduced.height() * 3);
+        qInfo() << "Oriented YUV reduction mean RGB error" << mean;
+        QVERIFY(mean <= 1.0);
+    } else {
+        comparePixels(reducedFrame, reducedReference, 2);
+    }
+    const QPointF origin = fixture.scenePoint();
+    QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < 0.001);
+    QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < 0.001);
+    QCOMPARE(fixture.scenePoint({1, 0}) - origin, QPointF(1, 0));
+    QCOMPARE(fixture.scenePoint({0, 1}) - origin, QPointF(0, 1));
+    if (surfaceRotation == 90 && combination == 0)
+        QVERIFY(reducedFrame.save(QString("video-surface-orientation-%1-175.png").arg(pixelFormat)));
+}
+
 void ViewerResampleGpuTest::videoResampleMatchesReference_data() {
     // Preserve the paused-cache matrix and exercise the same filtering paths
     // with fresh revisions instead of reusing a paused presentation.
@@ -1897,7 +2198,7 @@ void ViewerResampleGpuTest::videoConversionInputs_data() {
                     const QByteArray row = QByteArray(input.name) + "-r" + QByteArray::number(rotation)
                         + (mirrored ? "-mirror" : "") + (dpr == 1 ? "" : "-dpr175");
                     for (int level = 0; level <= 2; ++level) {
-                        const QByteArray name = row + (level ? "-pyramid" + QByteArray::number(level) : "");
+                        const QByteArray name = row + (level ? "-pyramid" + QByteArray::number(level) : QByteArray{});
                         const QSize target = level == 0 ? QSize(56, 42)
                             : (level == 1 ? QSize(28, 21) : QSize(14, 10));
                         QTest::newRow(name.constData()) << int(input.format) << input.cropped << input.alpha
@@ -2593,9 +2894,9 @@ void ViewerResampleGpuTest::decodedVideoFileRenders() {
     player.pause();
     QCoreApplication::processEvents();
     const auto snapshot = source.snapshot();
-    const QImage reference = snapshot.frame.toImage();
+    const QImage reference = ZoinGallery::VideoFrameGeometry::displayImage(snapshot.frame);
     QVERIFY(!reference.isNull());
-    const QSize targetSize(672, 378);
+    const QSize targetSize = reference.size().scaled(QSize(672, 672), Qt::KeepAspectRatio);
     QImage fallback(reference.size(), QImage::Format_ARGB32);
     fallback.fill(Qt::magenta);
     GpuFixture fixture;
@@ -2605,7 +2906,11 @@ void ViewerResampleGpuTest::decodedVideoFileRenders() {
     const QImage actual = fixture.render();
     QVERIFY(!actual.isNull());
     qInfo() << "Decoded frame" << reference.size() << "pixel format"
-            << snapshot.frame.pixelFormat() << "rendered on" << fixture.deviceName();
+            << snapshot.frame.pixelFormat() << "coded size" << snapshot.frame.size()
+            << "viewport" << snapshot.frame.surfaceFormat().viewport()
+            << "surface rotation" << snapshot.frame.surfaceFormat().rotation()
+            << "frame rotation" << snapshot.frame.rotation()
+            << "rendered on" << fixture.deviceName();
     const QString capture = qEnvironmentVariable("ZOIN_VIDEO_GPU_CAPTURE");
     if (!capture.isEmpty())
         QVERIFY(actual.save(capture + "-decoded.png"));
@@ -2859,7 +3164,9 @@ void ViewerResampleGpuTest::shaderStageInterfacesMatch() {
         QList<Field> expected = base;
         const bool video = variant != QStringLiteral("viewer_resample");
         if (video) {
-            expected.append({{"videoColorMatrix", D::Mat4, 176, 64},
+            expected.append({{"videoMasteringWhite", D::Float, 164, 4},
+                {"videoMaxLum", D::Float, 168, 4}, {"videoTransfer", D::Int, 172, 4},
+                {"videoColorMatrix", D::Mat4, 176, 64},
                 {"videoFrameSize", D::Vec2, 240, 8}, {"videoViewport", D::Vec4, 256, 16},
                 {"videoPixelInfo", D::Int4, 272, 16}, {"videoTextureFormats", D::Int4, 288, 16},
                 {"videoEnabled", D::Int, 304, 4}});
@@ -2873,6 +3180,19 @@ void ViewerResampleGpuTest::shaderStageInterfacesMatch() {
             QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(file.fileName()));
             const QShader shader = QShader::fromSerialized(file.readAll());
             QVERIFY(shader.isValid());
+#ifdef Q_OS_WIN
+            if (video) {
+                const QShaderVersion sm5(50);
+                QVERIFY2(shader.shader(QShaderKey(QShader::DxbcShader, sm5,
+                             QShader::StandardShader)).shader().startsWith("DXBC"),
+                         qPrintable(file.fileName()));
+                if (stage == QStringLiteral("vert")) {
+                    QVERIFY2(shader.shader(QShaderKey(QShader::DxbcShader, sm5,
+                                 QShader::BatchableVertexShader)).shader().startsWith("DXBC"),
+                             qPrintable(file.fileName()));
+                }
+            }
+#endif
             QCOMPARE(shader.stage(), stage == QStringLiteral("vert") ? QShader::VertexStage
                                                                      : QShader::FragmentStage);
             const auto blocks = shader.description().uniformBlocks();
@@ -2928,7 +3248,8 @@ void ViewerResampleGpuTest::shaderStageInterfacesMatch() {
 
 int main(int argc, char **argv) {
     qputenv("F4_VIEWER_RESAMPLE_DRAW_TRACE", "1");
-    qputenv("QT_QPA_PLATFORM", "offscreen");
+    if (qEnvironmentVariableIntValue("ZOIN_TEST_NATIVE_RENDERER") == 0)
+        qputenv("QT_QPA_PLATFORM", "offscreen");
     qputenv("QT_SCALE_FACTOR", "1");
     // offscreen QPA otherwise selects the software scene graph before the
     // render-control RHI can initialize. Explicitly require real shaders.

@@ -23,7 +23,14 @@ QQuickItem *MasonryLayout::itemAt(qreal x, qreal y) const {
 
 int MasonryLayout::indexAt(qreal x, qreal y) const {
     const qreal margin = 1 / devicePixelRatio();
-    if (_presentationMode != Masonry || sparseVirtualLayout()) {
+    if (sparseMasonryLayout()) {
+        for (const int index : sparseMasonryIndexesForRange(y - margin, y + margin)) {
+            if (indexGeometry(index).contains(x, y))
+                return index;
+        }
+        return -1;
+    }
+    if (_presentationMode != Masonry) {
         const ZoinGallery::GalleryFixedLayoutPlan plan = fixedLayoutPlan();
         const QVector<int> candidates = _presentationMode == Columns
             ? plan.indexesIntersecting(x - margin, x + margin)

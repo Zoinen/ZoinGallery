@@ -1,5 +1,6 @@
 #include "GalleryVectorUploadGate.h"
 #include "VectorUploadGateProtocol.h"
+#include "GalleryViewportMotion.h"
 #include <QQuickWindow>
 #include <QSGTransformNode>
 #include <QtQuick/private/qquickitem_p.h>
@@ -12,11 +13,28 @@ struct GalleryVectorUploadState {
     std::atomic<int> priority = 100;
     std::atomic<QSGNode *> root = nullptr;
     std::atomic<const F4VectorUploadGateInterface *> api = nullptr;
+    // The following snapshot is owned by the render thread.
+    std::shared_ptr<GalleryViewportMotionState> motion;
+    QRectF motionBounds;
+    quint64 motionGeneration = 0;
+    bool motionReady = false;
 
     void configure(QSGNode *node) {
-        if (auto *interface = api.load())
-            interface->configure(node, generation.load(), complete.load(), present.load(),
-                                 priority.load(), prepared.load());
+        if (auto *interface = api.load()) {
+            const auto revision = generation.load();
+            const bool completeSnapshot = complete.load();
+            bool effectivePresent = present.load();
+            int effectivePriority = priority.load();
+            if (motion && motion->active.load(std::memory_order_acquire)) {
+                const bool inside = motionBounds.intersects(motion->renderVisibleViewport);
+                effectivePresent = inside && motionGeneration == revision && motionReady
+                    && completeSnapshot && failedGeneration.load() != revision
+                    && interface->ready(node, revision);
+                if (effectivePriority >= 100) effectivePriority = inside ? 100 : 200;
+            }
+            interface->configure(node, revision, completeSnapshot, effectivePresent,
+                                 effectivePriority, prepared.load());
+        }
     }
 };
 
@@ -31,6 +49,23 @@ public:
         if (auto *api = state->api.load()) api->remove(this);
         QSGNode *expected = this;
         state->root.compare_exchange_strong(expected, nullptr);
+    }
+    void setViewportMotion(std::shared_ptr<GalleryViewportMotionState> motion,
+        const QRectF &bounds, bool readySnapshot) {
+        if (state->root.load() != this) return;
+        state->motion = std::move(motion);
+        state->motionBounds = bounds;
+        state->motionGeneration = state->generation.load();
+        state->motionReady = readySnapshot;
+        state->configure(this);
+    }
+    void updateViewportMotion() {
+        if (state->root.load() == this) state->configure(this);
+    }
+    void clearViewportMotion(const std::shared_ptr<GalleryViewportMotionState> &owner) {
+        if (state->root.load() != this || state->motion != owner) return;
+        state->motion.reset();
+        state->configure(this);
     }
 private:
     QSharedPointer<GalleryVectorUploadState> state;
@@ -56,6 +91,22 @@ GalleryVectorUploadGate::~GalleryVectorUploadGate() {
     disconnect(_rendered);
     disconnect(_published);
     disconnect(_invalidated);
+}
+
+void GalleryVectorUploadGate::setNodeViewportMotion(QSGTransformNode *node,
+    std::shared_ptr<GalleryViewportMotionState> state, const QRectF &bounds,
+    bool readySnapshot) {
+    if (auto *upload = dynamic_cast<UploadTransform *>(node))
+        upload->setViewportMotion(std::move(state), bounds, readySnapshot);
+}
+void GalleryVectorUploadGate::updateNodeViewportMotion(QSGTransformNode *node) {
+    if (auto *upload = dynamic_cast<UploadTransform *>(node))
+        upload->updateViewportMotion();
+}
+void GalleryVectorUploadGate::clearNodeViewportMotion(QSGTransformNode *node,
+    const std::shared_ptr<GalleryViewportMotionState> &owner) {
+    if (auto *upload = dynamic_cast<UploadTransform *>(node))
+        upload->clearViewportMotion(owner);
 }
 
 void GalleryVectorUploadGate::resetNativeState() {
@@ -136,20 +187,23 @@ void GalleryVectorUploadGate::watchWindow() {
 
 void GalleryVectorUploadGate::watchProgress() {
     auto *target = window();
-    if (!target || _rendered || _published) return;
+    if (!target) return;
     const auto state = _state;
-    _rendered = connect(target, &QQuickWindow::afterRendering, target, [state] {
+    if (!_rendered) _rendered = connect(target, &QQuickWindow::afterRendering, target, [state, target] {
         const auto generation = state->generation.load();
         auto *root = state->root.load();
         if (const auto *api = state->api.load(); api && root) {
             if (api->ready(root, generation)) state->readyGeneration = generation;
             if (api->failed(root, generation)) state->failedGeneration = generation;
             state->pending = api->needsFrame(root, generation);
+            // GPU residency can be lost after the GUI published source readiness.
+            // Continue on the render thread without posting per-frame GUI work.
+            if (state->pending) target->update();
         } else {
             state->pending = false;
         }
     }, Qt::DirectConnection);
-    _published = connect(target, &QQuickWindow::afterRendering, this,
+    if (!_published) _published = connect(target, &QQuickWindow::afterRendering, this,
                          &GalleryVectorUploadGate::publishNativeState, Qt::QueuedConnection);
 }
 
@@ -164,11 +218,14 @@ void GalleryVectorUploadGate::publishNativeState() {
         _state->prepared = ready;
         emit nativeStateChanged();
     }
-    if ((known && !available) || ready || failed) {
+    if ((known && !available) || failed) {
         disconnect(_rendered); disconnect(_published);
         _rendered = {}; _published = {};
-    } else if (_state->pending && isVisible() && window() && window()->isVisible()) {
-        window()->update();
+    } else if (ready) {
+        // Re-entry may need fresh GPU batches even though source readiness is
+        // unchanged. Keep only the lightweight render-thread progress observer.
+        disconnect(_published);
+        _published = {};
     }
 }
 

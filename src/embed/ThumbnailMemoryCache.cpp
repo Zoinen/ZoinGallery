@@ -1,5 +1,6 @@
 #include "ThumbnailMemoryCache.h"
 
+#include "DecodeSizePolicy.h"
 #include "ProviderImageStore.h"
 
 #include <ZoinGallery/MediaTimingTrace.h>
@@ -97,11 +98,8 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::compatibleFrameLocked(
         const bool aspectPreserved = sourceKeyValue.endsWith(
             QChar(0x1f) + QString::fromLatin1(DefaultTransformKey)) ||
             sourceKeyValue.endsWith(
-                QChar(0x1f) + QStringLiteral("video-contact-sheet-2x2-display-v4"));
-        const QSize requiredSize = aspectPreserved
-            ? it->decodedSize.scaled(targetSize, Qt::KeepAspectRatio)
-            : targetSize;
-        if (!decodedFrameCovers(it->decodedSize, requiredSize)
+                QChar(0x1f) + QStringLiteral("video-contact-sheet-2x2-display-v6"));
+        if (!panelThumbnailCovers(it->decodedSize, targetSize, aspectPreserved)
             && !it->completedRequests.contains(targetSize)) {
             continue;
         }
@@ -226,21 +224,27 @@ QString ThumbnailMemoryCache::nextProviderIdLocked(
         .arg(++_serial);
 }
 
-QStringList ThumbnailMemoryCache::pruneLocked() {
+QStringList ThumbnailMemoryCache::pruneLocked(bool bulk) {
     QStringList evicted;
+    QStringList byRecency;
+    if (bulk && _frames.size() > 1 && _retainedBytes > _byteBudget) {
+        // A settings change can drop many frames at once. Sort once instead
+        // of scanning the remaining cache for every victim.
+        byRecency = _frames.keys();
+        std::sort(byRecency.begin(), byRecency.end(),
+                  [this](const QString &a, const QString &b) {
+            return _frames.constFind(a)->lastUse > _frames.constFind(b)->lastUse;
+        });
+    }
     // Keep one oversized most-recent frame so a single unusual thumbnail can
     // still be presented. Every subsequent insertion evicts it normally.
     while (_frames.size() > 1 && _retainedBytes > _byteBudget) {
-        auto victim = _frames.end();
-        for (auto it = _frames.begin(); it != _frames.end(); ++it) {
-            if (victim == _frames.end() ||
-                it->lastUse < victim->lastUse) {
-                victim = it;
-            }
-        }
-        if (victim == _frames.end()) {
-            break;
-        }
+        const auto victim = bulk
+            ? _frames.find(byRecency.takeLast())
+            : std::min_element(_frames.begin(), _frames.end(),
+                [](const FrameEntry &a, const FrameEntry &b) {
+                    return a.lastUse < b.lastUse;
+                });
         _retainedBytes = qMax<qint64>(0,
             _retainedBytes - victim->bytes);
         _sourceFrames.remove(victim->sourceKey, victim.key());
@@ -442,7 +446,22 @@ void ThumbnailMemoryCache::clear() {
     removeProviderIds(providerIds, true);
 }
 
+void ThumbnailMemoryCache::setByteBudget(qint64 byteBudget) {
+    const qint64 budget = qMax<qint64>(0, byteBudget);
+    QStringList evicted;
+    {
+        QMutexLocker locker(&_mutex);
+        if (_byteBudget == budget) return;
+        const bool shrinking = budget < _byteBudget;
+        _byteBudget = budget;
+        if (shrinking) evicted = pruneLocked(true);
+    }
+    removeProviderIds(evicted, true);
+    emit byteBudgetChanged();
+}
+
 qint64 ThumbnailMemoryCache::byteBudget() const {
+    QMutexLocker locker(&_mutex);
     return _byteBudget;
 }
 

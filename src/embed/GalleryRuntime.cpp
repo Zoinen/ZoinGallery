@@ -25,6 +25,12 @@
 #include "VectorSource.h"
 #include "GalleryVectorUploadGate.h"
 #include "GalleryIconImage.h"
+#include "GalleryThumbnailImage.h"
+#include "GalleryComponentHost.h"
+#include "GalleryScrollAnimation.h"
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+#include "VideoPlaybackController.h"
+#endif
 
 #include <QDebug>
 #include <QPointer>
@@ -76,6 +82,7 @@ public:
     QSharedPointer<ProviderImageStore> store;
     QSharedPointer<ThumbnailMemoryCache> thumbnailCache;
     QSharedPointer<ImageSourceProvider> imageSourceProvider;
+    VideoMutePreference *videoMutePreference = nullptr;
     QSharedPointer<QThreadPool> directoryPool = QSharedPointer<QThreadPool>::create();
     QSharedPointer<DirectoryPreviewCache> directoryCache = QSharedPointer<DirectoryPreviewCache>::create();
     QSharedPointer<DirectoryPreviewScheduler> directoryScheduler = QSharedPointer<DirectoryPreviewScheduler>::create(directoryPool);
@@ -122,7 +129,10 @@ void GalleryRuntime::registerTypes() {
                                                 "GalleryNativeTextMetrics");
         qmlRegisterType<BrickItem>(NativeModuleUri, 1, 0, "BrickItem");
         qmlRegisterType<GallerySceneItem>(NativeModuleUri, 1, 0, "GallerySceneItem");
+        qmlRegisterType<GalleryScrollAnimation>(NativeModuleUri, 1, 0, "GalleryScrollAnimation");
         qmlRegisterType<GalleryIconImage>(NativeModuleUri, 1, 0, "GalleryIconImage");
+        qmlRegisterType<GalleryThumbnailImage>(NativeModuleUri, 1, 0, "GalleryThumbnailImage");
+        qmlRegisterType<GalleryComponentHost>(NativeModuleUri, 1, 0, "GalleryComponentHost");
         qmlRegisterType<GalleryVectorUploadGate>(NativeModuleUri, 1, 0, "GalleryVectorUploadGate");
         qmlRegisterType<VectorSourcePin>(NativeModuleUri, 1, 0, "VectorSourcePin");
         qmlRegisterType<ViewerWheelArea>(NativeModuleUri, 1, 0,
@@ -156,6 +166,11 @@ GalleryRuntime::GalleryRuntime(
     : QObject(engine), d(new Private) {
     d->engine = engine;
     d->options = options;
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+    if (options.enableVideoPlayback) {
+        d->videoMutePreference = new VideoMutePreference(this);
+    }
+#endif
     d->directoryPool->setMaxThreadCount(2);
     d->options.providerPrefix = normalizedProviderPrefix(
         d->options.providerPrefix);
@@ -196,7 +211,8 @@ GalleryRuntime::GalleryRuntime(
     // to retain the pre-module decode parallelism, while embedded hosts can
     // still supply an explicit bounded limit.
     d->decodeManager = new DecodeManager(
-        this, d->options.maxDecodeThreads, d->imageSourceProvider);
+        this, d->options.maxDecodeThreads, d->imageSourceProvider,
+        d->options.expandViewerFitWorkers);
     if (d->options.persistentCache) {
         QSettings settings;
         d->decodeManager->setImageCacheMode(cacheUsageModeFromInt(
@@ -211,7 +227,10 @@ GalleryRuntime::GalleryRuntime(
         d->decodeManager->setFileListCacheMode(CacheUsageMode::Off);
     }
 
-    d->preferences = new GalleryPreferences(d->decodeManager, d->options.persistentCache, this);
+    d->preferences = new GalleryPreferences(d->decodeManager,
+        d->options.persistentCache, this, d->thumbnailCache.data());
+    connect(d->thumbnailCache.data(), &ThumbnailMemoryCache::byteBudgetChanged,
+            this, &GalleryRuntime::thumbnailCacheByteBudgetChanged);
     connect(d->preferences, &GalleryPreferences::changed, this, [this] {
         if (!d->options.persistentCache) return;
         for (const auto &session : d->sessions) if (session)
@@ -279,6 +298,7 @@ GallerySession *GalleryRuntime::createExternalSession(
         d->thumbnailProviderName, d->asyncProviderName,
         d->store, d->thumbnailCache, d->decodeManager,
         d->imageSourceProvider, d->options.enableVideoPlayback,
+        d->videoMutePreference,
         d->options.viewerFitCacheByteBudget,
         d->options.viewerNativeCacheByteBudget,
         parent ? parent : this);
@@ -314,6 +334,7 @@ GallerySession *GalleryRuntime::createSession(
         d->thumbnailProviderName, d->asyncProviderName,
         d->store, d->thumbnailCache, d->decodeManager,
         d->imageSourceProvider, d->options.enableVideoPlayback,
+        d->videoMutePreference,
         d->options.viewerFitCacheByteBudget,
         d->options.viewerNativeCacheByteBudget,
         parent ? parent : this);
@@ -387,6 +408,8 @@ void GalleryRuntime::shutdown() {
         return;
     }
     d->shutdown = true;
+    if (auto *textures = GalleryThumbnailTextureCache::forEngine(d->engine, false))
+        textures->shutdown();
     for (const QPointer<GallerySession> &session : std::as_const(d->sessions)) {
         if (session) {
             session->shutdown();

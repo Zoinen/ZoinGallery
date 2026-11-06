@@ -2,6 +2,7 @@
 
 #include <QEvent>
 #include <QCoreApplication>
+#include <QLoggingCategory>
 #include <mutex>
 #include <QMatrix4x4>
 #include <QMetaMethod>
@@ -26,6 +27,8 @@ void registerPixelGridTypes() {
 }
 
 namespace {
+Q_LOGGING_CATEGORY(pixelGridTopologyLog, "zoingallery.pixelgrid.topology", QtWarningMsg)
+
 bool isGridBoundary(QQuickItem *item) {
     return item && (qobject_cast<PixelGridScope *>(item) || item->property("_zoinPixelGridScope").toBool());
 }
@@ -38,8 +41,12 @@ struct PixelGridContext::Private {
         Node *parentNode = nullptr;
         QSet<Node *> children;
         QSet<PixelGridAlignment *> targets;
+        QSet<PixelGridAlignment *> deferred;
         QList<QMetaObject::Connection> connections;
         int references = 0;
+        bool boundary = false;
+        bool motionActive = false;
+        bool ownerChecked = false;
     };
     PixelGridContext *q;
     QPointer<QQuickWindow> window;
@@ -52,6 +59,7 @@ struct PixelGridContext::Private {
     bool flushing = false;
     bool collecting = false;
     quint64 visits = 0, maps = 0, topology = 0, flushes = 0;
+    quint64 boundaryChecks = 0;
 
     void mark(Node *node) {
         if (!node) return;
@@ -68,6 +76,10 @@ struct PixelGridContext::Private {
         auto *node = new Node(q);
         node->item = item;
         node->references = 1;
+        node->boundary = isGridBoundary(item);
+        node->motionActive = node->boundary
+            && item->property("_zoinPixelGridMotionActive").toBool();
+        if (collecting) ++boundaryChecks;
         nodes.insert(item, node);
         const auto changed = [this, node] { mark(node); };
         node->connections = {
@@ -87,6 +99,7 @@ struct PixelGridContext::Private {
                 }
             }),
             QObject::connect(item, &QQuickItem::parentChanged, q, [this, node] {
+                node->ownerChecked = false;
                 collect(node, reparented);
                 mark(node);
             })
@@ -94,10 +107,21 @@ struct PixelGridContext::Private {
         if (collecting) ++topology;
         return node;
     }
+    void setParentNode(Node *node, Node *parent) {
+        auto *previous = node->parentNode;
+        if (previous == parent) return;
+        if (previous) previous->children.remove(node);
+        node->parentNode = parent;
+        if (parent) parent->children.insert(node);
+        if (previous && parent)
+            qCDebug(pixelGridTopologyLog) << "[FIX] Moved alignment subtree"
+                                         << node->item.data() << previous->item.data()
+                                         << parent->item.data();
+    }
     void release(Node *node) {
         if (--node->references) return;
         for (const auto &connection : std::as_const(node->connections)) QObject::disconnect(connection);
-        if (node->parentNode) node->parentNode->children.remove(node);
+        setParentNode(node, nullptr);
         if (node->item) nodes.remove(node->item);
         else for (auto it = nodes.begin(); it != nodes.end(); ++it)
             if (it.value() == node) { nodes.erase(it); break; }
@@ -112,12 +136,17 @@ struct PixelGridContext::Private {
         const auto targets = node->targets;
         for (auto *alignment : targets) {
             if (!alignment->isEnabled()) continue;
+            auto *scope = nodes.value(alignment->m_scope);
+            if (scope && scope->motionActive) {
+                scope->deferred.insert(alignment);
+                continue;
+            }
             if (collecting) ++visits;
             alignment->align();
         }
         // An aligned scope owns the phase of its children. Moving its parent
         // changes only this boundary, not any cached local child coordinates.
-        if (isGridBoundary(node->item)) return;
+        if (node->boundary) return;
         const auto children = node->children;
         for (auto *child : children) fit(child);
     }
@@ -157,23 +186,30 @@ void PixelGridContext::add(PixelGridAlignment *alignment) {
     QList<Private::Node *> chain;
     auto *boundary = d->window->contentItem();
     for (auto *ancestor = item; ancestor; ancestor = ancestor->parentItem()) {
+        auto *node = d->watch(ancestor);
         auto *owner = ancestor->parentItem();
-        if (!isGridBoundary(ancestor) && owner
-            && owner->metaObject()->indexOfProperty("moving") >= 0
-            && owner->property("contentItem").value<QQuickItem *>() == ancestor)
-            qmlAttachedPropertiesObject<PixelGridScope>(ancestor, true);
-        chain.append(d->watch(ancestor));
+        if (!node->ownerChecked) {
+            node->ownerChecked = true;
+            if (!node->boundary && owner
+                && owner->metaObject()->indexOfProperty("moving") >= 0
+                && owner->property("contentItem").value<QQuickItem *>() == ancestor) {
+                // Publish before creating the adapter: its own alignment can
+                // register recursively through this same watched node.
+                node->boundary = true;
+                qmlAttachedPropertiesObject<PixelGridScope>(ancestor, true);
+            }
+        }
+        chain.append(node);
         if (ancestor == boundary) break;
     }
-    for (qsizetype i = 0; i + 1 < chain.size(); ++i) {
-        chain[i]->parentNode = chain[i + 1];
-        chain[i + 1]->children.insert(chain[i]);
-    }
+    for (qsizetype i = 0; i + 1 < chain.size(); ++i)
+        d->setParentNode(chain[i], chain[i + 1]);
+    d->setParentNode(chain.last(), nullptr);
     chain.first()->targets.insert(alignment);
     d->chains.insert(alignment, chain);
     alignment->m_scope = nullptr;
-    for (auto *ancestor = item->parentItem(); ancestor; ancestor = ancestor->parentItem())
-        if (isGridBoundary(ancestor)) { alignment->m_scope = ancestor; break; }
+    for (qsizetype i = 1; i < chain.size(); ++i)
+        if (chain[i]->boundary) { alignment->m_scope = chain[i]->item; break; }
     d->mark(chain.first());
 }
 void PixelGridContext::remove(PixelGridAlignment *alignment) {
@@ -181,7 +217,10 @@ void PixelGridContext::remove(PixelGridAlignment *alignment) {
     const auto chain = d->chains.take(alignment);
     if (chain.isEmpty()) return;
     chain.first()->targets.remove(alignment);
-    for (auto *node : chain) d->release(node);
+    for (auto *node : chain) {
+        node->deferred.remove(alignment);
+        d->release(node);
+    }
 }
 void PixelGridContext::invalidate(PixelGridAlignment *alignment) {
     const auto it = d->chains.constFind(alignment);
@@ -189,8 +228,24 @@ void PixelGridContext::invalidate(PixelGridAlignment *alignment) {
 }
 void PixelGridContext::invalidateScope(QQuickItem *item) {
     if (auto *node = d->nodes.value(item)) {
+        // Scope installation can happen after descendants have registered.
+        // Re-evaluate once here, rather than reflecting on every ancestor for
+        // every descendant during the resulting chain rebuild.
+        node->boundary = isGridBoundary(item);
+        node->motionActive = node->boundary
+            && item->property("_zoinPixelGridMotionActive").toBool();
+        if (d->collecting) ++d->boundaryChecks;
         d->collect(node, d->reparented);
         d->mark(node);
+    }
+}
+void PixelGridContext::setScopeMotionActive(QQuickItem *item, bool active) {
+    auto *node = d->nodes.value(item);
+    if (!node || node->motionActive == active) return;
+    node->motionActive = active;
+    if (!active) {
+        const auto deferred = std::exchange(node->deferred, {});
+        for (auto *alignment : deferred) invalidate(alignment);
     }
 }
 void PixelGridContext::flushWindow(QQuickWindow *window) { if (auto *context = forWindow(window)) context->flush(); }
@@ -208,7 +263,7 @@ void PixelGridContext::flush() {
         for (auto *node : dirty) {
             bool inherited = false;
             for (auto *parent = node->parentNode; parent; parent = parent->parentNode) {
-                if (isGridBoundary(parent->item)) break;
+                if (parent->boundary) break;
                 if (dirty.contains(parent)) { inherited = true; break; }
             }
             if (!inherited) d->fit(node);
@@ -219,9 +274,10 @@ void PixelGridContext::flush() {
 }
 QVariantMap PixelGridContext::counters() const {
     return {{"alignmentVisits", d->visits}, {"sceneMaps", d->maps}, {"topologyChanges", d->topology},
-            {"flushes", d->flushes}, {"registeredLeaves", d->chains.size()}, {"watchedItems", d->nodes.size()}};
+            {"flushes", d->flushes}, {"registeredLeaves", d->chains.size()}, {"watchedItems", d->nodes.size()},
+            {"boundaryChecks", d->boundaryChecks}};
 }
-void PixelGridContext::resetCounters() { d->collecting = true; d->visits = d->maps = d->topology = d->flushes = 0; }
+void PixelGridContext::resetCounters() { d->collecting = true; d->visits = d->maps = d->topology = d->flushes = d->boundaryChecks = 0; }
 
 PixelGridAlignment::PixelGridAlignment(QObject *parent) : QObject(parent), m_item(qobject_cast<QQuickItem *>(parent)) {
     if (m_item) {
@@ -283,7 +339,9 @@ void PixelGridScope::setMotionOffset(QPointF offset) {
 void PixelGridScope::setMotionActive(bool active) {
     if (m_motionActive == active) return;
     m_motionActive = active;
+    setProperty("_zoinPixelGridMotionActive", active);
     m_alignment->setEnabled(!active);
+    if (auto *grid = m_alignment->grid()) grid->setScopeMotionActive(this, active);
     updateTranslation();
     emit motionActiveChanged();
 }
@@ -333,7 +391,10 @@ PixelGridScopeAttached::~PixelGridScopeAttached() = default;
 void PixelGridScopeAttached::setMotionActive(bool active) {
     if (m_motionActive == active) return;
     m_motionActive = active;
+    if (m_item) m_item->setProperty("_zoinPixelGridMotionActive", active);
     if (m_alignment) m_alignment->setEnabled(!active);
+    if (m_alignment && m_alignment->grid())
+        m_alignment->grid()->setScopeMotionActive(m_item, active);
     emit motionActiveChanged();
 }
 void PixelGridScopeAttached::updateTranslation() {

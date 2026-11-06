@@ -569,19 +569,21 @@ void ExternalCatalogModel::scheduleViewerDecode() {
 
 void ExternalCatalogModel::scheduleViewerDecodeAt(
     int row, const QSize &viewportSize, int prefetchCount) {
-    if (_shutdown || !validRow(row) || !loadedEntry(row).image
-        || loadedEntry(row).thumbnailKind == QStringLiteral("video") ||
-        !viewportSize.isValid() || prefetchCount <= 0) {
+    if (_shutdown || !validRow(row)
+        || (!loadedEntry(row).image && !isVideoAt(row))
+        || !viewportSize.isValid() || prefetchCount <= 0) {
         return;
     }
 
-    if (viewerDecodeFailedAt(row)) return;
+    const bool videoAnchor = isVideoAt(row);
+    if (videoAnchor && viewportSize.isEmpty()) return;
+    if (!videoAnchor && viewerDecodeFailedAt(row)) return;
 
     const Entry &requestedEntry = loadedEntry(row);
     const QSize requestedOriginalSize = requestedEntry.originalSize.isValid()
         ? requestedEntry.originalSize
         : requestedEntry.item ? requestedEntry.item->fullSize() : QSize();
-    if (!requestedOriginalSize.isValid() &&
+    if (!videoAnchor && !requestedOriginalSize.isValid() &&
         _metadataResolvedPaths.contains(requestedEntry.sourceIdentity) &&
         viewerRequestStateAt(row) == QStringLiteral("pending")) {
         setViewerRequestState({row}, QStringLiteral("failed"));
@@ -590,13 +592,16 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
     const bool probeBarrierActive =
         _catalogProbeRequested && !_probePassComplete;
     const bool explicitCurrentPlan = loadedEntry(row).id == _viewerEntryId;
-    const bool waitingForCurrent = explicitCurrentPlan
+    const bool waitingForCurrent = !videoAnchor && explicitCurrentPlan
         && viewerRequestStateAt(row) != QStringLiteral("ready");
     if (explicitCurrentPlan && !viewportSize.isEmpty()) {
         QStringList sources;
-        for (const int candidate : viewerCandidateRows(row, prefetchCount))
-            sources.append(loadedEntry(candidate).sourceIdentity);
+        for (const int candidate : viewerCandidateRows(row, prefetchCount)) {
+            if (!isVideoAt(candidate))
+                sources.append(loadedEntry(candidate).sourceIdentity);
+        }
         _decodeManager->setViewerDemand(_sessionId, sources);
+        if (!videoAnchor) restoreViewerThumbnail(row);
     }
     // A slow catalog probe must not hold the Fit neighbor window behind an
     // unrelated offscreen source. Native neighbors retain their dwell/barrier.
@@ -606,6 +611,7 @@ void ExternalCatalogModel::scheduleViewerDecodeAt(
     const QList<int> candidates = viewerCandidateRows(
         row, effectivePrefetchCount);
     for (const int candidateRow : candidates) {
+        if (isVideoAt(candidateRow)) continue;
         const Entry &candidate = loadedEntry(candidateRow);
         if (!candidate.originalSize.isValid() &&
             (!candidate.item || !candidate.item->fullSize().isValid())) {
@@ -674,10 +680,13 @@ QList<int> ExternalCatalogModel::viewerCandidateRows(
     }
 
     result.append(row);
+    // Keep the video as the spatial/retention anchor, without consuming an
+    // image slot: its pixels are supplied by the player, not this cache.
+    const int candidateCount = count + int(isVideoAt(row));
     int next = row + 1;
     int previous = row - 1;
     bool forward = true;
-    while (result.size() < count
+    while (result.size() < candidateCount
            && (next < logicalRowCount() || previous >= 0)) {
         int &cursor = forward ? next : previous;
         const int step = forward ? 1 : -1;

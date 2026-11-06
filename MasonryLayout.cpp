@@ -361,9 +361,6 @@ BrickItem *MasonryLayout::createComponent(
                  << component->errors();
         return nullptr;
     }
-    object->setProperty(
-        "_zoinGalleryDelegateComponent",
-        QVariant::fromValue(reinterpret_cast<quintptr>(component)));
     // A newly allocated viewport slot becomes visible only after its row
     // bindings and final geometry have been committed.
     object->setVisible(false);

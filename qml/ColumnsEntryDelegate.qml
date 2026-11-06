@@ -15,13 +15,13 @@ Item {
     }
 
     function pixelOffset(item) {
-        return content.entry.iconPixelOffset(item)
+        return content.entry.iconPixelAlignment(item)
     }
 
     Item {
         id: textRow
-        x: content.entry.effectivePreviewRect.x
-           + content.entry.effectivePreviewRect.width
+        x: content.entry.effectivePreviewX
+           + content.entry.effectivePreviewWidth
            + content.entry.panelRoot.detailsRowSpacing
         width: Math.max(0, parent.width - x - content.entry.panelRoot.detailsRowInset)
         height: parent.height
@@ -39,7 +39,7 @@ Item {
             motionActive: content.entry.motionActive
             id: baseNameLabel
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
-            readonly property point pixelCorrection: content.pixelOffset(baseNameLabel)
+            readonly property var pixelCorrection: content.pixelOffset(baseNameLabel)
             objectName: "galleryBaseName-" + content.entry.viewIndex
             x: 0
             width: Math.max(0, Math.round(
@@ -68,8 +68,8 @@ Item {
             verticalAlignment: Text.AlignVCenter
             font: content.entry.panelRoot.iconLabelFont
             transform: Translate {
-                x: baseNameLabel.pixelCorrection.x
-                y: baseNameLabel.pixelCorrection.y
+                x: (baseNameLabel.pixelCorrection ? baseNameLabel.pixelCorrection.offsetX : 0)
+                y: (baseNameLabel.pixelCorrection ? baseNameLabel.pixelCorrection.offsetY : 0)
             }
         }
 
@@ -77,7 +77,7 @@ Item {
             motionActive: content.entry.motionActive
             id: extensionLabel
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
-            readonly property point pixelCorrection: content.pixelOffset(extensionLabel)
+            readonly property var pixelCorrection: content.pixelOffset(extensionLabel)
             objectName: "galleryExtension-" + content.entry.viewIndex
             visible: content.entry.panelRoot.separateFileExtensions
                      && content.entry.displayExtension !== ""
@@ -100,8 +100,8 @@ Item {
             elide: Text.ElideLeft
             font: content.entry.panelRoot.iconLabelFont
             transform: Translate {
-                x: extensionLabel.pixelCorrection.x
-                y: extensionLabel.pixelCorrection.y
+                x: (extensionLabel.pixelCorrection ? extensionLabel.pixelCorrection.offsetX : 0)
+                y: (extensionLabel.pixelCorrection ? extensionLabel.pixelCorrection.offsetY : 0)
             }
         }
 

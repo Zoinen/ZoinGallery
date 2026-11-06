@@ -22,11 +22,11 @@ Item {
         y: Math.round((parent.height - margin - height) * dpr) / dpr
         width: content.entry.cellContentWidth
         height: Math.ceil(masonryLabel.implicitHeight * dpr) / dpr + captionTopSpacing
-        readonly property point pixelGridOffset:
-            content.entry.iconPixelOffset(labelSurface)
+        readonly property var pixelGridOffset:
+            content.entry.iconPixelAlignment(labelSurface)
         transform: Translate {
-            x: labelSurface.pixelGridOffset.x
-            y: labelSurface.pixelGridOffset.y
+            x: (labelSurface.pixelGridOffset ? labelSurface.pixelGridOffset.offsetX : 0)
+            y: (labelSurface.pixelGridOffset ? labelSurface.pixelGridOffset.offsetY : 0)
         }
 
         Rectangle {

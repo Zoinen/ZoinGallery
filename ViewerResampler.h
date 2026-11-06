@@ -2,6 +2,9 @@
 
 #include <QImage>
 #include <QSize>
+#include <functional>
+
+class QThreadPool;
 
 namespace ZoinGallery::ViewerResampler {
 
@@ -9,6 +12,9 @@ namespace ZoinGallery::ViewerResampler {
 // Equal-size requests share the original image without altering its pixels.
 // Reduction uses the viewer's sRGB sampling transfer and ordered dither;
 // existing color-space tags and image metadata are preserved without conversion.
-QImage downsample(const QImage &image, QSize targetSize);
+// With a helper pool, the cancellation callback may run on several threads.
+QImage downsample(const QImage &image, QSize targetSize,
+                  const std::function<bool()> &isCanceled = {},
+                  QThreadPool *helperPool = nullptr);
 
 }

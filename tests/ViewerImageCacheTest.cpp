@@ -45,6 +45,42 @@ class ViewerImageCacheTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void videoAnchorPrefetchesSixteenImageNeighbors() {
+        std::vector<std::unique_ptr<ImageFile>> owned;
+        QList<ImageFile *> items;
+        for (int row = 0; row < 23; ++row) {
+            auto item = std::make_unique<ImageFile>();
+            configureImage(*item, QStringLiteral("image-%1.png").arg(row), QSize(800, 600));
+            if (row == 10 || row == 11 || row == 13) {
+                auto info = item->info();
+                info.thumbnailKind = QStringLiteral("video");
+                item->setInfo(info);
+                item->setIsImage(false);
+            }
+            items.append(item.get());
+            owned.push_back(std::move(item));
+        }
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        ViewerImageCache cache(QStringLiteral("video-neighbors-"), store);
+        const auto plan = cache.planRequest(items, 11, QSize(320, 240), 16);
+        QVERIFY(plan.cachedImages.isEmpty());
+        QCOMPARE(plan.decodeRequests.size(), 16);
+        const QList<int> expected{12, 9, 14, 8, 15, 7, 16, 6, 17, 5, 18, 4, 19, 3, 20, 2};
+        for (int ordinal = 0; ordinal < expected.size(); ++ordinal) {
+            const auto &request = plan.decodeRequests[ordinal];
+            QCOMPARE(request.info.sourceIdentity(), items[expected[ordinal]]->fullPath());
+            QCOMPARE(request.targetSize, QSize(320, 240));
+            QVERIFY(request.fitToViewerRequest);
+            QVERIFY(storeFrame(cache, request).accepted);
+        }
+        const auto next = cache.planRequest(items, 12, QSize(320, 240), 16);
+        QCOMPARE(next.cachedImages.size(), 1);
+        QCOMPARE(next.cachedImages.first().second, 1);
+        const auto previous = cache.planRequest(items, 9, QSize(320, 240), 16);
+        QCOMPARE(previous.cachedImages.size(), 1);
+        QCOMPARE(previous.cachedImages.first().second, 1);
+    }
+
     void fitRequestReusesFullTierWhenImageFitsViewport() {
         const QSize originalSize(640, 480);
         const QSize viewportSize(2048, 1536);

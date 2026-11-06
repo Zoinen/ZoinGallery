@@ -5,6 +5,7 @@
 #include "FileListModel.h"
 #include "ImageFile.h"
 #include "GalleryDelegateItem.h"
+#include "GalleryComponentHost.h"
 #include <ZoinGallery/PixelGrid.h>
 
 #include <QDir>
@@ -13,6 +14,7 @@
 #include <QImage>
 #include <QLineF>
 #include <QPainter>
+#include <QPixmap>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
@@ -26,9 +28,13 @@
 #include <QtTest>
 #include <cstring>
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+#include "HdrDisplay.h"
+#include "HdrVideoOutput.h"
+#include "ViewerVideoFrameSource.h"
 #include <QVideoFrame>
 #include <QVideoFrameFormat>
 #include <QVideoSink>
+#include <QScopeGuard>
 #endif
 
 #include <cmath>
@@ -57,6 +63,27 @@ bool writeImage(const QString &path, const QSize &size, const QColor &color) {
 }
 
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+QVideoFrame hdrControlsFrame(bool hdr) {
+    const QSize size(64, 48);
+    QVideoFrameFormat format(size, QVideoFrameFormat::Format_P010);
+    format.setColorRange(QVideoFrameFormat::ColorRange_Video);
+    format.setColorSpace(QVideoFrameFormat::ColorSpace_BT2020);
+    format.setColorTransfer(hdr ? QVideoFrameFormat::ColorTransfer_STD_B67
+                                : QVideoFrameFormat::ColorTransfer_BT709);
+    QVideoFrame frame(format);
+    if (!frame.map(QVideoFrame::WriteOnly)) return {};
+    for (int y = 0; y < size.height(); ++y) {
+        auto *row = reinterpret_cast<quint16 *>(frame.bits(0) + y * frame.bytesPerLine(0));
+        std::fill(row, row + size.width(), quint16(720 << 6));
+    }
+    for (int y = 0; y < size.height() / 2; ++y) {
+        auto *row = reinterpret_cast<quint16 *>(frame.bits(1) + y * frame.bytesPerLine(1));
+        std::fill(row, row + size.width(), quint16(512 << 6));
+    }
+    frame.unmap();
+    return frame;
+}
+
 QVideoFrame solidVideoFrame(const QSize &size, const QColor &color) {
     QVideoFrame frame(QVideoFrameFormat(
         size, QVideoFrameFormat::Format_BGRA8888));
@@ -166,6 +193,107 @@ private slots:
         }
     }
 
+    void physicalGridReparentedSubtreeLeavesOldBranch() {
+        QQuickView view;
+        auto *root = createRoot(view, R"(
+            import QtQuick
+            import ZoinGallery.PixelGrid 1.0
+
+            Item {
+                width: 200
+                height: 100
+                Item {
+                    objectName: "oldBranch"
+                    x: 3.25
+                    Text {
+                        id: stationary
+                        objectName: "stationaryCaption"
+                        x: 2.3
+                        y: 4.7
+                        text: "Stationary"
+                        transform: Translate {
+                            x: stationary.PixelGridAlignment.offsetX
+                            y: stationary.PixelGridAlignment.offsetY
+                        }
+                    }
+                    Item {
+                        objectName: "movingBranch"
+                        x: 8.3
+                        Text {
+                            id: first
+                            objectName: "firstMovedCaption"
+                            x: 3.1
+                            y: 24.7
+                            text: "First"
+                            transform: Translate {
+                                x: first.PixelGridAlignment.offsetX
+                                y: first.PixelGridAlignment.offsetY
+                            }
+                        }
+                        Text {
+                            id: second
+                            objectName: "secondMovedCaption"
+                            x: 7.9
+                            y: 43.3
+                            text: "Second"
+                            transform: Translate {
+                                x: second.PixelGridAlignment.offsetX
+                                y: second.PixelGridAlignment.offsetY
+                            }
+                        }
+                    }
+                }
+                Item {
+                    objectName: "newBranch"
+                    x: 92.3
+                }
+            }
+        )", QStringLiteral("GridReparent"));
+        QVERIFY(root);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        auto *grid = ZoinGallery::PixelGridContext::forWindow(&view);
+        auto *oldBranch = root->findChild<QQuickItem *>("oldBranch");
+        auto *newBranch = root->findChild<QQuickItem *>("newBranch");
+        auto *movingBranch = root->findChild<QQuickItem *>("movingBranch");
+        auto *stationary = root->findChild<QQuickItem *>("stationaryCaption");
+        auto *first = root->findChild<QQuickItem *>("firstMovedCaption");
+        auto *second = root->findChild<QQuickItem *>("secondMovedCaption");
+        QVERIFY(oldBranch && newBranch && movingBranch && stationary && first && second);
+        grid->flush();
+
+        movingBranch->setParentItem(newBranch);
+        grid->flush();
+        grid->resetCounters();
+        oldBranch->setX(oldBranch->x() + 0.3);
+        grid->flush();
+        QCOMPARE(grid->counters().value("alignmentVisits").toULongLong(), 1u);
+
+        const auto verifyOrigin = [&](QQuickItem *leaf) {
+            const auto point = leaf->mapToItem(view.contentItem(), QPointF());
+            const qreal dpr = view.effectiveDevicePixelRatio();
+            for (qreal coordinate : {point.x(), point.y()}) {
+                const qreal physical = coordinate * dpr;
+                QVERIFY2(qAbs(physical - std::round(physical)) < 0.001,
+                         qPrintable(QString("%1 is at physical coordinate %2")
+                                        .arg(leaf->objectName()).arg(physical)));
+            }
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - point, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - point, QPointF(0, 1));
+        };
+        verifyOrigin(first);
+        verifyOrigin(second);
+
+        delete movingBranch;
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        oldBranch->setVisible(false);
+        grid->flush();
+        oldBranch->setVisible(true);
+        grid->flush();
+        verifyOrigin(stationary);
+        QCOMPARE(grid->counters().value("registeredLeaves").toULongLong(), 1u);
+    }
+
     void physicalGridCachesLeavesAcrossMotionAndUnrelatedFrames() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -190,28 +318,28 @@ private slots:
                         objectName: "gridCaption"; x: 4.17; y: 6.29
                         text: "Small caption"; font.family: "Segoe UI"; font.pixelSize: 11
                         renderType: Text.NativeRendering; color: "white"
-                        transform: Translate { x: caption.PixelGridAlignment.offset.x; y: caption.PixelGridAlignment.offset.y }
+                        transform: Translate { x: caption.PixelGridAlignment.offsetX; y: caption.PixelGridAlignment.offsetY }
                     }
                     TextInput {
                         id: input
                         objectName: "gridInput"; x: 4.17; y: 35.29
                         text: "Editable text"; font.family: "Segoe UI"; font.pixelSize: 12
                         renderType: TextInput.NativeRendering; color: "white"
-                        transform: Translate { x: input.PixelGridAlignment.offset.x; y: input.PixelGridAlignment.offset.y }
+                        transform: Translate { x: input.PixelGridAlignment.offsetX; y: input.PixelGridAlignment.offsetY }
                     }
                     TextEdit {
                         id: edit
                         objectName: "gridEdit"; x: 4.17; y: 63.29
                         text: "Second line\nsmall secondary label"; font.family: "Segoe UI"; font.pixelSize: 10
                         renderType: TextEdit.NativeRendering; color: "white"
-                        transform: Translate { x: edit.PixelGridAlignment.offset.x; y: edit.PixelGridAlignment.offset.y }
+                        transform: Translate { x: edit.PixelGridAlignment.offsetX; y: edit.PixelGridAlignment.offsetY }
                     }
                     Image {
                         id: icon
                         objectName: "gridIcon"; x: 150.17; y: 6.29
                         width: 16 / content.gridDpr; height: width
                         source: gridImage; smooth: false
-                        transform: Translate { x: icon.PixelGridAlignment.offset.x; y: icon.PixelGridAlignment.offset.y }
+                        transform: Translate { x: icon.PixelGridAlignment.offsetX; y: icon.PixelGridAlignment.offsetY }
                     }
                 }
             }
@@ -231,6 +359,10 @@ private slots:
             for (const auto &name : names) {
                 auto *leaf = root->findChild<QQuickItem *>(name);
                 QVERIFY(leaf && leaf->isVisible());
+                auto *alignment = ZoinGallery::PixelGridAlignment::forItem(leaf);
+                QVERIFY(alignment);
+                QCOMPARE(alignment->offsetX(), alignment->offset().x());
+                QCOMPARE(alignment->offsetY(), alignment->offset().y());
                 const QPointF point = leaf->mapToItem(view.contentItem(), QPointF());
                 for (qreal coordinate : {point.x(), point.y()})
                     QVERIFY2(qAbs(coordinate * view.devicePixelRatio() - std::round(coordinate * view.devicePixelRatio())) < .001,
@@ -285,6 +417,74 @@ private slots:
             for (int x = 0; x < capture.width(); ++x)
                 painted += capture.pixelColor(x, y).lightness() > 80;
         QVERIFY2(painted > 100, "The actual small text and icon must be rendered in the capture");
+        runtime->shutdown();
+    }
+
+    void physicalGridSharesBoundaryDiscovery() {
+        QQuickView view;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        auto *root = qobject_cast<QQuickItem *>(createRoot(view, R"(
+            import QtQuick
+            import ZoinGallery.PixelGrid 1.0
+            Item {
+                width: 400; height: 160
+                Item {
+                    objectName: "lateScope"; x: 13.27; y: 9.31
+                    Item {
+                        x: 3.17; y: 7.29
+                        Text {
+                            id: caption; objectName: "lateScopeCaption"
+                            x: 2.13; y: 3.19; text: "Small shared-boundary caption"
+                            color: "white"; font.pixelSize: 11; renderType: Text.NativeRendering
+                            transform: Translate { x: caption.PixelGridAlignment.offsetX; y: caption.PixelGridAlignment.offsetY }
+                        }
+                    }
+                }
+            }
+        )", "sharedBoundary.qml"));
+        QVERIFY(root);
+        view.setColor(QColor("#181d25"));
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        auto *context = ZoinGallery::PixelGridContext::forWindow(&view);
+        auto *holder = root->findChild<QQuickItem *>("lateScope");
+        auto *caption = root->findChild<QQuickItem *>("lateScopeCaption");
+        QVERIFY(context && holder && caption);
+        context->flush();
+        context->resetCounters();
+        constexpr int count = 128;
+        for (int i = 0; i < count; ++i) {
+            auto *leaf = new QQuickItem(caption->parentItem());
+            ZoinGallery::PixelGridAlignment::forItem(leaf);
+        }
+        context->flush();
+        QCOMPARE(context->counters().value("boundaryChecks").toInt(), count);
+        auto verifyCaption = [&] {
+            context->flush();
+            const auto origin = caption->mapToItem(view.contentItem(), QPointF());
+            for (qreal v : {origin.x(), origin.y()})
+                QVERIFY(qAbs(v * view.devicePixelRatio() - std::round(v * view.devicePixelRatio())) < .001);
+            QCOMPARE(caption->mapToItem(view.contentItem(), QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(caption->mapToItem(view.contentItem(), QPointF(0, 1)) - origin, QPointF(0, 1));
+        };
+        verifyCaption();
+        // Installing a scope after all descendants registered must invalidate
+        // their cached boundary, including paths shared by many aligned leaves.
+        QVERIFY(qmlAttachedPropertiesObject<ZoinGallery::PixelGridScope>(holder, true));
+        verifyCaption();
+        caption->setParentItem(root);
+        verifyCaption();
+        caption->setParentItem(holder);
+        verifyCaption();
+        QTest::qWait(40);
+        const auto capture = view.grabWindow();
+        QVERIFY(capture.save("pixel-grid-shared-boundary-175.png"));
+        int painted = 0;
+        for (int y = 0; y < capture.height(); ++y)
+            for (int x = 0; x < capture.width(); ++x)
+                painted += capture.pixelColor(x, y).lightness() > 80;
+        QVERIFY(painted > 100);
         runtime->shutdown();
     }
 
@@ -381,6 +581,30 @@ private slots:
         events.clear();
         item.setVisualRow(row);
         QVERIFY(events.isEmpty());
+
+        item.beginVisualUpdate();
+        item.beginVisualUpdate();
+        row[QStringLiteral("entryId")] = QStringLiteral("third");
+        item.setVisualRow(row);
+        QVERIFY(item.visualIdentityChanging());
+        QCOMPARE(resetSpy.count(), 1);
+        QCOMPARE(events, QStringList({QStringLiteral("identity-with-reset"),
+            QStringLiteral("snapshot-with-reset")}));
+        item.endVisualUpdate();
+        QVERIFY(item.visualIdentityChanging());
+        QCOMPARE(resetSpy.count(), 1);
+        item.endVisualUpdate();
+        QVERIFY(!item.visualIdentityChanging());
+        QCOMPARE(resetSpy.count(), 2);
+
+        events.clear();
+        resetSpy.clear();
+        item.beginVisualUpdate();
+        row[QStringLiteral("text")] = QStringLiteral("same-entry-renamed.png");
+        item.setVisualRow(row);
+        item.endVisualUpdate();
+        QVERIFY(!item.visualIdentityChanging());
+        QVERIFY(resetSpy.isEmpty());
     }
 
     void initTestCase() {
@@ -397,6 +621,530 @@ private slots:
 
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
     void videoSourceInitializationWaitsForViewerExpandAnimation();
+
+    void videoControlsAutoHide_data() {
+        QTest::addColumn<bool>("sharedOutput");
+        QTest::newRow("viewer") << false;
+        QTest::newRow("hdr-shared-surface") << true;
+    }
+
+    void videoControlsAutoHide() {
+        QFETCH(bool, sharedOutput);
+        QTemporaryDir directory;
+        const QString iconPath = directory.filePath("icon.png");
+        QImage icon(32, 32, QImage::Format_RGBA8888_Premultiplied);
+        icon.fill(Qt::transparent);
+        {
+            QPainter painter(&icon);
+            painter.setPen(QPen(Qt::white, 2));
+            painter.drawRect(8, 8, 16, 16);
+        }
+        QVERIFY(icon.save(iconPath));
+        ZoinGallery::ViewerVideoFrameSource source;
+        auto *sink = qobject_cast<QVideoSink *>(source.sink());
+        QVERIFY(sink);
+        sink->setVideoFrame(hdrControlsFrame(true));
+        QQuickView view;
+        selectScreenAtDpr(view, 1.75);
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        view.engine()->rootContext()->setContextProperty("testVideoSource", &source);
+        view.engine()->rootContext()->setContextProperty("testSharedOutput", sharedOutput);
+        view.engine()->rootContext()->setContextProperty("testVideoIcon", QUrl::fromLocalFile(iconPath));
+#ifndef Q_MOC_RUN
+        auto *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Rectangle {
+                width: 848; height: 420
+                color: "#343a42"
+                property int viewportClicks: 0
+                MouseArea {
+                    anchors.fill: parent
+                    onClicked: ++parent.viewportClicks
+                }
+                QtObject {
+                    id: playback
+                    objectName: "testPlayback"
+                    property string state: "ready"
+                    property string error: ""
+                    property bool playing: false
+                    property bool muted: true
+                    property bool looping: false
+                    property real volume: 0.7
+                    property int position: 5000
+                    property int duration: 10000
+                    function setFrameSource(source) {}
+                    function playPause() { playing = !playing }
+                    function seekTo(value) { position = value }
+                    function adjustVolume(delta) { volume += delta }
+                    function toggleMute() { muted = !muted }
+                    function toggleLoop() { looping = !looping }
+                }
+                QtObject {
+                    id: output
+                    property bool supported: true
+                    property string displayName: "Test HDR display"
+                    property bool active: false
+                    property bool busy: false
+                    property string error: ""
+                    function toggle() { active = !active }
+                    function close() {}
+                    function linearColor(value) { return value }
+                }
+                GalleryVideoPlaybackSurface {
+                    objectName: "testVideoSurface"
+                    anchors.fill: parent
+                    devicePixelRatio: 1.75
+                    controller: playback
+                    sharedFrameSource: testVideoSource
+                    managesFrameSource: !testSharedOutput
+                    externalHdrOutput: output
+                    linearOutput: testSharedOutput
+                    iconSources: ({play: testVideoIcon, pause: testVideoIcon,
+                        loop: testVideoIcon, muted: testVideoIcon, sound: testVideoIcon})
+                }
+            }
+        )QML", "VideoControlsAutoHide.qml");
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        auto *surface = root->findChild<QQuickItem *>("testVideoSurface");
+        auto *bar = root->findChild<QQuickItem *>("galleryVideoControlsBar");
+        QVERIFY(surface && bar);
+        QCOMPARE(surface->property("controlsAutoHideDelay").toInt(), 3000);
+        QVERIFY(surface->setProperty("controlsAutoHideDelay", 240));
+        view.show();
+        view.requestActivate();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QVERIFY(QTest::qWaitForWindowActive(&view));
+        QCOMPARE(view.effectiveDevicePixelRatio(), qreal(1.75));
+        auto *hover = root->findChild<QObject *>("galleryVideoPointerActivity");
+        QVERIFY(hover);
+        QTest::mouseMove(&view, {-20, -20});
+        QTest::mouseMove(&view, {400, 180});
+        QTRY_VERIFY(hover->property("hovered").toBool());
+        QTest::qWait(140);
+        QTest::mouseMove(&view, {410, 180});
+        QTest::qWait(140);
+        QVERIFY(surface->property("controlsShown").toBool());
+        QTRY_VERIFY(!surface->property("controlsShown").toBool());
+        QVERIFY(surface->property("controlsAnimating").toBool());
+        QVERIFY(bar->isVisible());
+        QVERIFY(!bar->isEnabled());
+        QTRY_COMPARE(bar->opacity(), qreal(0));
+        QVERIFY(!bar->isVisible());
+
+        // The passive activity observer must preserve ordinary viewport input.
+        QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, {410, 180});
+        QCOMPARE(root->property("viewportClicks").toInt(), 1);
+        QTest::mouseMove(&view, {420, 180});
+        QTRY_VERIFY(surface->property("controlsShown").toBool());
+        QTRY_VERIFY(surface->property("controlsAnimating").toBool());
+        QTRY_COMPARE(bar->opacity(), qreal(1));
+        QVERIFY(surface->setProperty("controlsAutoHideDelay", 3000));
+
+        const QStringList leaves{
+            "galleryVideoPlayButtonIcon", "galleryVideoLoopButtonIcon",
+            "galleryVideoMuteButtonIcon", "galleryVideoTimeText", "galleryVideoHdrButtonText",
+            "galleryVideoSeekTrack", "galleryVideoSeekProgress", "galleryVideoSeekHandle",
+            "galleryVideoVolumeTrack", "galleryVideoVolumeProgress", "galleryVideoVolumeHandle"};
+        for (const auto &name : leaves) {
+            auto *leaf = root->findChild<QQuickItem *>(name);
+            QVERIFY2(leaf, qPrintable(name));
+            const auto origin = leaf->mapToItem(view.contentItem(), QPointF());
+            for (qreal value : {origin.x(), origin.y()})
+                QVERIFY2(qAbs(value * 1.75 - qRound(value * 1.75)) < .001,
+                    qPrintable(QString("%1 at physical %2").arg(name).arg(value * 1.75, 0, 'f', 6)));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), {1, 0}) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), {0, 1}) - origin, QPointF(0, 1));
+        }
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        const QString captures = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+        if (!captures.isEmpty()) QVERIFY(capture.save(QDir(captures).filePath(
+            QString("video-controls-revealed-%1-175.png").arg(QTest::currentDataTag()))));
+
+        // Both sliders accept input at the panel's top and bottom edges,
+        // including the seek slider's time-label region.
+        auto *playback = root->findChild<QObject *>("testPlayback");
+        QVERIFY(playback);
+        for (const auto &name : {"galleryVideoSeekMouseArea", "galleryVideoVolumeMouseArea"}) {
+            auto *area = root->findChild<QQuickItem *>(name);
+            QVERIFY(area);
+            const bool seek = QString::fromLatin1(name).contains("Seek");
+            for (bool bottom : {false, true}) {
+                const qreal fraction = bottom ? 0.75 : 0.25;
+                const qreal x = area->mapToItem(bar, {area->width() * fraction, 0}).x();
+                const qreal y = bottom ? bar->height() - 1 / 1.75 : 1 / 1.75;
+                const auto point = bar->mapToItem(view.contentItem(), {x, y}).toPoint();
+                QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, point);
+                const qreal actual = seek ? playback->property("position").toReal() / 10000
+                                          : playback->property("volume").toReal();
+                QVERIFY2(qAbs(actual - fraction) < .02,
+                    qPrintable(QString("%1 click at %2 edge: expected %3, got %4")
+                        .arg(name, bottom ? "bottom" : "top").arg(fraction).arg(actual)));
+                QCOMPARE(root->property("viewportClicks").toInt(), 1);
+            }
+        }
+
+        QVERIFY(surface->setProperty("controlsAutoHideDelay", 240));
+        for (const auto &name : {"galleryVideoSeekMouseArea", "galleryVideoVolumeMouseArea"}) {
+            auto *area = root->findChild<QQuickItem *>(name);
+            QVERIFY(area);
+            const auto point = area->mapToItem(view.contentItem(), {area->width() / 2, area->height() / 2});
+            QTest::mouseMove(&view, point.toPoint());
+            QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, point.toPoint());
+            QVERIFY(area->property("pressed").toBool());
+            QTest::qWait(500);
+            QVERIFY(surface->property("controlsShown").toBool());
+            QCOMPARE(bar->opacity(), qreal(1));
+            QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, point.toPoint());
+            QTest::qWait(500);
+            QVERIFY(surface->property("controlsShown").toBool());
+            QCOMPARE(bar->opacity(), qreal(1));
+            QTest::mouseMove(&view, {400, 180});
+            QTRY_COMPARE(bar->opacity(), qreal(0));
+        }
+
+        // Leaving the window cancels idle hiding; a new file starts visible.
+        QTest::mouseMove(&view, {-20, -20});
+        QEvent leave(QEvent::Leave);
+        QCoreApplication::sendEvent(&view, &leave);
+        QTRY_VERIFY(!hover->property("hovered").toBool());
+        QTRY_COMPARE(bar->opacity(), qreal(1));
+        QTest::qWait(500);
+        QVERIFY(surface->property("controlsShown").toBool());
+        QTest::mouseMove(&view, {400, 180});
+        QTRY_COMPARE(bar->opacity(), qreal(0));
+        QVERIFY(surface->setProperty("videoIdentity", QStringLiteral("another-video")));
+        QVERIFY(surface->property("controlsShown").toBool());
+        runtime->shutdown();
+    }
+
+    void hdrControlsAreManualAndAligned_data() {
+        QTest::addColumn<bool>("hdrSource");
+        QTest::addColumn<bool>("hdrDisplay");
+        QTest::newRow("hdr-video-hdr-display") << true << true;
+        QTest::newRow("hdr-video-sdr-display") << true << false;
+        QTest::newRow("sdr-video-hdr-display") << false << true;
+    }
+
+    void hdrControlsAreManualAndAligned() {
+#ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+        QFETCH(bool, hdrSource);
+        QFETCH(bool, hdrDisplay);
+        QTemporaryDir directory;
+        const QString path = directory.filePath("icon.png");
+        QImage icon(32, 32, QImage::Format_RGBA8888_Premultiplied);
+        icon.fill(Qt::transparent);
+        { QPainter painter(&icon); painter.setPen(QPen(Qt::white, 2)); painter.drawRect(8, 8, 16, 16); }
+        QVERIFY(icon.save(path));
+        ZoinGallery::ViewerVideoFrameSource source;
+        QSignalSpy hdrChanges(&source, &ZoinGallery::ViewerVideoFrameSource::hdrChanged);
+        auto *sink = qobject_cast<QVideoSink *>(source.sink());
+        QVERIFY(sink);
+        const auto frame = hdrControlsFrame(hdrSource);
+        sink->setVideoFrame(frame);
+        const int changes = hdrChanges.count();
+        for (int repeat = 0; repeat < 8; ++repeat) sink->setVideoFrame(frame);
+        QCOMPARE(hdrChanges.count(), changes);
+        QCOMPARE(source.hdr(), hdrSource);
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        QVERIFY(runtime);
+        view.engine()->rootContext()->setContextProperty("hdrTestSource", &source);
+        view.engine()->rootContext()->setContextProperty("hdrTestDisplay", hdrDisplay);
+        view.engine()->rootContext()->setContextProperty("hdrTestIcon", QUrl::fromLocalFile(path));
+#ifndef Q_MOC_RUN
+        auto *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 848; height: 420
+                QtObject {
+                    id: playback
+                    property string state: "ready"
+                    property string error: ""
+                    property bool playing: false
+                    property bool muted: true
+                    property bool looping: false
+                    property real volume: 0.7
+                    property int position: 5000
+                    property int duration: 10000
+                }
+                QtObject {
+                    id: output
+                    objectName: "testHdrOutput"
+                    property bool supported: hdrTestDisplay
+                    property string displayName: "Test HDR display"
+                    property bool active: false
+                    property bool busy: false
+                    property string error: ""
+                    property int toggles: 0
+                    function toggle() { ++toggles; active = !active }
+                }
+                GalleryVideoPlaybackSurface {
+                    objectName: "testHdrSurface"
+                    anchors.fill: parent
+                    devicePixelRatio: 1.75
+                    controller: playback
+                    sharedFrameSource: hdrTestSource
+                    managesFrameSource: false
+                    externalHdrOutput: output
+                    iconSources: ({play: hdrTestIcon, pause: hdrTestIcon, loop: hdrTestIcon,
+                        muted: hdrTestIcon, sound: hdrTestIcon})
+                }
+            }
+        )QML", "HdrControls.qml");
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QCOMPARE(view.effectiveDevicePixelRatio(), qreal(1.75));
+        auto *button = root->findChild<QQuickItem *>("galleryVideoHdrButton");
+        auto *output = root->findChild<QObject *>("testHdrOutput");
+        QVERIFY(button && output);
+        QCOMPARE(button->isVisible(), hdrSource && hdrDisplay);
+        QCOMPARE(output->property("toggles").toInt(), 0);
+        const QStringList leaves{"galleryVideoPlayButtonIcon", "galleryVideoLoopButtonIcon",
+            "galleryVideoMuteButtonIcon", "galleryVideoTimeText", "galleryVideoHdrButtonText"};
+        for (const auto &name : leaves) {
+            auto *leaf = root->findChild<QQuickItem *>(name);
+            QVERIFY2(leaf, qPrintable(name));
+            const auto origin = leaf->mapToItem(view.contentItem(), QPointF());
+            for (qreal value : {origin.x(), origin.y()})
+                QVERIFY2(qAbs(value * 1.75 - qRound(value * 1.75)) < .001,
+                    qPrintable(QString("%1 at physical %2").arg(name).arg(value * 1.75, 0, 'f', 6)));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), {1, 0}) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), {0, 1}) - origin, QPointF(0, 1));
+        }
+        const auto revision = source.revision();
+        if (button->isVisible()) {
+            const auto point = button->mapToItem(view.contentItem(), {button->width()/2, button->height()/2});
+            QTest::mouseClick(&view, Qt::LeftButton, Qt::NoModifier, point.toPoint());
+            QCOMPARE(output->property("toggles").toInt(), 1);
+            QVERIFY(output->property("active").toBool());
+        }
+        QCOMPARE(source.revision(), revision);
+        const QImage capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        const QString captures = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+        if (!captures.isEmpty()) QVERIFY(capture.save(QDir(captures).filePath(
+            QString("hdr-controls-%1-175.png").arg(QTest::currentDataTag()))));
+        runtime->shutdown();
+#else
+        QSKIP("Video playback is disabled");
+#endif
+    }
+
+    void nativeHdrOutputLifecycle() {
+#ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+        QQuickView view;
+        const QString requestedScreen = qEnvironmentVariable("ZOIN_TEST_HDR_SCREEN");
+        if (!requestedScreen.isEmpty()) {
+            QScreen *target = nullptr;
+            for (auto *screen : QGuiApplication::screens()) {
+                qInfo() << "Screen" << screen->name() << screen->geometry();
+                if (screen->name().contains(requestedScreen, Qt::CaseInsensitive)) target = screen;
+            }
+            QVERIFY2(target, qPrintable(QString("Requested HDR screen not found: %1").arg(requestedScreen)));
+            view.setScreen(target);
+            view.setGeometry(QRect(target->geometry().topLeft() + QPoint(40, 40), QSize(848, 420)));
+        }
+        const auto initial = ZoinGallery::queryHdrDisplayForWindow(view.winId());
+        QList<ZoinGallery::HdrDisplayState> otherDisplays;
+        for (auto *screen : QGuiApplication::screens()) {
+            QWindow probe;
+            probe.setScreen(screen);
+            probe.setGeometry(QRect(screen->geometry().topLeft() + QPoint(40, 40), QSize(100, 100)));
+            const auto state = ZoinGallery::queryHdrDisplayForWindow(probe.winId());
+            if (!state.error && (state.adapterId != initial.adapterId || state.targetId != initial.targetId))
+                otherDisplays.append(state);
+        }
+        qInfo() << "HDR display" << initial.deviceName << initial.displayName
+            << "supported" << initial.supported << "enabled" << initial.enabled
+            << "active" << initial.active << "modern API" << initial.modernApi << "error" << initial.error;
+        if (!qEnvironmentVariableIsSet("ZOIN_TEST_HDR_SWITCH")) QSKIP("Explicit native display-switch test");
+        QVERIFY(initial.supported);
+        const auto restore = qScopeGuard([&] { ZoinGallery::setHdrDisplayEnabled(initial, initial.enabled); });
+        ZoinGallery::ViewerVideoFrameSource source;
+        auto *sink = qobject_cast<QVideoSink *>(source.sink());
+        QVERIFY(sink);
+        sink->setVideoFrame(hdrControlsFrame(true));
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        ZoinGallery::HdrVideoOutput output;
+        view.engine()->rootContext()->setContextProperty("nativeHdrSource", &source);
+        view.engine()->rootContext()->setContextProperty("nativeHdrOutput", &output);
+#ifndef Q_MOC_RUN
+        auto *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryVideoPlaybackSurface {
+                width: 848; height: 420
+                devicePixelRatio: 1.75
+                sharedFrameSource: nativeHdrSource
+                externalHdrOutput: nativeHdrOutput
+                managesFrameSource: false
+                videoIdentity: "paused-hdr-frame"
+                iconSources: ({play: "", pause: "", loop: "", muted: "", sound: ""})
+            }
+        )QML", "NativeHdrOutput.qml");
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        output.setSurface(qobject_cast<QQuickItem *>(root));
+        QVERIFY(output.supported());
+        QVERIFY(!output.active());
+        QCOMPARE(ZoinGallery::queryHdrDisplay(initial.deviceName).enabled, initial.enabled);
+        for (int cycle = 0; cycle < 2; ++cycle) {
+            const auto revision = source.revision();
+            output.toggle();
+            QTRY_VERIFY_WITH_TIMEOUT(output.active() || !output.error().isEmpty(), 15000);
+            QVERIFY2(output.active(), qPrintable(output.error()));
+            QVERIFY(ZoinGallery::queryHdrDisplay(initial.deviceName).active);
+            QQuickWindow *hdrWindow = nullptr;
+            for (auto *window : QGuiApplication::topLevelWindows())
+                if (window->objectName() == "galleryHdrVideoWindow") hdrWindow = qobject_cast<QQuickWindow *>(window);
+            QVERIFY(hdrWindow);
+            QCOMPARE(hdrWindow->visibility(), QWindow::FullScreen);
+            QCOMPARE(ZoinGallery::queryHdrDisplayForWindow(hdrWindow->winId()).targetId, initial.targetId);
+            for (const QString &name : {QString("galleryVideoTimeText"), QString("galleryVideoHdrButtonText"),
+                 QString("galleryVideoPlayButtonIcon"), QString("galleryVideoMuteButtonIcon"),
+                 QString("galleryVideoLoopButtonIcon"), QString("galleryVideoStatusText")}) {
+                auto *leaf = hdrWindow->findChild<QQuickItem *>(name);
+                QVERIFY2(leaf, qPrintable(name));
+                const QPointF origin = leaf->mapToItem(hdrWindow->contentItem(), QPointF());
+                const qreal dpr = hdrWindow->effectiveDevicePixelRatio();
+                for (qreal value : {origin.x(), origin.y()})
+                    QVERIFY2(qAbs(value * dpr - qRound(value * dpr)) < .001,
+                        qPrintable(QString("%1 at physical %2").arg(name).arg(value * dpr, 0, 'f', 6)));
+                QCOMPARE(leaf->mapToItem(hdrWindow->contentItem(), {1, 0}) - origin, QPointF(1, 0));
+                QCOMPARE(leaf->mapToItem(hdrWindow->contentItem(), {0, 1}) - origin, QPointF(0, 1));
+            }
+            const QString captures = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+            if (cycle == 0 && !captures.isEmpty()) {
+                // Qt Quick 6.11's grabWindow interprets FP16 swapchain bytes
+                // as RGBA8. Capture the composited desktop for UI geometry;
+                // HDR values are checked separately with float RHI readback.
+                const auto capture = hdrWindow->screen()->grabWindow(hdrWindow->winId()).toImage();
+                QVERIFY(!capture.isNull());
+                QVERIFY(capture.save(QDir(captures).filePath("hdr-fullscreen-controls-175.png")));
+            }
+            for (const auto &other : otherDisplays)
+                QCOMPARE(ZoinGallery::queryHdrDisplayState(other).enabled, other.enabled);
+            QCOMPARE(source.revision(), revision);
+            if (cycle == 0) QTest::keyClick(hdrWindow, Qt::Key_Escape);
+            else hdrWindow->close();
+            QTRY_VERIFY_WITH_TIMEOUT(!output.active() && !output.busy(), 15000);
+            QVERIFY2(output.error().isEmpty(), qPrintable(output.error()));
+            QCOMPARE(ZoinGallery::queryHdrDisplay(initial.deviceName).enabled, initial.enabled);
+            for (const auto &other : otherDisplays)
+                QCOMPARE(ZoinGallery::queryHdrDisplayState(other).enabled, other.enabled);
+            QCOMPARE(source.revision(), revision);
+        }
+        // HDR already enabled by the user must survive both a regular exit
+        // and destruction before the new window's first frame is presented.
+        QCOMPARE(ZoinGallery::setHdrDisplayEnabled(initial, true), 0);
+        QTRY_VERIFY_WITH_TIMEOUT(ZoinGallery::queryHdrDisplay(initial.deviceName).active, 10000);
+        output.toggle();
+        QTRY_VERIFY_WITH_TIMEOUT(output.active() || !output.error().isEmpty(), 10000);
+        QVERIFY2(output.active(), qPrintable(output.error()));
+        output.close();
+        QTRY_VERIFY_WITH_TIMEOUT(!output.busy(), 10000);
+        QVERIFY(ZoinGallery::queryHdrDisplay(initial.deviceName).enabled);
+        auto *shortLived = new ZoinGallery::HdrVideoOutput;
+        shortLived->setSurface(qobject_cast<QQuickItem *>(root));
+        shortLived->toggle();
+        delete shortLived;
+        QVERIFY(ZoinGallery::queryHdrDisplay(initial.deviceName).enabled);
+        QCOMPARE(ZoinGallery::setHdrDisplayEnabled(initial, initial.enabled), 0);
+        QTRY_COMPARE_WITH_TIMEOUT(ZoinGallery::queryHdrDisplay(initial.deviceName).enabled, initial.enabled, 10000);
+        runtime->shutdown();
+#else
+        QSKIP("Video playback is disabled");
+#endif
+    }
+
+    void openingVideoPrefetchesAdjacentPhotos() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("photo.png");
+        QVERIFY(writeImage(path, QSize(1600, 1200), Qt::blue));
+        const QString nextPath = directory.filePath("next.png");
+        QVERIFY(writeImage(nextPath, QSize(1600, 1200), Qt::green));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.enableVideoPlayback = true;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession(QStringLiteral("video-photo-prefetch"));
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        QTRY_VERIFY_WITH_TIMEOUT(session->videoPlaybackAvailable(), 5000);
+#else
+        QSKIP("Video playback is disabled in this build");
+#endif
+        auto video = imageEntry("video", 1, directory.filePath("video.mp4"));
+        video["isImage"] = false;
+        video["thumbnailKind"] = QStringLiteral("video");
+        QVERIFY(session->applyExternalCatalog({imageEntry("previous", 0, path), video,
+            imageEntry("next", 2, nextPath)}, 1));
+        QVERIFY(session->applyExternalState("video", 1, {}, 1));
+        session->setViewerOpen(true);
+        view.engine()->rootContext()->setContextProperty("videoPrefetchSession", session);
+#ifndef Q_MOC_RUN
+        auto *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            Item {
+                width: 640; height: 420
+                GalleryViewer {
+                    objectName: "videoPrefetchViewer"
+                    anchors.fill: parent
+                    session: videoPrefetchSession
+                    videoPlaybackMode: "manual"
+                    animationDuration: 0
+                }
+            }
+        )QML", QStringLiteral("VideoPhotoPrefetch.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        auto *viewer = root->findChild<QQuickItem *>("videoPrefetchViewer");
+        QVERIFY(viewer);
+        QTRY_VERIFY(viewer->property("currentIsVideo").toBool());
+        const auto hasFit = [&](int row) {
+            const auto sources = session->viewerSourcesAt(row);
+            return std::any_of(sources.cbegin(), sources.cend(), [](const QVariant &source) {
+                return source.toMap().value("level").toInt() == 1;
+            });
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(hasFit(0) && hasFit(2), 5000);
+        QVERIFY(session->viewerSourcesAt(1).isEmpty());
+        QVERIFY(QMetaObject::invokeMethod(viewer, "navigate", Q_ARG(QVariant, 1)));
+        QCOMPARE(viewer->property("presentedIndex").toInt(), 2);
+        QCOMPARE(viewer->property("currentSourceLevelValue").toInt(), 1);
+        QCOMPARE(session->currentIndex(), 1);
+        QVERIFY(session->applyExternalState("next", 2, {}, 1));
+        QVERIFY(QMetaObject::invokeMethod(viewer, "navigate", Q_ARG(QVariant, -1)));
+        QCOMPARE(viewer->property("presentedIndex").toInt(), 1);
+        QVERIFY(QMetaObject::invokeMethod(viewer, "navigate", Q_ARG(QVariant, -1)));
+        QCOMPARE(viewer->property("presentedIndex").toInt(), 0);
+        QCOMPARE(viewer->property("currentSourceLevelValue").toInt(), 1);
+        runtime->shutdown();
+    }
 
     void imageWheelZoomFrameTimingAt175Percent() {
         QTemporaryDir directory;
@@ -907,7 +1655,6 @@ private slots:
                     devicePixelRatio: 1.75
                     posterSource: root.posterSourceValue
                     videoIdentity: root.identityValue
-                    previewVisible: viewport.imageTextureReady
                     foregroundColor: "#f3f4f6"
                     mutedColor: "#c7c9cc"
                     iconSources: ({
@@ -1046,7 +1793,6 @@ private slots:
         auto *statusText = root->findChild<QQuickItem *>(
             QStringLiteral("galleryVideoStatusText"));
         QVERIFY(statusText);
-        QVERIFY(surface->property("previewVisible").toBool());
         QVERIFY(controller->setProperty("state", QStringLiteral("loading")));
         QVERIFY(QMetaObject::invokeMethod(controller, "publish"));
         QVERIFY(!statusText->property("visible").toBool());
@@ -1645,6 +2391,7 @@ private slots:
                     property string cursorEntryId: "row-0"
                     property bool videoPlaybackAvailable: false
                     property var failedRows: []
+                    property int lastPresentedRequest: -1
                     property string viewerPreviousEntryId: ""
                     property string viewerPreviousReturnEntryId: ""
                     property bool viewerPreviousLocked: false
@@ -1667,6 +2414,10 @@ private slots:
                     }
                     function requestViewer(width, height) {}
                     function requestViewerAt(index, width, height) {}
+                    function requestPresentedViewerAt(index, width, height) {
+                        if (index !== currentIndex)
+                            lastPresentedRequest = index
+                    }
                     function setViewerPreviousState(previous, returned, locked, viewport) {
                         viewerPreviousEntryId = previous
                     }
@@ -1718,6 +2469,7 @@ private slots:
         };
         QVERIFY(navigate(1));
         QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 1);
+        QCOMPARE(session->property("lastPresentedRequest").toInt(), 1);
         QVERIFY(fail(1));
         QTRY_COMPARE(viewer->property("presentedIndex").toInt(), 2);
         // The last candidate fails: restore the successful navigation origin.
@@ -2550,6 +3302,86 @@ private slots:
         verifySampling(true);
         QTRY_VERIFY(!viewer->property("transitioning").toBool());
         verifySampling(false);
+    }
+
+    void viewerFullscreenBackgroundFadesToBlack_data() {
+        QTest::addColumn<QColor>("windowedColor");
+        QTest::newRow("themed") << QColor("#345678");
+        QTest::newRow("transparent") << QColor(Qt::transparent);
+    }
+
+    void viewerFullscreenBackgroundFadesToBlack() {
+        QFETCH(QColor, windowedColor);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("fullscreen-background.png");
+        QVERIFY(writeImage(path, QSize(120, 480), Qt::cyan));
+        QQuickView view;
+        view.setResizeMode(QQuickView::SizeRootObjectToView);
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        const auto shutdown = qScopeGuard([runtime] { runtime->shutdown(); });
+        auto *session = runtime->createExternalSession("fullscreen-background");
+        QVERIFY(session->applyExternalCatalog({imageEntry("portrait", 0, path)}, 1));
+        session->setViewerOpen(true);
+        view.engine()->rootContext()->setContextProperty("fullscreenSession", session);
+        view.engine()->rootContext()->setContextProperty("fullscreenBackgroundColor", windowedColor);
+#ifndef Q_MOC_RUN
+        auto *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery 1.0
+            GalleryViewer {
+                width: 640
+                height: 420
+                session: fullscreenSession
+                animationDuration: 800
+                theme: GalleryThemePalette { viewerBackground: fullscreenBackgroundColor }
+            }
+        )QML", "FullscreenBackground.qml");
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        root->setProperty("devicePixelRatio", view.devicePixelRatio());
+        view.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        auto *background = root->findChild<QQuickItem *>("galleryViewerBackground");
+        QVERIFY(background);
+        QTRY_COMPARE(background->property("opacity").toReal(), 1.0);
+        QTRY_COMPARE(background->property("color").value<QColor>(), windowedColor);
+        QSignalSpy colors(background, SIGNAL(colorChanged()));
+        QVERIFY(colors.isValid());
+
+        view.showFullScreen();
+        QTRY_COMPARE_WITH_TIMEOUT(background->property("color").value<QColor>(), QColor(Qt::black), 2000);
+        QVERIFY2(colors.count() > 1, "Fullscreen background changed without intermediate animation frames");
+        const qreal dpr = view.devicePixelRatio();
+        const QPointF origin = background->mapToItem(view.contentItem(), QPointF{});
+        for (const qreal coordinate : {origin.x(), origin.y()})
+            QVERIFY(qAbs(coordinate*dpr-qRound(coordinate*dpr)) < .01);
+        QCOMPARE(background->mapToItem(view.contentItem(), {1, 0}) - origin, QPointF(1, 0));
+        QCOMPARE(background->mapToItem(view.contentItem(), {0, 1}) - origin, QPointF(0, 1));
+        const QImage fullscreen = view.grabWindow();
+        for (const QPoint corner : {QPoint(10, 10), QPoint(fullscreen.width() - 11, 10),
+                                    QPoint(10, fullscreen.height() - 11),
+                                    QPoint(fullscreen.width() - 11, fullscreen.height() - 11)})
+            QCOMPARE(fullscreen.pixelColor(corner), QColor(Qt::black));
+        const QString tag = QString::fromLatin1(QTest::currentDataTag());
+        QVERIFY(fullscreen.save(QString("viewer-fullscreen-background-%1-175.png").arg(tag)));
+
+        colors.clear();
+        view.showNormal();
+        QTRY_COMPARE_WITH_TIMEOUT(background->property("color").value<QColor>(), windowedColor, 2000);
+        QVERIFY2(colors.count() > 1, "Windowed background changed without intermediate animation frames");
+        QVERIFY(view.grabWindow().save(QString("viewer-windowed-background-%1-175.png").arg(tag)));
+
+        colors.clear();
+        view.showFullScreen();
+        QTRY_VERIFY_WITH_TIMEOUT(!colors.isEmpty(), 500);
+        view.showNormal();
+        QTRY_COMPARE_WITH_TIMEOUT(background->property("color").value<QColor>(), windowedColor, 2000);
     }
 
     void viewerUsesOriginalHeldKeysPinchGeometryAndScrollBars() {
@@ -4183,9 +5015,9 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(
             (thumbnail = leaf(QStringLiteral("galleryThumbnail-0")))
                 && thumbnail->isVisible(), 5000);
-        QQuickItem *thumbnailImage =
-            leaf(QStringLiteral("galleryThumbnailImage-0"));
-        QVERIFY(thumbnailImage);
+        QQuickItem *thumbnailImage = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (thumbnailImage = leaf(QStringLiteral("galleryThumbnailImage-0"))), 5000);
         QTRY_COMPARE_WITH_TIMEOUT(
             thumbnailImage->property("status").toInt(), 1, 5000);
         QQuickItem *preview = thumbnail->parentItem();
@@ -4195,9 +5027,8 @@ private slots:
         auto *visualModel = entry->property("visualModel").value<QObject *>();
         QVERIFY(visualModel);
 
-        QQuickItem *badge = leaf(QStringLiteral("galleryVideoPlayBadge-0"));
-        QVERIFY(badge);
-        QVERIFY(!badge->isVisible());
+        QQuickItem *badge = nullptr;
+        QVERIFY(!leaf(QStringLiteral("galleryVideoPlayBadge-0")));
         QVariantMap row = entry->property("visualRow").toMap();
         QVERIFY(!row.isEmpty());
 
@@ -4205,7 +5036,12 @@ private slots:
         QVERIFY(entry->setProperty("visualRow", row));
         QTRY_VERIFY_WITH_TIMEOUT(visualModel->property("isVideo").toBool(),
                                  1000);
-        QTRY_VERIFY_WITH_TIMEOUT(badge->isVisible(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (badge = leaf(QStringLiteral("galleryVideoPlayBadge-0")))
+                && badge->isVisible(), 3000);
+        QCOMPARE(badge->width(), badge->property("badgeDiameter").toReal());
+        QCOMPARE(badge->height(), badge->width());
+        QVERIFY(badge->width() <= 76);
 
         QQuickItem *badgeCircle =
             leaf(QStringLiteral("galleryVideoPlayBadgeCircle-0"));
@@ -4307,11 +5143,21 @@ private slots:
                     .arg(QString::fromLatin1(QTest::currentDataTag())))));
         }
 
+        QPointer<QQuickItem> retiredBadge(badge);
         row.remove(QStringLiteral("thumbnailKind"));
         QVERIFY(entry->setProperty("visualRow", row));
         QTRY_VERIFY_WITH_TIMEOUT(!visualModel->property("isVideo").toBool(),
                                  1000);
-        QTRY_VERIFY_WITH_TIMEOUT(!badge->isVisible(), 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(retiredBadge.isNull(), 1000);
+        QVERIFY(!leaf(QStringLiteral("galleryVideoPlayBadge-0")));
+        row.insert(QStringLiteral("thumbnailKind"), QStringLiteral("video"));
+        QVERIFY(entry->setProperty("visualRow", row));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (badge = leaf(QStringLiteral("galleryVideoPlayBadge-0")))
+                && badge->isVisible(), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (playIcon = leaf(QStringLiteral("galleryVideoPlayIcon-0")))
+                && playIcon->property("status").toInt() == 1, 3000);
 
         runtime->shutdown();
     }
@@ -4384,8 +5230,12 @@ private slots:
             QStringLiteral("galleryThumbnailShader-0"));
         auto *thumbnailBackdrop = rootObject->findChild<QQuickItem *>(
             QStringLiteral("galleryThumbnailBackdrop-0"));
-        QVERIFY(thumbnailImage);
-        QVERIFY(thumbnailShader);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (thumbnailImage = rootObject->findChild<QQuickItem *>(
+                QStringLiteral("galleryThumbnailImage-0"))), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (thumbnailShader = rootObject->findChild<QQuickItem *>(
+                QStringLiteral("galleryThumbnailShader-0"))), 5000);
         QVERIFY(thumbnailBackdrop);
 
         // Embedded Masonry must use the same render chain as standalone:
@@ -4442,25 +5292,35 @@ private slots:
                 const auto candidates = rootObject->findChildren<QQuickItem *>(
                     objectName, Qt::FindChildrenRecursively);
                 for (QQuickItem *candidate : candidates) {
-                    // Loader replacement uses deleteLater(). The outgoing
-                    // subtree can still be discoverable as a QObject during
-                    // this event turn, but only the committed visual remains
-                    // attached to the active scene graph window.
-                    if (candidate->window() == &view) {
+                    // A staged or retired renderer can still have a window.
+                    // Only inspect the root published by each owning host.
+                    bool committed = true;
+                    for (auto *branch = candidate; branch && branch->parentItem();
+                         branch = branch->parentItem()) {
+                        if (auto *host = qobject_cast<GalleryComponentHost *>(branch->parentItem());
+                            host && host->item() != branch) {
+                            committed = false;
+                            break;
+                        }
+                    }
+                    if (candidate->window() == &view && committed) {
                         return candidate;
                     }
                 }
                 return nullptr;
             };
+            const bool shaderMode = mode == QStringLiteral("masonry")
+                || mode == QStringLiteral("grid");
             QQuickItem *modeThumbnail = nullptr;
             QTRY_VERIFY_WITH_TIMEOUT(
                 (modeThumbnail = activeVisual(
                      QStringLiteral("galleryThumbnail-0")))
                     && modeThumbnail->isVisible(),
                 3000);
-            auto *modeImage = activeVisual(
-                QStringLiteral("galleryThumbnailImage-0"));
-            QVERIFY(modeImage);
+            QQuickItem *modeImage = nullptr;
+            QTRY_VERIFY_WITH_TIMEOUT(
+                (modeImage = activeVisual(QStringLiteral("galleryThumbnailImage-0")))
+                    && modeImage->isVisible() != shaderMode, 5000);
             QTRY_COMPARE_WITH_TIMEOUT(
                 modeImage->property("status").toInt(), 1, 5000);
             QCOMPARE(modeImage->property("asynchronous").toBool(),
@@ -4472,8 +5332,6 @@ private slots:
                          qRound(modeThumbnail->height() * 2)) <= 0.001);
             QVERIFY(!modeThumbnail->property("source").toUrl().isEmpty());
 
-            const bool shaderMode = mode == QStringLiteral("masonry")
-                || mode == QStringLiteral("grid");
             auto *modeShader = activeVisual(
                 QStringLiteral("galleryThumbnailShader-0"));
             auto *modeBackdrop = activeVisual(
@@ -4488,7 +5346,7 @@ private slots:
                 QCOMPARE(modeShader->property(
                              "showCheckerboard").toBool(), true);
                 QCOMPARE(modeBackdrop->property(
-                             "enabledForPresentation").toBool(), true);
+                             "enabledForPresentation").toBool(), mode == QStringLiteral("masonry"));
                 QTRY_VERIFY_WITH_TIMEOUT(
                     modeImage->property("fillMode").toInt() ==
                         (modeImage->property("diffIsSmall").toBool()
@@ -4512,7 +5370,11 @@ private slots:
                     / modeShader->height();
                 const qreal decodedAspect = modeImage->implicitWidth()
                     / modeImage->implicitHeight();
-                QVERIFY2(qAbs(renderedAspect - decodedAspect) < 0.001
+                // Fitting each extent to the physical grid permits one pixel
+                // of rounding per axis, rather than an exact aspect quotient.
+                const qreal physicalAspectError = qAbs(modeShader->width()
+                    - modeShader->height() * decodedAspect) * view.devicePixelRatio();
+                QVERIFY2(physicalAspectError <= 1 + decodedAspect
                              && qAbs(decodedAspect - sourceAspect) < 0.02,
                          qPrintable(QStringLiteral(
                              "%1 shader %2x%3 aspect %4; source image "
@@ -4573,13 +5435,31 @@ private slots:
         };
         QTRY_VERIFY_WITH_TIMEOUT(refreshTileSource(), 5000);
 
+        const QPointF sampleScene = thumbnail->mapToScene(
+            QPointF(thumbnail->width()/2, thumbnail->height()/2));
+        const QPoint sample(qRound(sampleScene.x()*view.devicePixelRatio()),
+                            qRound(sampleScene.y()*view.devicePixelRatio()));
+        const QImage visibleFrame = view.grabWindow();
+        QVERIFY(visibleFrame.rect().contains(sample));
         QVERIFY(QMetaObject::invokeMethod(rootObject, "suppressTile"));
-        QTRY_VERIFY(!thumbnail->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(!thumbnail->property("sceneVisible").toBool(), 1000);
+        const QImage suppressedFrame = view.grabWindow();
+        if (!qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR").isEmpty()) {
+            const QDir captures(qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR"));
+            QVERIFY(visibleFrame.save(captures.filePath("transition-tile-visible.png")));
+            QVERIFY(suppressedFrame.save(captures.filePath("transition-tile-suppressed.png")));
+        }
+        QVERIFY2(suppressedFrame.pixelColor(sample) != visibleFrame.pixelColor(sample),
+                 "Tile suppression must hide the committed renderer, not only its geometry item");
+        auto *caption = rootObject->findChild<QQuickItem *>("galleryMasonryLabel-0");
+        QVERIFY(caption && caption->isVisible());
         QVERIFY(panel->property("viewerTransitionActive").toBool());
         QCOMPARE(panel->property("viewerTransitionEntryId").toString(),
                  QStringLiteral("tile"));
         QVERIFY(QMetaObject::invokeMethod(rootObject, "revealTile"));
-        QTRY_VERIFY(thumbnail->isVisible());
+        QTRY_VERIFY_WITH_TIMEOUT(thumbnail->property("sceneVisible").toBool(), 1000);
+        const QImage revealedFrame = view.grabWindow();
+        QCOMPARE(revealedFrame.pixelColor(sample), visibleFrame.pixelColor(sample));
 
         runtime->shutdown();
     }
@@ -4699,6 +5579,8 @@ void GalleryQmlInteractionTest::videoSourceInitializationWaitsForViewerExpandAni
                     function indexForEntryId(entryId) { return entryId === "video-a" ? 0 : -1 }
                     function isVideoAt(index) { return index === 0 }
                     function isImageAt(index) { return false }
+                    function isVectorAt(index) { return false }
+                    function requestViewer(width, height) {}
                     function videoSourceAt(index) {
                         return index === 0 ? {
                             identity: "video-a",

@@ -1,10 +1,15 @@
 #include "ViewerResampler.h"
 
 #include <QColorSpace>
+#include <QSemaphore>
+#include <QThreadPool>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <memory>
+#include <utility>
 #include <vector>
 
 namespace ZoinGallery::ViewerResampler {
@@ -179,14 +184,24 @@ std::vector<AxisWeights> axisWeights(int sourceSize, int targetSize, bool exactH
     return result;
 }
 
-QImage reduceStage(const QImage &source, QSize target, bool halfX, bool halfY) {
-    QImage result(target, QImage::Format_ARGB32_Premultiplied);
-    if (result.isNull()) {
-        return {};
-    }
-    const auto horizontal = axisWeights(source.width(), target.width(), halfX);
-    const auto vertical = axisWeights(source.height(), target.height(), halfY);
+struct ReductionStage {
+    QImage source;
+    QImage result;
+    std::vector<AxisWeights> horizontal;
+    std::vector<AxisWeights> vertical;
+    std::function<bool()> isCanceled;
+    uchar *pixels = nullptr;
+    qsizetype stride = 0;
+    std::atomic_int nextStripe{0};
+    std::atomic_bool canceled{false};
+    QSemaphore helpersFinished;
+
+    bool reduceRows(int firstRow, int pastLastRow) const;
+};
+
+bool ReductionStage::reduceRows(int firstRow, int pastLastRow) const {
     const auto &tables = transferTables();
+    const int width = int(horizontal.size());
 
     // Only the vertical filter's eight active source rows need horizontal
     // intermediates. A 40 MP source does not require a 640 MB float frame.
@@ -197,9 +212,10 @@ QImage reduceStage(const QImage &source, QSize target, bool halfX, bool halfY) {
     std::array<int, MaximumTaps> rowIndices;
     rowIndices.fill(-1);
     for (auto &row : rows) {
-        row.resize(target.width());
+        row.resize(width);
     }
-    for (int y = 0; y < target.height(); ++y) {
+    for (int y = firstRow; y < pastLastRow; ++y) {
+        if (isCanceled && isCanceled()) return false;
         const AxisWeights &yTaps = vertical[y];
         for (int tap = 0; tap < yTaps.count; ++tap) {
             const int inputY = yTaps.indices[tap];
@@ -218,8 +234,8 @@ QImage reduceStage(const QImage &source, QSize target, bool halfX, bool halfY) {
             }
             filterRow(linearInput, horizontal, row);
         }
-        auto *output = reinterpret_cast<QRgb *>(result.scanLine(y));
-        for (int x = 0; x < target.width(); ++x) {
+        auto *output = reinterpret_cast<QRgb *>(pixels + y * stride);
+        for (int x = 0; x < width; ++x) {
             Pixel pixel;
             for (int tap = 0; tap < yTaps.count; ++tap) {
                 const Pixel &sample = rows[yTaps.indices[tap] % MaximumTaps][x];
@@ -246,13 +262,54 @@ QImage reduceStage(const QImage &source, QSize target, bool halfX, bool halfY) {
             output[x] = qRgba(encode(pixel.r), encode(pixel.g), encode(pixel.b), alpha);
         }
     }
-    return result;
+    return true;
+}
+
+QImage reduceStage(const QImage &source, QSize target, bool halfX, bool halfY,
+                   const std::function<bool()> &isCanceled,
+                   QThreadPool *helperPool) {
+    auto stage = std::make_shared<ReductionStage>();
+    stage->source = source;
+    stage->result = QImage(target, QImage::Format_ARGB32_Premultiplied);
+    if (stage->result.isNull()) return {};
+    stage->horizontal = axisWeights(source.width(), target.width(), halfX);
+    stage->vertical = axisWeights(source.height(), target.height(), halfY);
+    stage->isCanceled = isCanceled;
+    // Detach once on the caller. Each stripe writes to disjoint scanlines.
+    stage->pixels = stage->result.bits();
+    stage->stride = stage->result.bytesPerLine();
+    const int height = target.height();
+    if (!helperPool || height < 256 || qint64(source.width()) * source.height() < 1024 * 1024)
+        return stage->reduceRows(0, height) ? std::move(stage->result) : QImage{};
+
+    const int stripes = qBound(1, helperPool->maxThreadCount() + 1, 4);
+    const auto reduce = [stage, height, stripes] {
+        for (int stripe = stage->nextStripe.fetch_add(1, std::memory_order_relaxed);
+             stripe < stripes && !stage->canceled.load(std::memory_order_relaxed);
+             stripe = stage->nextStripe.fetch_add(1, std::memory_order_relaxed)) {
+            const int first = int(qint64(height) * stripe / stripes);
+            const int last = int(qint64(height) * (stripe + 1) / stripes);
+            if (!stage->reduceRows(first, last))
+                stage->canceled.store(true, std::memory_order_relaxed);
+        }
+    };
+    int helpers = 0;
+    // Borrow idle threads only. An earlier viewer request cannot put this
+    // frame's resampling behind unrelated jobs in the pool queue.
+    while (helpers + 1 < stripes && helperPool->tryStart([stage, reduce] {
+        reduce();
+        stage->helpersFinished.release();
+    })) ++helpers;
+    reduce();
+    stage->helpersFinished.acquire(helpers);
+    return stage->canceled.load(std::memory_order_relaxed) ? QImage{} : std::move(stage->result);
 }
 
 }
 
-QImage downsample(const QImage &image, QSize targetSize) {
-    if (image.isNull() || targetSize.isEmpty()) {
+QImage downsample(const QImage &image, QSize targetSize,
+                  const std::function<bool()> &isCanceled, QThreadPool *helperPool) {
+    if (image.isNull() || targetSize.isEmpty() || (isCanceled && isCanceled())) {
         return {};
     }
     targetSize = targetSize.boundedTo(image.size());
@@ -275,7 +332,7 @@ QImage downsample(const QImage &image, QSize targetSize) {
         const bool halfY = result.height() / 2 >= targetSize.height();
         const QSize stage(halfX ? result.width() / 2 : targetSize.width(),
                           halfY ? result.height() / 2 : targetSize.height());
-        result = reduceStage(result, stage, halfX, halfY);
+        result = reduceStage(result, stage, halfX, halfY, isCanceled, helperPool);
     }
     if (!result.isNull()) {
         result.setColorSpace(image.colorSpace());

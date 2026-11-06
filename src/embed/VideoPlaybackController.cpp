@@ -1,6 +1,7 @@
 #include "VideoPlaybackController.h"
 
 #include "ImageSourceRangeDevice.h"
+#include "ViewerVideoFrameSource.h"
 
 #include <ZoinGallery/ImageSourceProvider.h>
 #include <ZoinGallery/MediaTimingTrace.h>
@@ -38,6 +39,8 @@ public slots:
         if (m_player || m_shutdown) {
             return;
         }
+        const qint64 started = MediaTimingTrace::enabled()
+            ? MediaTimingTrace::monotonicNanoseconds() : 0;
         // Give each media backend a fresh output object. Some platform output
         // backends keep player-specific stream state inside QAudioOutput;
         // reattaching one object to a replacement QMediaPlayer can leave the
@@ -48,6 +51,10 @@ public slots:
         m_sink = new QVideoSink(this);
         m_player->setAudioOutput(m_audio);
         m_player->setVideoSink(m_sink);
+        if (started) {
+            MediaTimingTrace::event(QStringLiteral("qt.gallery.video.backend_created"),
+                {{QStringLiteral("durationNs"), MediaTimingTrace::monotonicNanoseconds() - started}});
+        }
         emit availabilityReady(m_player->isAvailable());
         connect(m_player, &QMediaPlayer::positionChanged, this,
                 [this](qint64) { publishSnapshot(); });
@@ -108,11 +115,14 @@ public slots:
 
     void openSource(qulonglong generation, const QVariantMap &source,
                     const QString &startMode, bool presentationVisible,
+                    bool muted, qreal volume,
                     const QSharedPointer<ImageSourceCancellation> &cancellation) {
-        if (m_shutdown) {
+        if (m_shutdown || (cancellation && cancellation->isCanceled())) {
             return;
         }
-        releaseCurrentSource();
+        if (m_sourceDevice || m_lease) {
+            releaseCurrentSource();
+        }
         createPlayer();
         if (!m_player) {
             return;
@@ -128,13 +138,8 @@ public slots:
         m_visible = presentationVisible;
         m_autoStart = startMode == QStringLiteral("autoplay-muted")
             || startMode == QStringLiteral("autoplay-sound");
-        if (!m_hasOpenedSource) {
-            m_muted = startMode != QStringLiteral("autoplay-sound");
-        }
-        m_hasOpenedSource = true;
-        m_volume = std::clamp(m_volume, qreal(0), qreal(1));
-        m_audio->setMuted(m_muted);
-        m_audio->setVolume(m_volume);
+        m_audio->setMuted(muted);
+        m_audio->setVolume(volume);
         publishSnapshot();
 
         const ImageSourceDescriptor descriptor = descriptorFromMap(source);
@@ -186,7 +191,8 @@ public slots:
 
         MediaTimingTrace::event(QStringLiteral("qt.gallery.video.open"),
             sourceTraceFields(source, {{QStringLiteral("generation"), generation},
-                                       {QStringLiteral("mode"), startMode}}));
+                                       {QStringLiteral("mode"), startMode},
+                                       {QStringLiteral("muted"), muted}}));
         m_player->setSourceDevice(m_sourceDevice, m_sourceUrl);
         if (m_cancellation && m_cancellation->isCanceled()) {
             releaseCurrentSource();
@@ -205,14 +211,15 @@ public slots:
 
     void stopSource(qulonglong generation) {
         m_generation = generation;
-        releaseCurrentSource();
+        if (m_sourceDevice || m_lease) {
+            releaseCurrentSource();
+        }
         m_state = QStringLiteral("idle");
         m_error.clear();
         m_position = 0;
         m_duration = 0;
         m_playing = false;
         m_resumeWhenVisible = false;
-        m_hasOpenedSource = false;
         publishSnapshot();
     }
 
@@ -277,19 +284,15 @@ public slots:
     }
 
     void setMuted(bool muted) {
-        m_muted = muted;
         if (m_audio) {
             m_audio->setMuted(muted);
         }
-        publishSnapshot();
     }
 
     void setVolume(qreal volume) {
-        m_volume = std::clamp(volume, qreal(0), qreal(1));
         if (m_audio) {
-            m_audio->setVolume(m_volume);
+            m_audio->setVolume(volume);
         }
-        publishSnapshot();
     }
 
     void setPresentationVisible(bool visible) {
@@ -331,8 +334,7 @@ signals:
     void availabilityReady(bool available);
     void snapshotReady(qulonglong generation, const QString &state,
                        const QString &error, qint64 position,
-                       qint64 duration, bool playing, bool muted,
-                       qreal volume);
+                       qint64 duration, bool playing);
     void frameAvailable();
     void shutdownFinished();
 
@@ -423,7 +425,7 @@ private:
         m_duration = m_player->duration();
         m_playing = m_player->playbackState() == QMediaPlayer::PlayingState;
         emit snapshotReady(m_generation, m_state, m_error, m_position,
-                           m_duration, m_playing, m_muted, m_volume);
+                           m_duration, m_playing);
     }
 
     void publishFrame(const QVideoFrame &frame) {
@@ -475,22 +477,24 @@ private:
     QString m_error;
     qint64 m_position = 0;
     qint64 m_duration = 0;
-    qreal m_volume = 1.0;
     bool m_playing = false;
     bool m_looping = false;
-    bool m_muted = true;
     bool m_visible = true;
     bool m_autoStart = false;
     bool m_resumeWhenVisible = false;
     bool m_firstFrame = false;
-    bool m_hasOpenedSource = false;
     bool m_shutdown = false;
 };
 
 VideoPlaybackController::VideoPlaybackController(
-    QSharedPointer<ImageSourceProvider> provider, QObject *parent)
+    QSharedPointer<ImageSourceProvider> provider, QObject *parent,
+    VideoMutePreference *mutePreference)
     : QObject(parent), m_provider(std::move(provider)),
       m_frameMailbox(QSharedPointer<FrameMailbox>::create()) {
+    m_mutePreference = mutePreference ? mutePreference : new VideoMutePreference(this);
+    m_muted = m_mutePreference->overrideValue().value_or(true);
+    connect(m_mutePreference, &VideoMutePreference::overrideChanged,
+            this, &VideoPlaybackController::applyMutePreference);
     qRegisterMetaType<QSharedPointer<ImageSourceCancellation>>();
     auto *thread = new QThread;
     auto *worker = new VideoPlaybackWorker(m_provider, m_frameMailbox);
@@ -542,13 +546,13 @@ void VideoPlaybackController::openSource(const QVariantMap &source,
     m_position = 0;
     m_duration = 0;
     m_playing = false;
-    if (!m_muteOverridden) {
-        m_muted = startMode != QStringLiteral("autoplay-sound");
-    }
+    m_muted = m_mutePreference ? m_mutePreference->overrideValue().value_or(
+        startMode != QStringLiteral("autoplay-sound")) : m_muted;
     emit changed();
     QMetaObject::invokeMethod(m_worker, "openSource", Qt::QueuedConnection,
         Q_ARG(qulonglong, generation), Q_ARG(QVariantMap, source),
         Q_ARG(QString, startMode), Q_ARG(bool, m_presentationVisible),
+        Q_ARG(bool, m_muted), Q_ARG(qreal, m_volume),
         Q_ARG(QSharedPointer<ZoinGallery::ImageSourceCancellation>, m_cancellation));
     MediaTimingTrace::event(QStringLiteral("qt.gallery.video.request"),
         {{QStringLiteral("generation"), generation},
@@ -564,7 +568,6 @@ void VideoPlaybackController::stop() {
     m_position = 0;
     m_duration = 0;
     m_playing = false;
-    m_muteOverridden = false;
     emit changed();
     postWorkerStop();
 }
@@ -599,8 +602,14 @@ void VideoPlaybackController::toggleLoop() {
 }
 
 void VideoPlaybackController::toggleMute() {
-    m_muted = !m_muted;
-    m_muteOverridden = true;
+    if (m_mutePreference) {
+        m_mutePreference->setOverride(!m_muted);
+    }
+}
+
+void VideoPlaybackController::applyMutePreference(bool muted) {
+    if (m_muted == muted) return;
+    m_muted = muted;
     if (m_worker) {
         QMetaObject::invokeMethod(m_worker, "setMuted", Qt::QueuedConnection,
                                   Q_ARG(bool, m_muted));
@@ -641,6 +650,16 @@ void VideoPlaybackController::setOutputSink(QObject *sinkObject) {
     drainLatestFrame();
 }
 
+void VideoPlaybackController::setFrameSource(QObject *sourceObject) {
+    auto *source = qobject_cast<ViewerVideoFrameSource *>(sourceObject);
+    if (m_frameSource == source) return;
+    if (m_frameSource) {
+        m_frameSource->acceptFrame(QVideoFrame());
+    }
+    m_frameSource = source;
+    if (m_frameSource) drainLatestFrame();
+}
+
 void VideoPlaybackController::drainLatestFrame() {
     if (!m_frameMailbox) {
         return;
@@ -653,9 +672,9 @@ void VideoPlaybackController::drainLatestFrame() {
         generation = m_frameMailbox->generation.load(std::memory_order_relaxed);
         m_frameMailbox->deliveryQueued = false;
     }
-    if (m_videoSink
-        && generation == m_generation.load(std::memory_order_acquire)) {
-        m_videoSink->setVideoFrame(frame);
+    if (generation == m_generation.load(std::memory_order_acquire)) {
+        if (m_videoSink) m_videoSink->setVideoFrame(frame);
+        if (m_frameSource) m_frameSource->acceptFrame(frame);
     }
 }
 
@@ -680,8 +699,7 @@ void VideoPlaybackController::acceptAvailability(bool available) {
 
 void VideoPlaybackController::acceptSnapshot(
     qulonglong generation, const QString &state, const QString &error,
-    qint64 position, qint64 duration, bool playing, bool muted,
-    qreal volume) {
+    qint64 position, qint64 duration, bool playing) {
     if (generation != m_generation.load(std::memory_order_acquire)) {
         return;
     }
@@ -690,8 +708,6 @@ void VideoPlaybackController::acceptSnapshot(
     m_position = position;
     m_duration = duration;
     m_playing = playing;
-    m_muted = muted;
-    m_volume = volume;
     emit changed();
 }
 
@@ -712,8 +728,9 @@ void VideoPlaybackController::invalidateSource(bool clearFrame) {
         QMutexLocker lock(&m_frameMailbox->mutex);
         m_frameMailbox->frame = QVideoFrame();
     }
-    if (clearFrame && m_videoSink) {
-        m_videoSink->setVideoFrame(QVideoFrame());
+    if (clearFrame) {
+        if (m_videoSink) m_videoSink->setVideoFrame(QVideoFrame());
+        if (m_frameSource) m_frameSource->acceptFrame(QVideoFrame());
     }
 }
 

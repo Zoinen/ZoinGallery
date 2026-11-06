@@ -203,6 +203,9 @@ void ExternalCatalogResetTransaction::initializeRow(
         : QDateTime{};
     entry.imageInfo.fileSize = entry.size;
     entry.imageInfo.thumbnailKind = entry.thumbnailKind;
+    if (!entry.directory && isVectorSource(entry.imageInfo)) {
+        entry.image = true;
+    }
     if (entry.image && entry.thumbnailKind == QStringLiteral("video")) {
         entry.imageInfo.imageSize = QSize(16, 9);
         entry.originalSize = entry.imageInfo.imageSize;

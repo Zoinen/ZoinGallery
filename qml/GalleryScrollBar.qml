@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import QtQuick.Controls.Basic as T
 
 // Module-local copy of ZGStyle/ScrollBar.  Using the Basic template directly
@@ -10,6 +11,8 @@ T.ScrollBar {
     id: scroll
 
     required property GalleryThemePalette theme
+    property bool pixelAlignmentSuspended: false
+    readonly property bool motionActive: pixelAlignmentSuspended || pressed
     readonly property color handleColor: theme.scrollBarHandle
     readonly property color handleBackgroundHoveredColor:
         theme.scrollBarHandleBackgroundHovered
@@ -38,9 +41,20 @@ T.ScrollBar {
         acceptedButtons: Qt.NoButton
 
         Rectangle {
+            id: handleSurface
             objectName: "galleryScrollBarHandle"
-            anchors.fill: parent
-            anchors.margins: 4
+            x: 4
+            y: 4
+            readonly property var pixelGrid: PixelGridAlignment.grid
+            readonly property real rawWidth: Math.max(0, parent.width - 8)
+            readonly property real rawHeight: Math.max(0, parent.height - 8)
+            width: !scroll.motionActive && pixelGrid ? pixelGrid.snap(rawWidth) : rawWidth
+            height: !scroll.motionActive && pixelGrid ? pixelGrid.snap(rawHeight) : rawHeight
+            PixelGridAlignment.enabled: scroll.visible && !scroll.motionActive
+            transform: Translate {
+                x: handleSurface.PixelGridAlignment.offset.x
+                y: handleSurface.PixelGridAlignment.offset.y
+            }
             radius: 4
             color: scroll.hovered
                    ? (scroll.pressed ? scroll.handlePressedColor

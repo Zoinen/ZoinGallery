@@ -6,6 +6,8 @@
 #include <QQmlComponent>
 #include <QPointer>
 
+class QQuickItem;
+
 // Immutable source, not a decoded image. Keeping this handle pins VFS backing
 // storage until the last panel/viewer consumer releases the revision.
 struct VectorSource {
@@ -45,6 +47,7 @@ public:
     QSize sourceSize() const { return _pin ? _pin->size : QSize(); }
     bool loading() const { return _loading; }
     bool failed() const { return _failed; }
+    Q_INVOKABLE bool sceneReady(QQuickItem *item) const;
 signals:
     void sourceChanged();
     void preparedChanged();

@@ -10,6 +10,7 @@ Item {
     required property bool densityAdjustmentEnabled
     required property bool primarySelectionEnabled
     required property real autoScrollExtent
+    property var nativeScrollAnimation: null
 
     readonly property alias scrollingStarted: autoScroll.scrollingStarted
     readonly property alias scrollingStartedAtY: autoScroll.startCoordinate
@@ -133,6 +134,7 @@ Item {
         objectName: "galleryMouseAutoScrollController"
         layout: pointerLayer.layout
         pointerSource: middleButtonArea
+        nativeScrollAnimation: pointerLayer.nativeScrollAnimation
         horizontal: pointerLayer.presentationMode === "columns"
         scrollExtent: pointerLayer.autoScrollExtent
     }

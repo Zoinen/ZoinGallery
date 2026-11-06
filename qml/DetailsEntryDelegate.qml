@@ -38,10 +38,10 @@ Item {
         Item {
             id: detailsIconSlot
             objectName: "galleryDetailsIconSlot-" + content.entry.viewIndex
-            x: content.entry.effectivePreviewRect.x
-            y: content.entry.effectivePreviewRect.y
-            width: content.entry.effectivePreviewRect.width
-            height: content.entry.effectivePreviewRect.height
+            x: content.entry.effectivePreviewX
+            y: content.entry.effectivePreviewY
+            width: content.entry.effectivePreviewWidth
+            height: content.entry.effectivePreviewHeight
         }
 
         GalleryMotionText {

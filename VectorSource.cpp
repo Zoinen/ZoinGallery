@@ -1,4 +1,5 @@
 #include "VectorSource.h"
+#include "VectorSourceStorage_p.h"
 #include <QFileInfo>
 #include <QSvgRenderer>
 #include <QUrlQuery>
@@ -10,10 +11,36 @@
 #include <QQmlEngine>
 #include <QCoreApplication>
 #include <QWaitCondition>
+#include <QGlobalStatic>
 #include <set>
 #include <QtQuickVectorImageGenerator/private/qquickqmlgenerator_p.h>
+#include <QtQuick/private/qquicktext_p.h>
+#include <QtQuickShapes/private/qquickshape_p.h>
+
+bool VectorSourcePin::sceneReady(QQuickItem *item) const {
+    if (!item) return false;
+    const auto *shape = qobject_cast<QQuickShape *>(item);
+    bool ready = !shape || shape->status() == QQuickShape::Ready;
+    if (auto *text = qobject_cast<QQuickText *>(item);
+        text && text->renderType() != QQuickText::CurveRendering) {
+        text->setRenderType(QQuickText::CurveRendering);
+    }
+    // Keep traversal native: exposing each children list to JS creates wrappers
+    // for the generated SVG scene on every asynchronous readiness poll.
+    const auto children = item->childItems();
+    for (auto *child : children) {
+        if (!sceneReady(child)) ready = false;
+    }
+    return ready;
+}
 
 namespace {
+struct DirectoryCleanupExecutor {
+    DirectoryCleanupExecutor() { pool.setMaxThreadCount(1); }
+    QThreadPool pool;
+};
+Q_GLOBAL_STATIC(DirectoryCleanupExecutor, directoryCleanupExecutor)
+
 QMutex sourceMutex;
 QHash<QUrl, QWeakPointer<VectorSource>> sourceHandles;
 // Qt 6.11's generator uses shared mutable indentation storage. All gallery
@@ -76,6 +103,24 @@ bool isVectorSource(const ImageInfo &info) {
             == QStringLiteral("image/svg+xml");
 }
 
+QSharedPointer<QTemporaryDir> ZoinGallery::Internal::createVectorSourceDirectory(
+    QThreadPool *executor) {
+    // Initialize the shared executor during worker-side source preparation.
+    if (!executor) (void)directoryCleanupExecutor();
+    return QSharedPointer<QTemporaryDir>(new QTemporaryDir, [executor](QTemporaryDir *directory) {
+        QThreadPool *pool = executor;
+        if (!pool) {
+            if (auto *shared = directoryCleanupExecutor()) pool = &shared->pool;
+        }
+        if (pool) {
+            pool->start([directory] { delete directory; });
+        } else {
+            // Late static teardown: the shared pool has already drained.
+            delete directory;
+        }
+    });
+}
+
 QString vectorRevisionKey(const ImageInfo &info) {
     return info.source.isValid() ? info.source.accessKey()
         : info.path + QChar(0x1f) + info.sourceVersionToken + QChar(0x1f)
@@ -109,7 +154,7 @@ VectorSourcePtr acquireVectorSource(const ImageInfo &info,
     source->url = url;
     // A distinct immutable directory avoids QQmlEngine's cached directory
     // listings and keeps generated image assets alive with the VFS revision.
-    source->preparedFiles = QSharedPointer<QTemporaryDir>::create();
+    source->preparedFiles = ZoinGallery::Internal::createVectorSourceDirectory();
     if (!source->preparedFiles->isValid()) return {};
     const QString componentPath = source->preparedFiles->filePath(QStringLiteral("Prepared.qml"));
     QQuickQmlGenerator generator(path,

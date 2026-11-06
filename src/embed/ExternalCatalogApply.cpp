@@ -454,7 +454,7 @@ bool ExternalCatalogModel::applyCatalog(
         return false;
     }
     if (totalCount >= 0 && totalCount != values.size()) {
-        if (checkEquivalentCatalog && _virtualRowCount >= 0
+        if (checkEquivalentCatalog
             && tryExtendSparseCatalog(
                 values, metadataDeferred, totalCount)) {
             timingSpan.set(QStringLiteral("outcome"),

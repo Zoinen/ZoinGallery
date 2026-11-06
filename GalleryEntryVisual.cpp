@@ -199,9 +199,15 @@ quint8 GalleryEntryVisual::emitChanges(
 quint8 GalleryEntryVisual::applySnapshot(
     const QVariantMap &snapshot) {
     const SnapshotValues values = parseSnapshot(snapshot);
-    return emitChanges(
+    const bool iconChanges = _iconPath != values.iconPath
+        || _iconKey != values.iconKey;
+    const quint8 changes = emitChanges(
         applyIdentity(values), applyMedia(values),
         applyState(values), applyStyle(values));
+    if (iconChanges) {
+        emit iconChanged();
+    }
+    return changes;
 }
 
 

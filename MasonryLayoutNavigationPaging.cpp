@@ -1,6 +1,8 @@
 #include "MasonryLayout.h"
 #include "FileListModel.h"
 #include "GalleryPixelGrid.h"
+#include "GalleryViewportMotion.h"
+#include <ZoinGallery/PixelGrid.h>
 
 #include <algorithm>
 #include <cmath>
@@ -13,11 +15,22 @@ ImageFile *imageFileFromNavigationIndex(const QModelIndex &index) {
     return index.data(FileListModel::ImageFileRole).value<ImageFile *>();
 }
 
+QPointF viewportMotionCorrection(QQuickItem *viewport,
+    const std::shared_ptr<GalleryViewportMotionState> &state) {
+    if (!state || !state->active.load(std::memory_order_acquire)) return {};
+    const auto *scope = qobject_cast<ZoinGallery::PixelGridScope *>(viewport);
+    if (!scope) return {};
+    return {0, state->contentY.load(std::memory_order_acquire)
+        + scope->appliedMotionOffset().y()};
+}
+
 } // namespace
 
 int MasonryLayout::indexAtViewport(qreal x, qreal y) const {
     if (_viewport) {
-        const QPointF point = _viewport->mapFromItem(this, QPointF(x, y));
+        QPointF point = _viewport->mapFromItem(this, QPointF(x, y));
+        if (_presentationMode == Masonry)
+            point += viewportMotionCorrection(_viewport, _viewportMotionState);
         return indexAt(point.x(), point.y());
     }
     return _presentationMode == Columns
@@ -34,8 +47,11 @@ QVariantList MasonryLayout::indexesInViewportRect(qreal x, qreal y, qreal width,
         : QRectF(viewportRect.x() - _paddingLeft,
                  viewportRect.y() + _contentY,
                  viewportRect.width(), viewportRect.height());
-    if (_viewport)
+    if (_viewport) {
         contentRect = _viewport->mapRectFromItem(this, viewportRect);
+        if (_presentationMode == Masonry)
+            contentRect.translate(viewportMotionCorrection(_viewport, _viewportMotionState));
+    }
 
     QVariantList result;
     const qreal margin = 1 / devicePixelRatio();
@@ -51,6 +67,33 @@ QVariantList MasonryLayout::indexesInViewportRect(qreal x, qreal y, qreal width,
     return result;
 }
 
+QList<int> MasonryLayout::viewportMotionCandidates(const QRectF &contentRect) const {
+    QList<int> result;
+    if (_presentationMode != Masonry || contentRect.isEmpty()) return result;
+    const auto candidates = indexesForVerticalRange(contentRect.top(), contentRect.bottom());
+    for (const int index : candidates)
+        if (indexGeometry(index).intersects(contentRect)) result.append(index);
+    return result;
+}
+
+void MasonryLayout::prepareViewportMotionTarget(qreal targetY) {
+    if (_presentationMode != Masonry || !_viewportMotionState
+        || !_viewportMotionState->active.load(std::memory_order_acquire)) return;
+    if (_viewportMotionState->page) {
+        _viewportMotionState->targetY.store(targetY);
+        scheduleNearbyPreparation();
+        return;
+    }
+    const auto previous = delegateIndexesForCurrentViewport();
+    const qreal previousTarget = _viewportMotionState->targetY.exchange(targetY);
+    if (_viewportMotionState->edgeJump && previousTarget != targetY) {
+        emit metadataDemandChanged();
+        planViewportThumbnails(_overscanIndexSet);
+        scheduleNearbyPreparation();
+    }
+    if (previous != delegateIndexesForCurrentViewport()) updateProperties(false);
+}
+
 QRectF MasonryLayout::indexGeometry(int index) const {
     if (index < 0 || index >= logicalBrickCount()) {
         return QRectF();
@@ -62,7 +105,7 @@ QRectF MasonryLayout::indexGeometry(int index) const {
             return QRectF();
         }
     }
-    if (_presentationMode != Masonry || sparseVirtualLayout()) {
+    if (_presentationMode != Masonry || sparseMasonryLayout()) {
         return analyticFixedGeometry(index);
     }
     const MasonryBrick *brick = brickAt(index);
@@ -82,9 +125,24 @@ QRectF MasonryLayout::indexGeometry(int index) const {
     return brick->geometry();
 }
 
+bool MasonryLayout::indexIntersectsViewport(int index) const {
+    if (index < 0 || index >= logicalBrickCount() || height() <= 0) {
+        return false;
+    }
+    const QRectF geometry = indexGeometry(index);
+    if (geometry.width() <= 0 || geometry.height() <= 0) {
+        return false;
+    }
+    // A cell merely touching a clipped edge has no painted area.
+    return _presentationMode == Columns
+        ? geometry.left() < _contentY + width() && geometry.right() > _contentY
+        : geometry.top() < _contentY + height() && geometry.bottom() > _contentY;
+}
+
 QRectF MasonryLayout::indexPreviewGeometry(int index) const {
-    if ((_presentationMode != Masonry || sparseVirtualLayout())
-        && index >= 0 && index < logicalBrickCount()) {
+    if (sparseMasonryLayout())
+        return sparseMasonryCell(index).previewGeometry;
+    if (_presentationMode != Masonry && index >= 0 && index < logicalBrickCount()) {
         MasonryBrick temporary;
         if (const MasonryBrick *source = brickAt(index)) {
             temporary.modelText = source->modelText;
@@ -405,8 +463,17 @@ int MasonryLayout::groupBoundaryIndex(
 int MasonryLayout::fixedNavigationIndex(
     int index, NavigationDirection direction, bool page,
     int lastIndex) const {
-    const bool usesFixedGeometry = _presentationMode != Masonry
-        || sparseVirtualLayout();
+    if (sparseMasonryLayout()) {
+        if (!page)
+            return sparseMasonryNeighbor(index, direction);
+        const QRectF cell = indexGeometry(index);
+        if (cell.isEmpty()) return index;
+        const bool backwards = direction == NavigateLeft || direction == NavigateUp;
+        const int target = sparseMasonryIndexNear(cell.center().x(),
+            cell.center().y() + (backwards ? -height() : height()));
+        return target >= 0 ? target : index;
+    }
+    const bool usesFixedGeometry = _presentationMode != Masonry;
     if ((usesFixedGeometry && !_groupRanges.isEmpty())
         || (_presentationMode == Icons && page)) {
         const ZoinGallery::GalleryFixedLayoutPlan plan = fixedLayoutPlan();
@@ -449,8 +516,7 @@ int MasonryLayout::fixedNavigationIndex(
             }
             if (_presentationMode == Icons)
                 return index;
-        } else if (_presentationMode == Grid || _presentationMode == Icons
-                   || sparseVirtualLayout()) {
+        } else if (_presentationMode == Grid || _presentationMode == Icons) {
             const int sectionIndex = plan.sectionIndexFor(index);
             if (sectionIndex >= 0) {
                 const auto &section = plan.sections.at(sectionIndex);
@@ -504,8 +570,7 @@ int MasonryLayout::fixedNavigationIndex(
             }
         }
     }
-    const qreal extent = (_presentationMode == Icons
-                          || sparseVirtualLayout())
+    const qreal extent = _presentationMode == Icons
         ? virtualGridRowHeight()
         : qMax<qreal>(1.0, effectiveTargetExtent());
     const int columns =
@@ -530,8 +595,7 @@ int MasonryLayout::fixedNavigationIndex(
         case NavigateDown: return qMin(lastIndex, index + 1);
         }
     }
-    if (_presentationMode == Grid || _presentationMode == Icons
-        || sparseVirtualLayout()) {
+    if (_presentationMode == Grid || _presentationMode == Icons) {
         switch (direction) {
         case NavigateLeft: return qMax(0, index - 1);
         case NavigateRight: return qMin(lastIndex, index + 1);
@@ -636,35 +700,11 @@ QVariantMap MasonryLayout::sparseMasonryPagePlan(
            : indexGeometry(state.currentIndex).top() - state.planned);
     state.atStart = state.destination <= 0.01;
     state.atEnd = state.destination >= state.maximum - 0.01;
-    if (state.atStart || state.atEnd) {
-        const int columns = virtualGridColumnCount();
-        const int column = qBound(
-            0, state.currentIndex % qMax(1, columns),
-            qMax(0, columns - 1));
-        if (state.atStart) {
-            state.targetIndex = qMin(logicalBrickCount() - 1, column);
-        } else {
-            const int lastRowStart =
-                ((logicalBrickCount() - 1) / qMax(1, columns))
-                * qMax(1, columns);
-            state.targetIndex = qMin(
-                logicalBrickCount() - 1, lastRowStart + column);
-        }
-    }
-    if (state.targetIndex < 0) {
-        const qreal lastProbeY = qMax<qreal>(
-            0, std::nextafter(
-                   _contentHeight,
-                   -std::numeric_limits<qreal>::infinity()));
-        state.targetIndex = indexAt(
-            state.anchorX,
-            qBound<qreal>(
-                0, state.destination + retainedRowViewportY, lastProbeY));
-    }
-    if (state.targetIndex < 0) {
-        state.targetIndex = state.pageDirection < 0
-            ? 0 : logicalBrickCount() - 1;
-    }
+    const qreal probeY = state.atStart && state.pageDirection < 0 ? 0
+        : state.atEnd && state.pageDirection > 0 ? _contentHeight
+        : state.destination + retainedRowViewportY;
+    state.targetIndex = sparseMasonryIndexNear(state.anchorX, probeY);
+    if (state.targetIndex < 0) return result;
     result[QStringLiteral("valid")] = true;
     result[QStringLiteral("targetIndex")] = state.targetIndex;
     result[QStringLiteral("contentY")] = state.destination;
@@ -673,6 +713,72 @@ QVariantMap MasonryLayout::sparseMasonryPagePlan(
     result[QStringLiteral("terminalClamp")] =
         state.atStart || state.atEnd;
     return result;
+}
+
+int MasonryLayout::sparseMasonryIndexInBand(
+    const SparseMasonryBlock &block, const ZoinGallery::GalleryLayoutBand &band,
+    qreal x) const {
+    int best = -1;
+    qreal distance = std::numeric_limits<qreal>::max();
+    for (const int row : band.indexes) {
+        const QRectF &geometry = block.layout.cells.at(row).geometry;
+        if (geometry.left() <= x && x < geometry.right()) return block.first + row;
+        const qreal candidate = qAbs(geometry.center().x() - x);
+        if (candidate < distance) {
+            distance = candidate;
+            best = block.first + row;
+        }
+    }
+    return best;
+}
+
+int MasonryLayout::sparseMasonryIndexNear(qreal x, qreal y) const {
+    if (_sparseMasonryBlocks.isEmpty()) return -1;
+    const auto end = _sparseMasonryBlocks.cend();
+    auto block = std::lower_bound(_sparseMasonryBlocks.cbegin(), end, y,
+        [](const SparseMasonryBlock &candidate, qreal value) {
+            return candidate.bottom() <= value;
+        });
+    if (block == end) --block;
+    const auto &bands = block->layout.bands;
+    if (bands.isEmpty()) return -1;
+    const auto band = std::lower_bound(bands.cbegin(), bands.cend(), y - block->top,
+        [](const ZoinGallery::GalleryLayoutBand &candidate, qreal value) {
+            return candidate.bottom <= value;
+        });
+    return sparseMasonryIndexInBand(*block, band == bands.cend() ? bands.last() : *band, x);
+}
+
+int MasonryLayout::sparseMasonryNeighbor(int index, NavigationDirection direction) const {
+    const bool backwards = direction == NavigateLeft || direction == NavigateUp;
+    if (direction == NavigateLeft || direction == NavigateRight)
+        return qBound(0, index + (backwards ? -1 : 1), logicalBrickCount() - 1);
+
+    const auto *block = sparseMasonryBlockForIndex(index);
+    if (!block) return index;
+    const auto &cell = block->layout.cells.at(index - block->first);
+    const auto &bands = block->layout.bands;
+    auto band = std::lower_bound(bands.cbegin(), bands.cend(), cell.row,
+        [](const ZoinGallery::GalleryLayoutBand &candidate, int row) {
+            return candidate.row < row;
+        });
+    if (band == bands.cend()) return index;
+    const qreal anchorX = cell.geometry.center().x();
+    if (backwards && band != bands.cbegin())
+        return sparseMasonryIndexInBand(*block, *--band, anchorX);
+    if (!backwards && ++band != bands.cend())
+        return sparseMasonryIndexInBand(*block, *band, anchorX);
+
+    const auto *begin = _sparseMasonryBlocks.constData();
+    const auto *end = begin + _sparseMasonryBlocks.size();
+    if (backwards && block != begin) {
+        --block;
+        if (!block->layout.bands.isEmpty())
+            return sparseMasonryIndexInBand(*block, block->layout.bands.last(), anchorX);
+    } else if (!backwards && ++block != end && !block->layout.bands.isEmpty()) {
+        return sparseMasonryIndexInBand(*block, block->layout.bands.first(), anchorX);
+    }
+    return index;
 }
 
 int MasonryLayout::closestLayoutBand(
@@ -873,7 +979,7 @@ QVariantMap MasonryLayout::masonryPagePlan(
         || currentIndex >= logicalBrickCount() || direction == 0) {
         return result;
     }
-    if (sparseVirtualLayout()) {
+    if (sparseMasonryLayout()) {
         return sparseMasonryPagePlan(state, std::move(result));
     }
     if (_layoutBands.isEmpty() || _bricks.isEmpty()

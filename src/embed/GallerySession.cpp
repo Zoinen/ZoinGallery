@@ -17,6 +17,8 @@
 #include <QHash>
 #include <QSet>
 
+#include <algorithm>
+
 namespace ZoinGallery {
 
 class GallerySession::Private {
@@ -84,6 +86,7 @@ GallerySession::GallerySession(
     ::DecodeManager *decodeManager,
     const QSharedPointer<ImageSourceProvider> &imageSourceProvider,
     bool enableVideoPlayback,
+    VideoMutePreference *videoMutePreference,
     qint64 viewerFitCacheByteBudget,
     qint64 viewerNativeCacheByteBudget,
     QObject *parent)
@@ -95,7 +98,7 @@ GallerySession::GallerySession(
 #if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
     if (enableVideoPlayback) {
         d->videoPlaybackController = new VideoPlaybackController(
-            imageSourceProvider, this);
+            imageSourceProvider, this, videoMutePreference);
         connect(d->videoPlaybackController,
                 &VideoPlaybackController::availableChanged,
                 this, &GallerySession::videoPlaybackAvailableChanged);
@@ -103,6 +106,7 @@ GallerySession::GallerySession(
 #else
     Q_UNUSED(imageSourceProvider)
     Q_UNUSED(enableVideoPlayback)
+    Q_UNUSED(videoMutePreference)
 #endif
 
     if (sourceKind == ExternalCatalogSource) {
@@ -476,10 +480,25 @@ bool GallerySession::applyExternalCatalog(
         d->external->setProperty("directoryTraceRevision", revision);
     }
     prepareExternalCatalogPath(context, entries, options);
+    const QVariantMap delta = options.value(QStringLiteral("catalogDelta")).toMap();
+    // A page of the current revision cannot make a complete catalog incomplete.
+    if (!sourceIdentityChanged && !context.pathChanged && revision != 0
+        && revision == d->catalogRevision && delta.isEmpty()
+        && context.catalogRowsDeferred && !d->external->sparseCatalog()
+        && context.totalCount == d->external->rowCount()
+        && entries.size() < context.totalCount
+        && std::all_of(entries.cbegin(), entries.cend(), [this](const QVariant &value) {
+            const QVariantMap row = value.toMap();
+            bool validIndex = false;
+            const int index = row.value(QStringLiteral("index")).toInt(&validIndex);
+            const QString id = row.value(QStringLiteral("entryId")).toString();
+            return validIndex && !id.isEmpty() && d->external->entryIdAt(index) == id;
+        })) {
+        context.catalogRowsDeferred = false;
+    }
     if (applySameExternalCatalogRevision(context, revision)) {
         return true;
     }
-    const QVariantMap delta = options.value(QStringLiteral("catalogDelta")).toMap();
     const bool wantsSparseCatalog = context.catalogRowsDeferred
         && context.totalCount != entries.size();
     // Reconcile identities first, then leave sparse storage without resetting
@@ -1090,6 +1109,17 @@ void GallerySession::requestViewerAt(int index, int width, int height) {
     }
     else if (d->local) {
         d->local->requestViewerAt(index, size);
+    }
+}
+
+void GallerySession::requestPresentedViewerAt(int index, int width, int height) {
+    if (d->shutdown || !d->viewerOpen || !isViewableAt(index)) return;
+    if (d->external) {
+        d->external->requestViewer(index, QSize(qMax(0, width), qMax(0, height)));
+    } else if (d->local && isVideoAt(index)) {
+        d->local->requestViewer(index, QSize(qMax(0, width), qMax(0, height)));
+    } else {
+        requestViewerAt(index, width, height);
     }
 }
 

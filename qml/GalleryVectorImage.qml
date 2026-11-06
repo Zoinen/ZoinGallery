@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Shapes
 import ZoinGallery.Native 1.0
 
 GalleryVectorUploadGate {
@@ -32,20 +31,12 @@ GalleryVectorUploadGate {
 
     // Component compilation/incubation and shape preparation are separate
     // stages. Inspect pending Shapes only until their geometry is ready.
-    function shapesReady(item) {
-        let ready = !(item instanceof Shape) || item.status === Shape.Ready
-        if (item instanceof Text) item.renderType = Text.CurveRendering
-        for (let i = 0; i < item.children.length; ++i) {
-            if (!shapesReady(item.children[i])) ready = false
-        }
-        return ready
-    }
     function resolveState() {
         if (source.toString() === "") {
             cpuSourceStatus = Image.Null
         } else if (sourcePin.failed || vectorImage.status === Loader.Error) {
             cpuSourceStatus = Image.Error
-        } else if (vectorImage.status === Loader.Ready && shapesReady(vectorImage.item)) {
+        } else if (vectorImage.status === Loader.Ready && sourcePin.sceneReady(vectorImage.item)) {
             cpuSourceStatus = Image.Ready
             sceneGenerationMs = Date.now() - loadStartedAt
         } else {

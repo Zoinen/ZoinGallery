@@ -28,9 +28,16 @@ PixelGridScope {
         id: background
         objectName: "galleryViewerBackground"
         anchors.fill: parent
-        color: root.viewer.backgroundColor
+        color: root.Window.visibility === Window.FullScreen
+               ? "#000000" : root.viewer.backgroundColor
         opacity: root.viewer.surfaceProgress
         visible: !root.viewer.customContent && opacity > 0
+        Behavior on color {
+            ColorAnimation {
+                duration: root.viewer.animationDuration
+                easing.type: Easing.OutSine
+            }
+        }
     }
 
     Item {
@@ -174,6 +181,7 @@ PixelGridScope {
             Loader {
                 id: videoPlaybackLoader
                 objectName: "galleryVideoPlaybackLoader"
+                asynchronous: true
                 // Native text/icons must not inherit the image's flight scale.
                 anchors.fill: parent
                 opacity: root.viewer.transitionHasGeometry
@@ -185,6 +193,11 @@ PixelGridScope {
                         && root.viewer.session
                         && root.viewer.session.videoPlaybackAvailable === true
                 source: active ? Qt.resolvedUrl("GalleryVideoPlaybackSurface.qml") : ""
+            }
+
+            Connections {
+                target: videoPlaybackLoader.item
+                function onNavigationRequested(direction) { root.viewer.navigate(direction) }
             }
 
             Binding {
@@ -205,13 +218,6 @@ PixelGridScope {
                 target: videoPlaybackLoader.item
                 property: "videoIdentity"
                 value: root.viewer.currentVideoIdentityValue
-                when: videoPlaybackLoader.item !== null
-            }
-
-            Binding {
-                target: videoPlaybackLoader.item
-                property: "previewVisible"
-                value: viewportItem.imageTextureReady
                 when: videoPlaybackLoader.item !== null
             }
 
@@ -354,17 +360,39 @@ PixelGridScope {
     }
 
     BusyIndicator {
+        id: imageLoading
         objectName: "galleryViewerBusyIndicator"
-        anchors.centerIn: parent
-        running: !root.viewer.customContent
-                 && !root.viewer.currentIsVideo
+        readonly property point alignedPosition: root.alignedCenter(imageLoading)
+        x: alignedPosition.x
+        y: alignedPosition.y
+        readonly property bool waitingForVideo: videoPlaybackLoader.active
+                 && (videoPlaybackLoader.status === Loader.Loading
+                     || (videoPlaybackLoader.status === Loader.Ready
+                         && videoPlaybackLoader.item.playbackPending))
+        readonly property string waitingEntry: !root.viewer.customContent
                  && root.viewer.visible
                  && root.viewer.viewerContentVisible
+                 && !root.viewer.completingClose
                  && root.viewer.transitionProgress > 0.5
                  && root.viewer.session
                  && root.viewer.presentedIndex >= 0
-                 && root.viewer.currentViewerRequestState === "pending"
-                 && root.viewer.currentSourceValue.toString() === ""
+                 && (root.viewer.currentIsVideo ? waitingForVideo
+                     : (root.viewer.currentViewerRequestState === "pending"
+                        && root.viewer.currentSourceValue.toString() === ""))
+                 ? root.viewer.presentedEntryId : ""
+        property bool showAfterGrace: false
+        onWaitingEntryChanged: {
+            previewGrace.stop()
+            showAfterGrace = false
+            if (waitingEntry !== "")
+                previewGrace.start()
+        }
+        Timer {
+            id: previewGrace
+            interval: 300
+            onTriggered: imageLoading.showAfterGrace = true
+        }
+        running: showAfterGrace && waitingEntry !== ""
         visible: running
     }
 

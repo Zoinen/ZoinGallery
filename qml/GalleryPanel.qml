@@ -14,6 +14,8 @@ GalleryPanelFacade {
     clip: false
 
     property GallerySession session
+    readonly property alias entryVisualFactories: entryVisualFactoriesObject
+    GalleryEntryVisualFactories { id: entryVisualFactoriesObject }
     readonly property GalleryVectorSceneCache vectorSceneCache: GalleryVectorSceneCache {
         parent: root
         enabled: !root.session || !root.session.viewerOpen

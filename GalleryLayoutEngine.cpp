@@ -266,29 +266,23 @@ void matchFinalMasonryRow(
     QVector<GalleryLayoutCell> &cells,
     const QVector<GalleryLayoutEntry> &entries,
     qreal width, qreal targetHeight, qreal spacing, qreal horizontalSpacing,
-    int index, int currentRow, qreal lastY) {
-    for (int previous = index - 1; previous >= 0; --previous) {
-        if (cells.at(previous).row == currentRow) {
-            continue;
-        }
-        scaleMasonryRow(
-            cells, entries, width, targetHeight, spacing, horizontalSpacing, index,
-            cells.at(previous).geometry.height());
-        if (cells.at(index).geometry.right() <= width) {
-            return;
-        }
-        for (int item = previous + 1; item <= index; ++item) {
-            const QSizeF resetSize = scaleToHeightWithSpacing(
-                entries.at(item).originalSize, targetHeight, spacing, horizontalSpacing);
-            const qreal resetX = item == previous + 1
-                ? 0 : cells.at(item - 1).geometry.right();
-            cells[item].geometry = QRectF(
-                resetX, lastY, resetSize.width(), resetSize.height());
-        }
-        scaleMasonryRow(
-            cells, entries, width, targetHeight, spacing, horizontalSpacing, index);
+    int index, qreal previousRowHeight, qreal lastY) {
+    scaleMasonryRow(
+        cells, entries, width, targetHeight, spacing, horizontalSpacing, index,
+        previousRowHeight);
+    if (cells.at(index).geometry.right() <= width) {
         return;
     }
+    const int first = index - cells.at(index).column;
+    for (int item = first; item <= index; ++item) {
+        const QSizeF resetSize = scaleToHeightWithSpacing(
+            entries.at(item).originalSize, targetHeight, spacing, horizontalSpacing);
+        const qreal resetX = item == first ? 0 : cells.at(item - 1).geometry.right();
+        cells[item].geometry = QRectF(
+            resetX, lastY, resetSize.width(), resetSize.height());
+    }
+    scaleMasonryRow(
+        cells, entries, width, targetHeight, spacing, horizontalSpacing, index);
 }
 
 QVector<GalleryLayoutBand> buildBands(
@@ -694,6 +688,12 @@ GalleryLayoutResult UniformGridStrategy::layout(
 GalleryLayoutResult JustifiedMasonryStrategy::layout(
     const GalleryLayoutRequest &request,
     const QVector<GalleryLayoutEntry> &entries) {
+    return layoutChunk(request, entries, {});
+}
+
+GalleryLayoutResult JustifiedMasonryStrategy::layoutChunk(
+    const GalleryLayoutRequest &request,
+    const QVector<GalleryLayoutEntry> &entries, Chunk chunk) {
     GalleryLayoutResult result;
     result.cells.resize(entries.size());
     if (entries.isEmpty()) {
@@ -711,6 +711,7 @@ GalleryLayoutResult JustifiedMasonryStrategy::layout(
     int currentColumn = 0;
     qreal lastX = 0;
     qreal lastY = request.insets.top;
+    qreal previousRowHeight = chunk.previousRowHeight;
 
     for (int index = 0; index < entries.size(); ++index) {
         const GalleryLayoutEntry &entry = entries.at(index);
@@ -733,11 +734,11 @@ GalleryLayoutResult JustifiedMasonryStrategy::layout(
              && (!lineBreak || currentColumn == 0))
             || request.singleRow) {
             lastX += size.width();
-            if (index == entries.size() - 1 && currentRow > 0
-                && request.lastRowMatchesPrevious) {
+            if (index == entries.size() - 1 && !chunk.hasFollowingEntries
+                && previousRowHeight >= 0 && request.lastRowMatchesPrevious) {
                 matchFinalMasonryRow(
                     result.cells, entries, width, targetHeight,
-                    spacing, horizontalSpacing, index, currentRow, lastY);
+                    spacing, horizontalSpacing, index, previousRowHeight, lastY);
             }
         } else if (currentColumn == 0) {
             if (!entry.originalSize.isEmpty()) {
@@ -751,8 +752,9 @@ GalleryLayoutResult JustifiedMasonryStrategy::layout(
             ++currentRow;
             currentColumn = -1;
             lastX = 0;
+            previousRowHeight = cell.geometry.height();
             if (index != entries.size() - 1) {
-                lastY += cell.geometry.height();
+                lastY += previousRowHeight;
             }
         } else {
             const qreal rowHeight = request.singleRow
@@ -763,10 +765,18 @@ GalleryLayoutResult JustifiedMasonryStrategy::layout(
             currentColumn = -1;
             lastX = 0;
             lastY += rowHeight;
+            previousRowHeight = rowHeight;
             --index;
         }
         ++currentColumn;
     }
+
+    // The last row is lookahead. Its first cell established the wrap,
+    // but the following chunk needs the entire row to lay it out.
+    if (chunk.hasFollowingEntries)
+        result.cells.resize(result.cells.size() - result.cells.last().column - 1);
+    if (!result.cells.isEmpty())
+        result.lastMasonryRowHeight = result.cells.last().geometry.height();
 
     const GridMetrics grid(request.devicePixelRatio);
     for (auto &cell : result.cells) {

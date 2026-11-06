@@ -35,6 +35,20 @@ using namespace std::chrono_literals;
 namespace {
 constexpr int InteractiveSourcePriority = 1000;
 constexpr int ViewerFitPriority = 100;
+constexpr int ViewerFitWindowSize = 16;
+constexpr int ViewerFitForegroundNeighbors = 6;
+
+bool isRankedViewerFit(Runner *runner, int priority) {
+    return priority > ViewerFitPriority - ViewerFitWindowSize
+        && runner->isViewerRequest() && runner->isViewerFitRequest();
+}
+
+bool canUseViewerFitWorker(Runner *runner, int priority) {
+    return isRankedViewerFit(runner, priority)
+        && (runner->type() == RunnerType::ImageDecode
+            || runner->type() == RunnerType::CachedImageRetrieve);
+}
+
 enum class QueuePriority {
     Background,
     High,
@@ -183,7 +197,8 @@ bool isRunnerImageInfoEmbedded(Runner *runner) {
 
 DecodeManager::DecodeManager(
     QObject *parent, int maxThreads,
-    QSharedPointer<ZoinGallery::ImageSourceProvider> imageSourceProvider)
+    QSharedPointer<ZoinGallery::ImageSourceProvider> imageSourceProvider,
+    bool expandViewerFitWorkers)
     : QObject(parent),
       _imageSourceProvider(std::move(imageSourceProvider)) {
 
@@ -193,18 +208,26 @@ DecodeManager::DecodeManager(
     }
 
     _runningTasksUpdateTimer.setInterval(100);
+    _viewerFitCachePool.setMaxThreadCount(1);
+    _viewerFitCachePool.setThreadPriority(QThread::LowPriority);
     connect(&_runningTasksUpdateTimer, &QTimer::timeout,
             this, &DecodeManager::updateRunningTasksCount);
 
-    int requestedThreads = qMax(1, QThread::idealThreadCount());
-    if (maxThreads > 0) {
-        requestedThreads = qMin(requestedThreads, maxThreads);
-    }
-    const int MaxThreads =
-        qMax(int(SpecialThreads::Last) + 1, requestedThreads);
-    qDebug() << "Configured" << MaxThreads
-             << "decode workers (started on demand)";
-    for (int i = 0; i < MaxThreads; i++) {
+    const int idealThreads = qMax(1, QThread::idealThreadCount());
+    const int requestedThreads = maxThreads > 0
+        ? qMin(idealThreads, maxThreads) : idealThreads;
+    _sharedWorkerCount = qMax(int(SpecialThreads::Last) + 1, requestedThreads);
+    const int workerCount = expandViewerFitWorkers
+        ? qMax(_sharedWorkerCount, qMin(idealThreads, ViewerFitWindowSize + 1))
+        : _sharedWorkerCount;
+    // Leave room for the current frame, the first wave of neighbors and UI
+    // work before borrowing up to three extra cores for the current resize.
+    _foregroundFitResizePool.setMaxThreadCount(expandViewerFitWorkers
+        ? qBound(0, idealThreads - ViewerFitForegroundNeighbors - 2, 3) : 0);
+    qDebug() << "[FIX:viewer-fit-parallelism]" << _sharedWorkerCount
+             << "shared decode workers and" << (workerCount - _sharedWorkerCount)
+             << "extra Fit workers, started on demand";
+    for (int i = 0; i < workerCount; i++) {
         WorkerInfo info{
             .thread = new QThread(this),
             .runner = nullptr,
@@ -509,7 +532,7 @@ void DecodeManager::restoreCachedVideoPoster(
     request.expandToCacheResolution = false;
     request.videoPosterRequest = true;
     request.thumbnailTransformKey = QStringLiteral(
-        "video-first-frame-poster-1024-display-v3");
+        "video-first-frame-poster-1024-display-v5");
     const QString key = request.requestNamespace + QChar(0x1f)
         + request.info.sourceIdentity() + QChar(0x1f)
         + request.info.sourceVersionToken;
@@ -530,6 +553,17 @@ void DecodeManager::restoreCachedVideoPoster(
     processQueue();
 }
 
+void DecodeManager::restoreCachedViewerThumbnail(
+    const ImageDecodeRequest &request) {
+    if (!cacheReadsEnabled(_imageCacheMode)) return;
+    auto *runner = new CachedImageRetrieveRunner(request, true);
+    runner->connections.append(connect(
+        runner, &CachedImageRetrieveRunner::cachedThumbnailRetrieved,
+        this, &DecodeManager::onImageReady));
+    _taskQueue.prepend(runner);
+    processQueue();
+}
+
 void DecodeManager::setViewportDemand(
     const QString &requestNamespace, const QSet<QString> &visibleSources) {
     if (_visibleSources.contains(requestNamespace)
@@ -546,11 +580,14 @@ void DecodeManager::setViewportDemand(
 void DecodeManager::setViewerDemand(const QString &requestNamespace,
                                     const QStringList &orderedSources) {
     QHash<QString, int> ranks;
-    for (int index = 0; index < qMin(orderedSources.size(), qsizetype(16)); ++index)
-        ranks.insert(orderedSources[index], index);
+    for (int index = 0; index < qMin(orderedSources.size(), qsizetype(ViewerFitWindowSize)); ++index) {
+        const QString &source = orderedSources[index];
+        if (!ranks.contains(source)) ranks.insert(source, index);
+    }
     if (_viewerSourceRanks.value(requestNamespace) == ranks) return;
     if (ranks.isEmpty()) _viewerSourceRanks.remove(requestNamespace);
     else _viewerSourceRanks.insert(requestNamespace, ranks);
+    cancelObsoleteViewerRequests(requestNamespace, ranks);
     processQueue();
 }
 
@@ -636,6 +673,13 @@ void DecodeManager::setInteractiveSource(
         && _interactiveSource == sourceIdentity) return;
     _interactiveNamespace = sourceIdentity.isEmpty() ? QString() : requestNamespace;
     _interactiveSource = sourceIdentity;
+    for (const WorkerInfo &worker : std::as_const(_workers)) {
+        if (worker.runner && worker.runner->type() == RunnerType::ImageDecode) {
+            auto *decode = static_cast<ImageDecodeRunner *>(worker.runner);
+            if (decode->_resizePool)
+                decode->_foregroundFit.store(isInteractiveFitDecode(decode));
+        }
+    }
     _imageSourceProvider->setInteractiveResource(resourceId);
     // Queue promotion cannot displace a network read already occupying a
     // worker. On each viewer handoff, release lower-priority transport lanes
@@ -646,6 +690,14 @@ void DecodeManager::setInteractiveSource(
         {QStringLiteral("sourceIdentity"), sourceIdentity},
     });
     processQueue();
+}
+
+bool DecodeManager::isInteractiveFitDecode(Runner *runner) const {
+    return runner && !_interactiveSource.isEmpty()
+        && !runner->isCanceled() && runner->type() == RunnerType::ImageDecode
+        && runner->isViewerFitRequest()
+        && runner->requestNamespace() == _interactiveNamespace
+        && runner->path() == _interactiveSource;
 }
 
 int DecodeManager::priorityForRunner(Runner *runner) const {
@@ -666,7 +718,14 @@ int DecodeManager::priorityForRunner(Runner *runner) const {
     }
     if (!_interactiveSource.isEmpty()
         && runner->requestNamespace() == _interactiveNamespace
-        && runner->path() == _interactiveSource) return InteractiveSourcePriority;
+        && runner->path() == _interactiveSource) {
+        const auto *lookup = qobject_cast<CachedImageRetrieveRunner *>(runner);
+        if (lookup && lookup->_request.viewerThumbnailRequest)
+            return InteractiveSourcePriority + 2;
+        if (runner->isViewerRequest() || runner->isViewerFitRequest())
+            return InteractiveSourcePriority + 1;
+        return InteractiveSourcePriority;
+    }
     const auto viewer = _viewerSourceRanks.constFind(runner->requestNamespace());
     if (viewer != _viewerSourceRanks.cend()
         && ((runner->isViewerRequest() && runner->isViewerFitRequest())
@@ -1089,21 +1148,50 @@ void DecodeManager::processQueue() {
     if (_taskQueue.isEmpty()) {
         // qDebug() << "ZZ FINISHED:" << _timer.elapsed() << "ms";
     }
-    // The read worker is the only producer for ImageDecodeRunner payloads.
-    // Capture its allowance once per scheduling pass instead of rescanning a
-    // potentially large request queue for every candidate read.
+    // Snapshot resident compressed payloads before scanning the queue.
     const int compressedPayloadCount = compressedPayloadRunnerCount();
     const qint64 compressedPayloadByteCount = compressedPayloadBytes();
+    const bool hasExtraWorkers = _workers.size() > _sharedWorkerCount;
+    constexpr int NearFitPriority = ViewerFitPriority - ViewerFitForegroundNeighbors;
+    QSet<QString> nearbyFitDecodes;
+    const auto recordNearbyFitDecode = [&](Runner *runner, int priority) {
+        if (hasExtraWorkers && priority >= NearFitPriority
+            && runner->type() == RunnerType::ImageDecode
+            && runner->isViewerRequest() && runner->isViewerFitRequest()
+            && !runner->isCanceled()) {
+            nearbyFitDecodes.insert(runner->requestNamespace());
+        }
+    };
+    bool currentFitHasPayload = false;
     QList<int> priorities;
     QHash<QString, QSet<QString>> cancelingSources;
     for (const WorkerInfo &worker : std::as_const(_workers)) {
         if (worker.runner && worker.runner->isCanceled())
             cancelingSources[worker.runner->requestNamespace()].insert(worker.runner->path());
+        if (hasExtraWorkers && worker.runner && worker.runner->type() == RunnerType::ImageDecode
+            && worker.runner->isViewerRequest() && worker.runner->isViewerFitRequest()) {
+            recordNearbyFitDecode(worker.runner, priorityForRunner(worker.runner));
+        }
+        currentFitHasPayload |= isInteractiveFitDecode(worker.runner);
     }
+    int queuedViewerFitStages = 0;
     priorities.reserve(_taskQueue.size());
-    for (Runner *runner : std::as_const(_taskQueue))
-        priorities.append(priorityForRunner(runner));
-    for (int workerIndex = 0; workerIndex < _workers.size(); workerIndex++) {
+    for (Runner *runner : std::as_const(_taskQueue)) {
+        const int priority = priorityForRunner(runner);
+        priorities.append(priority);
+        if (hasExtraWorkers && canUseViewerFitWorker(runner, priority))
+            ++queuedViewerFitStages;
+        recordNearbyFitDecode(runner, priority);
+        currentFitHasPayload |= isInteractiveFitDecode(runner);
+    }
+    // Offer Fit pixel/cache stages to their own workers first. That leaves the
+    // shared read-capable workers free to keep supplying compressed payloads.
+    const int firstWorker = queuedViewerFitStages ? _sharedWorkerCount : 0;
+    const int workerCount = queuedViewerFitStages ? _workers.size() : _sharedWorkerCount;
+    for (int offset = 0; offset < workerCount; ++offset) {
+        const int workerIndex = (firstWorker + offset) % _workers.size();
+        const bool viewerOnly = workerIndex >= _sharedWorkerCount;
+        if (viewerOnly && !queuedViewerFitStages) continue;
         if (!_workers[workerIndex].runner) {
             if (_taskQueue.isEmpty()) {
                 updateRunningTasksCount();
@@ -1115,15 +1203,35 @@ void DecodeManager::processQueue() {
             for (int taskIndex = 0; taskIndex < _taskQueue.size(); taskIndex++) {
                 Runner *candidate = _taskQueue.at(taskIndex);
                 const int priority = priorities.at(taskIndex);
+                if (viewerOnly && !canUseViewerFitWorker(candidate, priority))
+                    continue;
                 // Let the canceled transport release its shared flight before
                 // admitting the replacement for the same immutable source.
                 const auto canceling = cancelingSources.constFind(candidate->requestNamespace());
                 if (canceling != cancelingSources.cend()
                     && canceling->contains(candidate->path())) continue;
-                // Cache metadata lookups can resolve the current image's
-                // prerequisites. New source I/O and heavy pixel/cache work
-                // wait until that image is ready; running work is retained.
+                // Let already-read Fit neighbors release their compressed
+                // payloads. Otherwise they can fill the viewer reserve and
+                // prevent the current image's read from ever starting.
+                const bool rankedFit = isRankedViewerFit(candidate, priority);
+                // A faster current resize must not release all the distant
+                // reads into the CPU pool while nearby frames are still
+                // being resized. Already-read pixels may always drain.
+                if (rankedFit && priority < NearFitPriority
+                    && candidate->type() == RunnerType::ImageRead
+                    && nearbyFitDecodes.contains(candidate->requestNamespace())) continue;
+                const bool liveFitNeighbor = rankedFit
+                    && candidate->requestNamespace() == _interactiveNamespace;
+                // Give the next/previous three frames a head start before
+                // opening the full pool. Starting the whole cold window
+                // together can slow down the current and nearest resizes.
+                const bool canReadAhead = currentFitHasPayload &&
+                    (!hasExtraWorkers || priority >= NearFitPriority);
+                const bool canPrefetch = liveFitNeighbor &&
+                    (candidate->type() == RunnerType::ImageDecode
+                     || (canReadAhead && candidate->type() == RunnerType::ImageRead));
                 if (!_interactiveSource.isEmpty() && priority < InteractiveSourcePriority
+                    && !canPrefetch
                     && (candidate->type() == RunnerType::ImageProbe
                         || candidate->type() == RunnerType::ImageInfoRead
                         || candidate->type() == RunnerType::ImageRead
@@ -1147,9 +1255,16 @@ void DecodeManager::processQueue() {
                 continue;
             }
             runner = _taskQueue.takeAt(bestIndex);
+            if (hasExtraWorkers && canUseViewerFitWorker(runner, bestPriority))
+                --queuedViewerFitStages;
             priorities.removeAt(bestIndex);
 
             // qDebug() << "RUNNING" << runner->type() << "on thread" << workerIndex;
+            if (runner->type() == RunnerType::ImageDecode) {
+                auto *decode = static_cast<ImageDecodeRunner *>(runner);
+                if (decode->_resizePool)
+                    decode->_foregroundFit.store(isInteractiveFitDecode(decode));
+            }
             _workers[workerIndex].runner = runner;
             runner->moveToThread(_workers[workerIndex].thread);
 
@@ -1191,13 +1306,18 @@ void DecodeManager::onImageReadReady(const ImageData &result) {
         emit vectorSourceReady(result.request, result.vectorSource);
         return;
     }
-    ImageDecodeRunner *runner = new ImageDecodeRunner(result);
+    QThreadPool *resizePool = result.request.fitToViewerRequest
+        && _foregroundFitResizePool.maxThreadCount() > 0
+        ? &_foregroundFitResizePool : nullptr;
+    ImageDecodeRunner *runner = new ImageDecodeRunner(result, resizePool);
     if (cacheWritesEnabled(_imageCacheMode)) {
         runner->connections.append({
             connect(runner, &ImageDecodeRunner::imageReady,
                     this, &DecodeManager::onImageReady),
             connect(runner, &ImageDecodeRunner::storeInCache,
-                    this, &DecodeManager::onStoreInCache)
+                    this, &DecodeManager::onStoreInCache),
+            connect(runner, &ImageDecodeRunner::storeViewerFit,
+                    this, &DecodeManager::onStoreViewerFit)
         });
     }
     else {
@@ -1324,6 +1444,17 @@ void DecodeManager::onStoreInCache(const ImageDecodeRequest &request, const QByt
     processQueue();
 }
 
+void DecodeManager::onStoreViewerFit(const ImageDecodeRequest &request, const QImage &image) {
+    if (_isClosing || !cacheWritesEnabled(_imageCacheMode)
+        || qobject_cast<Runner *>(sender())->isCanceled() || image.isNull()) return;
+    // Lossless encoding may outlast several viewer transitions. Keep it off
+    // the decode workers and never queue an unbounded series of decoded frames.
+    const auto generation = PersistentDerivedImageCache::writeGeneration();
+    _viewerFitCachePool.tryStart([request, image, generation] {
+        PersistentDerivedImageCache::storeViewerFitFrame(request, image, generation);
+    });
+}
+
 void DecodeManager::onCachedImageInfoRetrieved(
     const QList<ImageInfo> &results, const QStringList &notFound,
     bool isFromEmbeddedView, const QString &lastPath,
@@ -1400,9 +1531,7 @@ bool DecodeManager::isRunnerTypeMatchesThreadType(Runner *runner, int threadType
 }
 
 int DecodeManager::compressedPayloadRunnerLimit() const {
-    // Every worker except the dedicated source-read worker can consume an
-    // ImageDecodeRunner with the current thread routing policy.
-    return qMax(1, _workers.size() - 1);
+    return qMax(1, _sharedWorkerCount - 1);
 }
 
 int DecodeManager::compressedPayloadRunnerCount() const {
@@ -1457,7 +1586,7 @@ int DecodeManager::viewerCompressedPayloadRunnerCount() const {
     int count = 0;
     const auto addViewerPayload = [this, &count](Runner *runner) {
         if (runner && runner->type() == RunnerType::ImageDecode &&
-            (runner->isViewerRequest() || priorityForRunner(runner) == 3)) {
+            (runner->isViewerRequest() || priorityForRunner(runner) >= InteractiveSourcePriority)) {
             ++count;
         }
     };
@@ -1474,7 +1603,7 @@ qint64 DecodeManager::viewerCompressedPayloadBytes() const {
     qint64 bytes = 0;
     const auto addViewerPayload = [this, &bytes](Runner *runner) {
         if (!runner || runner->type() != RunnerType::ImageDecode ||
-            (!runner->isViewerRequest() && priorityForRunner(runner) != 3)) {
+            (!runner->isViewerRequest() && priorityForRunner(runner) < InteractiveSourcePriority)) {
             return;
         }
         const auto *decodeRunner =
@@ -1545,16 +1674,17 @@ bool DecodeManager::canStartRunner(
         return true;
     }
 
-    if (!runner->isViewerRequest() && priorityForRunner(runner) != 3) {
+    if (!runner->isViewerRequest() && priorityForRunner(runner) < InteractiveSourcePriority) {
         return false;
     }
 
-    // Background thumbnails may already occupy the global allowance.  Give
-    // the ordered viewer batch an independently bounded lane for its current,
-    // previous, and next frames, matching the latency of the old dedicated
-    // viewer scheduler without bringing back unbounded compressed read-ahead.
-    const int viewerLimit = qMin(ViewerCompressedPayloadReserve,
-                                 compressedPayloadRunnerLimit());
+    // Fit has its own count allowance so shared panel work cannot starve the
+    // active window. Both allowances still limit resident compressed bytes.
+    const bool expandedFit = _workers.size() > _sharedWorkerCount
+        && isRankedViewerFit(runner, priorityForRunner(runner));
+    const int viewerLimit = expandedFit
+        ? qMin(ViewerFitWindowSize, int(_workers.size()) - 1)
+        : qMin(ViewerCompressedPayloadReserve, compressedPayloadRunnerLimit());
     const int viewerCount = viewerCompressedPayloadRunnerCount();
     const qint64 viewerBytes = viewerCompressedPayloadBytes();
     return fitsAllowance(viewerCount, viewerLimit,

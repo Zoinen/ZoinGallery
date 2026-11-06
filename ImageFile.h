@@ -132,6 +132,8 @@ struct ImageDecodeRequest {
     // Video's first decoded frame is cached separately from the panel's
     // four-frame contact sheet and must never replace that presentation.
     bool videoPosterRequest = false;
+    // Cache-only first frame while the viewer waits for Fit pixels.
+    bool viewerThumbnailRequest = false;
 };
 
 struct DecodedImageInfo {

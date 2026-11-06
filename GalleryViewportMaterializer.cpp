@@ -4,6 +4,35 @@
 
 namespace ZoinGallery {
 
+GalleryViewportWindow GalleryViewportMaterializer::withMotionTarget(
+    GalleryViewportWindow window, qreal targetOffset) {
+    const qreal delta = targetOffset - window.visibleStart;
+    // Spend the existing metadata budget where the camera is heading. Fast
+    // motion can consume the symmetric leading margin before the next GUI
+    // synchronization. Keep the ordinary delegate margin behind the camera
+    // for reversals; do not widen the total materialization window.
+    if (delta > 0) {
+        const qreal extra = qBound<qreal>(0,
+            delta - (window.metadataEnd - window.visibleEnd),
+            qMax<qreal>(0, window.delegateStart - window.metadataStart));
+        window.metadataStart += extra;
+        window.metadataEnd += extra;
+    } else if (delta < 0) {
+        const qreal extra = qBound<qreal>(0,
+            -delta - (window.visibleStart - window.metadataStart),
+            qMax<qreal>(0, window.metadataEnd - window.delegateEnd));
+        window.metadataStart -= extra;
+        window.metadataEnd -= extra;
+    }
+    if (delta > 0)
+        window.delegateEnd = qMax(window.delegateEnd,
+            qMin(window.metadataEnd, window.visibleEnd + delta));
+    else if (delta < 0)
+        window.delegateStart = qMin(window.delegateStart,
+            qMax(window.metadataStart, targetOffset));
+    return window;
+}
+
 GalleryViewportWindow GalleryViewportMaterializer::plan(
     GalleryPresentationMode mode,
     qreal contentOffset,

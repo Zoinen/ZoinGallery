@@ -32,7 +32,7 @@ BrickItem {
         folderPreviewActive ? height : (modeVisual.item ? modeVisual.item.paintedHeight : height)
 
     readonly property bool pointerHovered:
-        panelRoot.hoveredIndex === viewIndex
+        viewIndex >= 0 && panelRoot.hoveredIndex === viewIndex
     // A sparse page hand-off may briefly invalidate the row facade while the
     // bounded replacement snapshot is being installed. Keep the already
     // supplied row paintable through the typed controller's one-row lookup;
@@ -72,10 +72,9 @@ BrickItem {
     readonly property real cellVerticalInset: {
         // Native layout can clamp the requested inset to reserve caption space
         // or preserve a positive Masonry preview at minimum zoom.
-        const rect = previewRect
         if ((masonryMode || gridMode || iconsMode)
-            && rect && rect.width > 0 && rect.height > 0)
-            return Math.max(0, rect.y)
+            && previewWidth > 0 && previewHeight > 0)
+            return Math.max(0, previewY)
         return Math.min(
             Math.max(0, Math.floor((Math.round(height * renderDpr) - 1) / 2)) / renderDpr,
             Math.round(Math.max(0, panelRoot.metrics.cellVerticalPadding) * renderDpr) / renderDpr)
@@ -97,6 +96,12 @@ BrickItem {
                            / renderDpr)
     }
 
+    function iconPixelAlignment(item) {
+        if (!iconPixelAlignmentActive || !item || !item.parent || !item.visible)
+            return null
+        return item.PixelGridAlignment
+    }
+
     function iconPixelOffset(item) {
         if (!iconPixelAlignmentActive || !item || !item.parent || !item.visible)
             return Qt.point(0, 0)
@@ -104,7 +109,7 @@ BrickItem {
     }
 
     readonly property bool current:
-        panelRoot.visualCursorIndex === viewIndex
+        viewIndex >= 0 && panelRoot.visualCursorIndex === viewIndex
     readonly property bool selected: panelRoot.effectiveEntrySelected(
         entryId, visualModel.isSelected)
     readonly property bool cursorChromeSuppressed:
@@ -157,32 +162,45 @@ BrickItem {
          ? (masonryMode ? ZG.Style.brickInfoPanelSelected : visualModel.cursorBackground)
          : visualModel.normalBackground)
         || panelRoot.labelBackgroundColor
-    readonly property rect effectivePreviewRect: {
-        if (detailsMode || columnsMode) {
-            // Keep the slot tied to the scaled icon, not unused row height:
-            // both the preview centering and filename origin use this extent.
-            const extent = Math.max(0, Math.round((height
+    // Keep component reads scalar: a rect read from QML creates a GC wrapper,
+    // including a notify connection for referenced value types.
+    readonly property bool compactPreview: detailsMode || columnsMode
+    readonly property bool nativePreviewValid: previewWidth > 0 && previewHeight > 0
+    readonly property bool useMasonryPreview: masonryMode && nativePreviewValid
+        && (isImage || visualModel.isVideo)
+    readonly property real compactPreviewExtent: compactPreview
+        ? Math.max(0, Math.round((height
                 - 2 * panelRoot.metrics.detailsIconVerticalPadding
                 + panelRoot.detailsIconSlotSize - panelRoot.detailsIconSize)
-                * renderDpr) / renderDpr)
-            const origin = detailsMode ? Qt.point(0, 0) : iconSceneOrigin
-            const left = panelRoot.detailsRowInset
-            const top = Math.max(0, (height - extent) / 2)
-            return Qt.rect(Math.round((origin.x + left) * renderDpr) / renderDpr - origin.x,
-                           Math.round((origin.y + top) * renderDpr) / renderDpr - origin.y,
-                           extent, extent)
-        }
-        const rect = previewRect
-        if (rect && rect.width > 0 && rect.height > 0)
-            return Qt.rect(cellHorizontalInset, rect.y, cellContentWidth,
-                           Math.max(1 / renderDpr, rect.height - masonryCaptionReserve))
-        return Qt.rect(cellHorizontalInset, cellVerticalInset,
-                       cellContentWidth,
-                       Math.max(0, height - cellVerticalInset * 2))
+                * renderDpr) / renderDpr) : 0
+    readonly property real effectivePreviewX: {
+        if (!compactPreview)
+            return useMasonryPreview ? previewX : cellHorizontalInset
+        const originX = detailsMode ? 0 : iconSceneOrigin.x
+        return Math.round((originX + panelRoot.detailsRowInset) * renderDpr) / renderDpr - originX
     }
+    readonly property real effectivePreviewY: {
+        if (!compactPreview)
+            return nativePreviewValid ? previewY : cellVerticalInset
+        const originY = detailsMode ? 0 : iconSceneOrigin.y
+        const top = Math.max(0, (height - compactPreviewExtent) / 2)
+        return Math.round((originY + top) * renderDpr) / renderDpr - originY
+    }
+    readonly property real effectivePreviewWidth:
+        compactPreview ? compactPreviewExtent
+                       : useMasonryPreview ? previewWidth : cellContentWidth
+    readonly property real effectivePreviewHeight: compactPreview
+        ? compactPreviewExtent
+        : (nativePreviewValid
+           ? Math.max(1 / renderDpr, previewHeight - masonryCaptionReserve)
+           : Math.max(0, height - cellVerticalInset * 2))
+    // Preserve the public rectangle for embedders and geometric operations.
+    readonly property rect effectivePreviewRect:
+        Qt.rect(effectivePreviewX, effectivePreviewY,
+                effectivePreviewWidth, effectivePreviewHeight)
 
     readonly property real compactImageContentWidth: {
-        const extent = effectivePreviewRect.width
+        const extent = effectivePreviewWidth
         if (!(detailsMode || columnsMode) || !isImage)
             return extent
         // Position a portrait inside the shared square slot rather than
@@ -261,10 +279,10 @@ BrickItem {
     GalleryLayoutDebugZone {
         objectName: "galleryPreviewZone-" + entry.viewIndex
         anchors.fill: undefined
-        x: entry.effectivePreviewRect.x
-        y: entry.effectivePreviewRect.y
-        width: entry.effectivePreviewRect.width
-        height: entry.effectivePreviewRect.height
+        x: visible ? entry.effectivePreviewX : 0
+        y: visible ? entry.effectivePreviewY : 0
+        width: visible ? entry.effectivePreviewWidth : 0
+        height: visible ? entry.effectivePreviewHeight : 0
         zone: "preview"
         visible: entry.debugLayoutZones && !entry.folderPreviewActive
     }
@@ -289,25 +307,19 @@ BrickItem {
         z: 2
         sceneVisible: !entry.folderPreviewActive
         visible: (entry.masonryMode && nativeCullingAvailable) || sceneVisible
-        Loader {
+        GalleryVisualHost {
             id: modeVisual
+            objectName: "galleryEntryModeHost-" + entry.viewIndex
+            entry: entry
             active: entry.visualGeometryReady && !(entry.folderPreviewRequested
                 && (entry.visualModel.folderPreviewState === 2 || entry.folderPreviewActive))
             anchors.fill: parent
             asynchronous: false
-            sourceComponent: entry.detailsMode ? detailsVisual
-                             : entry.columnsMode ? columnsVisual
-                             : entry.gridMode ? gridVisual
-                             : entry.iconsMode ? iconsVisual
-                             : masonryVisual
-        }
-    }
-
-    Component {
-        id: masonryVisual
-        GalleryMasonryEntryDelegate {
-            anchors.fill: parent
-            entry: entry
+            sourceComponent: entry.detailsMode ? entry.panelRoot.entryVisualFactories.details
+                             : entry.columnsMode ? entry.panelRoot.entryVisualFactories.columns
+                             : entry.gridMode ? entry.panelRoot.entryVisualFactories.grid
+                             : entry.iconsMode ? entry.panelRoot.entryVisualFactories.icons
+                             : entry.panelRoot.entryVisualFactories.masonry
         }
     }
 
@@ -316,49 +328,17 @@ BrickItem {
         z: 2
         sceneVisible: entry.folderPreviewRequested
         visible: (entry.masonryMode && nativeCullingAvailable) || sceneVisible
-        Loader {
+        GalleryVisualHost {
             id: folderLoader
+            objectName: "galleryEntryFolderHost-" + entry.viewIndex
+            entry: entry
             // This small shell follows the existing bounded delegate pool. Its
             // image grid has a separate lifetime inside GalleryFolderPreview.
             property bool frameCreated: false
             anchors.fill: parent
             active: entry.folderPreviewRequested || frameCreated
             onLoaded: frameCreated = true
-            sourceComponent: Component {
-                GalleryFolderPreview { entry: entry }
-            }
-        }
-    }
-
-    Component {
-        id: columnsVisual
-        ColumnsEntryDelegate {
-            anchors.fill: parent
-            entry: entry
-        }
-    }
-
-    Component {
-        id: detailsVisual
-        DetailsEntryDelegate {
-            anchors.fill: parent
-            entry: entry
-        }
-    }
-
-    Component {
-        id: gridVisual
-        GridEntryDelegate {
-            anchors.fill: parent
-            entry: entry
-        }
-    }
-
-    Component {
-        id: iconsVisual
-        IconsEntryDelegate {
-            anchors.fill: parent
-            entry: entry
+            sourceComponent: entry.panelRoot.entryVisualFactories.folder
         }
     }
 

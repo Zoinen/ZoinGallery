@@ -96,6 +96,7 @@ GallerySceneItem {
             width: host ? host.width : idleSize.width
             height: host ? host.height : idleSize.height
             visible: host !== null && host.visible
+            displayEnabled: host !== null && host.visible && host.inViewport
             devicePixelRatio: host ? host.devicePixelRatio : idleDpr
             crop: host ? host.crop : idleCrop
             showCheckerboard: host ? host.showCheckerboard : idleCheckerboard

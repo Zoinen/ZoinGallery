@@ -35,6 +35,10 @@ class GalleryDelegateItem : public GallerySceneItem {
     Q_PROPERTY(int column READ column WRITE setColumn NOTIFY rowColumnChanged)
     Q_PROPERTY(QRectF previewRect READ previewRect WRITE setPreviewRect
                NOTIFY previewRectChanged)
+    Q_PROPERTY(qreal previewX READ previewX NOTIFY previewRectChanged)
+    Q_PROPERTY(qreal previewY READ previewY NOTIFY previewRectChanged)
+    Q_PROPERTY(qreal previewWidth READ previewWidth NOTIFY previewRectChanged)
+    Q_PROPERTY(qreal previewHeight READ previewHeight NOTIFY previewRectChanged)
     Q_PROPERTY(QString iconLabelText READ iconLabelText
                WRITE setIconLabelText
                NOTIFY iconLabelTextChanged)
@@ -86,10 +90,16 @@ public:
     void setPreviewRect(const QRectF &previewRect);
     void setIconLabelText(const QString &text);
     quint8 setVisualRow(const QVariantMap &visualRow);
+    void beginVisualUpdate();
+    void endVisualUpdate();
     void assignVisualRow(const QVariantMap &visualRow);
     void setVisualFacadeReady(bool ready);
     QRectF geometry() const;
     QRectF previewRect() const;
+    qreal previewX() const { return _previewRect.x(); }
+    qreal previewY() const { return _previewRect.y(); }
+    qreal previewWidth() const { return _previewRect.width(); }
+    qreal previewHeight() const { return _previewRect.height(); }
     QString iconLabelText() const;
     QVariantMap visualRow() const;
     QObject *visualModel() const;
@@ -109,6 +119,8 @@ public:
     bool visualFacadeReady() const;
     bool geometryAnimationRunning() const;
     void stopGeometryAnimation();
+    quint64 vectorSceneUseSerial() const { return _vectorSceneUseSerial; }
+    void setVectorSceneUseSerial(quint64 serial) { _vectorSceneUseSerial = serial; }
     bool accessibleChildrenDecorative() const { return _accessibleChildrenDecorative; }
     void setAccessibleChildrenDecorative(bool decorative);
 
@@ -165,6 +177,7 @@ private:
     QVariantMap _visualRow;
     GalleryEntryVisual *_visualModel = nullptr;
     bool _visualIdentityChanging = false;
+    int _visualUpdateDepth = 0;
     bool _visualFacadeReady = false;
     bool _accessibleChildrenDecorative = false;
 
@@ -173,6 +186,7 @@ private:
     QPropertyAnimation *_yAnimation = nullptr;
     QPropertyAnimation *_widthAnimation = nullptr;
     QPropertyAnimation *_heightAnimation = nullptr;
+    quint64 _vectorSceneUseSerial = 0;
 };
 
 using BrickItem = GalleryDelegateItem;

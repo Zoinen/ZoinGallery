@@ -309,7 +309,8 @@ QtObject {
 
     function moveCursor(index, preserveSelectionAnchor,
                         preserveHorizontalAnchor, deferCursorCommit,
-                        preserveVerticalAnchor, keyboardRevealDirection) {
+                        preserveVerticalAnchor, keyboardRevealDirection,
+                        edgeNavigation) {
         if (!controllerReady || galleryLayout.count === 0)
             return
         const bounded = Math.max(0, Math.min(galleryLayout.count - 1, index))
@@ -326,7 +327,7 @@ QtObject {
         // interior PageUp/PageDown. Every ordinary move (including Up/Down,
         // which preserves only X) reveals the item and adopts its resulting Y.
         if (!preserveVerticalAnchor) {
-            ensureCurrentVisible(undefined, keyboardRevealDirection)
+            ensureCurrentVisible(undefined, keyboardRevealDirection, edgeNavigation)
             resetCurrentItemCenterY(bounded)
         }
         coordinateVisualCursor(bounded, previousVisualIndex)
@@ -360,12 +361,19 @@ QtObject {
 
     function invalidateMasonryPageGeometry() {
         const stalePageScroll = masonryPageScrollActive
+        const rebase = stalePageScroll && panelScrollAnimation.rebasingPage()
         panel.traceBenchmarkStage("navigation.page.geometry-invalidated", {
+            "fix": "[FIX:masonry-page-rebase]",
+            "rebasing": rebase,
             "pageScrollActive": stalePageScroll,
             "scrollRunning": panelScrollAnimation.running,
             "scrollTarget": panelScrollAnimation.to
         })
         resetMasonryPageSequence()
+        if (rebase) {
+            masonryPageScrollActive = true
+            return
+        }
         if (galleryLayout.presentationMode !== GalleryViewportItem.Masonry
                 || !stalePageScroll
                 || (!panelScrollAnimation.running
@@ -617,7 +625,8 @@ QtObject {
         currentItemCenterY = Number(targetNode.anchorY)
         if (Math.abs(destination - plannedContentY) > 0.01) {
             masonryPageOrdinal = nextOrdinal
-            animatePanelScrollTo(destination, false, true)
+            panel.viewportController.animatePanelScrollTo(
+                        destination, false, true, direction, true)
             masonryPageScrollActive = panelScrollAnimation.running
         } else {
             // Cursor-only terminal movement is deliberately not part of the
@@ -709,7 +718,8 @@ QtObject {
         return targetIndex
     }
 
-    function ensureCurrentVisible(animateScroll, keyboardRevealDirection) {
+    function ensureCurrentVisible(animateScroll, keyboardRevealDirection,
+                                  edgeNavigation) {
         if (!controllerReady || galleryLayout.count === 0
                 || controller.currentIndex < 0 || galleryLayout.height <= 0)
             return
@@ -742,7 +752,15 @@ QtObject {
         else if (geometry.y + geometry.height
                  > galleryLayout.contentY + galleryLayout.height)
             targetY = geometry.y + geometry.height - galleryLayout.height
-        if (targetY < 0) {
+        const maximum = Math.max(0, galleryLayout.contentHeight
+                                 - (presentationMode === "columns"
+                                    ? galleryLayout.width
+                                    : galleryLayout.height))
+        const edgeDirection = edgeNavigation && presentationMode === "masonry"
+                ? keyboardRevealDirection : 0
+        if (edgeDirection)
+            targetY = edgeDirection < 0 ? 0 : maximum
+        if (targetY < 0 || (edgeDirection && targetY === galleryLayout.contentY)) {
             // An initial cursor that is already visible still owns the saved
             // viewport identity. Record it so later Loader recreations can
             // distinguish restoration from a cursor changed in list mode.
@@ -753,12 +771,8 @@ QtObject {
             }
             return
         }
-        const maximum = Math.max(0, galleryLayout.contentHeight
-                                 - (presentationMode === "columns"
-                                    ? galleryLayout.width
-                                    : galleryLayout.height))
-        targetY = keyboardAlignedContentY(targetY,
-                                          keyboardRevealDirection)
+        if (!edgeDirection)
+            targetY = keyboardAlignedContentY(targetY, keyboardRevealDirection)
         targetY = Math.max(0, Math.min(maximum, targetY))
         const compactRows = presentationMode === "columns"
                 || presentationMode === "details"
@@ -769,6 +783,9 @@ QtObject {
         panelScrollAnimation.from = galleryLayout.contentY
         panelScrollAnimation.to = targetY
         panelScrollAnimation.duration = 150
-        panelScrollAnimation.restart()
+        if (edgeDirection)
+            panel.motionController.restartEdgeScroll(edgeDirection)
+        else
+            panel.motionController.restartScroll()
     }
 }

@@ -22,12 +22,12 @@ Item {
         readonly property var quickSearchMatch:
             content.entry.panelRoot.quickSearchFormatter.matchForEntry(
                 content.entry.entryId)
-        readonly property point pixelCorrection:
-            content.entry.iconPixelOffset(label)
+        readonly property var pixelCorrection:
+            content.entry.iconPixelAlignment(label)
         objectName: "galleryGridLabel-" + content.entry.viewIndex
         x: content.entry.cellHorizontalInset
-        y: content.entry.effectivePreviewRect.y
-           + content.entry.effectivePreviewRect.height + content.entry.cellCaptionSpacing
+        y: content.entry.effectivePreviewY
+           + content.entry.effectivePreviewHeight + content.entry.cellCaptionSpacing
         width: content.entry.cellContentWidth
         height: Math.round(2 * Math.ceil(captionMetrics.height)
                            * content.entry.renderDpr) / content.entry.renderDpr
@@ -50,8 +50,8 @@ Item {
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignTop
         transform: Translate {
-            x: label.pixelCorrection.x
-            y: label.pixelCorrection.y
+            x: (label.pixelCorrection ? label.pixelCorrection.offsetX : 0)
+            y: (label.pixelCorrection ? label.pixelCorrection.offsetY : 0)
         }
     }
 }

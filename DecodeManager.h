@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QQueue>
 #include <QSet>
+#include <QThreadPool>
 #include <QTimer>
 
 #include <atomic>
@@ -90,7 +91,8 @@ public:
 
     explicit DecodeManager(
         QObject *parent = nullptr, int maxThreads = 0,
-        QSharedPointer<ZoinGallery::ImageSourceProvider> imageSourceProvider = {});
+        QSharedPointer<ZoinGallery::ImageSourceProvider> imageSourceProvider = {},
+        bool expandViewerFitWorkers = false);
     ~DecodeManager() override;
     int workerCount() const;
     void readImagesInfo(const QList<QString> &paths, bool isFromEmbeddedView,
@@ -123,6 +125,7 @@ public:
                              const QString &sourceIdentity,
                              const QString &resourceId = {});
     void restoreCachedVideoPoster(const ImageDecodeRequest &thumbnailRequest);
+    void restoreCachedViewerThumbnail(const ImageDecodeRequest &request);
     void readFolderList(const QStringList &paths, int totalImages = -1,
                         quint64 requestGeneration = 0,
                         const QString &requestNamespace = QString());
@@ -137,6 +140,11 @@ public:
     void cancelAllDecodeViewerRunners();
     void cancelThumbnailRequests(const QString &requestNamespace);
     void cancelPanelThumbnailRequests(const QString &requestNamespace);
+    // Relayout discards queued presentation work, while bounded running work
+    // can still populate its immutable cache tier. Return the exact discarded
+    // requests so their shared-cache owner admissions can be released.
+    QList<ImageDecodeRequest> cancelQueuedPanelThumbnailRequests(
+        const QString &requestNamespace);
     void cancelViewerRequests(const QString &requestNamespace);
     void cancelRequests(const QString &requestNamespace);
     void cancelSourceRequests(const QString &requestNamespace,
@@ -167,6 +175,7 @@ signals:
     void runningTasksChanged(const QString &runningTasks, const QStringList &tasksInfo);
     void viewerRunnerCanceled(const QString &path,
                               const QString &requestNamespace);
+    void viewerDemandRequestCanceled(const ImageDecodeRequest &request);
 
 protected:
     void processQueue();
@@ -185,6 +194,7 @@ private:
     void onScannerInfoReady(const ImageInfo &result);
 
     void onStoreInCache(const ImageDecodeRequest &request, const QByteArray &imageData);
+    void onStoreViewerFit(const ImageDecodeRequest &request, const QImage &image);
     void onCachedImageInfoRetrieved(const QList<ImageInfo> &results,
                                     const QStringList &notFound,
                                     bool isFromEmbeddedView,
@@ -204,6 +214,8 @@ private:
         const QList<ImageInfo> &requests);
     void cancelDecodeRequests(const QString &requestNamespace,
                               bool viewerRequests);
+    void cancelObsoleteViewerRequests(const QString &requestNamespace,
+                                      const QHash<QString, int> &ranks);
     bool canStartRunner(Runner *runner, int compressedPayloadCount,
                         qint64 compressedPayloadByteCount) const;
     int compressedPayloadRunnerCount() const;
@@ -214,6 +226,7 @@ private:
     bool isRunnerTypeMatchesThreadType(Runner *runner, int threadType);
     void updateRunningTasksCount();
     int priorityForRunner(Runner *runner) const;
+    bool isInteractiveFitDecode(Runner *runner) const;
     void preemptSourceReads(const QString &requestNamespace,
                             bool interactiveDemand = false);
     QString runnerToString(Runner *task);
@@ -230,6 +243,9 @@ private:
     QString _interactiveSource;
     QSet<QString> _pendingVideoPosterLookups;
     QList<WorkerInfo> _workers;
+    int _sharedWorkerCount = 0;
+    QThreadPool _viewerFitCachePool;
+    QThreadPool _foregroundFitResizePool;
 
     enum class SpecialThreads {
         Read,

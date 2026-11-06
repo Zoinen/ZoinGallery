@@ -1,5 +1,6 @@
 #include "ViewerVideoFrameSource.h"
 #include "VideoFrameGeometry.h"
+#include "VideoColorSpace.h"
 
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
 
@@ -8,10 +9,18 @@
 namespace ZoinGallery {
 
 ViewerVideoFrameSource::ViewerVideoFrameSource(QObject *parent)
-    : QObject(parent), m_sink(new QVideoSink(this))
+    : QObject(parent)
 {
-    connect(m_sink, &QVideoSink::videoFrameChanged, this,
-            &ViewerVideoFrameSource::acceptFrame);
+}
+
+QObject *ViewerVideoFrameSource::sink()
+{
+    if (!m_sink) {
+        m_sink = new QVideoSink(this);
+        connect(m_sink, &QVideoSink::videoFrameChanged, this,
+                &ViewerVideoFrameSource::acceptFrame);
+    }
+    return m_sink;
 }
 
 bool ViewerVideoFrameSource::hasFrame() const
@@ -40,14 +49,24 @@ ViewerVideoFrameSource::Snapshot ViewerVideoFrameSource::snapshot() const
     return {m_frame, m_revision};
 }
 
+bool ViewerVideoFrameSource::hdr() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_frame.isValid() && VideoColorSpace::isHdr(m_frame.surfaceFormat());
+}
+
 void ViewerVideoFrameSource::acceptFrame(const QVideoFrame &frame)
 {
+    bool changedHdr = false;
     {
         QMutexLocker lock(&m_mutex);
+        changedHdr = (frame.isValid() && VideoColorSpace::isHdr(frame.surfaceFormat()))
+            != (m_frame.isValid() && VideoColorSpace::isHdr(m_frame.surfaceFormat()));
         m_frame = frame;
         ++m_revision;
     }
     emit frameChanged();
+    if (changedHdr) emit hdrChanged();
 }
 
 } // namespace ZoinGallery

@@ -172,7 +172,8 @@ QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request, bool val
         return {};
     }
     result.setColorSpace(DisplayColorSpace::cacheColorSpace());
-    if (request.targetSize.isValid() && (request.targetSize.width() < result.width() ||
+    if (!request.viewerThumbnailRequest && request.targetSize.isValid()
+        && (request.targetSize.width() < result.width() ||
                                          request.targetSize.height() < result.height())) { // Never upscale
         result = result.scaled(request.targetSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         result.setColorSpace(DisplayColorSpace::cacheColorSpace());

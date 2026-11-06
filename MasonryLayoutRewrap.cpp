@@ -1,11 +1,15 @@
 #include "MasonryLayout.h"
 
 #include <ZoinGallery/MediaTimingTrace.h>
+#include <ZoinGallery/PixelGrid.h>
 
 #include <QElapsedTimer>
+#include <QScopeGuard>
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <tuple>
 #include <utility>
 
 struct MasonryLayout::RewrapTrace
@@ -27,6 +31,12 @@ struct MasonryLayout::ViewportAnchor
 
 void MasonryLayout::rewrap(bool animate)
 {
+    const bool outerRewrap = ++_rewrapDepth == 1;
+    const auto finishRewrap = qScopeGuard([this, outerRewrap] {
+        --_rewrapDepth;
+        if (outerRewrap) emit rewrapFinished();
+    });
+    if (outerRewrap) emit rewrapAboutToBegin();
     _fixedLayoutPlanCached = false;
     RewrapTrace trace;
     trace.enabled = qEnvironmentVariableIsSet("F4_NAV_BENCHMARK_TRACE");
@@ -44,7 +54,7 @@ void MasonryLayout::rewrap(bool animate)
         rewrapFixed(animate, &trace);
     } else if (groupingActive() && !_sparseCatalogRows) {
         rewrapGroupedMasonry(animate, currentIndexOffset);
-    } else if (sparseVirtualLayout()) {
+    } else if (sparseMasonryLayout()) {
         rewrapSparseMasonry(animate, currentIndexOffset);
     } else {
         rewrapMasonry(animate, currentIndexOffset);
@@ -96,7 +106,7 @@ void MasonryLayout::updateFixedContentExtent(
     setContentHeight(plan.contentExtent);
     if (_presentationMode == Columns) {
         _contentY = qBound<qreal>(0, _contentY, maximumContentOffset());
-    } else if (_presentationMode != Icons || sparseVirtualLayout()) {
+    } else if (_presentationMode != Icons || _sparseCatalogRows) {
         _contentY = qBound<qreal>(
             0, _contentY, qMax<qreal>(0, _contentHeight - height()));
     }
@@ -261,28 +271,155 @@ void MasonryLayout::rewrapFixed(bool animate, RewrapTrace *trace)
     traceFixedRewrap(*trace);
 }
 
+void MasonryLayout::rebuildSparseMasonryGeometry() {
+    constexpr int blockSize = 256;
+    const int count = logicalBrickCount();
+    auto request = layoutRequest();
+    request.insets = {.left = _paddingLeft, .right = _paddingRight};
+    request.lastRowMatchesPrevious = !_listView;
+    const auto geometryKey = [](const ZoinGallery::GalleryLayoutRequest &plan) {
+        return std::tuple(plan.viewportSize.width(), plan.insets.left,
+                          plan.insets.right, plan.density, plan.spacing,
+                          plan.cellHorizontalPadding, plan.cellVerticalPadding,
+                          plan.devicePixelRatio, plan.lastRowMatchesPrevious);
+    };
+    const bool useThumbnails = thumbnailsEnabled();
+    const bool reuse = useThumbnails == _sparseMasonryThumbnailsEnabled
+        && geometryKey(request) == geometryKey(_sparseMasonryRequest);
+
+    QVector<SparseMasonryBlock> blocks;
+    QHash<int, ZoinGallery::GalleryLayoutResult> placeholders;
+    std::optional<QList<int>> materialized;
+    auto previous = _sparseMasonryBlocks.cbegin();
+    const auto previousEnd = _sparseMasonryBlocks.cend();
+    const ZoinGallery::GridMetrics grid(request.devicePixelRatio);
+    qreal top = grid.snap(_paddingTop);
+    int rowBase = 0;
+
+    const auto layoutBlock = [&](int first, int length, bool cachedStart,
+                                 ZoinGallery::JustifiedMasonryStrategy::Chunk chunk) {
+        const ZoinGallery::GalleryLayoutEntry placeholder{.originalSize = GridView_Folder};
+        QVector<ZoinGallery::GalleryLayoutEntry> entries;
+        const auto addSize = [&](int row) {
+            const QSize size = _model->index(row, 0).data(_knownImageSizeRole).toSize();
+            if (size.isEmpty()) return;
+            if (entries.isEmpty()) entries.fill(placeholder, length);
+            entries[row - first].originalSize = size;
+        };
+        if (useThumbnails && _knownImageSizeRole >= 0) {
+            if (cachedStart) {
+                for (int row = first; row < first + length; ++row)
+                    addSize(row);
+            } else {
+                if (!materialized) materialized = materializedModelRows();
+                auto row = std::lower_bound(materialized->cbegin(), materialized->cend(), first);
+                for (; row != materialized->cend() && *row < first + length; ++row)
+                    addSize(*row);
+            }
+        }
+        if (!entries.isEmpty())
+            return ZoinGallery::JustifiedMasonryStrategy::layoutChunk(request, entries, chunk);
+
+        if (chunk.hasFollowingEntries) {
+            auto found = placeholders.constFind(length);
+            if (found != placeholders.cend()) return found.value();
+        }
+        entries.fill(placeholder, length);
+        auto layout = ZoinGallery::JustifiedMasonryStrategy::layoutChunk(request, entries, chunk);
+        if (chunk.hasFollowingEntries) placeholders.insert(length, layout);
+        return layout;
+    };
+
+    // Blocks end at visual row boundaries, independently of catalog pages.
+    // Unread blocks share placeholder geometry without materializing model rows.
+    const auto appendRange = [&](int first, int end) {
+        qreal previousRowHeight = -1;
+        while (first < end) {
+            while (previous != previousEnd && previous->first < first)
+                ++previous;
+            const bool cachedStart = reuse && previous != previousEnd && previous->first == first;
+            const bool reusable = cachedStart && !previous->dirty && previous->end() <= end
+                && previous->endsRange == (previous->end() == end)
+                && (!previous->endsRange || previous->previousRowHeight == previousRowHeight);
+            ZoinGallery::GalleryLayoutResult layout;
+            if (reusable) {
+                layout = previous->layout;
+            } else {
+                const int remaining = end - first;
+                int length = qMin(blockSize + 1, remaining);
+                do {
+                    layout = layoutBlock(first, length, cachedStart, {
+                        .hasFollowingEntries = length < remaining,
+                        .previousRowHeight = previousRowHeight,
+                    });
+                    // A very wide viewport can fit the whole candidate in one row.
+                    length += qMin(length, remaining - length);
+                } while (layout.cells.isEmpty());
+            }
+            const int next = first + int(layout.cells.size());
+            blocks.append({first, rowBase, top, std::move(layout), previousRowHeight, next == end});
+            if (!blocks.last().layout.bands.isEmpty())
+                rowBase += blocks.last().layout.bands.last().row + 1;
+            previousRowHeight = blocks.last().layout.lastMasonryRowHeight;
+            top = blocks.last().bottom();
+            first = next;
+        }
+    };
+
+    _masonryGroupHeaders.clear();
+    _groupSections.clear();
+    QVector<qreal> offsets;
+    QVector<qreal> extents;
+    int first = 0;
+    const qreal headerHeight = grid.snap(groupHeaderHeight());
+    const qreal canvasWidth = qMax<qreal>(0, width() - _paddingLeft - _paddingRight);
+    if (groupingActive()) {
+        const int groupCount = _groupIndex.groupCount();
+        for (int group = 0; group < groupCount; ++group) {
+            const auto *descriptor = _groupIndex.descriptor(group);
+            appendRange(first, descriptor->startIndex);
+            const qreal offset = top;
+            _masonryGroupHeaders.append({
+                descriptor->key, descriptor->title, QRectF(0, top, canvasWidth, headerHeight),
+            });
+            top += headerHeight;
+            first = descriptor->startIndex + descriptor->count;
+            if (!_groupIndex.isCollapsed(group))
+                appendRange(descriptor->startIndex, first);
+            _groupSections.append({.offset = offset, .extent = top - offset});
+            offsets.append(offset);
+            extents.append(top - offset);
+        }
+    } else {
+        for (const auto &group : _groupRanges) {
+            const int start = qBound(first, group.start, count);
+            const int end = qBound(start, group.start + group.count, count);
+            if (start == end) continue;
+            appendRange(first, start);
+            _masonryGroupHeaders.append({
+                group.key, group.title, QRectF(0, top, canvasWidth, headerHeight),
+            });
+            top += headerHeight;
+            appendRange(start, end);
+            first = end;
+        }
+    }
+    appendRange(first, count);
+    _sparseMasonryBlocks = std::move(blocks);
+    _sparseMasonryRequest = std::move(request);
+    _sparseMasonryThumbnailsEnabled = useThumbnails;
+    _groupIndex.setSectionGeometry(offsets, extents, headerHeight);
+    setContentHeight(top + _paddingBottom);
+    if (groupingActive())
+        emit groupHeadersChanged();
+}
+
 void MasonryLayout::rewrapSparseMasonry(bool animate,
-                                        qreal currentIndexOffset)
+                                       qreal currentIndexOffset)
 {
     const qreal oldContentY = _contentY;
     const int count = logicalBrickCount();
-    const int columns = virtualGridColumnCount();
-    const int rows = columns > 0 ? (count + columns - 1) / columns : 0;
-    if (groupingActive()) {
-        rebuildGroupSections(fixedLayoutPlan());
-        if (!_groupSections.isEmpty()) {
-            const GroupSection &last = _groupSections.constLast();
-            setContentHeight(last.offset + last.extent + _paddingBottom);
-        }
-        else {
-            setContentHeight(_paddingTop + rows * virtualGridRowHeight()
-                             + _paddingBottom);
-        }
-        emit groupHeadersChanged();
-    }
-    else {
-    setContentHeight(fixedLayoutPlan().contentExtent);
-    }
+    rebuildSparseMasonryGeometry();
     _contentY = qBound<qreal>(
         0, _contentY, qMax<qreal>(0, _contentHeight - height()));
     rebuildLayoutBands();
@@ -295,7 +432,9 @@ void MasonryLayout::rewrapSparseMasonry(bool animate,
             nextContentY = qBound<qreal>(
                 0, indexGeometry(_currentIndex).top() + currentIndexOffset,
                 qMax<qreal>(0, _contentHeight - height()));
-        } else if (_topItem >= 0 && _topItem < count) {
+        } else if (oldContentY > 0 && _topItem >= 0 && _topItem < count) {
+            // At the leading edge preserve the viewport origin. A sparse
+            // row can have padding that the previous dense anchor excluded.
             nextContentY = qBound<qreal>(
                 0, indexGeometry(_topItem).top() - _topItemOffset,
                 qMax<qreal>(0, _contentHeight - height()));

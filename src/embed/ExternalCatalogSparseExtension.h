@@ -4,7 +4,7 @@
 
 namespace ZoinGallery {
 
-// Extends an already-published sparse catalog without resetting delegates.
+// Extends a published catalog into sparse storage without resetting delegates.
 // Validation is completed before the model transaction starts, so a rejected
 // payload cannot leave the logical row count or lookup indexes half-updated.
 class ExternalCatalogSparseExtension final {
@@ -35,6 +35,12 @@ private:
     bool m_metadataDeferred = false;
     int m_totalCount = 0;
     int m_previousCount = 0;
+    struct DirectoryUpdate {
+        int row;
+        DirectorySourceDescriptor source;
+        DirectoryPreviewState state;
+    };
+    QList<DirectoryUpdate> m_directoryUpdates;
     QList<Entry> m_appended;
     QList<int> m_newlyMaterializedOldRows;
     QSet<int> m_seenRows;

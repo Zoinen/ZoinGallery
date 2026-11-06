@@ -48,6 +48,7 @@ public:
     static PixelGridContext *forWindow(QQuickWindow *window);
     static void flushWindow(QQuickWindow *window);
     void invalidateScope(QQuickItem *item);
+    void setScopeMotionActive(QQuickItem *item, bool active);
     explicit PixelGridContext(QQuickWindow *window);
     ~PixelGridContext() override;
     qreal dpr() const;
@@ -74,6 +75,8 @@ private:
 class PixelGridAlignment : public QObject {
     Q_OBJECT
     Q_PROPERTY(QPointF offset READ offset NOTIFY offsetChanged)
+    Q_PROPERTY(qreal offsetX READ offsetX NOTIFY offsetChanged)
+    Q_PROPERTY(qreal offsetY READ offsetY NOTIFY offsetChanged)
     Q_PROPERTY(bool enabled READ isEnabled WRITE setEnabled NOTIFY enabledChanged)
     Q_PROPERTY(ZoinGallery::PixelGridContext *grid READ grid NOTIFY gridChanged)
     QML_ATTACHED(PixelGridAlignment)
@@ -83,6 +86,8 @@ public:
     static PixelGridAlignment *qmlAttachedProperties(QObject *object);
     static PixelGridAlignment *forItem(QQuickItem *item);
     QPointF offset() const { return m_offset; }
+    qreal offsetX() const { return m_offset.x(); }
+    qreal offsetY() const { return m_offset.y(); }
     bool isEnabled() const { return m_enabled; }
     void setEnabled(bool enabled);
     Q_INVOKABLE void invalidate();

@@ -72,6 +72,11 @@ void MasonryLayout::updateSceneBranchParent(BrickItem *item) {
             ? _masonryVectorBranch : _masonryRasterBranch;
     }
     if (item->parentItem() != parent) item->setParentItem(parent);
+    // A recycled slot's creation order is unrelated to its current row.
+    // Captions can extend above very thin panoramas, so their paint order must
+    // stay stable across camera culling and delegate-window replacement.
+    // Only rebind/layout changes update this key, with no per-frame order pass.
+    item->setZ(parent == _viewport ? 0 : item->viewIndex());
 }
 
 void MasonryLayout::updateSceneBranchParents() {

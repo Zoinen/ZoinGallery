@@ -495,10 +495,13 @@ void FileListModel::requestViewerInOrder(
     int index, const QVariantList &orderedSourceRows,
     int width, int height) {
     if (index < 0 || index >= _items.size()
-        || !_items.at(index)->isViewerImage()) {
+        || (!_items.at(index)->isViewerImage()
+            && !_items.at(index)->isVideoThumbnail())) {
         return;
     }
 
+    const bool videoAnchor = _items.at(index)->isVideoThumbnail();
+    if (videoAnchor && (width <= 0 || height <= 0)) return;
     _currentViewIndex = index;
     _currentViewerRequestSize = QSize(width, height);
     _hasCurrentViewerRequest = true;
@@ -514,13 +517,15 @@ void FileListModel::requestViewerInOrder(
     const bool metadataTerminal =
         _terminalImageInfoFailureRevisions.value(currentInfo.path) ==
         imageInfoRevisionToken(currentInfo);
-    setViewerRequestState(
-        _items.at(index)->fullPath(),
-        requestedTierReady ? QStringLiteral("ready")
-        : metadataTerminal ? QStringLiteral("failed")
-                           : QStringLiteral("pending"));
-    if (!_items[index]->imageIdUrl().isEmpty()) {
-        emit viewerImageIdUrlChanged(_items[index]->imageIdUrl(), 0);
+    if (!videoAnchor) {
+        setViewerRequestState(
+            _items.at(index)->fullPath(),
+            requestedTierReady ? QStringLiteral("ready")
+            : metadataTerminal ? QStringLiteral("failed")
+                               : QStringLiteral("pending"));
+        if (!_items[index]->imageIdUrl().isEmpty()) {
+            emit viewerImageIdUrlChanged(_items[index]->imageIdUrl(), 0);
+        }
     }
 
     QList<ImageFile *> prioritizedItems;
@@ -544,7 +549,7 @@ void FileListModel::requestViewerInOrder(
     }
 
     // The explicit list is already in viewer priority order
-    // (current, previous, next, ...). Starting planRequest at its first row
+    // (current, next, previous, ...). Starting planRequest at its first row
     // consumes that edge-anchored list in exactly the supplied order.
     const ViewerImageCache::RequestPlan requestPlan =
         prioritizedItems.isEmpty()
@@ -552,7 +557,7 @@ void FileListModel::requestViewerInOrder(
               _items, index, QSize(width, height))
         : _viewerImageCache.planRequest(
               prioritizedItems, 0, QSize(width, height),
-              prioritizedItems.size());
+              prioritizedItems.size() - int(videoAnchor));
     for (const auto &[url, level] : requestPlan.cachedImages) {
         emit viewerImageIdUrlChanged(url, level);
     }

@@ -56,7 +56,7 @@ GallerySceneItem {
             })
         }
     }
-    opacity: entry.hiddenEntry && !entry.detailsMode ? 0.5 : 1
+    opacity: entry.hiddenEntry ? 0.5 : 1
     x: entry.effectivePreviewX
     y: entry.effectivePreviewY
     width: entry.effectivePreviewWidth
@@ -103,7 +103,8 @@ GallerySceneItem {
                       && !failedThumbnailIcon.ready))
                  && !preview.thumbnailExpected
                  && fallbackIcon.hasModelIconSource
-                 && (!preview.entry.highlightMarker || fallbackIcon.lucideSource)
+                 && (preview.entry.isFolder || !preview.entry.highlightMarker
+                     || fallbackIcon.lucideSource)
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId
                          === preview.entry.entryId)

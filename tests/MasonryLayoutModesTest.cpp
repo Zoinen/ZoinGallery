@@ -14,6 +14,7 @@
 #include <ZoinGallery/PixelGrid.h>
 #include <QSGTransformNode>
 #include <QtQuick/private/qquickitem_p.h>
+#include <QtQuick/private/qquickimagebase_p_p.h>
 #include "SvgCursor.h"
 #include "tests/DirectoryPreviewFixture.h"
 
@@ -10743,6 +10744,155 @@ private slots:
         QVERIFY(!preview->property("videoThumbnailReady").toBool());
         QVERIFY2(!panel->findChild<QQuickItem *>("galleryVideoPlayBadge-0"),
                  "Video metadata without a decoded thumbnail must not create a badge");
+    }
+
+    void hiddenEntryArtworkIsDimmed_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<bool>("folder");
+        for (const auto &mode : {"masonry", "grid", "icons", "details", "columns"})
+            for (bool folder : {false, true})
+                QTest::newRow(qPrintable(QString(mode)+(folder ? "-folder" : "-file"))) << QString(mode) << folder;
+    }
+
+    void hiddenEntryArtworkIsDimmed() {
+        QFETCH(QString, mode);
+        QFETCH(bool, folder);
+        QTemporaryDir directory;
+        QFile svg(directory.filePath("icon.svg"));
+        QVERIFY(svg.open(QIODevice::WriteOnly));
+        svg.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"80\"><path fill=\"#00ff00\" d=\"M0 0h40v80H0z\"/></svg>");
+        svg.close();
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        const auto shutdown = qScopeGuard([&] { runtime->shutdown(); });
+        auto *session = runtime->createExternalSession("hidden-artwork");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(1), 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "hiddenSession", mode));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("animateLayoutChanges", false);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        QColor normal;
+        int revision = 2;
+        for (bool hidden : {false, true, false}) {
+            auto entry = prefixedCatalog(QString::number(revision), 1)[0].toMap();
+            entry["isImage"] = false;
+            entry["isDir"] = folder;
+            entry["isHidden"] = hidden;
+            entry["highlightStyle"] = QVariantMap{{"icon", QUrl::fromLocalFile(svg.fileName()).toString()}, {"tintIcon", true}, {"normal", QVariantMap{{"foreground", "#00ff00"}}}};
+            QVERIFY(session->applyExternalCatalog({entry}, revision++));
+            QQuickItem *leaf = nullptr;
+            QTRY_VERIFY((leaf = findVisualItem(panel, "galleryFallbackIcon-0")));
+            QTRY_COMPARE(leaf->property("status").toInt(), 1);
+            QTest::qWait(80);
+            qreal effectiveOpacity = 1;
+            for (auto *item = leaf; item; item = item->parentItem()) effectiveOpacity *= item->opacity();
+            QCOMPARE(effectiveOpacity, hidden ? .5 : 1.0);
+            const qreal dpr = view.devicePixelRatio();
+            const QPointF origin = leaf->mapToScene(QPointF());
+            QVERIFY(qAbs(origin.x()*dpr-qRound(origin.x()*dpr)) < .01);
+            QVERIFY(qAbs(origin.y()*dpr-qRound(origin.y()*dpr)) < .01);
+            QCOMPARE(leaf->mapToScene(QPointF(1,0))-origin, QPointF(1,0));
+            QCOMPARE(leaf->mapToScene(QPointF(0,1))-origin, QPointF(0,1));
+            const auto image = view.grabWindow();
+            QVERIFY(!image.isNull());
+            const auto center = (leaf->mapToScene(QPointF(leaf->width()/2,leaf->height()/2))*dpr).toPoint();
+            const auto pixel = image.pixelColor(center);
+            if (!hidden) { QVERIFY(pixel.green() > 240); normal = pixel; }
+            else { QVERIFY(pixel.green() > pixel.red()+40); QVERIFY(pixel.green() < normal.green()-40); }
+            const QString capture = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+            if (hidden && !capture.isEmpty()) QVERIFY(image.save(QDir(capture).filePath("hidden-"+mode+(folder ? "-folder.png" : "-file.png"))));
+        }
+    }
+
+    void fallbackArtworkKeepsAspectAcrossCatalogChanges_data() {
+        QTest::addColumn<QString>("mode");
+        QTest::addColumn<bool>("tinted");
+        QTest::addColumn<bool>("markedDirectory");
+        for (const auto &mode : {"masonry", "grid", "icons", "details", "columns"}) {
+            for (bool directory : {false, true}) {
+                const QString suffix = directory ? "-marked-directory" : "";
+                QTest::newRow(qPrintable(QString(mode)+"-color"+suffix)) << QString(mode) << false << directory;
+                QTest::newRow(qPrintable(QString(mode)+"-tint"+suffix)) << QString(mode) << true << directory;
+            }
+        }
+    }
+
+    void fallbackArtworkKeepsAspectAcrossCatalogChanges() {
+        QFETCH(QString, mode);
+        QFETCH(bool, tinted);
+        QFETCH(bool, markedDirectory);
+        QTemporaryDir directory;
+        QFile svg(directory.filePath("portrait.svg"));
+        QVERIFY(svg.open(QIODevice::WriteOnly));
+        svg.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"80\" viewBox=\"0 0 40 80\"><path fill=\"#00ff00\" d=\"M0 0h40v80H0z\"/></svg>");
+        svg.close();
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        const auto shutdown = qScopeGuard([&] { runtime->shutdown(); });
+        auto *session = runtime->createExternalSession("fallback-aspect");
+        QVariantMap style{{"icon", QUrl::fromLocalFile(svg.fileName()).toString()},
+                          {"tintIcon", tinted}, {"color", "#00ff00"}};
+        if (markedDirectory) style["marker"] = "*";
+        QVERIFY(session->applyExternalCatalog(plainCatalog(2), 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "aspectSession", mode));
+        QVERIFY(panel);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        panel->setProperty("animateLayoutChanges", false);
+        QVERIFY(setPanelObjectProperties(panel, "theme", {{"mutedText", "#00ff00"}}));
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        for (int revision = 2; revision <= 3; ++revision) {
+            auto entries = prefixedCatalog(QString::number(revision), 2);
+            for (auto &value : entries) {
+                auto entry = value.toMap();
+                entry["isImage"] = false;
+                entry["isDir"] = markedDirectory;
+                entry["highlightStyle"] = style;
+                value = entry;
+            }
+            QVERIFY(session->applyExternalCatalog(entries, revision));
+            QQuickItem *leaf = nullptr;
+            const QString leafName = tinted ? "galleryFallbackIcon-0" : "gallerySourceColorIcon-0";
+            QTRY_VERIFY((leaf = findVisualItem(panel, leafName)));
+            QTRY_COMPARE(leaf->property("status").toInt(), 1);
+            QTest::qWait(80);
+            const auto image = view.grabWindow();
+            QVERIFY(!image.isNull());
+            const qreal dpr = view.devicePixelRatio();
+            QVERIFY2(leaf->smooth(), "Aspect-fitted artwork must filter fractional texture sampling at rest");
+            const auto *imageData = static_cast<QQuickImageBasePrivate *>(QQuickItemPrivate::get(leaf));
+            const QSize rasterPixels = imageData->currentPix->image().size();
+            const qreal fittedHeight = qMin(leaf->height(), leaf->width() * 2);
+            QVERIFY2(rasterPixels.height() >= qRound(fittedHeight * dpr),
+                     qPrintable(QString("%1 raster %2x%3, displayed height %4 physical pixels")
+                         .arg(leafName).arg(rasterPixels.width()).arg(rasterPixels.height())
+                         .arg(fittedHeight * dpr)));
+            const QRect area = QRectF(leaf->mapToScene(QPointF())*dpr,
+                                     QSizeF(leaf->width()*dpr, leaf->height()*dpr)).toAlignedRect().intersected(image.rect());
+            QRect ink;
+            for (int y = area.top(); y <= area.bottom(); ++y)
+                for (int x = area.left(); x <= area.right(); ++x) {
+                    const QColor color = image.pixelColor(x,y);
+                    if (color.green() > 180 && color.red() < 80 && color.blue() < 80)
+                        ink |= QRect(x,y,1,1);
+                }
+            QVERIFY2(!ink.isEmpty(), qPrintable(leafName));
+            QVERIFY2(qAbs(qreal(ink.width())/ink.height() - .5) < .07,
+                     qPrintable(QString("%1 %2 rendered %3x%4").arg(mode, leafName).arg(ink.width()).arg(ink.height())));
+            const QPointF origin = leaf->mapToScene(QPointF());
+            QVERIFY(qAbs(origin.x()*dpr-qRound(origin.x()*dpr)) < .01);
+            QVERIFY(qAbs(origin.y()*dpr-qRound(origin.y()*dpr)) < .01);
+            QCOMPARE(leaf->mapToScene(QPointF(1,0))-origin, QPointF(1,0));
+            QCOMPARE(leaf->mapToScene(QPointF(0,1))-origin, QPointF(0,1));
+            if (revision == 3) {
+                const QString capture = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+                if (!capture.isEmpty()) QVERIFY(image.save(QDir(capture).filePath("aspect-"+mode+(tinted ? "-tint.png" : "-color.png"))));
+            }
+        }
     }
 
     void fallbackFactoriesAreSharedAcrossEntries_data() {

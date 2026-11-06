@@ -113,15 +113,18 @@ QtObject {
             // A delegate can complete before MasonryLayout attaches it to
             // its window. Request pixels only at the owning window's DPR.
             source: fallbackIcon.rasterSource
-            // Qt applies DPR once to this logical sourceSize.
-            // Icon providers render the requested rectangle directly. Keep
-            // the raster square; PreserveAspectFit positions it in our slot.
+            // Providers fit artwork into a square canvas. Direct SVG sources
+            // need one unspecified dimension to retain their native aspect
+            // before PreserveAspectFit positions the raster in the slot.
             sourceSize: Qt.size(Math.round(fallbackIcon.rasterExtent),
-                                Math.round(fallbackIcon.rasterExtent))
+                                source.toString().startsWith("image://")
+                                ? Math.round(fallbackIcon.rasterExtent) : 0)
             color: fallbackIcon.effectiveIconColor
             fillMode: Image.PreserveAspectFit
             verticalAlignment: preview.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
-            smooth: preview.motionActive
+            // A native-aspect SVG raster can be larger than its fitted slot.
+            // Keep filtered sampling at rest too, as for un-tinted artwork.
+            smooth: true
             readonly property var pixelGridOffset:
                 fallbackIcon.pixelGridOffset
         }

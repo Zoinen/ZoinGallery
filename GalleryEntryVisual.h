@@ -36,6 +36,7 @@ class GalleryEntryVisual final : public QObject {
     Q_PROPERTY(bool isHidden READ isHidden NOTIFY stateChanged)
     Q_PROPERTY(QString highlightMarker READ highlightMarker
                NOTIFY styleChanged)
+    Q_PROPERTY(QVariant tintIcon READ tintIcon NOTIFY styleChanged)
     Q_PROPERTY(QString normalForeground READ normalForeground
                NOTIFY styleChanged)
     Q_PROPERTY(QString normalBackground READ normalBackground
@@ -89,6 +90,7 @@ public:
     QVariantMap displayFields() const;
     bool isHidden() const;
     QString highlightMarker() const;
+    QVariant tintIcon() const { return _tintIcon; }
     QString normalForeground() const;
     QString normalBackground() const;
     QString selectedForeground() const;
@@ -138,6 +140,7 @@ private:
     QVariantMap _displayFields;
     bool _isHidden = false;
     QString _highlightMarker;
+    QVariant _tintIcon;
     QString _normalForeground;
     QString _normalBackground;
     QString _selectedForeground;

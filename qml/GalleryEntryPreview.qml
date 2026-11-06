@@ -95,6 +95,9 @@ Item {
             preview.entry.isLucideIconSource(modelIconSource)
         readonly property bool systemFileSource:
             preview.entry.isSystemFileIconSource(modelIconSource)
+        readonly property bool tintedSource:
+            !systemFileSource && (preview.entry.visualModel.tintIcon === true
+                || (preview.entry.visualModel.tintIcon === undefined && lucideSource))
         anchors.centerIn: parent
         readonly property real nominalIconSize:
             preview.entry.detailsMode || preview.entry.columnsMode
@@ -116,9 +119,7 @@ Item {
             x: fallbackIcon.pixelGridOffset.x
             y: fallbackIcon.pixelGridOffset.y
         }
-        opacity: preview.entry.detailsMode || preview.entry.columnsMode
-                 ? 1 : 0.78
-        visible: (lucideSource
+        visible: (tintedSource
                   || (systemFileSource
                       && !preview.thumbnailReady
                       && (!previewContent.item
@@ -131,11 +132,12 @@ Item {
                       && preview.entry.panelRoot.viewerTransitionEntryId
                          === preview.entry.entryId)
         readonly property bool useAspectRaster: fullAreaIcon
+                                               && lucideSource
                                                && rasterSource.toString().startsWith("image://")
         readonly property real rasterExtent: fullAreaIcon
                                                 ? Math.max(width, height)
                                                 : Math.min(width, height)
-        readonly property url rasterSource: !Window.window ? "" : lucideSource
+        readonly property url rasterSource: !Window.window ? "" : tintedSource
             ? preview.entry.sourceColorIconAtSize(modelIconSource, rasterExtent, effectiveIconColor)
             : (systemFileSource ? preview.entry.systemFileFallbackSource(rasterExtent) : "")
         sourceComponent: useAspectRaster ? aspectRasterComponent : tintedRasterComponent
@@ -212,7 +214,7 @@ Item {
         id: previewContent
         active: preview.activePresentation
         readonly property bool sourceColorIconNeeded:
-            !fallbackIcon.lucideSource
+            !fallbackIcon.tintedSource
             && !preview.thumbnailExpected
             && thumbnail.source.toString() === ""
             && fallbackIcon.modelIconSource.toString() !== ""

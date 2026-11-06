@@ -41,6 +41,45 @@ class ThumbnailMemoryCacheTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void thumbnailAttachedDuringRowInsertionRetainsCacheOwnership() {
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        const auto cache = QSharedPointer<ZoinGallery::ThumbnailMemoryCache>::create(
+            store, 1024 * 1024);
+        DecodeManager decoder;
+        ZoinGallery::ExternalCatalogModel model("insert-owner", "thumbs", "async",
+            store, cache, &decoder, 1024 * 1024, 1024 * 1024);
+        const auto row = [](int index) {
+            return QVariantMap{{"entryId", QString::number(index)}, {"index", index},
+                {"name", QString("image-%1.png").arg(index)},
+                {"localPath", QString("/virtual/image-%1.png").arg(index)},
+                {"isImage", true}, {"mtimeNs", qint64(101)}, {"size", qint64(6)}};
+        };
+        QVERIFY(model.applyCatalog({row(0)}));
+        QString providerId;
+        ImageDecodeRequest request;
+        connect(&model, &QAbstractItemModel::rowsInserted, &model,
+            [&](const QModelIndex &, int first, int) {
+                auto *item = model.index(first, 0).data(FileListModel::ImageFileRole)
+                    .value<ImageFile *>();
+                QVERIFY(item);
+                request.info = item->info();
+                request.targetSize = QSize(80, 60);
+                providerId = cache->storeDecoded("other-panel", request.info.path,
+                    request.info.sourceVersionToken, 6, request.targetSize,
+                    "thumbnail-aspect-v1", frame(request.targetSize)).providerId;
+                model.decodeImages({request});
+                QVERIFY(!item->imageIdUrl().isEmpty());
+            });
+        QVERIFY(model.applyCatalog({row(0), row(1)}, false, true));
+        QVERIFY(!providerId.isEmpty());
+        QVERIFY(store->contains(providerId));
+        QVERIFY(model.hasPublishedThumbnails());
+        model.decodeImages({request});
+        QVERIFY2(store->contains(providerId), "Reattaching a shared thumbnail removed its pixels");
+        model.shutdown();
+        decoder.prepareToClose();
+    }
+
     void largerFrameIsDeduplicatedAndSharedAcrossSessions() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -135,6 +174,10 @@ private slots:
         QCOMPARE(repeated.state, ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
         QCOMPARE(repeated.handle.providerId, decoded.providerId);
         QCOMPARE(cache.acquire("other", source, "v1", 100, QSize(123, 78), transform).state,
+                 ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
+        // More unused vertical space does not require more source pixels;
+        // increasing the limiting width does require a higher pixel tier.
+        QCOMPARE(cache.acquire("other", source, "v1", 100, QSize(124, 78), transform).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         QCOMPARE(cache.acquire("other", source, "v2", 100, QSize(123, 77), transform).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);

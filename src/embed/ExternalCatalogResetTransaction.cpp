@@ -444,6 +444,10 @@ void ExternalCatalogResetTransaction::reconcileRows() {
             m_model._entries.insert(row, next);
             reindexCurrentRows();
             m_model.endInsertRows();
+            // Observers can synchronously attach a shared cached thumbnail.
+            // The inserted row already contains `next`; copying it again
+            // would erase that publication's ownership and request state.
+            continue;
         } else if (current != row) {
             const bool moved = m_model.beginMoveRows({}, current, current, {}, current < row ? row+1 : row);
             Q_ASSERT(moved);

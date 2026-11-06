@@ -46,6 +46,7 @@ struct GalleryEntryVisual::SnapshotValues {
     QVariantMap displayFields;
     bool isHidden = false;
     QString highlightMarker;
+    QVariant tintIcon;
     QString normalForeground;
     QString normalBackground;
     QString selectedForeground;
@@ -97,6 +98,7 @@ GalleryEntryVisual::SnapshotValues GalleryEntryVisual::parseSnapshot(
         .isHidden = display.value(QStringLiteral("isHidden")).toBool(),
         .highlightMarker = style.value(
             QStringLiteral("marker")).toString(),
+        .tintIcon = style.value(QStringLiteral("tintIcon")),
         .normalForeground = styleColor(
             style, "normal", "foreground"),
         .normalBackground = styleColor(
@@ -159,6 +161,7 @@ bool GalleryEntryVisual::applyState(const SnapshotValues &values) {
 bool GalleryEntryVisual::applyStyle(const SnapshotValues &values) {
     bool changed = false;
     changed |= assignChanged(_highlightMarker, values.highlightMarker);
+    changed |= assignChanged(_tintIcon, values.tintIcon);
     changed |= assignChanged(_normalForeground, values.normalForeground);
     changed |= assignChanged(_normalBackground, values.normalBackground);
     changed |= assignChanged(

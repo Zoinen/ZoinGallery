@@ -137,6 +137,32 @@ class ViewerDecodeSourceTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void rgbPngThumbnailRemainsOpaque() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString path = qEnvironmentVariable("ZG_PNG_PROBE");
+        if (path.isEmpty()) {
+            path = directory.filePath("opaque.png");
+            QImage fixture(688, 992, QImage::Format_RGB888);
+            fixture.fill(QColor(180, 110, 50));
+            QVERIFY(fixture.save(path));
+        }
+        ImageDecodeRequest request;
+        request.info.path = path;
+        request.targetSize = QSize(256, 384);
+        request.expandToCacheResolution = false;
+        QVERIFY(ThumbnailLoader::readMetadata(request.info));
+        ImageData data(request);
+        QVERIFY(ThumbnailLoader::readImage(data));
+        DecodedImageInfo decoded;
+        const auto image = ThumbnailLoader::decode(data, decoded);
+        QVERIFY(!image.isNull());
+        const auto thumb = ThumbnailLoader::createThumbnail(image, data.request.targetSize);
+        QVERIFY(!thumb.isNull());
+        for (int y = 0; y < thumb.height(); ++y)
+            for (int x = 0; x < thumb.width(); ++x)
+                QCOMPARE(thumb.pixelColor(x, y).alpha(), 255);
+    }
     void viewerReadsOriginalOnlyWhenNativeDecodeExists() {
         ImageDecoderFactory::registerClass(
             [] { return new PreviewFixtureDecoder(false); }, 1000);

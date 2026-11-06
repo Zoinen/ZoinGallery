@@ -169,11 +169,9 @@ BrickItem {
     readonly property color fallbackIconColor:
         selected
         ? panelRoot.markedTextColor
-        : (isFolder
-           ? (current && panelRoot.showCursor
-              ? panelRoot.foregroundColor : panelRoot.folderIconColor)
-           : (highlightForegroundValue !== ""
-              ? highlightForeground : panelRoot.mutedColor))
+        : (visualModel.normalForeground !== ""
+           ? visualModel.normalForeground
+           : (isFolder ? panelRoot.folderIconColor : panelRoot.mutedColor))
     readonly property color highlightLabelBackground:
         (current && panelRoot.showCursor
          ? (masonryMode ? ZG.Style.brickInfoPanelSelected : visualModel.cursorBackground)

@@ -775,16 +775,8 @@ void ExternalCatalogModel::attachThumbnail(
     if (!entry.thumbnailProviderId.isEmpty()) {
         _providerEntryIds.remove(entry.thumbnailProviderId, entry.id);
     }
-    else {
-        // Remove only a legacy per-session publication. Shared cache IDs are
-        // owned solely by ThumbnailMemoryCache and remain valid for users in
-        // the other panel.
-        const QString legacyId = item->imageIdUrl().section(
-            QLatin1Char('/'), -1);
-        if (!legacyId.isEmpty()) {
-            _store->remove(legacyId);
-        }
-    }
+    // Pixel lifetime belongs to ThumbnailMemoryCache / ViewerImageCache,
+    // never to a row facade. Another panel may still use its previous URL.
     const bool restoredVideo = entry.videoThumbnailFailed;
     entry.videoThumbnailFailed = false;
     if (restoredVideo) {
@@ -839,13 +831,6 @@ void ExternalCatalogModel::detachThumbnail(Entry &entry) {
     }
     if (!entry.thumbnailProviderId.isEmpty()) {
         _providerEntryIds.remove(entry.thumbnailProviderId, entry.id);
-    }
-    else {
-        const QString legacyId = entry.item->imageIdUrl().section(
-            QLatin1Char('/'), -1);
-        if (!legacyId.isEmpty()) {
-            _store->remove(legacyId);
-        }
     }
     entry.thumbnailProviderId.clear();
     if (hadThumbnails && !hasPublishedThumbnails()) emit publishedThumbnailsChanged();

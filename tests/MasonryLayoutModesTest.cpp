@@ -1592,7 +1592,8 @@ private slots:
     }
 
     void initTestCase() {
-        QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+        if (!qEnvironmentVariableIsSet("ZG_NATIVE_RENDER"))
+            QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     }
 
     void panelThemeColorsUpdateLiveAfterConstruction() {
@@ -1772,6 +1773,50 @@ private slots:
         }
     }
 
+    void cursorKeepsNormalIconColorAndOpacity_data() {
+        QTest::addColumn<QString>("mode");
+        for (const auto &mode : {"icons", "grid", "masonry", "details", "columns"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void cursorKeepsNormalIconColorAndOpacity() {
+        QFETCH(QString, mode);
+        QVariantList catalog;
+        for (int index = 0; index < 2; ++index) {
+            auto entry = catalogEntry(index);
+            entry["isDir"] = index == 0;
+            entry["name"] = index == 0 ? "folder" : "file.txt";
+            entry["highlightStyle"] = QVariantMap{
+                {"normal", QVariantMap{{"foreground", "#dc823a"}}},
+                {"cursor", QVariantMap{{"foreground", "#70baff"}}},
+            };
+            catalog.append(entry);
+        }
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(QStringLiteral("normal-icon-color"));
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *panel = createPanel(view, session, QStringLiteral("normalIconSession"), mode);
+        QVERIFY(panel);
+        panel->setProperty("showCursor", true);
+        for (int cursor = 0; cursor < 2; ++cursor) {
+            session->setCurrentIndex(cursor);
+            for (int index = 0; index < 2; ++index) {
+                QQuickItem *icon = nullptr;
+                QTRY_VERIFY_WITH_TIMEOUT((icon = panel->findChild<QQuickItem *>(
+                    QStringLiteral("galleryFallbackIcon-%1").arg(index))), 3000);
+                auto *loader = icon->parentItem();
+                QVERIFY(loader);
+                QTRY_COMPARE_WITH_TIMEOUT(loader->property("effectiveIconColor").value<QColor>(),
+                    QColor(QStringLiteral("#dc823a")), 3000);
+                QCOMPARE(loader->opacity(), 1.0);
+            }
+        }
+    }
+
     void neutralPanelTextColorsLeaveSemanticIconColorsAlone() {
         QVariantMap folder = catalogEntry(0);
         folder[QStringLiteral("name")] = QStringLiteral("folder");
@@ -1834,7 +1879,7 @@ private slots:
             "effectiveIconColor").value<QColor>();
         QCOMPARE(fileIconColor, QColor(QStringLiteral("#00ff00")));
         QCOMPARE(folderIcon->property("effectiveIconColor").value<QColor>(),
-                 QColor(QStringLiteral("#5ab2f1")));
+                 QColor(QStringLiteral("#ff00ff")));
 
         QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
             {QStringLiteral("text"), QStringLiteral("#222222")},
@@ -6570,6 +6615,49 @@ private slots:
                 layout->overscanIndexes().size());
     }
 
+    void opaquePngThumbnailRendersPixels() {
+        if (!qEnvironmentVariableIsSet("ZG_NATIVE_RENDER"))
+            QSKIP("Requires the native renderer for ShaderEffect pixel validation");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString path = qEnvironmentVariable("ZG_PNG_PROBE");
+        if (path.isEmpty()) {
+            path = directory.filePath("opaque.png");
+            QImage image(688, 992, QImage::Format_RGB888);
+            image.fill(QColor(180, 110, 50));
+            QVERIFY(image.save(path));
+        }
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession("opaque-png");
+        QVERIFY(session->applyExternalCatalog({catalogEntry(0, path)}, 1));
+        QObject *panel = createPanel(view, session, "opaquePngSession", "grid");
+        QVERIFY(panel);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        layout->setDensity(240);
+        QQuickItem *image = nullptr;
+        QQuickItem *shader = nullptr;
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (image = panel->findChild<QQuickItem *>("galleryThumbnailImage-0"))
+            && (shader = panel->findChild<QQuickItem *>("galleryThumbnailShader-0")), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(image->property("status").toInt(), 1, 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(shader->isVisible(), 10000);
+        const auto hasPixels = [&] {
+            const QImage frame = view.grabWindow();
+            const QPoint center = (shader->mapToScene(
+                QPointF(shader->width()/2, shader->height()/2)) * view.devicePixelRatio()).toPoint();
+            if (!frame.rect().contains(center)) return false;
+            const QColor pixel = frame.pixelColor(center);
+            return pixel.red() > pixel.blue() + 20;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(hasPixels(), 10000);
+        runtime->shutdown();
+    }
+
     void svgThumbnailsUseTheCurrentPhysicalPreviewResolution() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -8420,8 +8508,7 @@ private slots:
                 {QStringLiteral("sizeText"), folder
                      ? QStringLiteral("<DIR>") : QStringLiteral("4 KiB")},
                 // f4 supplies a normal foreground for every catalog row.
-                // Folder icon tint must still use its dedicated blue/white
-                // state instead of inheriting this ordinary white text.
+                // Icon tint keeps this normal state as the cursor moves.
                 {QStringLiteral("highlightStyle"), QVariantMap{
                      {QStringLiteral("normal"), QVariantMap{
                           {QStringLiteral("foreground"),
@@ -8672,11 +8759,11 @@ private slots:
                                       - panel->property("detailsHeaderCellInset").toReal()
                                       - folderBasePosition.x());
         QCOMPARE(fileIcon->property("effectiveIconColor").value<QColor>(),
-                 QColor(QStringLiteral("#9aa7b5")));
+                 QColor(QStringLiteral("#e8edf2")));
         QCOMPARE(folderIcon->property("effectiveIconColor").value<QColor>(),
                  QColor(QStringLiteral("#ffd43b")));
         QCOMPARE(plainFolderIcon->property("effectiveIconColor").value<QColor>(),
-                 QColor(QStringLiteral("#5ab2f1")));
+                 QColor(QStringLiteral("#e8edf2")));
         QCOMPARE(plainFolderBase->property("color").value<QColor>(),
                  QColor(QStringLiteral("#ffffff")));
         QCOMPARE(markedSurface->property("color").value<QColor>(),
@@ -8697,9 +8784,8 @@ private slots:
             folderIcon->property("effectiveIconColor").value<QColor>(),
             QColor(QStringLiteral("#ffd43b")), 3000);
 
-        // Folder labels stay at the configurable neutral folder color. Their
-        // Lucide icon is blue normally, becomes white under the cursor, and
-        // persistent selection remains the strongest state.
+        // Cursor movement changes the label state, never the ordinary icon tint.
+        // Persistent marking remains a separate state.
         session->setCurrentIndex(2);
         QTRY_COMPARE_WITH_TIMEOUT(
             plainFolderIcon->property("effectiveIconColor").value<QColor>(),

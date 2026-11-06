@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Controls.Basic as T
 
 import "."
@@ -7,6 +8,8 @@ T.TextField {
     id: control
 
     property bool hasBackground: true
+    property var contextMenuHandler: null
+    ContextMenu.menu: null
 
     color: acceptableInput ? Style.text : Style.textError
 
@@ -29,13 +32,14 @@ T.TextField {
     leftPadding: 10
     rightPadding: 10
 
-    function showContextMenu() {
-        textEditMenu.popup()
+    function showContextMenu(position = Qt.point(width / 2, height)) {
+        if (contextMenuHandler) contextMenuHandler(control, position)
+        else textEditMenu.popup()
     }
 
     onReleased: (event) => {
         if (event.button === Qt.RightButton) {
-            showContextMenu()
+            showContextMenu(Qt.point(event.x, event.y))
         }
     }
 

@@ -9,6 +9,7 @@
 #include "Decoders/RawBitmapPreview.h"
 #include "FileListModel.h"
 #include "GalleryViewModel.h"
+#include "GalleryEntryVisual.h"
 #include "PersistentImageCache.h"
 #include "PersistentDerivedImageCache.h"
 #include "StorageLocations.h"
@@ -30,28 +31,46 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QImage>
+#include <QPainter>
+#include <QSvgRenderer>
 #include <QFontDatabase>
 #include <QQmlProperty>
 #ifndef Q_MOC_RUN
 #include <QQuickWindow>
 #include <QQuickItem>
 #include "VectorSource.h"
+#include "VectorSourceStorage_p.h"
+#include "GalleryVectorUploadGate.h"
+#include "GallerySceneItem.h"
+#include <QSGFlatColorMaterial>
+#include <QtQuick/private/qquickitem_p.h>
+#include <QtQuick/private/qquickwindow_p.h>
+#define private public
+#include <QtQuick/private/qsgbatchrenderer_p.h>
+#undef private
+#include "GalleryComponentHost.h"
 #include "Runners/ImageReadRunner.h"
 #endif
 #include <QMutex>
 #include <QPointer>
 #include <QQmlComponent>
+#include <QQmlAbstractUrlInterceptor>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQmlIncubationController>
 #include <QSignalSpy>
 #include <QSet>
 #include <QSettings>
+#include <QSemaphore>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QThreadPool>
+#include <QUuid>
 #include <QTimeZone>
 #include <QtTest>
 #if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
 #include "src/embed/VideoPlaybackController.h"
+#include "ViewerVideoFrameSource.h"
 #include <QElapsedTimer>
 #include <QAudioBuffer>
 #include <QAudioBufferOutput>
@@ -63,12 +82,76 @@
 #endif
 
 #include <algorithm>
+#include <iterator>
 #include <atomic>
 #include <chrono>
 #include <thread>
 #include <vector>
 
+class CountingFallbackIconProvider final : public QObject {
+    Q_OBJECT
+public:
+    explicit CountingFallbackIconProvider(QUrl url) : _url(std::move(url)) {}
+    Q_INVOKABLE qreal lucideStrokeWidth(qreal) const { return 2; }
+    Q_INVOKABLE QUrl rasterizedLucideSource(const QString &, int, qreal,
+                                          const QString &, qreal) {
+        ++requests;
+        return _url;
+    }
+    int requests = 0;
+private:
+    QUrl _url;
+};
+
+class VisualBindingReadCounter final : public QObject {
+    Q_OBJECT
+public:
+    Q_INVOKABLE QString observeIconKey(const QString &value) {
+        ++iconKeyReads;
+        return value;
+    }
+    Q_INVOKABLE QString observeIconPath(const QString &value) {
+        ++iconPathReads;
+        return value;
+    }
+    Q_INVOKABLE QString observeImageSource(const QString &value) {
+        ++imageSourceReads;
+        return value;
+    }
+    int iconKeyReads = 0;
+    int iconPathReads = 0;
+    int imageSourceReads = 0;
+};
+
 namespace {
+
+class UploadProgressTile final : public QQuickItem {
+public:
+    UploadProgressTile(QQuickItem *parent, QColor color) : QQuickItem(parent), _color(color) {
+        setFlag(ItemHasContents);
+        setSize({16, 16});
+    }
+protected:
+    QSGNode *updatePaintNode(QSGNode *node, UpdatePaintNodeData *) override {
+        if (node) return node;
+        auto *result = new QSGGeometryNode;
+        auto *geometry = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(),
+            16384, 6, QSGGeometry::UnsignedIntType);
+        geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+        auto *vertices = geometry->vertexDataAsPoint2D();
+        for (int i = 0; i < geometry->vertexCount(); ++i) vertices[i].set(0, 0);
+        vertices[1].set(16, 0); vertices[2].set(16, 16); vertices[3].set(0, 16);
+        const quint32 indexes[] = {0, 1, 2, 0, 2, 3};
+        std::copy(std::begin(indexes), std::end(indexes), geometry->indexDataAsUInt());
+        auto *material = new QSGFlatColorMaterial;
+        material->setColor(_color); material->setFlag(QSGMaterial::NoBatching);
+        result->setGeometry(geometry); result->setMaterial(material);
+        result->setFlag(QSGNode::OwnsGeometry); result->setFlag(QSGNode::OwnsMaterial);
+        return result;
+    }
+private:
+    QColor _color;
+};
 
 QVariantMap entry(const QString &id, int index, const QString &name,
                   bool image = false, bool selected = false,
@@ -1191,6 +1274,7 @@ private slots:
         const auto firstUrl = first->imageIdUrl();
         const auto secondUrl = second->imageIdUrl();
         QSignalSpy resized(first, &ImageFile::fullSizeChanged);
+        QSignalSpy resumedReads(children, &QAbstractItemModel::dataChanged);
         QVERIFY(session->applyExternalCatalog({}, 2));
         QTRY_COMPARE(provider->leases.load(), 0);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
@@ -1214,6 +1298,14 @@ private slots:
         QCOMPARE(first->fullSize(), source.size());
         QCOMPARE(resized.size(), 0);
         QCOMPARE(decoded.size(), 2);
+        bool requestedThumbnails = false;
+        for (const auto &change : resumedReads) {
+            const auto roles = change.at(2).value<QList<int>>();
+            QVERIFY2(!roles.contains(FileListModel::ImageFullSizeRole),
+                     "Resuming reads must not advertise unchanged image dimensions");
+            requestedThumbnails |= roles.contains(FileListModel::ImageIdUrlRole);
+        }
+        QVERIFY(requestedThumbnails);
         model->shutdown();
     }
 
@@ -1398,6 +1490,58 @@ private slots:
         QVERIFY(ready.last().at(0).value<ImageDecodeRequest>().videoPosterRequest);
         QVERIFY(ready.last().at(2).value<DecodedImageInfo>().isFromCache);
         runtime->shutdown();
+    }
+
+    void videoMuteSurvivesClosingAndOpeningFilesFromAnotherSession() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString firstFile = QStringLiteral(ZOIN_TEST_VIDEO_PATH);
+        const QString secondFile = directory.filePath(QStringLiteral("second.mp4"));
+        QVERIFY(QFile::copy(firstFile, secondFile));
+
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.enableVideoPlayback = true;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        const auto shutdown = qScopeGuard([&] { runtime->shutdown(); });
+        auto playback = [&](const QString &name) {
+            auto *session = runtime->createExternalSession(name);
+            return qobject_cast<ZoinGallery::VideoPlaybackController *>(
+                session ? session->videoPlaybackController() : nullptr);
+        };
+        auto *first = playback(QStringLiteral("video-mute-first-panel"));
+        QVERIFY(first);
+        QTRY_VERIFY_WITH_TIMEOUT(first->available(), 5000);
+        ZoinGallery::ViewerVideoFrameSource frames;
+        first->setFrameSource(&frames);
+        const auto source = [](const QString &path) {
+            return QVariantMap{{QStringLiteral("identity"), path},
+                               {QStringLiteral("path"), path}};
+        };
+        first->openSource(source(firstFile), QStringLiteral("manual"));
+        QTRY_COMPARE_WITH_TIMEOUT(first->state(), QStringLiteral("ready"), 10000);
+        QVERIFY(first->muted());
+        first->playPause();
+        QTRY_VERIFY_WITH_TIMEOUT(frames.hasFrame(), 5000);
+        QVERIFY(!frames.findChild<QVideoSink *>());
+        first->toggleMute();
+        QVERIFY(!first->muted());
+        first->stop();
+        QVERIFY(!frames.hasFrame());
+
+        auto *second = playback(QStringLiteral("video-mute-second-panel"));
+        QVERIFY(second);
+        QTRY_VERIFY_WITH_TIMEOUT(second->available(), 5000);
+        second->openSource(source(secondFile), QStringLiteral("manual"));
+        QTRY_COMPARE_WITH_TIMEOUT(second->state(), QStringLiteral("ready"), 10000);
+        QVERIFY(!second->muted());
+        second->toggleMute();
+        second->stop();
+        first->openSource(source(firstFile), QStringLiteral("autoplay-sound"));
+        QTRY_VERIFY_WITH_TIMEOUT(first->playing(), 5000);
+        QVERIFY(first->muted());
     }
 
     void videoLoopKeepsPlaybackAndFramesContinuous_data() {
@@ -1761,7 +1905,8 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(
             playback->property("state").toString(), QStringLiteral("failed"),
             10000);
-        QVERIFY(playback->property("muted").toBool());
+        // The explicit unmute still applies after stop and a change of mode.
+        QVERIFY(!playback->property("muted").toBool());
         QVERIFY(!playback->property("error").toString().isEmpty());
 
         QVERIFY(QMetaObject::invokeMethod(
@@ -1941,6 +2086,64 @@ private slots:
         }
     }
 
+    void lateVideoThumbnailDoesNotFlushCachedMetadata_data() {
+        QTest::addColumn<bool>("cached");
+        QTest::newRow("decoded") << false;
+        QTest::newRow("cached-pixels") << true;
+    }
+
+    void lateVideoThumbnailDoesNotFlushCachedMetadata() {
+        QFETCH(bool, cached);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("late-video-dimensions");
+        auto video = entry("video", 0, "portrait.mp4");
+        video["thumbnailKind"] = "video";
+        video["contentVersion"] = "video-v1";
+        video["versionStrength"] = "strong";
+        video["sourceKey"] = "late-video-source";
+        QVERIFY(session->applyExternalCatalog({video}, 1));
+        auto *model = session->model();
+        auto *item = model->index(0, 0).data(FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(item);
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        ImageDecodeRequest request{
+            .info = item->info(), .targetSize = QSize(90, 160),
+            .requestNamespace = session->sessionId()};
+        request.info.isCached = cached;
+        request.info.imageSize = QSize(1080, 1920);
+        request.thumbnailTransformKey = "video-contact-sheet-2x2-display-v6";
+        QImage sheet(QSize(90, 160), QImage::Format_ARGB32_Premultiplied);
+        sheet.fill(Qt::red);
+        MasonryLayout layout;
+        QQmlEngine::setContextForObject(&layout, engine.rootContext());
+        layout.setSize(QSizeF(600, 400));
+        layout.setModel(model);
+        layout.componentComplete();
+        const quint64 revision = layout.layoutRevision();
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        decoder->imageReady(request, sheet, {});
+        QCOMPARE(layout.layoutRevision(), revision);
+        QCOMPARE(item->fullSize(), request.info.imageSize);
+        QCOMPARE(item->info().isCached, cached);
+        int geometryChanges = 0;
+        for (const auto &change : changes) {
+            const auto roles = change.at(2).value<QList<int>>();
+            if (!roles.contains(FileListModel::ImageFullSizeRole)) continue;
+            ++geometryChanges;
+            QVERIFY(!roles.contains(FileListModel::CachedMetadataBatchRole));
+        }
+        QCOMPARE(geometryChanges, 1);
+        QTRY_VERIFY(layout.layoutRevision() > revision);
+        const auto preview = layout.indexPreviewGeometry(0);
+        QVERIFY(preview.isValid());
+        QVERIFY(qAbs(preview.width() / preview.height() - 1080.0 / 1920) < .02);
+        runtime->shutdown();
+    }
+
     void cachedVideoThumbnailKeepsCompletedMetadataAndGeometry() {
         QQmlEngine engine;
         ZoinGallery::RuntimeOptions options;
@@ -1961,7 +2164,7 @@ private slots:
         QVERIFY(decoder);
         ImageDecodeRequest stale{.info = item->info(), .targetSize = QSize(90,160),
             .requestNamespace = session->sessionId()};
-        stale.thumbnailTransformKey = "video-contact-sheet-2x2-display-v4";
+        stale.thumbnailTransformKey = "video-contact-sheet-2x2-display-v6";
         ImageInfo complete = stale.info;
         stale.info.imageSize = QSize(90,160);
         complete.imageSize = QSize(1080,1920);
@@ -2194,6 +2397,31 @@ private slots:
         QTRY_COMPARE(provider->leases.load(), 0);
     }
 
+    void sameRevisionPagePreservesCompleteCatalog() {
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession(QStringLiteral("complete-catalog"));
+        const QVariantMap options{{"currentPath", "/same"}};
+        QVERIFY(session->applyExternalCatalog(
+            {entry("a", 0, "a.txt"), entry("b", 1, "b.txt"), entry("c", 2, "c.txt")},
+            7, options));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        session->setCurrentIndex(2);
+        const QPersistentModelIndex lastRow(model->index(2, 0));
+        QSignalSpy reset(model, &QAbstractItemModel::modelReset);
+
+        QVERIFY(session->applyExternalCatalog(
+            {entry("a", 0, "a.txt")}, 7,
+            {{"currentPath", "/same"}, {"catalogRowsDeferred", true}, {"totalCount", 3}}));
+
+        QCOMPARE(reset.size(), 0);
+        QVERIFY(!model->sparseCatalog());
+        QVERIFY(lastRow.isValid());
+        QCOMPARE(model->entryIdAt(lastRow.row()), QStringLiteral("c"));
+        QCOMPARE(session->currentIndex(), 2);
+    }
+
     void sparseRefreshRetainsMaterializedRowsAndRejectsInvalidRanges() {
         QQmlEngine engine;
         auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
@@ -2422,7 +2650,16 @@ private slots:
         runtime->shutdown();
     }
 
-    void relayoutKeepsExpensiveThumbnailOwnerAdmission() {
+    void relayoutKeepsRunningThumbnailOwnerAdmission_data() {
+        QTest::addColumn<QString>("storageClass");
+        QTest::addColumn<QString>("accessProfile");
+        QTest::newRow("network") << QString("network") << QString("materializeOnce");
+        QTest::newRow("local") << QString("local") << QString("directLocal");
+    }
+
+    void relayoutKeepsRunningThumbnailOwnerAdmission() {
+        QFETCH(QString, storageClass);
+        QFETCH(QString, accessProfile);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const QString backing = directory.filePath(
@@ -2457,9 +2694,8 @@ private slots:
             {QStringLiteral("sourceKey"), QStringLiteral("network/remote")},
             {QStringLiteral("contentVersion"), QStringLiteral("strong-v1")},
             {QStringLiteral("versionStrength"), QStringLiteral("strong")},
-            {QStringLiteral("storageClass"), QStringLiteral("network")},
-            {QStringLiteral("accessProfile"),
-             QStringLiteral("materializeOnce")},
+            {QStringLiteral("storageClass"), storageClass},
+            {QStringLiteral("accessProfile"), accessProfile},
             {QStringLiteral("mimeType"), QStringLiteral("image/png")},
             {QStringLiteral("size"), backingInfo.size()},
         }}, 1));
@@ -2488,7 +2724,7 @@ private slots:
             provider->entered.load(std::memory_order_acquire), 5000);
 
         // Masonry revokes its geometry lease before immediately asking for
-        // the same stable remote tier again. The live decode remains the
+        // the same stable tier again. The live decode remains the
         // shared owner and the second request must coalesce behind it.
         model->cancelAllDecodeRunners();
         model->decodeImages({request});
@@ -2500,6 +2736,68 @@ private slots:
         QCOMPARE(provider->materializations.load(), 1);
 
         runtime->shutdown();
+    }
+
+    void relayoutDropsQueuedPanelWorkWithoutCancelingWorkersOrViewer() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("queued.png");
+        QImage image(48, 32, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<BlockingThumbnailMaterializeProvider>::create(path);
+        DecodeManager manager(nullptr, 3, provider);
+        manager.setImageCacheMode(CacheUsageMode::Off);
+        QSignalSpy ready(&manager, &DecodeManager::imageReady);
+        const auto requestFor = [&path](const QString &identity, const QString &owner) {
+            ImageDecodeRequest request;
+            request.info.path = identity;
+            request.info.fileSize = QFileInfo(path).size();
+            request.info.sourceVersionToken = "v1";
+            request.info.source = {
+                .resourceId = identity,
+                .sourceKey = identity,
+                .contentVersion = "v1",
+                .versionStrength = "strong",
+                .storageClass = "local",
+                .accessProfile = "directLocal",
+                .mimeType = "image/png",
+                .size = QFileInfo(path).size(),
+            };
+            request.targetSize = QSize(24, 16);
+            request.requestNamespace = owner;
+            request.panelThumbnailRequest = true;
+            request.checkCache = false;
+            request.storeInPersistentCache = false;
+            request.expandToCacheResolution = false;
+            request.thumbnailTransformKey = "thumbnail-aspect-v1";
+            return request;
+        };
+        manager.decodeImages({requestFor("running-0", "left"),
+                              requestFor("running-1", "left"),
+                              requestFor("running-2", "left")});
+        QTRY_COMPARE_WITH_TIMEOUT(provider->materializations.load(), 3, 5000);
+        auto viewer = requestFor("viewer", "left");
+        viewer.panelThumbnailRequest = false;
+        viewer.viewerRequest = true;
+        manager.decodeImages({requestFor("obsolete", "left"),
+                              requestFor("other-panel", "right"), viewer});
+        QVERIFY(manager.cancelQueuedPanelThumbnailRequests({}).isEmpty());
+        const auto canceled = manager.cancelQueuedPanelThumbnailRequests("left");
+        QCOMPARE(canceled.size(), 1);
+        QCOMPARE(canceled.first().info.sourceIdentity(), QString("obsolete"));
+        QCOMPARE(canceled.first().targetSize, QSize(24, 16));
+        QCOMPARE(canceled.first().thumbnailTransformKey, QString("thumbnail-aspect-v1"));
+        QVERIFY(manager.cancelQueuedPanelThumbnailRequests("left").isEmpty());
+        QCOMPARE(provider->materializations.load(), 3);
+        provider->release.store(true, std::memory_order_release);
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), 5, 10000);
+        QSet<QString> completed;
+        for (const auto &result : ready) {
+            completed.insert(qvariant_cast<ImageDecodeRequest>(result.first()).info.sourceIdentity());
+        }
+        QCOMPARE(completed, QSet<QString>({"running-0", "running-1", "running-2", "viewer", "other-panel"}));
+        manager.prepareToClose();
     }
 
     void openingImagePromotesOnePendingCatalogFitDecode() {
@@ -2607,6 +2905,165 @@ private slots:
         manager.prepareToClose();
     }
 
+    void fastViewerNavigationDropsObsoleteDemandWithoutLosingOtherOwners() {
+        DecodeManager manager(nullptr, 4);
+        manager.setImageCacheMode(CacheUsageMode::Off);
+        manager.setInteractiveSource("left", "hold-admission");
+        const auto requestFor = [](int row, const QString &owner) {
+            ImageDecodeRequest request;
+            request.requestNamespace = owner;
+            request.info.path = QString("/missing-navigation-%1.png").arg(row);
+            request.targetSize = QSize(160, 120);
+            request.viewerRequest = true;
+            request.fitToViewerRequest = true;
+            return request;
+        };
+        QSignalSpy canceled(&manager, &DecodeManager::viewerDemandRequestCanceled);
+        QSignalSpy failed(&manager, &DecodeManager::imageReadFailed);
+        const auto other = requestFor(0, "right");
+        manager.decodeImages({other});
+        for (int row = 0; row < 500; ++row) {
+            const auto current = requestFor(row, "left");
+            const auto previous = requestFor(qMax(0, row - 1), "left");
+            manager.setViewerDemand("left", {current.info.path, previous.info.path,
+                                             current.info.path});
+            manager.decodeImages({current});
+        }
+        QCOMPARE(canceled.size(), 498);
+        QCOMPARE(failed.size(), 0);
+        manager.setInteractiveSource("left", {});
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 3, 3000);
+        const auto current = qvariant_cast<ImageDecodeRequest>(failed[0][0]);
+        QCOMPARE(current.info.path, requestFor(499, "left").info.path);
+        QCOMPARE(current.requestNamespace, QString("left"));
+        const auto previous = qvariant_cast<ImageDecodeRequest>(failed[1][0]);
+        QCOMPARE(previous.info.path, requestFor(498, "left").info.path);
+        QCOMPARE(qvariant_cast<ImageDecodeRequest>(failed[2][0]).requestNamespace,
+                 QString("right"));
+        manager.prepareToClose();
+    }
+
+    void viewerRestoresPanelThumbnailFromDiskWithoutOpeningTheSource() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString key = QUuid::createUuid().toString();
+        const QString path = directory.filePath("missing.png");
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, false);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        decoder->setImageCacheMode(CacheUsageMode::OnlyCache);
+        auto *session = runtime->createExternalSession("viewer-disk-thumbnail");
+        ImageDecodeRequest cached;
+        cached.info.path = key;
+        cached.info.fileSize = 42;
+        cached.info.sourceVersionToken = "v1";
+        cached.info.imageSize = QSize(640, 480);
+        cached.info.source = {
+            .resourceId = key, .sourceKey = key, .contentVersion = "v1",
+            .versionStrength = "strong", .storageClass = "network",
+            .accessProfile = "materializeOnce", .mimeType = "image/png",
+            .size = 42,
+        };
+        PersistentDerivedImageCache::storeMetadata(cached.info);
+        cached.targetSize = QSize(80, 60);
+        cached.thumbnailTransformKey = "thumbnail-aspect-v1";
+        QImage thumbnail(cached.targetSize, QImage::Format_RGB32);
+        thumbnail.fill(Qt::red);
+        const auto bytes = PersistentImageCache::createImageForCache(cached, thumbnail);
+        QVERIFY(!bytes.isEmpty());
+        PersistentImageCache::storeImage(cached, bytes);
+        const QVariantMap row{{"entryId", key}, {"index", 1}, {"name", "missing.png"},
+            {"isImage", true}, {"resourceId", key}, {"sourceKey", key},
+            {"contentVersion", "v1"}, {"versionStrength", "strong"},
+            {"storageClass", "network"}, {"accessProfile", "materializeOnce"},
+            {"mimeType", "image/png"}, {"size", qint64(42)}, {"sizeKnown", true}};
+        const QVariantMap first{{"entryId", "first"}, {"index", 0},
+                                {"name", "first.txt"}, {"isImage", false}};
+        QVERIFY(session->applyExternalCatalog({first, row}, 1));
+        QCOMPARE(session->currentIndex(), 0);
+        QVERIFY(session->viewerSourcesAt(1).isEmpty());
+        session->setViewerOpen(true);
+        session->requestPresentedViewerAt(1, 320, 240);
+        QTRY_COMPARE_WITH_TIMEOUT(session->viewerSourcesAt(1).size(), 1, 3000);
+        const QVariantMap restored = session->viewerSourcesAt(1).constFirst().toMap();
+        QCOMPARE(restored.value("level").toInt(), 0);
+        QVERIFY(!restored.value("source").toUrl().isEmpty());
+        QCOMPARE(session->currentIndex(), 0);
+        QCOMPARE(provider->materializations.load(), 0);
+        runtime->shutdown();
+    }
+
+    void videoViewerPrefetchesSixteenFitImages_data() {
+        QTest::addColumn<int>("entryMode");
+        QTest::newRow("current-video") << 0;
+        QTest::newRow("presented-video-before-panel-cursor") << 1;
+        QTest::newRow("video-after-native-photo") << 2;
+    }
+
+    void videoViewerPrefetchesSixteenFitImages() {
+        QFETCH(int, entryMode);
+        QTemporaryDir directory;
+        const QString path = directory.filePath("fit.png");
+        QImage image(800, 600, QImage::Format_RGB32);
+        image.fill(Qt::blue);
+        QVERIFY(image.save(path));
+        auto provider = QSharedPointer<PriorityTestProvider>::create(path, false);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.enableVideoPlayback = true;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("video-fit-sixteen");
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        QTRY_VERIFY_WITH_TIMEOUT(session->videoPlaybackAvailable(), 5000);
+#else
+        QSKIP("Video playback is disabled in this build");
+#endif
+        auto catalog = priorityCatalog(path, 25);
+        for (int row : {10, 12, 14}) {
+            auto video = catalog[row].toMap();
+            video["isImage"] = false;
+            video["name"] = QStringLiteral("video-%1.mp4").arg(row);
+            video["thumbnailKind"] = QStringLiteral("video");
+            video["mimeType"] = QStringLiteral("video/mp4");
+            catalog[row] = video;
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        const int authorityRow = entryMode ? 0 : 12;
+        QVERIFY(session->applyExternalState(QStringLiteral("priority-%1").arg(authorityRow), authorityRow, {}, 1));
+        session->setViewerOpen(true);
+        if (entryMode == 2) {
+            session->requestViewer(160, 120);
+            session->requestViewer(0, 0);
+            QTRY_COMPARE_WITH_TIMEOUT(session->viewerRequestStateAt(0), QString("ready"), 5000);
+            QTRY_COMPARE_WITH_TIMEOUT(model->viewerNativeFrameCount(), qsizetype(1), 5000);
+        }
+        const auto nativeFramesBeforeVideo = model->viewerNativeFrameCount();
+        if (entryMode) session->requestPresentedViewerAt(12, 160, 120);
+        else session->requestViewer(160, 120);
+        QTRY_COMPARE_WITH_TIMEOUT(model->viewerFitFrameCount(), qsizetype(16), 5000);
+        QCOMPARE(model->viewerNativeFrameCount(), nativeFramesBeforeVideo);
+        QCOMPARE(session->currentIndex(), authorityRow);
+        QVERIFY(session->viewerSourcesAt(12).isEmpty());
+        QVERIFY(!provider->materializedRows().contains(12));
+        for (int row : {11, 13}) {
+            const auto sources = session->viewerSourcesAt(row);
+            QVERIFY(std::any_of(sources.cbegin(), sources.cend(), [](const QVariant &source) {
+                return source.toMap().value("level").toInt() == 1;
+            }));
+        }
+        session->setViewerOpen(false);
+        runtime->shutdown();
+    }
+
     void remoteViewerPrefetchesSixteenFitImages() {
         QTemporaryDir directory;
         const QString path = directory.filePath("fit.png");
@@ -2632,12 +3089,18 @@ private slots:
 
     void viewerPrefetchRefillsFailedCandidates_data() {
         QTest::addColumn<bool>("validMetadata");
-        QTest::newRow("metadata-failure") << false;
-        QTest::newRow("pixel-failure") << true;
+        QTest::addColumn<bool>("videoAnchor");
+        QTest::newRow("metadata-failure") << false << false;
+        QTest::newRow("pixel-failure") << true << false;
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        QTest::newRow("video-metadata-failure") << false << true;
+        QTest::newRow("video-pixel-failure") << true << true;
+#endif
     }
 
     void viewerPrefetchRefillsFailedCandidates() {
         QFETCH(bool, validMetadata);
+        QFETCH(bool, videoAnchor);
         QTemporaryDir directory;
         const QString path = directory.filePath("good.png");
         QImage image(800, 600, QImage::Format_RGB32);
@@ -2664,10 +3127,20 @@ private slots:
         QQmlEngine engine;
         ZoinGallery::RuntimeOptions options;
         options.persistentCache = false;
+        options.enableVideoPlayback = true;
         options.imageSourceProvider = provider;
         auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
         auto *session = runtime->createExternalSession("fit-failure-refill");
-        QVERIFY(session->applyExternalCatalog(priorityCatalog(path, 35), 1));
+        auto catalog = priorityCatalog(path, 35);
+        if (videoAnchor) {
+            QTRY_VERIFY_WITH_TIMEOUT(session->videoPlaybackAvailable(), 5000);
+            auto video = catalog[12].toMap();
+            video["isImage"] = false;
+            video["name"] = QStringLiteral("video.mp4");
+            video["thumbnailKind"] = QStringLiteral("video");
+            catalog[12] = video;
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
         QVERIFY(session->applyExternalState("priority-12", 12, {}, 1));
         session->setViewerOpen(true);
         session->requestViewer(160, 120);
@@ -2967,6 +3440,8 @@ private slots:
             {QStringLiteral("catalogProvisional"), true},
         }));
         QCOMPARE(session->model()->rowCount(), 1);
+        QPersistentModelIndex firstRow(session->model()->index(0, 0));
+        QSignalSpy reset(session->model(), &QAbstractItemModel::modelReset);
         QVERIFY(session->applyExternalCatalog(rows, 1, {
             {QStringLiteral("currentPath"), QStringLiteral("/camera")},
             {QStringLiteral("catalogProvisional"), false},
@@ -2974,7 +3449,37 @@ private slots:
             {QStringLiteral("totalCount"), 6275},
         }));
         QCOMPARE(session->model()->rowCount(), 6275);
+        QCOMPARE(reset.size(), 0);
+        QVERIFY(firstRow.isValid());
+        QCOMPARE(session->entryIdAt(firstRow.row()), QStringLiteral("first"));
         runtime->shutdown();
+    }
+
+    void sparseCatalogAddsDirectoryPreviewSourceWithoutReset() {
+        QQmlEngine engine;
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->names = {"photo.jpg"};
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("sparse-directory-source");
+        const QVariantMap sparse{{"catalogRowsDeferred", true}, {"totalCount", 10}};
+        const auto authoritative = previewFolder(0);
+        auto provisional = authoritative;
+        provisional.remove("directorySource");
+        QVERIFY(session->applyExternalCatalog({provisional}, 1, sparse));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        const QPersistentModelIndex firstRow(model->index(0, 0));
+        QSignalSpy reset(model, &QAbstractItemModel::modelReset);
+
+        QVERIFY(session->applyExternalCatalog({authoritative}, 2, sparse));
+
+        QCOMPARE(reset.size(), 0);
+        QVERIFY(firstRow.isValid());
+        model->requestDirectoryPreviews({0});
+        QTRY_VERIFY(model->directoryPreviewAvailable(0));
     }
 
     void viewerFitPrefetchBypassesCatalogProbeBarrier() {
@@ -3853,6 +4358,36 @@ private slots:
         QCOMPARE(provider->materializations.load(), 1);
         QCOMPARE(provider->lastResourceId, QStringLiteral("resource:7"));
 
+        // A resolved backing path and display timestamp enrich an immutable
+        // opaque revision; they do not invalidate already-known dimensions.
+        QSignalSpy changed(leftModel, &QAbstractItemModel::dataChanged);
+        const QVariantMap enrichment{{"entryId", "remote-image"},
+            {"localPath", backing},
+            {"mtimeNanos", backingInfo.lastModified().toMSecsSinceEpoch() * qint64(1'000'000)}};
+        QVERIFY(leftModel->applyMetadata({enrichment}));
+        QCOMPARE(changed.size(), 1);
+        const auto enrichedRoles = changed[0][2].value<QList<int>>();
+        QVERIFY(enrichedRoles.contains(ZoinGallery::ExternalCatalogModel::LocalPathRole));
+        QVERIFY(enrichedRoles.contains(FileListModel::LastModifiedRole));
+        QVERIFY(enrichedRoles.contains(ZoinGallery::ExternalCatalogModel::VisualSnapshotRole));
+        QVERIFY(!enrichedRoles.contains(FileListModel::IsImageRole));
+        QVERIFY(!enrichedRoles.contains(FileListModel::ImageFullSizeRole));
+        QVERIFY(!enrichedRoles.contains(FileListModel::ImageIdUrlRole));
+        QCOMPARE(leftModel->imageOriginalSizeAt(0), QSize(48, 32));
+        QCOMPARE(left->localPathAt(0), backing);
+        QCOMPARE(leftModel->data(leftModel->index(0, 0),
+            ZoinGallery::ExternalCatalogModel::VersionTokenRole).toString(), opaqueVersion);
+        changed.clear();
+        QVERIFY(leftModel->applyMetadata({enrichment}));
+        QCOMPARE(changed.size(), 0);
+        QVERIFY(leftModel->applyMetadata({QVariantMap{{"entryId", "remote-image"},
+            {"contentVersion", "revision-43"}}}));
+        QCOMPARE(changed.size(), 1);
+        const auto replacementRoles = changed[0][2].value<QList<int>>();
+        QVERIFY(replacementRoles.contains(FileListModel::IsImageRole));
+        QVERIFY(replacementRoles.contains(FileListModel::ImageFullSizeRole));
+        QVERIFY(replacementRoles.contains(FileListModel::ImageIdUrlRole));
+
         runtime->shutdown();
     }
 
@@ -3929,7 +4464,16 @@ private slots:
         QVERIFY(right->shutdownComplete());
     }
 
+    void localViewerPrefetchFollowsSortedProxyOrder_data() {
+        QTest::addColumn<bool>("videoAnchor");
+        QTest::newRow("image") << false;
+#if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
+        QTest::newRow("video") << true;
+#endif
+    }
+
     void localViewerPrefetchFollowsSortedProxyOrder() {
+        QFETCH(bool, videoAnchor);
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
 
@@ -3955,10 +4499,20 @@ private slots:
                 QFileDevice::FileModificationTime));
         }
 
+        if (videoAnchor) {
+            const QString videoPath = directory.filePath("video.mp4");
+            QVERIFY(QFile::copy(QFINDTESTDATA("data/gallery-video-playback.mp4"), videoPath));
+            QFile videoFile(videoPath);
+            QVERIFY(videoFile.open(QIODevice::ReadWrite));
+            QVERIFY(videoFile.setFileTime(QDateTime::fromMSecsSinceEpoch(
+                1'700'000'011'500LL, QTimeZone::UTC), QFileDevice::FileModificationTime));
+        }
+
         QQmlEngine engine;
         ZoinGallery::RuntimeOptions options;
         options.maxDecodeThreads = 4;
         options.persistentCache = false;
+        options.enableVideoPlayback = true;
         ZoinGallery::GalleryRuntime *runtime =
             ZoinGallery::GalleryRuntime::install(&engine, options);
         QVERIFY(runtime);
@@ -3966,7 +4520,8 @@ private slots:
             runtime->createSession(QStringLiteral("sorted-prefetch"));
         QVERIFY(session);
         QVERIFY(session->cd(directory.path()) >= 0);
-        QTRY_COMPARE_WITH_TIMEOUT(session->model()->rowCount(), imageCount,
+        const int catalogCount = imageCount + int(videoAnchor);
+        QTRY_COMPARE_WITH_TIMEOUT(session->model()->rowCount(), catalogCount,
                                   5000);
 
         auto *fileList = qobject_cast<FileListModel *>(
@@ -3981,8 +4536,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(
             gallery->mapToSourceRow(centerViewRow) != centerViewRow, 2000);
         QTRY_VERIFY_WITH_TIMEOUT([&] {
-            for (int viewRow = 0; viewRow < imageCount; ++viewRow) {
-                if (session->imageOriginalSizeAt(viewRow) != QSize(640, 480)) {
+            for (int viewRow = 0; viewRow < catalogCount; ++viewRow) {
+                if (session->isImageAt(viewRow) && session->imageOriginalSizeAt(viewRow) != QSize(640, 480)) {
                     return false;
                 }
             }
@@ -3992,6 +4547,9 @@ private slots:
         const QVariantList orderedRows =
             gallery->viewerPrefetchSourceRows(centerViewRow, 16);
         QCOMPARE(orderedRows.size(), 16);
+        QCOMPARE(session->isVideoAt(centerViewRow), videoAnchor);
+        QCOMPARE(orderedRows.at(videoAnchor ? 0 : 1).toInt(),
+                 gallery->mapToSourceRow(centerViewRow + 1));
         QSet<int> expectedSourceRows;
         for (const QVariant &row : orderedRows) {
             expectedSourceRows.insert(row.toInt());
@@ -4004,7 +4562,7 @@ private slots:
 
         const auto preparedFitSourceRows = [&] {
             QSet<int> result;
-            for (int sourceRow = 0; sourceRow < imageCount; ++sourceRow) {
+            for (int sourceRow = 0; sourceRow < catalogCount; ++sourceRow) {
                 const auto sources = fileList->viewerImageSourcesForIndex(
                     sourceRow, QSize(320, 240));
                 const bool hasPreparedFit = std::any_of(
@@ -4854,6 +5412,56 @@ private slots:
         runtime->shutdown();
     }
 
+    void appearanceMetadataDoesNotInvalidateImageGeometry() {
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession(
+            QStringLiteral("appearance-metadata-roles"));
+        QVERIFY(session);
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        QVariantList catalog;
+        QVariantList updates;
+        for (int row = 0; row < 4; ++row) {
+            const QString id = QString::number(row);
+            catalog.append(QVariantMap{{"entryId", id}, {"index", row},
+                {"name", id + ".txt"}, {"path", "D:/synthetic/" + id + ".txt"},
+                {"isImage", false}, {"size", 10}});
+            QVariantMap update{{"entryId", id}, {"sizeText", "10 B"},
+                {"highlightStyle", QVariantMap{{"icon", "qrc:/custom/text.svg"}}}};
+            if (row >= 2) update.insert("size", 20);
+            if (row == 3) update.insert("mtimeNanos", qint64(42'000'000));
+            updates.append(update);
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        QSignalSpy changed(model, &QAbstractItemModel::dataChanged);
+        QVERIFY(model->applyMetadata(updates));
+        QCOMPARE(changed.size(), 2);
+        QCOMPARE(changed[0][0].value<QModelIndex>().row(), 0);
+        QCOMPARE(changed[0][1].value<QModelIndex>().row(), 1);
+        QCOMPARE(changed[0][2].value<QList<int>>(),
+                 QList<int>{ZoinGallery::ExternalCatalogModel::VisualSnapshotRole});
+        QCOMPARE(changed[1][0].value<QModelIndex>().row(), 2);
+        QCOMPARE(changed[1][1].value<QModelIndex>().row(), 3);
+        const auto replacementRoles = changed[1][2].value<QList<int>>();
+        QVERIFY(replacementRoles.contains(FileListModel::ImageIdUrlRole));
+        QVERIFY(replacementRoles.contains(FileListModel::ImageFullSizeRole));
+        QVERIFY(replacementRoles.contains(FileListModel::IsImageRole));
+        QVERIFY(replacementRoles.contains(FileListModel::FileSizeRole));
+        const auto snapshot = model->data(model->index(0, 0),
+            ZoinGallery::ExternalCatalogModel::VisualSnapshotRole).toMap();
+        QCOMPARE(snapshot.value("displayFields").toMap().value("sizeText").toString(),
+                 QStringLiteral("10 B"));
+        QCOMPARE(snapshot.value("iconPath").toString(), QStringLiteral("qrc:/custom/text.svg"));
+        changed.clear();
+        QVERIFY(model->applyMetadata(updates));
+        QCOMPARE(changed.size(), 0);
+        runtime->shutdown();
+    }
+
     void deferredMetadataRequeuesVisiblePreviewForPublishedVersion() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -5199,6 +5807,37 @@ private slots:
         runtime->shutdown();
     }
 
+    void catalogMetadataUsesDenseRowsForNoncontiguousSourceIndexes() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QVariantList catalog;
+        const QList<int> sourceIndexes{17, 38, 91};
+        for (int row = 0; row < sourceIndexes.size(); ++row) {
+            const QString name = QString("dense-metadata-%1.png").arg(row);
+            const QString path = directory.filePath(name);
+            QImage image(32 + row, 24 + row, QImage::Format_RGB32);
+            image.fill(Qt::red);
+            QVERIFY(image.save(path));
+            auto value = entry(name, sourceIndexes[row], name, true);
+            value["localPath"] = path;
+            value["size"] = QFileInfo(path).size();
+            catalog.append(value);
+        }
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("dense-metadata-indexes");
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        model->requestImageMetadata({0}, true);
+        model->requestImageMetadata({}, false, true);
+        for (int row = 0; row < sourceIndexes.size(); ++row)
+            QTRY_COMPARE_WITH_TIMEOUT(model->imageOriginalSizeAt(row), QSize(32 + row, 24 + row), 3000);
+        runtime->shutdown();
+    }
+
     void coalescesVisibleAndCatalogMetadataIntoOneSubmission() {
         constexpr int imageCount = 128;
         constexpr int visibleCount = 16;
@@ -5242,6 +5881,344 @@ private slots:
         QVERIFY(model->metadataPeakPendingRequestCount() <=
                 model->metadataRequestLimit());
 
+        runtime->shutdown();
+    }
+
+    void thumbnailPublicationKeepsUnchangedIconBindings() {
+        GalleryEntryVisual visual;
+        QVariantMap snapshot{
+            {QStringLiteral("entryId"), QStringLiteral("photo")},
+            {QStringLiteral("isImage"), true},
+            {QStringLiteral("iconKey"), QStringLiteral("file-image")},
+            {QStringLiteral("iconPath"), QStringLiteral("qrc:/icons/image.svg")},
+        };
+        visual.applySnapshot(snapshot);
+        VisualBindingReadCounter counter;
+        QQmlEngine engine;
+        engine.rootContext()->setContextProperty("observedVisual", &visual);
+        engine.rootContext()->setContextProperty("bindingCounter", &counter);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQml
+            QtObject {
+                readonly property string icon: bindingCounter.observeIconKey(observedVisual.iconKey)
+                readonly property string path: bindingCounter.observeIconPath(observedVisual.iconPath)
+                readonly property string imageSource: bindingCounter.observeImageSource(observedVisual.imageIdUrl)
+            }
+        )QML", QUrl());
+        QScopedPointer<QObject> bound(component.create());
+        QVERIFY2(bound, qPrintable(component.errorString()));
+        QCOMPARE(bound->property("icon").toString(), QStringLiteral("file-image"));
+        QCOMPARE(bound->property("path").toString(), QStringLiteral("qrc:/icons/image.svg"));
+        const int iconKeyReads = counter.iconKeyReads;
+        const int iconPathReads = counter.iconPathReads;
+        const int imageSourceReads = counter.imageSourceReads;
+        QSignalSpy mediaChanged(&visual, &GalleryEntryVisual::mediaChanged);
+
+        snapshot.insert(QStringLiteral("imageIdUrl"), QStringLiteral("image://thumbnail/photo"));
+        snapshot.insert(QStringLiteral("imageDimensionsKnown"), true);
+        QVERIFY(visual.applySnapshot(snapshot) & GalleryEntryVisual::MediaChange);
+        QCOMPARE(bound->property("imageSource").toString(), QStringLiteral("image://thumbnail/photo"));
+        QVERIFY(counter.imageSourceReads > imageSourceReads);
+        QCOMPARE(mediaChanged.count(), 1);
+        QCOMPARE(counter.iconKeyReads, iconKeyReads);
+        QCOMPARE(counter.iconPathReads, iconPathReads);
+
+        snapshot.insert(QStringLiteral("iconKey"), QStringLiteral("file-video"));
+        QVERIFY(visual.applySnapshot(snapshot) & GalleryEntryVisual::MediaChange);
+        QCOMPARE(bound->property("icon").toString(), QStringLiteral("file-video"));
+        QVERIFY(counter.iconKeyReads > iconKeyReads);
+        snapshot.insert(QStringLiteral("iconPath"), QStringLiteral("qrc:/icons/video.svg"));
+        visual.applySnapshot(snapshot);
+        QCOMPARE(bound->property("path").toString(), QStringLiteral("qrc:/icons/video.svg"));
+
+        const int stableKeyReads = counter.iconKeyReads;
+        const int stablePathReads = counter.iconPathReads;
+        QCOMPARE(visual.applySnapshot(snapshot), quint8(0));
+        QCOMPARE(counter.iconKeyReads, stableKeyReads);
+        QCOMPARE(counter.iconPathReads, stablePathReads);
+        visual.applySnapshot({});
+        QVERIFY(bound->property("icon").toString().isEmpty());
+        QVERIFY(bound->property("path").toString().isEmpty());
+    }
+
+    void catalogRowVisualUpdatesDoNotRewrap_data() {
+        QTest::addColumn<QString>("field");
+        QTest::addColumn<QVariant>("value");
+        QTest::newRow("selection") << QString("selected") << QVariant(true);
+        QTest::newRow("caption-metadata") << QString("sizeText") << QVariant("updated size");
+        QTest::newRow("hidden") << QString("isHidden") << QVariant(true);
+    }
+
+    void catalogRowVisualUpdatesDoNotRewrap() {
+        QFETCH(QString, field);
+        QFETCH(QVariant, value);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("row-visual-update");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        QVariantMap row{{"entryId", "ordinary"}, {"index", 0},
+                        {"name", "ordinary.bin"}, {"isImage", false}, {"size", 12}};
+        QVERIFY(model->applyCatalog({row}));
+        MasonryLayout layout;
+        QQmlEngine::setContextForObject(&layout, engine.rootContext());
+        layout.setSize(QSizeF(600, 400));
+        layout.setModel(model);
+        layout.componentComplete();
+        const quint64 revision = layout.layoutRevision();
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        QSignalSpy rewraps(&layout, &MasonryLayout::rewrapFinished);
+        row[field] = value;
+        QVERIFY(model->applyCatalogRows({row}));
+        QCOMPARE(changes.size(), 1);
+        const auto roles = changes.first().at(2).value<QList<int>>();
+        QVERIFY2(!roles.isEmpty(), "Visual-only publication incorrectly invalidates every role");
+        QVERIFY(roles.contains(ZoinGallery::ExternalCatalogModel::VisualSnapshotRole));
+        QVERIFY(roles.contains(FileListModel::ImageFileRole));
+        QVERIFY(!roles.contains(FileListModel::IsImageRole));
+        QVERIFY(!roles.contains(FileListModel::FolderRole));
+        QVERIFY(!roles.contains(FileListModel::ImageFullSizeRole));
+        QVERIFY(!roles.contains(ZoinGallery::ExternalCatalogModel::EntryNameRole));
+        QCOMPARE(rewraps.size(), 0);
+        QCOMPARE(layout.layoutRevision(), revision);
+        const auto snapshot = model->data(model->index(0),
+            ZoinGallery::ExternalCatalogModel::VisualSnapshotRole).toMap();
+        if (field == "selected") QCOMPARE(snapshot.value("isSelected"), value);
+        else QCOMPARE(snapshot.value("displayFields").toMap().value(field), value);
+        runtime->shutdown();
+    }
+
+    void catalogRowSemanticUpdatesStillPublishGeometryRoles() {
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession("row-semantic-update");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        QVariantMap row{{"entryId", "ordinary"}, {"index", 0},
+                        {"name", "ordinary.bin"}, {"isImage", false}};
+        QVERIFY(model->applyCatalog({row}));
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        row["isDir"] = true;
+        row["name"] = "new folder";
+        QVERIFY(model->applyCatalogRows({row}));
+        QCOMPARE(changes.size(), 1);
+        const auto roles = changes.first().at(2).value<QList<int>>();
+        QVERIFY(roles.contains(FileListModel::FolderRole));
+        QVERIFY(roles.contains(ZoinGallery::ExternalCatalogModel::EntryNameRole));
+        QVERIFY(model->isDirectoryAt(0));
+        QCOMPARE(model->entryNameAt(0), QString("new folder"));
+        runtime->shutdown();
+    }
+
+    void catalogRowReplacementRetainsOldFacadeThroughNotification() {
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession("row-facade-replacement");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        QVariantMap row{{"entryId", "ordinary"}, {"index", 0},
+                        {"name", "ordinary.bin"}, {"isImage", false}};
+        QVERIFY(model->applyCatalog({row}));
+        QPointer<ImageFile> previous = model->data(model->index(0),
+            FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(previous);
+        bool observedReplacement = false;
+        connect(model, &QAbstractItemModel::dataChanged, model,
+            [&](const QModelIndex &, const QModelIndex &, const QList<int> &roles) {
+                QVERIFY(previous);
+                QVERIFY(roles.contains(FileListModel::ImageFileRole));
+                auto *current = model->data(model->index(0),
+                    FileListModel::ImageFileRole).value<ImageFile *>();
+                QVERIFY(current);
+                QVERIFY(current != previous);
+                observedReplacement = true;
+            });
+        row["selected"] = true;
+        QVERIFY(model->applyCatalogRows({row}));
+        QVERIFY(observedReplacement);
+        QTRY_VERIFY(previous.isNull());
+        runtime->shutdown();
+    }
+
+    void identicalCatalogRowsPreserveFacadeAndDerivedState() {
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession("identical-row-replay");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        const QVariantMap row{{"entryId", "ordinary"}, {"index", 0},
+            {"name", "ordinary.bin"}, {"isImage", false}, {"resourceId", "resource"},
+            {"sourceKey", "source"}, {"contentVersion", "v1"}, {"versionStrength", "strong"}};
+        QVERIFY(model->applyCatalog({row}));
+        QPointer<ImageFile> facade = model->data(model->index(0),
+            FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(facade);
+        ImageInfo derived = facade->info();
+        derived.typedFileFields = {{"decoded-field", "retained"}};
+        facade->setInfo(derived);
+        facade->setFullSize(QSize(64, 32));
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        for (int replay = 0; replay < 8; ++replay) {
+            QVERIFY(model->applyCatalogRows({row}));
+            QCOMPARE(model->data(model->index(0), FileListModel::ImageFileRole)
+                         .value<ImageFile *>(), facade.data());
+            QCOMPARE(changes.size(), 0);
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(facade);
+        QCOMPARE(facade->fullSize(), QSize(64, 32));
+        QCOMPARE(facade->info().typedFileFields, derived.typedFileFields);
+        QVariantMap transportOnly = row;
+        transportOnly["unused-transport-field"] = 7;
+        QVERIFY(model->applyCatalogRows({transportOnly}));
+        QCOMPARE(changes.size(), 0);
+        runtime->shutdown();
+    }
+
+    void changedCatalogRowInputsAreNotSuppressed_data() {
+        QTest::addColumn<QString>("field");
+        QTest::addColumn<QVariant>("value");
+        const QList<QPair<QString, QVariant>> changes{
+            {"name", "renamed.bin"}, {"localPath", "/another/path.bin"},
+            {"isDir", true}, {"isImage", true}, {"selected", true},
+            {"mtimeNs", qint64(123)}, {"size", qint64(99)},
+            {"resourceId", "new-resource"}, {"sourceKey", "new-source"},
+            {"contentVersion", "v2"}, {"versionStrength", "weak"},
+            {"storageClass", "remote"}, {"accessProfile", "new-lease"},
+            {"mimeType", "text/plain"}, {"generation", quint64(2)},
+            {"thumbnailKind", "video"},
+            {"displayFields", QVariantMap{{"extra", "changed"}}},
+            {"highlightStyle", QVariantMap{{"label", "changed"}}},
+            {"directorySource", QVariantMap{{"resourceId", "directory-resource"},
+                {"sourceKey", "directory-source"}, {"version", "v2"}}},
+        };
+        for (const auto &change : changes)
+            QTest::newRow(qPrintable(change.first)) << change.first << change.second;
+    }
+
+    void changedCatalogRowInputsAreNotSuppressed() {
+        QFETCH(QString, field);
+        QFETCH(QVariant, value);
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession("changed-row-input");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVariantMap row{{"entryId", "ordinary"}, {"index", 0},
+            {"name", "ordinary.bin"}, {"isImage", false}, {"size", qint64(42)},
+            {"resourceId", "resource"}, {"sourceKey", "source"},
+            {"contentVersion", "v1"}, {"versionStrength", "strong"}};
+        QVERIFY(model->applyCatalog({row}));
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        row[field] = value;
+        QVERIFY(model->applyCatalogRows({row}));
+        QCOMPARE(changes.size(), 1);
+        runtime->shutdown();
+    }
+
+    void noOpCatalogRowsStillValidateWholeBatch() {
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *session = runtime->createExternalSession("validated-noop-row");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVariantMap first{{"entryId", "first"}, {"index", 0}, {"name", "first.bin"}};
+        QVariantMap second{{"entryId", "second"}, {"index", 1}, {"name", "second.bin"}};
+        QVERIFY(model->applyCatalog({first, second}));
+        QPointer<ImageFile> facade = model->data(model->index(0),
+            FileListModel::ImageFileRole).value<ImageFile *>();
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        QVERIFY(!model->applyCatalogRows({first, first}));
+        QVariantMap invalid = second;
+        invalid["entryId"] = "wrong-identity";
+        QVERIFY(!model->applyCatalogRows({first, invalid}));
+        QCOMPARE(changes.size(), 0);
+        QCOMPARE(model->data(model->index(0), FileListModel::ImageFileRole)
+                     .value<ImageFile *>(), facade.data());
+        second["selected"] = true;
+        QVERIFY(model->applyCatalogRows({first, second}));
+        QCOMPARE(changes.size(), 1);
+        QCOMPARE(changes.first().at(0).value<QModelIndex>().row(), 1);
+        QCOMPARE(changes.first().at(1).value<QModelIndex>().row(), 1);
+        QCOMPARE(model->data(model->index(0), FileListModel::ImageFileRole)
+                     .value<ImageFile *>(), facade.data());
+        runtime->shutdown();
+    }
+
+    void identicalRowReplayCanPublishNewCachedDimensions() {
+        QQmlEngine engine;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine);
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(decoder);
+        decoder->setImageCacheMode(CacheUsageMode::On);
+        auto *session = runtime->createExternalSession("late-row-cache");
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        const QString key = "late-row-cache-" + QUuid::createUuid().toString();
+        const QVariantMap row{{"entryId", key}, {"index", 0}, {"name", "late.png"},
+            {"isImage", true}, {"resourceId", key}, {"sourceKey", key},
+            {"contentVersion", "v1"}, {"versionStrength", "strong"},
+            {"size", qint64(42)}, {"sizeKnown", true}};
+        QVERIFY(model->applyCatalog({row}));
+        QVERIFY(model->imageOriginalSizeAt(0).isEmpty());
+        auto *facade = model->data(model->index(0), FileListModel::ImageFileRole).value<ImageFile *>();
+        QVERIFY(facade);
+        auto info = facade->info();
+        info.imageSize = QSize(96, 72);
+        PersistentDerivedImageCache::storeMetadata(info);
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        QVERIFY(model->applyCatalogRows({row}));
+        QCOMPARE(model->imageOriginalSizeAt(0), QSize(96, 72));
+        QCOMPARE(changes.size(), 1);
+        changes.clear();
+        info.orientation = ExifOrientation::Rotate180;
+        PersistentDerivedImageCache::storeMetadata(info);
+        QVERIFY(model->applyCatalogRows({row}));
+        QCOMPARE(changes.size(), 1);
+        facade = model->data(model->index(0), FileListModel::ImageFileRole).value<ImageFile *>();
+        QCOMPARE(facade->info().orientation, ExifOrientation::Rotate180);
+        changes.clear();
+        info.typedFileFields = {{"cached-field", "new value"}};
+        info.fileFieldsRead = true;
+        PersistentDerivedImageCache::storeMetadata(info);
+        QVERIFY(model->applyCatalogRows({row}));
+        QCOMPARE(changes.size(), 1);
+        const auto snapshot = model->data(model->index(0),
+            ZoinGallery::ExternalCatalogModel::VisualSnapshotRole).toMap();
+        QCOMPARE(snapshot.value("displayFields").toMap().value("cached-field").toString(), QString("new value"));
+        runtime->shutdown();
+    }
+
+    void videoRowReplayKeepsDecodedDimensionsWithoutCache() {
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("replayed-video");
+        auto video = entry("video", 0, "portrait.mp4");
+        video["thumbnailKind"] = "video";
+        video["contentVersion"] = "v1";
+        video["versionStrength"] = "strong";
+        video["sourceKey"] = "replayed-video-source";
+        QVERIFY(session->applyExternalCatalog({video}, 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        auto *facade = model->data(model->index(0), FileListModel::ImageFileRole).value<ImageFile *>();
+        auto *decoder = runtime->findChild<DecodeManager *>();
+        QVERIFY(facade && decoder);
+        decoder->setImageCacheMode(CacheUsageMode::Off);
+        ImageDecodeRequest request{.info = facade->info(), .targetSize = QSize(90, 160),
+            .requestNamespace = session->sessionId()};
+        request.info.imageSize = QSize(1080, 1920);
+        request.thumbnailTransformKey = "video-contact-sheet-2x2-display-v6";
+        QImage sheet(QSize(90, 160), QImage::Format_ARGB32_Premultiplied);
+        sheet.fill(Qt::red);
+        decoder->imageReady(request, sheet, {});
+        QCOMPARE(model->imageOriginalSizeAt(0), QSize(1080, 1920));
+        QSignalSpy changes(model, &QAbstractItemModel::dataChanged);
+        QVERIFY(model->applyCatalogRows({video}));
+        QCOMPARE(model->imageOriginalSizeAt(0), QSize(1080, 1920));
+        QCOMPARE(changes.size(), 0);
+        QCOMPARE(model->data(model->index(0), FileListModel::ImageFileRole).value<ImageFile *>(), facade);
         runtime->shutdown();
     }
 
@@ -6841,6 +7818,77 @@ private slots:
         runtime->shutdown();
     }
 
+    void preparedVectorReentryProgressesWithoutGuiInput() {
+        if (!qEnvironmentVariableIsSet("ZOIN_TEST_NATIVE_RENDERER"))
+            QSKIP("Requires the native upload-gate renderer");
+        QQuickWindow window;
+        window.resize(256, 160);
+        window.setColor(Qt::blue);
+        auto *ancestor = new GallerySceneItem(window.contentItem());
+        ancestor->setSize({256, 160});
+        auto *gate = new GalleryVectorUploadGate(ancestor);
+        gate->setSize({256, 160});
+        gate->setSourceKey("progress-test");
+        gate->setCpuComplete(true);
+        gate->setPresent(true);
+        QList<QQuickItem *> leaves;
+        for (int i = 0; i < 24; ++i) {
+            auto *tile = new UploadProgressTile(gate, QColor(200+i, 0, 0));
+            tile->setObjectName(QStringLiteral("progressTile-%1").arg(i));
+            tile->setPosition({qreal(16+(i%8)*24), qreal(16+(i/8)*24)});
+            leaves.append(tile);
+        }
+        QSGNode *root = nullptr;
+        std::atomic_int resident{0}, frames{0};
+        auto sync = connect(&window, &QQuickWindow::afterSynchronizing, &window, [&] {
+            root = QQuickItemPrivate::get(gate)->itemNodeInstance;
+        }, Qt::DirectConnection);
+        auto rendered = connect(&window, &QQuickWindow::afterRendering, &window, [&] {
+            auto *renderer = static_cast<QSGBatchRenderer::Renderer *>(
+                QQuickWindowPrivate::get(&window)->renderer);
+            int count = 0;
+            for (const auto *batches : {&renderer->m_opaqueBatches, &renderer->m_alphaBatches})
+                for (int i = 0; i < batches->size(); ++i) {
+                    auto *batch = batches->at(i);
+                    if (!batch->first || batch->isRenderNode || batch->needsUpload || !batch->vbo.buf) continue;
+                    for (QSGNode *node = batch->first->node; node; node = node->parent())
+                        if (node == root) { ++count; break; }
+                }
+            resident.store(count); ++frames;
+        }, Qt::DirectConnection);
+        const auto cleanup = qScopeGuard([&] { disconnect(sync); disconnect(rendered); });
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QTRY_VERIFY_WITH_TIMEOUT(gate->nativeKnown(), 5000);
+        QVERIFY(gate->nativeAvailable());
+        QTRY_VERIFY_WITH_TIMEOUT(gate->nativeReady(), 5000);
+        QCOMPARE(resident.load(), 24);
+        const QImage complete = window.grabWindow();
+        ancestor->setSceneVisible(false);
+        window.grabWindow();
+        QCOMPARE(resident.load(), 0);
+        frames = 0;
+        ancestor->setSceneVisible(true);
+        // No grabWindow(), update(), key, or mouse request drives these frames.
+        QTRY_COMPARE_WITH_TIMEOUT(resident.load(), 24, 5000);
+        QVERIFY(frames.load() >= 5);
+        QCOMPARE(window.grabWindow(), complete);
+        const int settledFrames = frames.load();
+        QTest::qWait(100);
+        QVERIFY2(frames.load() <= settledFrames + 2, "Completed re-entry keeps requesting render frames");
+        gate->setSourceKey("progress-test-replacement");
+        QTRY_VERIFY_WITH_TIMEOUT(gate->nativeReady(), 5000);
+        for (auto *leaf : leaves) {
+            const auto origin = leaf->mapToItem(window.contentItem(), QPointF());
+            const qreal dpr = window.devicePixelRatio();
+            QVERIFY(qAbs(origin.x()*dpr-qRound(origin.x()*dpr)) < .001);
+            QVERIFY(qAbs(origin.y()*dpr-qRound(origin.y()*dpr)) < .001);
+            QCOMPARE(leaf->mapToItem(window.contentItem(), {1,0})-origin, QPointF(1,0));
+            QCOMPARE(leaf->mapToItem(window.contentItem(), {0,1})-origin, QPointF(0,1));
+        }
+        QVERIFY(complete.save("prepared-vector-auto-progress-175.png"));
+    }
+
     void vectorSourceAcquisition_data() {
         QTest::addColumn<bool>("remote");
         QTest::addColumn<bool>("compressed");
@@ -6848,6 +7896,51 @@ private slots:
         QTest::newRow("virtual") << true << false;
         QTest::newRow("local-svgz") << false << true;
         QTest::newRow("virtual-svgz") << true << true;
+    }
+
+    void vectorClassificationSurvivesExternalRasterHint_data() {
+        QTest::addColumn<QString>("name");
+        QTest::addColumn<QString>("mime");
+        QTest::addColumn<bool>("metadataUpdate");
+        for (bool metadata : {false, true}) {
+            const QByteArray prefix = metadata ? "metadata-" : "reset-";
+            QTest::newRow((prefix + "svg").constData())
+                << QString("PlayerControl+icons.svg") << QString() << metadata;
+            QTest::newRow((prefix + "svgz").constData())
+                << QString("source.svgz") << QString() << metadata;
+            QTest::newRow((prefix + "mime").constData())
+                << QString("source.dat") << QString("image/svg+xml") << metadata;
+        }
+    }
+
+    void vectorClassificationSurvivesExternalRasterHint() {
+        QFETCH(QString, name);
+        QFETCH(QString, mime);
+        QFETCH(bool, metadataUpdate);
+        QQmlEngine engine;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        const auto shutdown = qScopeGuard([&] { runtime->shutdown(); });
+        auto *session = runtime->createExternalSession("vector-classification");
+        QVariantMap row = entry("vector", 0, name, metadataUpdate);
+        row["localPath"] = QDir::temp().filePath(name);
+        row["mimeType"] = mime;
+        const QVariantMap catalogOptions{{"metadataDeferred", metadataUpdate},
+            {"metadataRevision", qulonglong(7)}};
+        QVERIFY(session->applyExternalCatalog({row}, 1, catalogOptions));
+        QVERIFY(session->isVectorAt(0));
+        if (metadataUpdate) {
+            QVERIFY(session->isImageAt(0));
+            QVERIFY(session->applyExternalMetadata(
+                {QVariantMap{{"entryId", "vector"}, {"index", 0},
+                             {"isImage", false}}}, 1, 7));
+        }
+        // Raster-decoder hints cannot suppress vector source acquisition.
+        QVERIFY(session->isImageAt(0));
+        const auto snapshot = session->model()->data(session->model()->index(0, 0),
+            session->model()->roleNames().key("visualSnapshot")).toMap();
+        QVERIFY(snapshot.value("isImage").toBool());
     }
 
     void vectorSourceAcquisition() {
@@ -7011,6 +8104,68 @@ private slots:
         runtime->shutdown();
     }
 
+    void vectorPreparedDirectoryRetirementDoesNotRemoveFilesOnCaller() {
+        QThreadPool executor;
+        executor.setMaxThreadCount(1);
+        QSemaphore entered;
+        QSemaphore resume;
+        auto finish = qScopeGuard([&] { resume.release(); executor.waitForDone(); });
+        executor.start([&] { entered.release(); resume.acquire(); });
+        QVERIFY(entered.tryAcquire(1, 3000));
+        auto directory = ZoinGallery::Internal::createVectorSourceDirectory(&executor);
+        QVERIFY(directory->isValid());
+        const QString path = directory->path();
+        const QString asset = directory->filePath("Prepared.qml");
+        QFile file(asset);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("Item {}"), qint64(7));
+        file.close();
+        auto pin = directory;
+        directory.clear();
+        QVERIFY(QFile::exists(asset));
+        pin.clear();
+        const bool retainedUntilWorkerRuns = QFile::exists(asset);
+        resume.release();
+        executor.waitForDone();
+        finish.dismiss();
+        QVERIFY2(retainedUntilWorkerRuns,
+                 "Last-reference release must queue file removal, not perform GUI-thread I/O");
+        QVERIFY(!QFile::exists(path));
+    }
+
+    void vectorPreparedDirectoryCleanupDrainsAtExecutorShutdown() {
+        QString path;
+        {
+            QThreadPool executor;
+            executor.setMaxThreadCount(1);
+            auto directory = ZoinGallery::Internal::createVectorSourceDirectory(&executor);
+            QVERIFY(directory->isValid());
+            path = directory->path();
+            directory.clear();
+        }
+        QVERIFY(!QFile::exists(path));
+    }
+
+    void vectorSourceRetirementPreservesIndependentFilePins() {
+        QTemporaryDir directory;
+        QFile svg(directory.filePath("retirement.svg"));
+        QVERIFY(svg.open(QIODevice::WriteOnly));
+        svg.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><rect width=\"80\" height=\"40\"/></svg>");
+        svg.close();
+        ImageInfo info;
+        info.path = svg.fileName();
+        auto source = acquireVectorSource(info, {});
+        QVERIFY(source);
+        const QString prepared = source->componentUrl.toLocalFile();
+        auto files = source->preparedFiles;
+        QWeakPointer<VectorSource> weak = source;
+        source.clear();
+        QVERIFY(weak.isNull());
+        QVERIFY(QFile::exists(prepared));
+        files.clear();
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(prepared), 5000);
+    }
+
     void vectorSurfacePinsRevisionAndIgnoresStaleFailures() {
         QTemporaryDir directory;
         const QString path = directory.filePath("pin.svg");
@@ -7022,6 +8177,9 @@ private slots:
         info.path = path;
         auto source = acquireVectorSource(info, {});
         QVERIFY(source);
+        const QString preparedPath = source->componentUrl.toLocalFile();
+        QVERIFY(QFile::exists(preparedPath));
+        QCOMPARE(acquireVectorSource(info, {}), source);
         QWeakPointer<VectorSource> weak = source.toWeakRef();
         VectorSourcePin pin;
         pin.setSource(source->url);
@@ -7029,6 +8187,7 @@ private slots:
         QVERIFY(!weak.isNull());
         pin.setSource({});
         QVERIFY(weak.isNull());
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(preparedPath), 5000);
 
         QQmlEngine engine;
         ZoinGallery::RuntimeOptions options;
@@ -7077,8 +8236,12 @@ private slots:
             QVERIFY(file.open(QIODevice::WriteOnly));
             QString geometry = color == "blue" ? "M0 0H80V80H0Z" : "M0 0H80V40H0Z";
             if (color == "blue") {
+                // Exercise asynchronous preparation with many curves, without
+                // 1000 coincident contours that also stall stock VectorImage's
+                // intersection solver and outlive the test at shutdown.
                 for (int i = 0; i < 1000; ++i)
-                    geometry += QString(" M%1 1C2 0 3 2 4 1C3 3 2 3 1 1Z").arg(1 + (i % 100) / 100.0);
+                    geometry += QString(" M%1 %2c0.25 -0.5 0.75 0.5 1 0c-0.25 0.75 -0.75 0.75 -1 0Z")
+                        .arg(1 + (i % 32) * 2).arg(1 + (i / 32) * 2);
             }
             file.write(QString("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"%3\"><path d=\"%1\" fill=\"%2\"/></svg>").arg(geometry, color).arg(color == "blue" ? 80 : 40).toUtf8());
         }
@@ -7141,9 +8304,27 @@ private slots:
                 Q_ARG(QVariant, QVariant(true)), Q_ARG(QVariant, QVariant(true))));
         }
         QTRY_COMPARE(colorAtCenter(), QColor(Qt::red));
+        if (qEnvironmentVariableIsSet("ZOIN_EXPECT_UPLOAD_GATE")) {
+            const bool expected = qEnvironmentVariableIntValue("ZOIN_EXPECT_UPLOAD_GATE") != 0;
+            const auto gates = viewport->findChildren<GalleryVectorUploadGate *>();
+            QVERIFY(!gates.isEmpty());
+            bool observed = false;
+            for (auto *gate : gates) {
+                if (gate->sourceKey().isEmpty() || !gate->isVisible()) continue;
+                QVERIFY(gate->nativeKnown());
+                QCOMPARE(gate->nativeAvailable(), expected);
+                if (expected) QVERIFY(gate->nativeReady());
+                observed = true;
+            }
+            QVERIFY(observed);
+        }
         const QUrl blue = QUrl::fromLocalFile(directory.filePath("blue.svg"));
         const QUrl red = QUrl::fromLocalFile(directory.filePath("red.svg"));
         for (int swap = 0; swap < 4; ++swap) {
+            QElapsedTimer swapClock;
+            swapClock.start();
+            qint64 firstCompleteFrameMs = -1;
+            const auto targetColor = QColor(swap % 2 == 0 ? Qt::blue : Qt::red);
             const QSizeF oldSize = viewport->property("originalSize").toSizeF();
             if (catalog) {
                 QVERIFY(QMetaObject::invokeMethod(rootItem, "setPresentedIndex",
@@ -7160,11 +8341,16 @@ private slots:
                 QCOMPARE(viewport->property("originalSize").toSizeF(), oldSize);
             for (int frame = 0; frame < 12; ++frame) {
                 const QColor color = colorAtCenter();
+                if (color == targetColor && firstCompleteFrameMs < 0)
+                    firstCompleteFrameMs = swapClock.elapsed();
                 QVERIFY2(color == QColor(Qt::red) || color == QColor(Qt::blue),
                          qPrintable(QString("Blank SVG swap frame %1: %2").arg(frame).arg(color.name())));
                 QTest::qWait(1);
             }
-            QTRY_COMPARE(colorAtCenter(), QColor(swap % 2 == 0 ? Qt::blue : Qt::red));
+            QTRY_COMPARE(colorAtCenter(), targetColor);
+            if (firstCompleteFrameMs < 0) firstCompleteFrameMs = swapClock.elapsed();
+            qInfo() << "SVG swap request to first target frame" << firstCompleteFrameMs << "ms"
+                    << "catalog" << catalog << "swap" << swap;
         }
         if (catalog) {
             QVERIFY(QMetaObject::invokeMethod(rootItem, "setPresentedIndex",
@@ -7190,6 +8376,1133 @@ private slots:
         }
         QVERIFY(window.grabWindow().save(catalog ? "artifacts/vector-catalog-swap-175.png" : "artifacts/vector-swap-175.png"));
         runtime->shutdown();
+    }
+
+    void entryVisualFactoriesAreSharedWithoutCapturingRows() {
+#ifndef Q_MOC_RUN
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::GalleryRuntime::install(&engine);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 336; height: 128
+                property alias first: first
+                property alias second: second
+                property alias panel: panel
+                property alias otherPanel: otherPanel
+                GalleryPanel { id: panel; visible: false }
+                GalleryPanel { id: otherPanel; visible: false }
+                GalleryEntryDelegateBase {
+                    id: first; panelRoot: panel; viewIndex: 0; sourceIndex: 0
+                    width: 160; height: 120
+                }
+                GalleryEntryDelegateBase {
+                    id: second; panelRoot: panel; viewIndex: 1; sourceIndex: 1
+                    x: 168; width: 160; height: 120
+                }
+            }
+        )QML", QUrl("inline:SharedEntryVisualFactories.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        auto *panel = root->property("panel").value<QObject *>();
+        auto *otherPanel = root->property("otherPanel").value<QObject *>();
+        auto *first = qobject_cast<GalleryDelegateItem *>(root->property("first").value<QObject *>());
+        auto *second = qobject_cast<GalleryDelegateItem *>(root->property("second").value<QObject *>());
+        QVERIFY(panel && otherPanel && first && second);
+        auto *factories = panel->property("entryVisualFactories").value<QObject *>();
+        QVERIFY2(factories, "Every row currently owns its own factories instead of sharing panel factories");
+        QVERIFY(factories != otherPanel->property("entryVisualFactories").value<QObject *>());
+        QVariantMap row{{"valid", true}, {"entryId", "first"}, {"text", "first.txt"}};
+        first->setVisualRow(row);
+        row["entryId"] = "second";
+        row["text"] = "second.txt";
+        second->setVisualRow(row);
+        QQuickWindow window;
+        window.resize(336, 128);
+        root->setParentItem(window.contentItem());
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QQuickItem *firstHost = nullptr;
+        QQuickItem *secondHost = nullptr;
+        QTRY_VERIFY((firstHost = first->findChild<QQuickItem *>("galleryEntryModeHost-0")));
+        QTRY_VERIFY((secondHost = second->findChild<QQuickItem *>("galleryEntryModeHost-1")));
+        QObject *secondVisual = nullptr;
+        QTRY_VERIFY((secondVisual = secondHost->property("item").value<QObject *>()));
+        QPointer<QObject> retainedSecondVisual(secondVisual);
+        const QStringList modes{"masonry", "columns", "details", "grid", "icons"};
+        for (int mode = 0; mode < modes.size(); ++mode) {
+            first->setPresentationMode(mode);
+            QObject *visual = nullptr;
+            QTRY_VERIFY((visual = firstHost->property("item").value<QObject *>()));
+            QCOMPARE(firstHost->property("sourceComponent").value<QObject *>(),
+                     factories->property(qPrintable(modes[mode])).value<QObject *>());
+            QTRY_COMPARE(visual->property("entry").value<QObject *>(), first);
+            QCOMPARE(secondHost->property("item").value<QObject *>(), retainedSecondVisual.data());
+            QCOMPARE(secondVisual->property("entry").value<QObject *>(), second);
+        }
+        QCOMPARE(first->findChildren<QQmlComponent *>(QString(), Qt::FindDirectChildrenOnly).size(), 0);
+        auto *folderHost = first->findChild<QQuickItem *>("galleryEntryFolderHost-0");
+        QVERIFY(folderHost);
+        QCOMPARE(folderHost->property("sourceComponent").value<QObject *>(),
+                 factories->property("folder").value<QObject *>());
+        row["entryId"] = "replacement";
+        row["text"] = "replacement.txt";
+        first->setVisualRow(row);
+        QCOMPARE(QQmlProperty::read(firstHost->property("item").value<QObject *>(), "entry.displayName").toString(),
+                 QString("replacement.txt"));
+        QCOMPARE(QQmlProperty::read(secondVisual, "entry.displayName").toString(), QString("second.txt"));
+        QPointer<QObject> retainedFactory(factories);
+        delete first;
+        QVERIFY(retainedFactory);
+        QCOMPARE(secondVisual->property("entry").value<QObject *>(), second);
+        root->setParentItem(nullptr);
+        object.reset();
+        QVERIFY(retainedFactory.isNull());
+#endif
+    }
+
+    void thumbnailReplacementStagesWithoutBlankingReadyItem() {
+#ifndef Q_MOC_RUN
+        QTest::failOnWarning(QRegularExpression(QStringLiteral(".*TypeError.*")));
+        QQmlIncubationController incubation;
+        QQmlEngine engine;
+        engine.setIncubationController(&incubation);
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        QVERIFY(ZoinGallery::GalleryRuntime::install(&engine, options));
+        QQmlComponent hostComponent(&engine);
+        hostComponent.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            GalleryPreviewVisualHost {
+                preview: null; x: 8; y: 8; width: 80; height: 40
+                asynchronous: false
+            }
+        )QML", QUrl("inline:StagedThumbnailHost.qml"));
+        QTRY_VERIFY(hostComponent.status() != QQmlComponent::Loading);
+        QVERIFY2(hostComponent.isReady(), qPrintable(hostComponent.errorString()));
+        QScopedPointer<QObject> object(hostComponent.create());
+        auto *host = qobject_cast<QQuickItem *>(object.data());
+        QVERIFY2(host, qPrintable(hostComponent.errorString()));
+        QQmlComponent first(&engine), second(&engine), third(&engine);
+        first.setData("import QtQuick; Rectangle { objectName: 'first'; color: 'red'; property var owner: parent.preview }", QUrl("inline:StagedFirst.qml"));
+        second.setData("import QtQuick; Rectangle { objectName: 'second'; color: 'lime'; Repeater { model: 4096; Item {} } }", QUrl("inline:StagedSecond.qml"));
+        third.setData("import QtQuick; Rectangle { objectName: 'third'; color: 'blue' }", QUrl("inline:StagedThird.qml"));
+        QTRY_VERIFY(first.isReady() && second.isReady() && third.isReady());
+        QVERIFY(host->setProperty("sourceComponent", QVariant::fromValue(&first)));
+        auto loadedItem = [&]() { return qvariant_cast<QQuickItem *>(host->property("item")); };
+        QPointer<QQuickItem> original = loadedItem();
+        QVERIFY(original);
+        QCOMPARE(original->objectName(), QStringLiteral("first"));
+        QQuickWindow window;
+        window.resize(112, 72);
+        host->setParentItem(window.contentItem());
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QSignalSpy swapped(&window, &QQuickWindow::frameSwapped);
+        auto settle = [&]() {
+            for (int frame=0; frame<3; ++frame) {
+                const int before = swapped.count(); window.update();
+                QTRY_VERIFY(swapped.count() > before);
+            }
+        };
+        settle();
+        QVERIFY(host->setProperty("asynchronous", true));
+        QVERIFY(host->setProperty("sourceComponent", QVariant::fromValue(&second)));
+        QCOMPARE(loadedItem(), original.data());
+        QCOMPARE(host->property("status").toInt(), 2);
+        QVERIFY(incubation.incubatingObjectCount() > 0);
+        std::atomic<bool> continueIncubation = true;
+        const auto attached = connect(host, &QQuickItem::childrenChanged, &engine, [&] {
+            if (host->childItems().size() > 1) continueIncubation = false;
+        });
+        incubation.incubateWhile(&continueIncubation, 100);
+        disconnect(attached);
+        QVERIFY(!continueIncubation);
+        QVERIFY(incubation.incubatingObjectCount() > 0);
+        QCOMPARE(loadedItem(), original.data());
+        host->setWidth(88);
+        QCOMPARE(original->width(), 88.0);
+        for (auto *child : host->childItems()) QCOMPARE(child->width(), 88.0);
+        host->setWidth(80);
+        settle();
+        const qreal dpr = window.devicePixelRatio();
+        if (qEnvironmentVariableIsSet("ZOIN_EXPECT_TEST_DPR"))
+            QCOMPARE(dpr, qEnvironmentVariable("ZOIN_EXPECT_TEST_DPR").toDouble());
+        QImage before = window.grabWindow();
+        QVERIFY(!before.isNull());
+        QCOMPARE(before.pixelColor(qRound(48*dpr), qRound(28*dpr)), QColor(Qt::red));
+        before.save(QStringLiteral("D:/Code/f4-zoin/artifacts/staged-thumbnail-before-%1.png").arg(qEnvironmentVariable("QSG_RHI_BACKEND")));
+        // Cancel a queued replacement before any incubation work is admitted.
+        QVERIFY(host->setProperty("sourceComponent", QVariant::fromValue(&third)));
+        QCOMPARE(loadedItem(), original.data());
+        for (int i=0; i<100 && incubation.incubatingObjectCount(); ++i) incubation.incubateFor(1);
+        QTRY_VERIFY(loadedItem() && loadedItem() != original);
+        QCOMPARE(loadedItem()->objectName(), QStringLiteral("third"));
+        settle();
+        auto *leaf = loadedItem();
+        const QPointF origin = leaf->mapToItem(window.contentItem(), QPointF());
+        QCOMPARE(origin.x()*dpr, std::round(origin.x()*dpr));
+        QCOMPARE(origin.y()*dpr, std::round(origin.y()*dpr));
+        QCOMPARE(leaf->mapToItem(window.contentItem(), QPointF(1,0))-origin, QPointF(1,0));
+        QCOMPARE(leaf->mapToItem(window.contentItem(), QPointF(0,1))-origin, QPointF(0,1));
+        QImage after = window.grabWindow();
+        QVERIFY(!after.isNull());
+        QCOMPARE(after.pixelColor(qRound(48*dpr), qRound(28*dpr)), QColor(Qt::blue));
+        after.save(QStringLiteral("D:/Code/f4-zoin/artifacts/staged-thumbnail-after-%1.png").arg(qEnvironmentVariable("QSG_RHI_BACKEND")));
+        QVERIFY(host->setProperty("sourceComponent", QVariant::fromValue(&second)));
+        QVERIFY(incubation.incubatingObjectCount() > 0);
+        QVERIFY(host->setProperty("active", false));
+        QVERIFY(!loadedItem());
+        QCOMPARE(incubation.incubatingObjectCount(), 0);
+        QVERIFY(host->setProperty("active", true));
+        QVERIFY(incubation.incubatingObjectCount() > 0);
+        object.reset();
+        QCOMPARE(incubation.incubatingObjectCount(), 0);
+        // A consumer can close its row immediately on successful publication.
+        QScopedPointer<QObject> closing(hostComponent.create());
+        auto *closingHost = qobject_cast<GalleryComponentHost *>(closing.data());
+        QVERIFY(closingHost);
+        connect(closingHost, &GalleryComponentHost::loaded, &engine, [&] { closing.reset(); });
+        closingHost->setSourceComponent(&first);
+        QVERIFY(!closing);
+        QCOMPARE(incubation.incubatingObjectCount(), 0);
+        QQmlComponent unsupported(&engine);
+        unsupported.setData("import QtQml; QtObject { objectName: 'unsupported-renderer' }", QUrl("inline:UnsupportedRenderer.qml"));
+        QTRY_VERIFY(unsupported.isReady());
+        QScopedPointer<QObject> rejecting(hostComponent.create());
+        auto *rejectingHost = qobject_cast<GalleryComponentHost *>(rejecting.data());
+        QVERIFY(rejectingHost);
+        rejectingHost->setSourceComponent(&unsupported);
+        QCOMPARE(rejectingHost->status(), 3);
+        QVERIFY(!rejectingHost->item());
+        QVERIFY(!rejectingHost->findChild<QObject *>(QStringLiteral("unsupported-renderer")));
+#endif
+    }
+
+    void thumbnailFactoriesAreSharedWithoutCapturingPreviews() {
+#ifndef Q_MOC_RUN
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QImage pixels(80, 40, QImage::Format_RGB32);
+        pixels.fill(Qt::red);
+        const QString firstPath = directory.filePath("first.png");
+        const QString replacementPath = directory.filePath("replacement.png");
+        QVERIFY(pixels.save(firstPath));
+        pixels.fill(Qt::blue);
+        QVERIFY(pixels.save(replacementPath));
+        const QString vectorPath = directory.filePath("vector.svg");
+        QFile vectorFile(vectorPath);
+        QVERIFY(vectorFile.open(QIODevice::WriteOnly));
+        vectorFile.write("<svg xmlns='http://www.w3.org/2000/svg' width='80' height='40'><path fill='red' d='M0 0H80V40H0Z'/></svg>");
+        vectorFile.close();
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession("shared-thumbnail-factories");
+        QVERIFY(session);
+        engine.rootContext()->setContextProperty("factoryTestSession", session);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 336; height: 128
+                property alias first: first
+                property alias second: second
+                property alias panel: panel
+                GalleryPanel { id: panel; visible: false; session: factoryTestSession }
+                GalleryEntryDelegateBase {
+                    id: first; panelRoot: panel; viewIndex: 0; sourceIndex: 0
+                    width: 160; height: 120; masonryGeometryReady: true
+                }
+                GalleryEntryDelegateBase {
+                    id: second; panelRoot: panel; viewIndex: 1; sourceIndex: 1
+                    x: 168; width: 160; height: 120; masonryGeometryReady: true
+                }
+            }
+        )QML", QUrl("inline:SharedThumbnailFactories.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        QVERIFY(root);
+        auto *first = qobject_cast<GalleryDelegateItem *>(root->property("first").value<QObject *>());
+        auto *second = qobject_cast<GalleryDelegateItem *>(root->property("second").value<QObject *>());
+        QVERIFY(root && first && second);
+        const QUrl imageUrl = QUrl::fromLocalFile(firstPath);
+        QVariantMap row{{"valid", true}, {"entryId", "first"}, {"text", "first.png"},
+            {"isImage", true}, {"imageDimensionsKnown", true}, {"imageIdUrl", imageUrl.toString()}};
+        first->setVisualRow(row);
+        row["entryId"] = "second";
+        row["text"] = "second.png";
+        second->setVisualRow(row);
+        QQuickWindow window;
+        window.resize(336, 128);
+        root->setParentItem(window.contentItem());
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const qreal dpr = window.devicePixelRatio();
+        if (qEnvironmentVariableIsSet("ZOIN_EXPECT_TEST_DPR"))
+            QCOMPARE(dpr, qEnvironmentVariable("ZOIN_EXPECT_TEST_DPR").toDouble());
+        root->property("panel").value<QObject *>()->setProperty("devicePixelRatio", dpr);
+        QSignalSpy renderedFrames(&window, &QQuickWindow::frameSwapped);
+        const auto contentHost = [](GalleryDelegateItem *entry) -> QQuickItem * {
+            for (auto *item : entry->findChildren<QQuickItem *>())
+                if (item->property("sourceColorIconNeeded").isValid()
+                    && item->property("markerNeeded").isValid()) return item;
+            return nullptr;
+        };
+        QQuickItem *firstHost = nullptr, *secondHost = nullptr;
+        QTRY_VERIFY((firstHost = contentHost(first)));
+        QTRY_VERIFY((secondHost = contentHost(second)));
+        auto *panel = root->property("panel").value<QObject *>();
+        auto *factories = panel->property("entryVisualFactories").value<QObject *>();
+        QVERIFY(factories);
+        const auto verifyLeaf = [&](QQuickItem *leaf) {
+            QVERIFY(leaf && leaf->width() > 0 && leaf->height() > 0);
+            const QPointF origin = leaf->mapToItem(window.contentItem(), QPointF());
+            for (qreal coordinate : {origin.x(), origin.y()})
+                QVERIFY2(qAbs(coordinate * dpr - qRound(coordinate * dpr)) < .001,
+                    qPrintable(QString("%1 physical coordinate %2").arg(leaf->objectName())
+                        .arg(coordinate * dpr, 0, 'f', 6)));
+            QCOMPARE(leaf->mapToItem(window.contentItem(), {1, 0}) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(window.contentItem(), {0, 1}) - origin, QPointF(0, 1));
+        };
+        for (int mode = 0; mode < 5; ++mode) {
+            first->setPresentationMode(mode);
+            second->setPresentationMode(mode);
+            QObject *a = nullptr, *b = nullptr;
+            QTRY_VERIFY((a = firstHost->property("item").value<QObject *>())
+                && a->property("imageSource").toUrl() == imageUrl);
+            QTRY_VERIFY((b = secondHost->property("item").value<QObject *>())
+                && b->property("imageSource").toUrl() == imageUrl);
+            QVERIFY(a != b);
+            if (mode == 0)
+                QCOMPARE(firstHost->property("sourceComponent").value<QObject *>(),
+                         secondHost->property("sourceComponent").value<QObject *>());
+            auto *expected = factories->property(mode == 0 || mode == 3
+                ? "shaderThumbnail" : "compactThumbnail").value<QObject *>();
+            QVERIFY(expected);
+            QTRY_COMPARE(firstHost->property("sourceComponent").value<QObject *>(), expected);
+            QTRY_COMPARE(secondHost->property("sourceComponent").value<QObject *>(), expected);
+            QTRY_VERIFY((a = firstHost->property("item").value<QObject *>())
+                && a->property("imageSource").toUrl() == imageUrl);
+            QTRY_VERIFY((b = secondHost->property("item").value<QObject *>())
+                && b->property("imageSource").toUrl() == imageUrl);
+            QCOMPARE(a->property("entry").value<QObject *>(), first);
+            QCOMPARE(b->property("entry").value<QObject *>(), second);
+            QTRY_COMPARE(a->property("sourceStatus").toInt(), 1);
+            QTRY_COMPARE(b->property("sourceStatus").toInt(), 1);
+            for (int frame = 0; frame < 3; ++frame) {
+                const int before = renderedFrames.size();
+                window.update();
+                QTRY_VERIFY(renderedFrames.size() > before);
+            }
+            for (auto *entry : {first, second}) {
+                auto *leaf = entry->findChild<QQuickItem *>(
+                    QString(mode == 0 || mode == 3 ? "galleryThumbnailShader-%1"
+                                                   : "galleryThumbnailImage-%1").arg(entry->viewIndex()));
+                QVERIFY(leaf);
+                verifyLeaf(leaf);
+            }
+            const QImage capture = window.grabWindow();
+            QVERIFY(!capture.isNull());
+            QVERIFY(capture.save(QString("artifacts/shared-thumbnail-mode-%1-%2.png")
+                .arg(mode).arg(qEnvironmentVariable("QSG_RHI_BACKEND", "default"))));
+        }
+        row["entryId"] = "first-replacement";
+        row["text"] = "replacement.png";
+        row["imageIdUrl"] = QUrl::fromLocalFile(replacementPath).toString();
+        first->setVisualRow(row);
+        auto *secondVisual = secondHost->property("item").value<QObject *>();
+        QTRY_COMPARE(firstHost->property("item").value<QObject *>()->property("imageSource").toUrl(),
+                     QUrl::fromLocalFile(replacementPath));
+        QCOMPARE(secondHost->property("item").value<QObject *>(), secondVisual);
+        QCOMPARE(secondVisual->property("imageSource").toUrl(), imageUrl);
+        row["isVector"] = true;
+        row["vectorSource"] = QUrl::fromLocalFile(vectorPath).toString();
+        first->setVisualRow(row);
+        row["entryId"] = "second";
+        row["text"] = "second.svg";
+        second->setVisualRow(row);
+        auto *vectorFactory = factories->property("vectorThumbnail").value<QObject *>();
+        QVERIFY(vectorFactory);
+        QTRY_COMPARE(firstHost->property("sourceComponent").value<QObject *>(), vectorFactory);
+        QTRY_COMPARE(secondHost->property("sourceComponent").value<QObject *>(), vectorFactory);
+        auto *a = firstHost->property("item").value<QObject *>();
+        auto *b = secondHost->property("item").value<QObject *>();
+        QVERIFY(a && b && a != b);
+        QCOMPARE(a->property("preview").value<QObject *>(), firstHost->parentItem());
+        QCOMPARE(b->property("preview").value<QObject *>(), secondHost->parentItem());
+        QPointer<QObject> retainedFactory(vectorFactory);
+        delete first;
+        QVERIFY(retainedFactory);
+        QCOMPARE(QQmlProperty::read(b, "preview.entry.displayName").toString(), QString("second.svg"));
+        root->setParentItem(nullptr);
+        object.reset();
+        QVERIFY(retainedFactory.isNull());
+        runtime->shutdown();
+#endif
+    }
+
+    void sourceColorFactoryUsesNativeStagingWithoutMovingItsLeaf() {
+#ifndef Q_MOC_RUN
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QImage pixels(80, 40, QImage::Format_RGB32);
+        pixels.fill(Qt::red);
+        const QString iconPath = directory.filePath("source-color.png");
+        QVERIFY(pixels.save(iconPath));
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QVERIFY(runtime);
+        auto *session = runtime->createExternalSession("native-source-color-staging");
+        QVERIFY(session);
+        engine.rootContext()->setContextProperty("stagingTestSession", session);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 176; height: 128
+                property alias entry: entry
+                property alias panel: panel
+                GalleryPanel { id: panel; visible: false; session: stagingTestSession }
+                GalleryEntryDelegateBase {
+                    id: entry; panelRoot: panel; viewIndex: 0; sourceIndex: 0
+                    width: 160; height: 120; masonryGeometryReady: true
+                }
+            }
+        )QML", QUrl("qrc:/staging-fixture/SourceColorFactory.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        QVERIFY(root);
+        auto *entry = qobject_cast<GalleryDelegateItem *>(root->property("entry").value<QObject *>());
+        QVERIFY(entry);
+        entry->setVisualRow({{"valid", true}, {"entryId", "source-color"}, {"text", "source-color.bin"},
+            {"iconPath", QUrl::fromLocalFile(iconPath).toString()}});
+        QQuickWindow window;
+        window.resize(176, 128);
+        root->setParentItem(window.contentItem());
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        const auto dpr = window.devicePixelRatio();
+        QCOMPARE(dpr, 1.75);
+        root->property("panel").value<QObject *>()->setProperty("devicePixelRatio", dpr);
+        for (int mode = 0; mode < 5; ++mode) {
+            entry->setPresentationMode(mode);
+            QQuickItem *leaf = nullptr;
+            QTRY_VERIFY((leaf = entry->findChild<QQuickItem *>("gallerySourceColorIcon-0")));
+            QTRY_COMPARE(leaf->property("status").toInt(), 1);
+            QVERIFY(qobject_cast<GallerySceneItem *>(leaf->parentItem()));
+            for (int frame = 0; frame < 3; ++frame) window.grabWindow();
+            const auto origin = leaf->mapToItem(window.contentItem(), QPointF());
+            for (const qreal coordinate : {origin.x(), origin.y()})
+                QVERIFY2(qAbs(coordinate*dpr-qRound(coordinate*dpr)) < .001,
+                    qPrintable(QString("%1 physical coordinate %2").arg(leaf->objectName())
+                        .arg(coordinate*dpr, 0, 'f', 6)));
+            QCOMPARE(leaf->mapToItem(window.contentItem(), {1, 0})-origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(window.contentItem(), {0, 1})-origin, QPointF(0, 1));
+            const auto rendered = window.grabWindow();
+            QVERIFY(!rendered.isNull());
+            const auto center = leaf->mapToItem(window.contentItem(), QPointF(leaf->width()/2, leaf->height()/2));
+            QCOMPARE(rendered.pixelColor(qRound(center.x()*dpr), qRound(center.y()*dpr)), QColor(Qt::red));
+            QVERIFY(rendered.save(QString("artifacts/source-color-staging-mode-%1-%2.png")
+                .arg(mode).arg(qEnvironmentVariable("QSG_RHI_BACKEND", "default"))));
+        }
+        root->setParentItem(nullptr);
+        object.reset();
+        runtime->shutdown();
+#endif
+    }
+
+    void layoutDebugZonesMaterializeOnlyWhenShown() {
+#ifndef Q_MOC_RUN
+        QQmlEngine engine;
+        struct DebugUrlProbe final : QQmlAbstractUrlInterceptor {
+            QQmlEngine &engine;
+            int calls = 0;
+            explicit DebugUrlProbe(QQmlEngine &engine) : engine(engine) {
+                engine.addUrlInterceptor(this);
+            }
+            ~DebugUrlProbe() override { engine.removeUrlInterceptor(this); }
+            QUrl intercept(const QUrl &url, DataType) override {
+                if (QThread::currentThread() == engine.thread()
+                    && url.path().endsWith("/GalleryLayoutDebugPaint.qml")) ++calls;
+                return url;
+            }
+        } urlProbe(engine);
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::GalleryRuntime::install(&engine);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                id: root
+                width: 160; height: 96
+                property bool debugEnabled: false
+                Item {
+                    x: 0; y: 8; width: 48; height: 80
+                    GalleryLayoutDebugZone { objectName: "testCellDebugZone"; zone: "cell"; visible: root.debugEnabled }
+                }
+                Item {
+                    x: 56; y: 8; width: 48; height: 80
+                    GalleryLayoutDebugZone { objectName: "testPreviewDebugZone"; zone: "preview"; color: "#447799"; visible: root.debugEnabled }
+                }
+                Item {
+                    x: 112; y: 8; width: 48; height: 80
+                    GalleryLayoutDebugZone { objectName: "testTextDebugZone"; visible: root.debugEnabled }
+                }
+            }
+        )QML", QUrl("inline:LazyDebugZones.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        const auto pens = [root] {
+            int count = 0;
+            for (auto *child : root->findChildren<QObject *>())
+                count += child->inherits("QQuickPen");
+            return count;
+        };
+        QCOMPARE(pens(), 0);
+        QCOMPARE(urlProbe.calls, 0);
+        QQuickWindow window;
+        window.resize(160, 96);
+        root->setParentItem(window.contentItem());
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        root->setProperty("debugEnabled", true);
+        QList<QPointer<QQuickItem>> paints;
+        const qreal dpr = window.devicePixelRatio();
+        if (qEnvironmentVariableIsSet("ZOIN_EXPECT_TEST_DPR"))
+            QCOMPARE(dpr, qEnvironmentVariable("ZOIN_EXPECT_TEST_DPR").toDouble());
+        for (const auto &name : {"testCellDebugZone", "testPreviewDebugZone", "testTextDebugZone"}) {
+            QQuickItem *paint = nullptr;
+            QTRY_VERIFY((paint = root->findChild<QQuickItem *>(QString::fromLatin1(name) + "Paint")));
+            auto *zone = root->findChild<QQuickItem *>(QString::fromLatin1(name));
+            QCOMPARE(paint->property("color"), zone->property("color"));
+            QCOMPARE(QQmlProperty::read(paint, "border.color"), zone->property("borderColor"));
+            const QPointF origin = paint->mapToScene({});
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .001);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .001);
+            QVERIFY(qAbs(paint->width() * dpr - qRound(paint->width() * dpr)) < .001);
+            QVERIFY(qAbs(paint->height() * dpr - qRound(paint->height() * dpr)) < .001);
+            QCOMPARE(paint->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(paint->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+            paints.append(paint);
+        }
+        QCOMPARE(pens(), 3);
+        QVERIFY(urlProbe.calls >= 3);
+        const QImage capture = window.grabWindow();
+        QVERIFY(!capture.isNull());
+        QCOMPARE(capture.pixelColor(qRound(80 * dpr), qRound(40 * dpr)), QColor("#447799"));
+        QVERIFY(capture.save("lazy-layout-debug-175.png"));
+        root->setProperty("debugEnabled", false);
+        QTRY_COMPARE(pens(), 0);
+        for (const auto &paint : paints) QTRY_VERIFY(paint.isNull());
+        for (const auto &name : {"testCellDebugZone", "testPreviewDebugZone", "testTextDebugZone"})
+            QVERIFY(root->findChild<QObject *>(name)->property("source").toUrl().isEmpty());
+        urlProbe.calls = 0;
+        root->setWidth(168);
+        QCoreApplication::processEvents();
+        QCOMPARE(urlProbe.calls, 0);
+        root->setProperty("debugEnabled", true);
+        QTRY_COMPARE(pens(), 3);
+        QVERIFY(urlProbe.calls >= 3);
+        root->setParentItem(nullptr);
+#endif
+    }
+
+    void thumbnailDoesNotRequestHiddenFallback_data() {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("masonry") << 0;
+        QTest::newRow("columns") << 1;
+        QTest::newRow("details") << 2;
+        QTest::newRow("grid") << 3;
+        QTest::newRow("icons") << 4;
+    }
+
+    void thumbnailDoesNotRequestHiddenFallback() {
+        QFETCH(int, mode);
+        QTemporaryDir directory;
+        const QString photoPath = directory.filePath("photo.png");
+        const QString iconPath = directory.filePath("icon.png");
+        QImage image(80, 40, QImage::Format_ARGB32);
+        image.fill(Qt::red);
+        QVERIFY(image.save(photoPath));
+        image.fill(Qt::green);
+        QVERIFY(image.save(iconPath));
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("hidden-fallback");
+        engine.rootContext()->setContextProperty("fallbackTestSession", session);
+        engine.rootContext()->setContextProperty("fallbackTestMode", mode);
+        engine.rootContext()->setContextProperty("fallbackInitialRow", QVariantMap());
+        CountingFallbackIconProvider icons(QUrl::fromLocalFile(iconPath));
+        engine.rootContext()->setContextProperty("fallbackTestIcons", &icons);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 320; height: 240
+                property alias slot: slot
+                GalleryPanel { id: panel; visible: false; session: fallbackTestSession; iconProvider: fallbackTestIcons }
+                GalleryEntryDelegateBase {
+                    id: slot; panelRoot: panel; viewIndex: 0; sourceIndex: 0
+                    width: 160; height: 120; presentationMode: fallbackTestMode
+                    masonryGeometryReady: true
+                    visualRow: fallbackInitialRow
+                }
+            }
+        )QML", QUrl("inline:HiddenFallbackRequests.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        auto *slot = qobject_cast<GalleryDelegateItem *>(root->property("slot").value<QObject *>());
+        QVERIFY(slot);
+        QQuickWindow window;
+        window.resize(320, 240);
+        root->setParentItem(window.contentItem());
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QTest::qWait(30);
+        icons.requests = 0;
+        QVariantMap row{{"valid", true}, {"entryId", "photo"}, {"text", "photo.png"},
+            {"iconKey", "file-image"}, {"isImage", true}, {"imageDimensionsKnown", true},
+            {"imageIdUrl", QUrl::fromLocalFile(photoPath).toString()}};
+        slot->setVisualRow(row);
+        QQuickItem *pixels = nullptr;
+        QTRY_VERIFY((pixels = slot->findChild<QQuickItem *>("galleryThumbnailImage-0")));
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QQuickItem *icon = nullptr;
+        QTRY_VERIFY((icon = slot->findChild<QQuickItem *>("galleryFallbackIcon-0")));
+        QVERIFY2(icon->property("source").toUrl().isEmpty(),
+                 qPrintable(QStringLiteral("Hidden fallback requested %1; provider calls %2")
+                    .arg(icon->property("source").toUrl().toString())
+                    .arg(icons.requests)));
+        QCOMPARE(icons.requests, 0);
+        session->setThumbnailsEnabled(false);
+        QTRY_VERIFY(!icon->property("source").toUrl().isEmpty());
+        QVERIFY(icons.requests > 0);
+        QPointer<QQuickItem> retainedIcon(icon);
+        session->setThumbnailsEnabled(true);
+        QTRY_VERIFY(icon->property("source").toUrl().isEmpty());
+        QCOMPARE(slot->findChild<QQuickItem *>("galleryFallbackIcon-0"), retainedIcon.data());
+        row["imageIdUrl"] = QUrl::fromLocalFile(directory.filePath("missing.png")).toString();
+        slot->setVisualRow(row);
+        QTRY_COMPARE(pixels->property("status").toInt(), 3);
+        QTRY_VERIFY(!icon->property("source").toUrl().isEmpty());
+        root->setParentItem(nullptr);
+        object.reset();
+        // Metadata present at construction must avoid creating the unused
+        // fallback primitive, in addition to suppressing provider requests.
+        row["imageIdUrl"] = QUrl::fromLocalFile(photoPath).toString();
+        engine.rootContext()->setContextProperty("fallbackInitialRow", row);
+        icons.requests = 0;
+        object.reset(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        root = qobject_cast<QQuickItem *>(object.data());
+        slot = qobject_cast<GalleryDelegateItem *>(root->property("slot").value<QObject *>());
+        root->setParentItem(window.contentItem());
+        QTRY_VERIFY((pixels = slot->findChild<QQuickItem *>("galleryThumbnailImage-0")));
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QVERIFY(!slot->findChild<QQuickItem *>("galleryFallbackIcon-0"));
+        QCOMPARE(icons.requests, 0);
+        root->setParentItem(nullptr);
+        runtime->shutdown();
+    }
+
+    void recycledPreviewKeepsCompatibleLeaves() {
+        QTemporaryDir directory;
+        const QString redPath = directory.filePath("red.png");
+        const QString bluePath = directory.filePath("blue.png");
+        QImage image(80, 40, QImage::Format_ARGB32);
+        image.fill(Qt::red);
+        QVERIFY(image.save(redPath));
+        image.fill(Qt::blue);
+        QVERIFY(image.save(bluePath));
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 320; height: 240
+                property alias slot: slot
+                GalleryPanel { id: panel; visible: false }
+                GalleryEntryDelegateBase {
+                    id: slot; panelRoot: panel; viewIndex: 0; sourceIndex: 0
+                    width: 160; height: 40; presentationMode: 1
+                }
+            }
+        )QML", QUrl("inline:RecycledPreviewTest.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        auto *slot = qobject_cast<GalleryDelegateItem *>(root->property("slot").value<QObject *>());
+        QVERIFY(slot);
+        QQuickWindow window;
+        window.resize(320, 240);
+        root->setParentItem(window.contentItem());
+        window.show();
+        QVariantMap row{{"valid", true}, {"entryId", "first"}, {"text", "first.txt"}, {"iconKey", "file"}};
+        slot->setVisualRow(row);
+        QQuickItem *icon = nullptr;
+        QTRY_VERIFY((icon = slot->findChild<QQuickItem *>("galleryFallbackIcon-0")));
+        QPointer<QQuickItem> originalIcon(icon);
+        row["entryId"] = "second";
+        row["text"] = "second.txt";
+        slot->setVisualRow(row);
+        QTest::qWait(10);
+        QVERIFY2(originalIcon, "Identity reset must clear the source without destroying a compatible icon leaf");
+        QCOMPARE(slot->findChild<QQuickItem *>("galleryFallbackIcon-0"), originalIcon.data());
+        row["isImage"] = true;
+        row["imageIdUrl"] = QUrl::fromLocalFile(redPath).toString();
+        slot->setVisualRow(row);
+        QQuickItem *pixels = nullptr;
+        QTRY_VERIFY((pixels = slot->findChild<QQuickItem *>("galleryThumbnailImage-0")));
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QPointer<QQuickItem> originalPixels(pixels);
+        row["entryId"] = "third";
+        row["imageIdUrl"] = QUrl::fromLocalFile(bluePath).toString();
+        slot->setVisualRow(row);
+        QTest::qWait(10);
+        QVERIFY2(originalPixels, "Bitmap-to-bitmap recycling must preserve the preview leaf");
+        QCOMPARE(slot->findChild<QQuickItem *>("galleryThumbnailImage-0"), originalPixels.data());
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QCOMPARE(pixels->property("source").toUrl(), QUrl::fromLocalFile(bluePath));
+        const auto bluePixels = [](const QImage &capture) {
+            int count = 0;
+            for (int y = 0; y < capture.height(); ++y)
+                for (int x = 0; x < capture.width(); ++x)
+                    count += capture.pixelColor(x, y) == QColor(Qt::blue);
+            return count;
+        };
+        QTRY_VERIFY(bluePixels(window.grabWindow()) > 0);
+        row["entryId"] = "missing";
+        row["imageIdUrl"] = QUrl::fromLocalFile(directory.filePath("missing.png")).toString();
+        slot->setVisualRow(row);
+        QTRY_COMPARE(pixels->property("status").toInt(), 3); // Image.Error
+        QVERIFY(!pixels->property("retainWhileLoading").toBool());
+        QCOMPARE(bluePixels(window.grabWindow()), 0);
+        QVERIFY(window.grabWindow().save("recycled-preview-cleared-175.png"));
+        runtime->shutdown();
+    }
+
+    void recycledPreviewNeverLoadsVectorAsBitmap_data() {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("masonry") << int(MasonryLayout::Masonry);
+        QTest::newRow("compact") << int(MasonryLayout::Columns);
+    }
+
+    void recycledPreviewNeverLoadsVectorAsBitmap() {
+        QFETCH(int, mode);
+        QTemporaryDir directory;
+        const QUrl photo = QUrl::fromLocalFile(directory.filePath("photo.png"));
+        const QUrl vector = QUrl::fromLocalFile(directory.filePath("vector.svg"));
+        QImage image(80, 40, QImage::Format_ARGB32);
+        image.fill(Qt::red);
+        QVERIFY(image.save(photo.toLocalFile()));
+        QFile svg(vector.toLocalFile());
+        QVERIFY(svg.open(QIODevice::WriteOnly));
+        svg.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><path d=\"M0 0H80V40H0Z\" fill=\"blue\"/></svg>");
+        svg.close();
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 320; height: 240
+                property alias slot: slot
+                GalleryPanel { id: panel; visible: false }
+                GalleryInteractiveEntryDelegate {
+                    id: slot; panelRoot: panel; viewIndex: 0; sourceIndex: 0
+                    width: 160; height: 160; masonryGeometryReady: true
+                }
+            }
+        )QML", QUrl("inline:RecycledVectorPreviewTest.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        auto *slot = qobject_cast<GalleryDelegateItem *>(root->property("slot").value<QObject *>());
+        QVERIFY(slot);
+        slot->setPresentationMode(mode);
+        QQuickWindow window;
+        window.resize(320, 240);
+        root->setParentItem(window.contentItem());
+        root->setX(13.2);
+        slot->property("panelRoot").value<QObject *>()->setProperty(
+            "devicePixelRatio", window.devicePixelRatio());
+        window.show();
+        QVariantMap row{{"valid", true}, {"entryId", "photo"}, {"text", "photo.png"},
+                        {"isImage", true}, {"imageIdUrl", photo.toString()}};
+        slot->setVisualRow(row);
+        QQuickItem *pixels = nullptr;
+        QTRY_VERIFY((pixels = slot->findChild<QQuickItem *>("galleryThumbnailImage-0")));
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QSignalSpy sources(pixels, SIGNAL(sourceChanged(QUrl)));
+        QVERIFY(sources.isValid());
+        auto *preview = qobject_cast<QQuickItem *>(
+            slot->property("previewContainerItem").value<QObject *>());
+        QVERIFY(preview);
+        // Raster Masonry surfaces already mask their own bounds. Additional
+        // clip nodes split renderer batches; vector crops still need a clip.
+        QCOMPARE(preview->clip(), mode != int(MasonryLayout::Masonry));
+        QTRY_VERIFY(window.isExposed());
+        auto *leaf = mode == int(MasonryLayout::Masonry)
+            ? slot->findChild<QQuickItem *>("galleryThumbnailShader-0") : pixels;
+        QVERIFY(leaf);
+        qInfo() << "Recycled preview before next frame (physical)"
+                << leaf->mapToScene(QPointF()) * window.devicePixelRatio();
+        // Image.Ready may precede the GUI afterAnimating alignment flush.
+        // Check the settled rendered frame, not the image-loader callback.
+        QSignalSpy renderedFrames(&window, &QQuickWindow::frameSwapped);
+        window.update();
+        QTRY_VERIFY(!renderedFrames.isEmpty());
+        const QPointF origin = leaf->mapToScene(QPointF());
+        const qreal dpr = window.devicePixelRatio();
+        QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01,
+                 qPrintable(QString::number(origin.x() * dpr, 'g', 12)));
+        QVERIFY2(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01,
+                 qPrintable(QString::number(origin.y() * dpr, 'g', 12)));
+        QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+        QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        const QImage rendered = window.grabWindow();
+        const QRectF bounds = leaf->mapRectToScene(leaf->boundingRect());
+        int redPixels = 0;
+        for (int y = 0; y < rendered.height(); ++y) {
+            for (int x = 0; x < rendered.width(); ++x) {
+                if (rendered.pixelColor(x, y) != QColor(Qt::red)) continue;
+                ++redPixels;
+                QVERIFY(bounds.adjusted(-1 / dpr, -1 / dpr, 1 / dpr, 1 / dpr)
+                    .contains(QPointF((x + .5) / dpr, (y + .5) / dpr)));
+            }
+        }
+        QVERIFY(redPixels > 1000);
+        if (mode == int(MasonryLayout::Masonry))
+            QVERIFY(rendered.save("masonry-unclipped-raster-175.png"));
+        if (mode == int(MasonryLayout::Masonry)) {
+            auto *actions = slot->findChild<QQuickItem *>("galleryEntryActions-0");
+            QVERIFY(actions);
+            slot->setSceneVisible(false);
+            QVERIFY(!actions->isEnabled());
+            slot->setViewSourceIndexes(-1, -1);
+            QCOMPARE(pixels->property("source").toUrl(), QUrl{});
+            QVERIFY(preview->isVisible());
+            QVERIFY(!preview->property("sceneVisible").toBool());
+            slot->setViewSourceIndexes(0, 0);
+            slot->setSceneVisible(true);
+            QCOMPARE(pixels->property("source").toUrl(), photo);
+            QVERIFY(actions->isEnabled());
+            sources.clear();
+        }
+        row["entryId"] = "vector";
+        row["text"] = "vector.svg";
+        row["imageIdUrl"] = "";
+        row["isVector"] = true;
+        row["vectorSource"] = vector.toString();
+        slot->setVisualRow(row);
+        QVERIFY(preview->clip());
+        // Inspect synchronous source notifications before Qt.callLater replaces
+        // the old renderer. A final vector-only scene misses this regression.
+        for (const auto &change : sources)
+            QVERIFY2(change.at(0).toUrl().isEmpty(),
+                     qPrintable("Outgoing bitmap received " + change.at(0).toUrl().toString()));
+        QTRY_VERIFY(root->findChild<QQuickItem *>("galleryVectorSurface"));
+        row["entryId"] = "photo-again";
+        row["text"] = "photo.png";
+        row["isVector"] = false;
+        row["vectorSource"] = "";
+        row["imageIdUrl"] = photo.toString();
+        slot->setVisualRow(row);
+        QTRY_VERIFY((pixels = slot->findChild<QQuickItem *>("galleryThumbnailImage-0")));
+        QTRY_COMPARE(pixels->property("source").toUrl(), photo);
+        QTRY_COMPARE(pixels->property("status").toInt(), 1);
+        QCOMPARE(preview->clip(), mode != int(MasonryLayout::Masonry));
+        runtime->shutdown();
+    }
+
+    void vectorPanelSceneCacheReusesAndBoundsSurfaces() {
+        QTemporaryDir directory;
+        const auto source = [&](const QString &name, const QString &color) {
+            const QString path = directory.filePath(name + ".svg");
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly)) return QUrl{};
+            file.write(QString("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><rect width=\"80\" height=\"40\" fill=\"%1\"/></svg>").arg(color).toUtf8());
+            return QUrl::fromLocalFile(path);
+        };
+        const QUrl red = source("red", "red");
+        const QUrl blue = source("blue", "blue");
+        const QUrl green = source("green", "green");
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            Item {
+                width: 320; height: 240
+                property alias source: slot.source
+                property alias status: slot.sourceStatus
+                property alias surface: slot.surface
+                property alias crop: slot.crop
+                property alias checkerboard: slot.showCheckerboard
+                property alias admissionEnabled: cache.enabled
+                function invalidate() { cache.invalidate() }
+                GalleryVectorSceneCache { id: cache; idleLimit: 1 }
+                GalleryVectorPreview {
+                    id: slot; x: 8; y: 8; width: 160; height: 80
+                    sceneCache: cache
+                    crop: true
+                    showCheckerboard: true
+                    devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+                }
+            }
+        )QML", QUrl("inline:VectorCacheTest.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        QQuickWindow window;
+        window.resize(320, 240);
+        root->setParentItem(window.contentItem());
+        window.show();
+        root->setProperty("source", red);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QPointer<QObject> first = root->property("surface").value<QObject *>();
+        QVERIFY(first);
+        auto *leaf = first->findChild<QQuickItem *>("galleryVectorSurface");
+        QVERIFY(leaf);
+        const QImage redImage = window.grabWindow();
+        auto *firstItem = qobject_cast<QQuickItem *>(first.data());
+        QVERIFY(firstItem);
+        const QSizeF cachedSize = firstItem->size();
+        const qreal cachedDpr = firstItem->property("devicePixelRatio").toReal();
+        QSignalSpy widthChanges(firstItem, &QQuickItem::widthChanged);
+        QSignalSpy heightChanges(firstItem, &QQuickItem::heightChanged);
+        root->setProperty("source", blue);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QPointer<QObject> second = root->property("surface").value<QObject *>();
+        QVERIFY(second && second != first);
+        QCOMPARE(firstItem->size(), cachedSize);
+        QCOMPARE(firstItem->property("devicePixelRatio").toReal(), cachedDpr);
+        QVERIFY(firstItem->property("crop").toBool());
+        QVERIFY(firstItem->property("showCheckerboard").toBool());
+        QCOMPARE(widthChanges.count(), 0);
+        QCOMPARE(heightChanges.count(), 0);
+        root->setProperty("source", red);
+        QCOMPARE(root->property("surface").value<QObject *>(), first.data());
+        QCOMPARE(root->property("status").toInt(), 1);
+        QCOMPARE(first->findChild<QQuickItem *>("galleryVectorSurface"), leaf);
+        QCOMPARE(window.grabWindow(), redImage);
+        QCOMPARE(widthChanges.count(), 0);
+        QCOMPARE(heightChanges.count(), 0);
+        root->setProperty("crop", false);
+        root->setProperty("checkerboard", false);
+        QVERIFY(!firstItem->property("crop").toBool());
+        QVERIFY(!firstItem->property("showCheckerboard").toBool());
+        root->setProperty("crop", true);
+        root->setProperty("checkerboard", true);
+        const QPointF origin = leaf->mapToScene(QPointF());
+        const qreal dpr = window.devicePixelRatio();
+        QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .001);
+        QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .001);
+        QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+        QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        QVERIFY(redImage.save("vector-cache-reuse-175.png"));
+        // Two idle scenes exceed the limit. The older blue revision is evicted.
+        root->setProperty("source", green);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QTRY_VERIFY(second.isNull());
+        QVERIFY(first);
+        QVERIFY(QMetaObject::invokeMethod(root, "invalidate"));
+        QTRY_VERIFY(first.isNull());
+        // A consumer that disappears before admission must never build a scene.
+        root->setProperty("source", QUrl{});
+        root->setProperty("admissionEnabled", false);
+        root->setProperty("source", red);
+        QPointer<QObject> cancelled = root->property("surface").value<QObject *>();
+        QVERIFY(cancelled);
+        QCOMPARE(cancelled->property("source").toUrl(), QUrl{});
+        root->setProperty("source", QUrl{});
+        root->setProperty("admissionEnabled", true);
+        QTRY_VERIFY(cancelled.isNull());
+        // The same path with a changed revision must get a fresh scene.
+        root->setProperty("source", red);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QPointer<QObject> oldRevision = root->property("surface").value<QObject *>();
+        QUrl revised = red;
+        revised.setQuery("revision=2");
+        root->setProperty("source", revised);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        QVERIFY(root->property("surface").value<QObject *>() != oldRevision.data());
+        root->setProperty("source", QUrl{});
+        QVERIFY(QMetaObject::invokeMethod(root, "invalidate"));
+        ImageInfo info;
+        info.path = red.toLocalFile();
+        auto acquired = acquireVectorSource(info, {});
+        QVERIFY(acquired);
+        QWeakPointer<VectorSource> weak = acquired.toWeakRef();
+        root->setProperty("admissionEnabled", false);
+        root->setProperty("source", acquired->url);
+        acquired.clear();
+        QVERIFY(!weak.isNull()); // Pending admission pins the materialized revision.
+        root->setProperty("source", QUrl{});
+        QTRY_VERIFY(weak.isNull());
+        root->setProperty("admissionEnabled", true);
+        acquired = acquireVectorSource(info, {});
+        weak = acquired.toWeakRef();
+        root->setProperty("source", acquired->url);
+        QTRY_COMPARE(root->property("status").toInt(), 1);
+        acquired.clear();
+        root->setProperty("source", QUrl{});
+        QVERIFY(!weak.isNull()); // An idle reusable scene still needs its lease.
+        QVERIFY(QMetaObject::invokeMethod(root, "invalidate"));
+        QTRY_VERIFY(weak.isNull());
+    }
+
+    void vectorReadinessTraversesNativeItemsWithoutReplacingThem() {
+        QQmlEngine engine;
+        ZoinGallery::GalleryRuntime::install(&engine);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import QtQuick.Shapes
+            Item {
+                width: 120; height: 80
+                Text { objectName: "readinessText"; text: "small"; renderType: Text.NativeRendering }
+                Item {
+                    Text { objectName: "nestedReadinessText"; text: "nested"; renderType: Text.NativeRendering }
+                }
+                Shape {
+                    objectName: "readinessShape"
+                    asynchronous: true
+                    ShapePath {
+                        strokeWidth: 1; strokeColor: "red"; fillColor: "transparent"
+                        startX: 0; startY: 0
+                        PathLine { x: 100; y: 60 }
+                    }
+                }
+                function curveTextReady() {
+                    return children[0].renderType === Text.CurveRendering
+                        && children[1].children[0].renderType === Text.CurveRendering
+                }
+            }
+        )QML", QUrl("inline:NativeVectorReadiness.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *root = qobject_cast<QQuickItem *>(object.data());
+        QVERIFY(root);
+        VectorSourcePin pin;
+        const auto ready = [&pin](QQuickItem *item) {
+            bool result = false;
+            const bool invoked = QMetaObject::invokeMethod(&pin, "sceneReady",
+                Q_RETURN_ARG(bool, result), Q_ARG(QQuickItem *, item));
+            return qMakePair(invoked, result);
+        };
+        // The unpolished asynchronous Shape must not be published as ready.
+        const auto initial = ready(root);
+        QVERIFY(initial.first);
+        QVERIFY(!initial.second);
+        QVariant curves;
+        QVERIFY(QMetaObject::invokeMethod(root, "curveTextReady", Q_RETURN_ARG(QVariant, curves)));
+        QVERIFY(curves.toBool());
+        QVERIFY(!ready(nullptr).second);
+        QQuickWindow window;
+        window.resize(120, 80);
+        root->setParentItem(window.contentItem());
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QTRY_VERIFY(ready(root).second);
+        auto *text = root->findChild<QQuickItem *>("readinessText");
+        auto *shape = root->findChild<QQuickItem *>("readinessShape");
+        QVERIFY(text);
+        QVERIFY(shape);
+        for (int i = 0; i < 100; ++i) QVERIFY(ready(root).second);
+        QCOMPARE(root->findChild<QQuickItem *>("readinessText"), text);
+        QCOMPARE(root->findChild<QQuickItem *>("readinessShape"), shape);
+        QCOMPARE(pin.source(), QUrl());
+        QVERIFY(!pin.component());
+        root->setParentItem(nullptr);
+    }
+
+    void vectorComponentCancellationPinsPreparedFiles() {
+        QTemporaryDir directory;
+        const QString path = directory.filePath("cancel.svg");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><rect width=\"80\" height=\"40\" fill=\"red\"/></svg>");
+        file.close();
+        ImageInfo info;
+        info.path = path;
+        auto prepared = acquireVectorSource(info, {});
+        QVERIFY(prepared);
+        const QString preparedPath = prepared->componentUrl.toLocalFile();
+        QWeakPointer<VectorSource> weak = prepared.toWeakRef();
+        QQmlEngine engine;
+        ZoinGallery::GalleryRuntime::install(&engine);
+        engine.rootContext()->setContextProperty("preparedTestSource", prepared->url);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import ZoinGallery.Native 1.0
+            VectorSourcePin { source: preparedTestSource; prepareComponent: true }
+        )QML", QUrl("inline:PreparedLifetime.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        QVERIFY(object->property("loading").toBool());
+        object.reset();
+        prepared.clear();
+        // The cancelled surface is gone, but the compiler may still read QML
+        // and companion assets. Its independent request keeps the lease alive.
+        QVERIFY(!weak.isNull());
+        QVERIFY(QFile::exists(preparedPath));
+        QTRY_VERIFY_WITH_TIMEOUT(weak.isNull(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!QFile::exists(preparedPath), 5000);
     }
 
     void vectorSurfaceKeepsGeometryAcrossResize() {
@@ -7224,6 +9537,8 @@ private slots:
         surface->setParentItem(window.contentItem());
         window.show();
         QTRY_COMPARE(surface->property("sourceStatus").toInt(), 1); // Image.Ready
+        if (qEnvironmentVariableIsSet("ZOIN_EXPECT_TEST_DPR"))
+            QCOMPARE(window.devicePixelRatio(), qEnvironmentVariable("ZOIN_EXPECT_TEST_DPR").toDouble());
         auto *vector = surface->findChild<QQuickItem *>("galleryVectorSurface");
         QVERIFY(vector);
         const auto assertAligned = [&window](QQuickItem *item) {
@@ -7235,8 +9550,17 @@ private slots:
             QCOMPARE(item->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
         };
         assertAligned(vector);
-        QCOMPARE(vector->property("preferredRendererType").toInt(), 1);
-        QVERIFY(vector->property("asynchronousShapes").toBool());
+        QVERIFY(vector->property("asynchronous").toBool());
+        int shapes = 0;
+        for (auto *child : vector->findChildren<QObject *>()) {
+            QVERIFY(!child->inherits("QQuickVectorImage"));
+            if (child->inherits("QQuickShape")) {
+                ++shapes;
+                QCOMPARE(child->property("preferredRendererType").toInt(), 4); // Shape.CurveRenderer
+                QVERIFY(child->property("asynchronous").toBool());
+            }
+        }
+        QVERIFY(shapes > 0);
         qInfo() << "Vector scene preparation ms" << surface->property("sceneGenerationMs").toInt();
         surface->setWidth(371);
         surface->setHeight(253);
@@ -7246,6 +9570,157 @@ private slots:
         const QImage rendered = window.grabWindow();
         QVERIFY(!rendered.isNull());
         QVERIFY(rendered.save("vector-surface-175.png"));
+    }
+
+    void masonryVectorSceneSurvivesNativeVisibility() {
+#if defined(Q_OS_WIN)
+        QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
+#endif
+        QTemporaryDir directory;
+        const QString path = directory.filePath("retained.svg");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"40\"><path d=\"M1 1H79V39H1Z\" fill=\"orange\" stroke=\"blue\" stroke-width=\"1\"/></svg>");
+        file.close();
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("retained-vector-scene");
+        auto first = entry("vector", 0, "retained.svg", true);
+        first["localPath"] = path;
+        first["size"] = QFileInfo(path).size();
+        QVariantList catalog{first};
+        for (int row = 1; row < 140; ++row)
+            catalog.append(entry(QString::number(row), row, QString::number(row) + ".txt"));
+        QVERIFY(session->applyExternalCatalog(catalog, 1));
+        engine.rootContext()->setContextProperty("retainedVectorSession", session);
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            GalleryPanel {
+                width: 640; height: 480; session: retainedVectorSession
+                devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+                presentationMode: "masonry"; animateLayoutChanges: false; showCursor: false
+                metrics.panelFontFamily: "Segoe UI"
+            }
+        )QML", QUrl("inline:RetainedVectorSceneTest.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        auto *panel = qobject_cast<QQuickItem *>(object.data());
+        QVERIFY(panel);
+        QQuickWindow window;
+        window.resize(640, 480);
+        panel->setParentItem(window.contentItem());
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        QTRY_VERIFY_WITH_TIMEOUT(!session->vectorSourceAt(0).isEmpty(), 5000);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        auto *tile = layout->itemForIndex(0);
+        QVERIFY(tile);
+        QQuickItem *vector = nullptr;
+        QTRY_VERIFY((vector = panel->findChild<QQuickItem *>("galleryVectorSurface")));
+        QTRY_COMPARE(vector->parentItem()->property("sourceStatus").toInt(), 1);
+        QPointer<QQuickItem> retained(vector);
+        QTest::qWait(100);
+        const auto orangePixels = [](const QImage &image) {
+            int count = 0;
+            for (int y = 0; y < image.height(); ++y)
+                for (int x = 0; x < image.width(); ++x)
+                    count += image.pixelColor(x, y) == QColor("orange");
+            return count;
+        };
+        QTRY_VERIFY(orangePixels(window.grabWindow()) > 100);
+        QSignalSpy enabledChanges(vector, SIGNAL(enabledChanged()));
+        QVERIFY(enabledChanges.isValid());
+        tile->setProperty("sceneVisible", false);
+        QVERIFY(tile->isVisible());
+        QCOMPARE(enabledChanges.count(), 0);
+        QVERIFY(vector->isEnabled());
+        QCOMPARE(orangePixels(window.grabWindow()), 0);
+        tile->setProperty("sceneVisible", true);
+        QTRY_VERIFY(orangePixels(window.grabWindow()) > 100);
+        layout->setContentY(layout->indexGeometry(40).top());
+        QCOMPARE(layout->itemForIndex(0), tile);
+        QVERIFY(!layout->visibleIndexes().contains(0));
+        QVERIFY(tile->isVisible());
+        QVERIFY(!tile->property("sceneVisible").toBool());
+        QVERIFY(tile->property("retainSceneWhenHidden").toBool());
+        QCOMPARE(orangePixels(window.grabWindow()), 0);
+        layout->setContentY(layout->indexGeometry(130).top());
+        QTest::qWait(150);
+        QCOMPARE(layout->itemForIndex(0), tile);
+        QVERIFY(!tile->property("sceneVisible").toBool());
+        QVERIFY(tile->property("retainSceneWhenHidden").toBool());
+        QCOMPARE(orangePixels(window.grabWindow()), 0);
+        layout->setContentY(0);
+        QCOMPARE(layout->itemForIndex(0), tile);
+        QVERIFY(tile->property("sceneVisible").toBool());
+        QCOMPARE(panel->findChild<QQuickItem *>("galleryVectorSurface"), retained.data());
+        QTest::qWait(50);
+        const qreal dpr = window.devicePixelRatio();
+        auto *caption = tile->findChild<QQuickItem *>("galleryMasonryLabel-0");
+        QVERIFY(caption);
+        for (auto *leaf : {vector, caption}) {
+            const QPointF origin = leaf->mapToScene(QPointF());
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+            QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        }
+        const QImage restored = window.grabWindow();
+        QVERIFY(orangePixels(restored) > 100);
+        QVERIFY(restored.save("masonry-retained-vector-175.png"));
+        // A larger vector working set must evict old scenes at the same
+        // sixteen-item bound, rather than retaining every SVG in the folder.
+        for (int row = 1; row < 20; ++row) {
+            const QString name = QStringLiteral("retained-%1.svg").arg(row);
+            const QString copy = directory.filePath(name);
+            QVERIFY(QFile::copy(path, copy));
+            auto image = entry(QStringLiteral("vector-%1").arg(row), row, name, true);
+            image["localPath"] = copy;
+            image["size"] = QFileInfo(copy).size();
+            catalog[row] = image;
+        }
+        QVERIFY(session->applyExternalCatalog(catalog, 2));
+        for (int row = 0; row < 20; ++row) {
+            layout->setContentY(layout->indexGeometry(row).top());
+            QTRY_VERIFY_WITH_TIMEOUT(!session->vectorSourceAt(row).isEmpty(), 5000);
+            layout->setContentY(layout->indexGeometry(row).top());
+            QTRY_VERIFY(layout->visibleIndexes().contains(row));
+            QTest::qWait(30);
+        }
+        layout->setContentY(layout->indexGeometry(130).top());
+        const auto retainedRows = [&] {
+            QSet<int> rows;
+            for (int row=0;row<layout->count();++row) {
+                auto *item = layout->itemForIndex(row);
+                if (item && item->property("retainSceneWhenHidden").toBool())
+                    rows.insert(item->property("viewIndex").toInt());
+            }
+            return rows;
+        };
+        QTRY_COMPARE(retainedRows().size(), 16);
+        for (const int row : retainedRows()) {
+            QVERIFY(row >= 4 && row < 20);
+            auto *item = layout->itemForIndex(row);
+            QVERIFY(item && !item->property("sceneVisible").toBool() && item->isVisible());
+            QVERIFY(!layout->boundingRect().intersects(
+                item->mapRectToItem(layout, item->boundingRect())));
+        }
+        QCOMPARE(orangePixels(window.grabWindow()), 0);
+        QVariantList plain;
+        for (int row = 0; row < 20; ++row)
+            plain.append(entry(QStringLiteral("plain-%1").arg(row), row,
+                               QString::number(row) + ".txt"));
+        QVERIFY(session->applyExternalCatalog(plain, 3));
+        layout->setContentY(0);
+        QTRY_VERIFY(retainedRows().isEmpty());
+        runtime->shutdown();
     }
 
     void vectorPanelModesStayAligned_data() {
@@ -7290,6 +9765,7 @@ private slots:
         auto *panel = qobject_cast<QQuickItem *>(object.data());
         QVERIFY(panel);
         panel->setProperty("presentationMode", mode);
+        panel->setProperty("showCursor", false);
         QQuickWindow window;
         window.resize(640, 480);
         panel->setParentItem(window.contentItem());
@@ -7297,7 +9773,29 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!session->vectorSourceAt(0).isEmpty(), 5000);
         QQuickItem *vector = nullptr;
         QTRY_VERIFY_WITH_TIMEOUT((vector = panel->findChild<QQuickItem *>("galleryVectorSurface")), 5000);
-        QTest::qWait(100);
+        QTRY_COMPARE_WITH_TIMEOUT(vector->parentItem()->property("sourceStatus").toInt(), 1, 10000);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        QTRY_VERIFY(layout->itemForIndex(0));
+        QTRY_VERIFY(!layout->itemForIndex(0)->property("geometryAnimationRunning").toBool());
+        QTRY_VERIFY(!panel->property("cursorPixelAlignmentSuspended").toBool());
+        const auto paintsOrange = [&window] {
+            const QImage capture = window.grabWindow();
+            int count = 0;
+            for (int y = 0; y < capture.height(); ++y)
+                for (int x = 0; x < capture.width(); ++x)
+                    count += capture.pixelColor(x, y) == QColor("orange");
+            return count > 10;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(paintsOrange(), 10000);
+        if (mode == "grid") {
+            auto *selection = panel->findChild<QQuickItem *>("gallerySelectionSurface-0");
+            QVERIFY(selection);
+            QCOMPARE(selection->property("baseColor").value<QColor>().alpha(), 0);
+            auto *backdrop = panel->findChild<QQuickItem *>("galleryThumbnailBackdrop-0");
+            QVERIFY(backdrop);
+            QVERIFY(!backdrop->property("enabledForPresentation").toBool());
+        }
         const auto origin = vector->mapToScene(QPointF());
         const qreal dpr = window.devicePixelRatio();
         QVERIFY2(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .001,
@@ -7330,6 +9828,62 @@ private slots:
         QVERIFY(rendered.save("vector-panel-" + mode + "-175.png"));
         QCOMPARE(session->viewerSourcesAt(0).size(), 1);
         runtime->shutdown();
+    }
+
+    void vectorPreparedScenePreservesGradientAlphaAndEmbeddedImage() {
+        QTemporaryDir directory;
+        QImage pixels(2, 2, QImage::Format_ARGB32);
+        pixels.fill(Qt::magenta);
+        QByteArray png;
+        QBuffer buffer(&png);
+        QVERIFY(buffer.open(QIODevice::WriteOnly));
+        QVERIFY(pixels.save(&buffer, "PNG"));
+        const QString path = directory.filePath("assets.svg");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"120\" height=\"60\"><defs><linearGradient id=\"g\"><stop stop-color=\"red\"/><stop offset=\"1\" stop-color=\"blue\"/></linearGradient></defs><rect width=\"120\" height=\"60\" fill=\"url(#g)\" opacity=\"0.5\"/><image x=\"45\" y=\"15\" width=\"30\" height=\"30\" xlink:href=\"data:image/png;base64," + png.toBase64() + "\"/></svg>");
+        file.close();
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        engine.rootContext()->setContextProperty("vectorTestUrl", QUrl::fromLocalFile(path));
+        QQmlComponent component(&engine);
+        component.setData(R"QML(
+            import QtQuick
+            import ZoinGallery
+            GalleryVectorImage { width: 240; height: 120; source: vectorTestUrl;
+                devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1 }
+        )QML", QUrl("inline:VectorAssets.qml"));
+        QTRY_VERIFY(component.status() != QQmlComponent::Loading);
+        QVERIFY2(component.isReady(), qPrintable(component.errorString()));
+        QScopedPointer<QObject> object(component.create());
+        QVERIFY2(object, qPrintable(component.errorString()));
+        auto *surface = qobject_cast<QQuickItem *>(object.data());
+        QQuickWindow window;
+        window.setColor(Qt::white);
+        window.resize(240, 120);
+        surface->setParentItem(window.contentItem());
+        window.show();
+        QTRY_COMPARE(surface->property("sourceStatus").toInt(), 1);
+        const QImage rendered = window.grabWindow();
+        QVERIFY(!rendered.isNull());
+        QImage reference(rendered.size(), QImage::Format_ARGB32_Premultiplied);
+        reference.fill(Qt::white);
+        QSvgRenderer svg(path);
+        QPainter painter(&reference);
+        svg.render(&painter, QRectF(QPointF(), QSizeF(reference.size())));
+        painter.end();
+        for (const QPointF sample : {QPointF(.1, .7), QPointF(.5, .5), QPointF(.9, .7)}) {
+            const QPoint at(qRound(sample.x() * (rendered.width() - 1)),
+                            qRound(sample.y() * (rendered.height() - 1)));
+            const QColor actual = rendered.pixelColor(at);
+            const QColor expected = reference.pixelColor(at);
+            QVERIFY2(qAbs(actual.red() - expected.red()) <= 3
+                     && qAbs(actual.green() - expected.green()) <= 3
+                     && qAbs(actual.blue() - expected.blue()) <= 3,
+                     qPrintable(QStringLiteral("%1: %2 != %3")
+                         .arg(at.x()).arg(actual.name(), expected.name())));
+        }
+        QVERIFY(rendered.save("vector-prepared-assets-175.png"));
     }
 
     void vectorAnimationHonorsVisibilityAndAuthoredLoops() {

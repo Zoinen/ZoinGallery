@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import QtQuick.Window
 import QtQuick.Layouts
 import QtQuick.Controls
@@ -26,16 +27,12 @@ Button {
     function iconPixelOffsetX(item) {
         if (!item || !item.parent)
             return 0
-        const revision = pixelAlignmentRevision
-        const scenePoint = item.parent.mapToItem(null, item.x, item.y)
-        return snap(scenePoint.x) - scenePoint.x + revision * 0
+        return item.PixelGridAlignment.offset.x
     }
     function iconPixelOffsetY(item) {
         if (!item || !item.parent)
             return 0
-        const revision = pixelAlignmentRevision
-        const scenePoint = item.parent.mapToItem(null, item.x, item.y)
-        return snap(scenePoint.y) - scenePoint.y + revision * 0
+        return item.PixelGridAlignment.offset.y
     }
 
     implicitHeight: titleBar.height

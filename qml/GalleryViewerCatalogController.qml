@@ -401,18 +401,21 @@ QtObject {
                 originalSizeAt(viewer.viewerNavigationTargetIndex)
     }
 
-    function requestIndex(index, scaleRatio) {
+    function requestIndex(index, scaleRatio, presented) {
         if (viewer.customContent || !viewer.session || index < 0
                 || viewer.width <= 0 || viewer.height <= 0)
             return
         if (typeof viewer.session.isImageAt === "function"
-                && !viewer.session.isImageAt(index))
+                && !viewer.session.isImageAt(index)
+                && !(viewer.currentIsVideo && index === viewer.presentedIndex))
             return
         const ratio = Math.max(1, scaleRatio === undefined ? 1 : scaleRatio)
         const requestedWidth = Math.ceil(viewer.width * viewer.devicePixelRatio * ratio)
         const requestedHeight = Math.ceil(viewer.height * viewer.devicePixelRatio * ratio)
         if (index === viewer.session.currentIndex)
             viewer.session.requestViewer(requestedWidth, requestedHeight)
+        else if (presented && typeof viewer.session.requestPresentedViewerAt === "function")
+            viewer.session.requestPresentedViewerAt(index, requestedWidth, requestedHeight)
         else
             viewer.session.requestViewerAt(index, requestedWidth, requestedHeight)
     }
@@ -421,11 +424,12 @@ QtObject {
         if (viewer.customContent || !viewer.session || viewer.presentedIndex < 0)
             return
         if (typeof viewer.session.isImageAt === "function"
-                && !viewer.session.isImageAt(viewer.presentedIndex))
+                && !viewer.session.isImageAt(viewer.presentedIndex)
+                && !viewer.currentIsVideo)
             return
-        if (viewer.currentIsVector || imageViewport.zoomFitView && !viewer.sphericViewerMode
+        if (viewer.currentIsVideo || viewer.currentIsVector || imageViewport.zoomFitView && !viewer.sphericViewerMode
                 && !viewer.nearestNeighbor) {
-            requestIndex(viewer.presentedIndex, 1)
+            requestIndex(viewer.presentedIndex, 1, true)
             viewer.refreshCurrentSource()
             return
         }
@@ -435,6 +439,8 @@ QtObject {
         // own native tier rather than inheriting this image's dimensions.
         if (viewer.presentedIndex === viewer.session.currentIndex)
             viewer.session.requestViewer(0, 0)
+        else if (typeof viewer.session.requestPresentedViewerAt === "function")
+            viewer.session.requestPresentedViewerAt(viewer.presentedIndex, 0, 0)
         else
             viewer.session.requestViewerAt(viewer.presentedIndex, 0, 0)
         viewer.refreshCurrentSource()

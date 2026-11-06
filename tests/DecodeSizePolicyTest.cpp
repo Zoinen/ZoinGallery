@@ -50,6 +50,18 @@ private slots:
                  QSize(640, 480));
     }
 
+    void thumbnailGrowthRequiresCoveringTier()
+    {
+        QCOMPARE(ZoinGallery::stableDecodeTarget(
+                     QSize(257, 172), QSize(6000, 4000), QSize(256, 171),
+                     ZoinGallery::DecodeSizeFamily::Thumbnail, true),
+                 QSize(384, 256));
+        QCOMPARE(ZoinGallery::stableDecodeTarget(
+                     QSize(1536, 1024), QSize(6000, 4000), QSize(1024, 683),
+                     ZoinGallery::DecodeSizeFamily::Thumbnail, true),
+                 QSize(1536, 1024));
+    }
+
     void videoPlaceholderDoesNotActAsNativePixelLimit()
     {
         // Video metadata starts with a 16x9 aspect-ratio placeholder.  The

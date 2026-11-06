@@ -83,18 +83,17 @@ QtObject {
     readonly property rect cursorChromeTargetRect:
         Qt.rect(cursorChromeTargetX, cursorChromeTargetY,
                 cursorChromeTargetWidth, cursorChromeTargetHeight)
-    // C++ publishes the actual snapped viewport translation. Reconstructing
-    // it from contentY would put the cursor back on the analytical fraction.
-    readonly property point cursorPixelGridViewportOrigin:
-        galleryLayout.viewportSceneOrigin
+    // C++ publishes the actual viewport translation, including its resting
+    // pixel-grid phase. Reconstructing it from contentY loses that correction.
     readonly property bool cursorPixelAlignmentSuspended:
-        cursorChromeTransitionActive || panelScrollAnimation.running
+        cursorChromeTransitionActive || panel.panelScrollAnimationRunning
+        || panel.autoScrollAnimationRunning
 
     function alignViewportItemRectToDevicePixels(item, rect) {
         if (!item || !rect)
             return rect
         const dpr = Math.max(0.01, Number(devicePixelRatio) || 1)
-        const origin = cursorPixelGridViewportOrigin
+        const origin = galleryLayout.viewportSceneOrigin
         const itemSceneX = origin.x + item.x
         const itemSceneY = origin.y + item.y
         const left = Math.round((itemSceneX + rect.x) * dpr) / dpr
@@ -109,24 +108,7 @@ QtObject {
     }
 
     function indexIntersectsViewport(index) {
-        if (index < 0 || index >= galleryLayout.count
-                || galleryLayout.height <= 0)
-            return false
-        const geometry = galleryLayout.indexGeometry(index)
-        if (geometry.width <= 0 || geometry.height <= 0)
-            return false
-        if (presentationMode === "columns") {
-            const left = galleryLayout.contentY
-            const right = left + galleryLayout.width
-            return geometry.x < right
-                    && geometry.x + geometry.width > left
-        }
-        const top = galleryLayout.contentY
-        const bottom = top + galleryLayout.height
-        // Edge contact alone is still completely clipped. Require a positive
-        // painted area, matching what the user can actually see.
-        return geometry.y < bottom
-                && geometry.y + geometry.height > top
+        return galleryLayout.indexIntersectsViewport(index)
     }
 
     function nearestVisibleCursor(targetIndex) {
@@ -204,7 +186,7 @@ QtObject {
                 return
             }
         } else {
-            if (indexIntersectsViewport(target))
+            if (visualCursorIndex !== target && indexIntersectsViewport(target))
                 visualCursorIndex = target
             // Ordinary wheel/scrollbar movement is allowed to move the
             // authoritative cursor out of view. Only an active keyboard

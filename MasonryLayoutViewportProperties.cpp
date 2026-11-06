@@ -38,6 +38,13 @@ void MasonryLayout::setPaddingTop(qreal newPaddingTop) {
     if (qFuzzyCompare(_paddingTop, newPaddingTop))
         return;
 
+    // indexGeometry() subtracts the first-row padding. Capture its anchor
+    // before changing that padding, while the old bricks still agree.
+    if (_presentationMode == Masonry && _currentIndexOffsetOverride == -1
+        && _currentIndex >= _visibleStart && _currentIndex <= _visibleEnd
+        && _currentIndex >= 0) {
+        _currentIndexOffsetOverride = _contentY - indexGeometry(_currentIndex).y();
+    }
     _paddingTop = newPaddingTop;
     _topItemOffset = _paddingTop;
     requestRewrap(false);

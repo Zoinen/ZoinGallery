@@ -134,9 +134,11 @@ void ExternalCatalogMetadataPlanner::collectCatalogRows() {
     }
     while (m_available > 0
            && m_model._catalogMetadataCursor < m_model._entries.size()) {
-        const int row = m_model._entries.at(
-            m_model._catalogMetadataCursor++).sourceIndex;
-        const auto &entry = m_model.loadedEntry(row);
+        const int offset = m_model._catalogMetadataCursor++;
+        const auto &entry = m_model._entries.at(offset);
+        // Sparse entries use logical source rows; dense preview catalogs can
+        // retain noncontiguous source indexes while their model rows are 0..N.
+        const int row = m_model._virtualRowCount >= 0 ? entry.sourceIndex : offset;
         if (m_model._hasViewportDemand && expensiveSource(entry.source)
             && !m_model._metadataLastVisibleRows.contains(row)
             && !m_model._metadataLastOverscanRows.contains(row)

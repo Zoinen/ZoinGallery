@@ -132,7 +132,7 @@ LocalFilesystemSource::LocalFilesystemSource(
                 const auto stored = _thumbnailCache->storeDecoded(
                     _sessionId, identity, version, sourceSize,
                     request.targetSize,
-                    QStringLiteral("video-first-frame-poster-1024-display-v3"),
+                    QStringLiteral("video-first-frame-poster-1024-display-v5"),
                     image);
                 if (stored.isValid()) {
                     emit viewerSourceAtChanged(viewIndex);
@@ -246,7 +246,7 @@ QUrl LocalFilesystemSource::videoThumbnailSourceAt(int viewIndex) const {
 
 QUrl LocalFilesystemSource::videoPosterSourceAt(int viewIndex) const {
     constexpr auto VideoPosterTransform =
-        "video-first-frame-poster-1024-display-v3";
+        "video-first-frame-poster-1024-display-v5";
     const ImageFile *item = itemAt(viewIndex);
     if (!item || !item->isVideoThumbnail() || !_thumbnailCache) {
         return {};

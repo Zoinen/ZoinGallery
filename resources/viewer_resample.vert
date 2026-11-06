@@ -23,6 +23,9 @@ layout(std140, binding = 0) uniform buf {
     vec4 framebufferRect;
     float framebufferYDirection;
 #ifdef ZOIN_VIDEO_SHADER
+    float videoMasteringWhite;
+    float videoMaxLum;
+    int videoTransfer;
     mat4 videoColorMatrix;
     vec2 videoFrameSize;
     vec4 videoViewport;

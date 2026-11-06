@@ -41,6 +41,11 @@ ExternalCatalogModel::ExternalCatalogModel(
             &ExternalCatalogModel::handleImageReady);
     connect(_decodeManager, &DecodeManager::imageReadFailed, this,
             &ExternalCatalogModel::handleImageReadFailed);
+    connect(_decodeManager, &DecodeManager::viewerDemandRequestCanceled,
+            this, [this](const ImageDecodeRequest &request) {
+        if (request.requestNamespace == _sessionId)
+            _pendingViewerRequests.remove(viewerRequestKey(request));
+    });
     connect(_thumbnailCache.data(),
             &ThumbnailMemoryCache::frameAvailable,
             this, &ExternalCatalogModel::handleThumbnailFrameAvailable);

@@ -12,23 +12,27 @@ CachedImageRetrieveRunner::CachedImageRetrieveRunner(const ImageDecodeRequest &r
 }
 
 void CachedImageRetrieveRunner::run() {
-    // QImage img(1, 1, QImage::Format_ARGB32);
-    QImage img = PersistentImageCache::retrieveImage(_request, _validateRequestVersion);
+    if (_request.viewerThumbnailRequest && isCanceled()) {
+        emit finished(this);
+        return;
+    }
+    ImageDecodeRequest request = _request;
+    QImage img = PersistentImageCache::retrieveImage(request, _validateRequestVersion);
     PersistentDerivedImageCache::completeLookup(_derivedLookupGate,
                                                  !img.isNull());
     // qDebug() << "XX REQ" << _request.info.path << img << _request.targetSize;
-    if (!img.isNull()) {
+    if (!img.isNull() && !isCanceled()) {
         // A video's cached pixels are display-sized previews. Restore native
         // dimensions and fields before publishing them into the catalog.
-        if (_request.info.thumbnailKind == QStringLiteral("video")
-            && !_request.info.fileFieldsRead)
-            PersistentDerivedImageCache::retrieveMetadata(_request.info);
+        if (request.info.thumbnailKind == QStringLiteral("video")
+            && !request.info.fileFieldsRead)
+            PersistentDerivedImageCache::retrieveMetadata(request.info);
         emit cachedThumbnailRetrieved(
-            _request, img,
+            request, img,
             DecodedImageInfo{
                 .isFromCache = true,
                 .isAuthoritativeDerivedCache =
-                    _request.info.source.isValid(),
+                    request.info.source.isValid(),
             });
     }
     emit finished(this);

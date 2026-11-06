@@ -60,16 +60,18 @@ Item {
     onSourceChanged: prepareSource()
     Component.onCompleted: prepareSource()
 
-    // Invisible opacity keeps Shapes eligible for asynchronous preparation.
-    // Only the completed scene becomes visible; the old scene stays intact.
+    // Native gates warm pending geometry without drawing it over the old slot.
+    // Builds without the optional capability retain the opacity-based path.
     Loader {
         id: first
         anchors.fill: parent
         active: String(root.firstSource) !== ""
-        opacity: root.displayedSlot === 0 ? 1 : 0
+        opacity: root.displayedSlot === 0 || (first.item && first.item.nativeAvailable) ? 1 : 0
         sourceComponent: Component {
             GalleryVectorImage {
                 source: root.firstSource
+                displayEnabled: root.displayedSlot === 0
+                uploadPriority: 0
                 animate: root.animate && root.displayedSlot === 0
                 showCheckerboard: root.showCheckerboard
                 devicePixelRatio: root.devicePixelRatio
@@ -82,10 +84,12 @@ Item {
         id: second
         anchors.fill: parent
         active: String(root.secondSource) !== ""
-        opacity: root.displayedSlot === 1 ? 1 : 0
+        opacity: root.displayedSlot === 1 || (second.item && second.item.nativeAvailable) ? 1 : 0
         sourceComponent: Component {
             GalleryVectorImage {
                 source: root.secondSource
+                displayEnabled: root.displayedSlot === 1
+                uploadPriority: 0
                 animate: root.animate && root.displayedSlot === 1
                 showCheckerboard: root.showCheckerboard
                 devicePixelRatio: root.devicePixelRatio

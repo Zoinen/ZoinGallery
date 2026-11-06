@@ -24,6 +24,7 @@
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
 #include <QtMultimedia/private/qvideoframetexturepool_p.h>
 #include <QtMultimedia/private/qvideotexturehelper_p.h>
+#include <QtMultimedia/private/qmultimediautils_p.h>
 #include <QtQuick/private/qsgplaintexture_p.h>
 #include "VideoFrameGeometry.h"
 using ZoinGallery::ViewerVideoFrameSource;
@@ -113,7 +114,9 @@ struct alignas(16) ResampleUniforms {
     float framebufferRect[4];
     float framebufferYDirection;
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
-    qint32 videoPadding0[3];
+    float videoMasteringWhite;
+    float videoMaxLum;
+    qint32 videoTransfer;
     float videoColorMatrix[16];
     float videoFrameSize[2];
     qint32 videoPadding1[2];
@@ -151,7 +154,9 @@ constexpr qsizetype BaseUniformByteSize = offsetof(ResampleUniforms, framebuffer
                                          + sizeof(float);
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
 constexpr qsizetype VideoUniformByteSize = BaseUniformByteSize
-    + sizeof(ResampleUniforms::videoPadding0)
+    + sizeof(ResampleUniforms::videoMasteringWhite)
+    + sizeof(ResampleUniforms::videoMaxLum)
+    + sizeof(ResampleUniforms::videoTransfer)
     + sizeof(ResampleUniforms::videoColorMatrix)
     + sizeof(ResampleUniforms::videoFrameSize)
     + sizeof(ResampleUniforms::videoPadding1)
@@ -186,6 +191,10 @@ void fillVideoUniforms(ResampleUniforms &uniforms, QRhi *rhi, const QVideoFrame 
     QByteArray videoData(sizeof(QVideoTextureHelper::UniformData), '\0');
     QVideoTextureHelper::updateUniformData(&videoData, rhi, format, frame, QMatrix4x4(), 1.0f);
     const auto *video = reinterpret_cast<const QVideoTextureHelper::UniformData *>(videoData.constData());
+    uniforms.videoMasteringWhite = video->masteringWhite;
+    uniforms.videoMaxLum = video->maxLum;
+    uniforms.videoTransfer = format.colorTransfer() == QVideoFrameFormat::ColorTransfer_STD_B67 ? 1
+        : format.colorTransfer() == QVideoFrameFormat::ColorTransfer_ST2084 ? 2 : 0;
     std::memcpy(uniforms.videoColorMatrix, video->colorMatrix, sizeof(uniforms.videoColorMatrix));
     const QRect viewport = ZoinGallery::VideoFrameGeometry::visibleViewport(frame);
     const QSize displaySize = ZoinGallery::VideoFrameGeometry::displaySize(frame);
@@ -199,11 +208,12 @@ void fillVideoUniforms(ResampleUniforms &uniforms, QRhi *rhi, const QVideoFrame 
     uniforms.videoPixelInfo[0] = int(format.pixelFormat());
     uniforms.videoPixelInfo[1] = description ? description->nplanes : 0;
     uniforms.videoPixelInfo[2] = video->redOrAlphaIndex;
-    uniforms.videoPixelInfo[3] = int(frame.rotation());
+    const auto transformation = qNormalizedFrameTransformation(frame);
+    uniforms.videoPixelInfo[3] = int(transformation.rotation);
     for (int plane = 0; plane < 3; ++plane)
         uniforms.videoTextureFormats[plane] = plane < uniforms.videoPixelInfo[1]
             ? videoTextureFormatCode(video->planeFormats[plane]) : 0;
-    uniforms.videoTextureFormats[3] = format.isMirrored() || frame.mirrored() ? 1 : 0;
+    uniforms.videoTextureFormats[3] = transformation.mirroredHorizontallyAfterRotation ? 1 : 0;
     uniforms.videoEnabled = uniforms.videoPixelInfo[1] > 0;
 }
 
@@ -236,7 +246,7 @@ class ResampleMaterial;
 class ResampleShader final : public QSGMaterialShader
 {
 public:
-    explicit ResampleShader(bool videoShader, bool referenceShader, bool convertVideoToLinear)
+    explicit ResampleShader(bool videoShader, bool referenceShader, bool convertVideoToLinear, bool hdrOutput)
     {
         setShaderFileName(VertexStage,
             videoShader
@@ -244,7 +254,9 @@ public:
                 : QStringLiteral(":/ZoinGallery/resources/viewer_resample.vert.qsb"));
         setShaderFileName(FragmentStage,
             videoShader
-                ? (convertVideoToLinear
+                ? (hdrOutput
+                    ? QStringLiteral(":/ZoinGallery/resources/viewer_resample_video_hdr.frag.qsb")
+                    : convertVideoToLinear
                     ? QStringLiteral(":/ZoinGallery/resources/viewer_video_linear.frag.qsb")
                     : referenceShader
                     ? QStringLiteral(":/ZoinGallery/resources/viewer_resample_video_reference.frag.qsb")
@@ -262,7 +274,7 @@ class ResampleMaterial final : public QSGMaterial
 {
 public:
     explicit ResampleMaterial(QQuickWindow *window
-                              , bool reference, bool conversion
+                              , bool reference, bool conversion, bool hdr
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
                               , bool useVideoShader
 #endif
@@ -273,6 +285,7 @@ public:
     {
         referenceShader = videoShader && reference;
         convertVideoToLinear = videoShader && conversion;
+        hdrOutput = videoShader && hdr;
         setFlag(RequiresFullMatrix, true);
         // The conversion target stores source data, not a presentation fade.
         // Disable blending to preserve float32 premultiplied texels exactly.
@@ -289,6 +302,8 @@ public:
         static QSGMaterialType videoType;
         static QSGMaterialType videoReferenceType;
         static QSGMaterialType videoConversionType;
+        static QSGMaterialType videoHdrType;
+        if (hdrOutput) return &videoHdrType;
         if (videoShader && convertVideoToLinear)
             return &videoConversionType;
         if (videoShader && referenceShader)
@@ -312,7 +327,7 @@ public:
             qInfo() << "[FIX:viewer-sampling] video=" << videoShader
                     << "reference=" << referenceShader
                     << "linearConversion=" << convertVideoToLinear;
-        return new ResampleShader(videoShader, referenceShader, convertVideoToLinear);
+        return new ResampleShader(videoShader, referenceShader, convertVideoToLinear, hdrOutput);
     }
 
     QPointer<QSGTextureProvider> provider;
@@ -334,6 +349,7 @@ public:
     bool videoShader = false;
     bool referenceShader = false;
     bool convertVideoToLinear = false;
+    bool hdrOutput = false;
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
     QPointer<QSGTextureProvider> linearProvider;
     QRhi *rhi = nullptr;
@@ -440,6 +456,14 @@ bool ResampleShader::updateUniformData(RenderState &state, QSGMaterial *newMater
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
     if (material->videoSource) {
         fillVideoUniforms(uniforms, state.rhi(), material->frame);
+        if (material->hdrOutput) {
+            // The HDR shader needs range/primaries instead of the SDR tone-map
+            // parameters. Reuse those scalar slots to keep the SDR shader and
+            // the shared uniform/vertex layout byte-for-byte unchanged.
+            const auto format = material->frame.surfaceFormat();
+            uniforms.videoMasteringWhite = format.colorRange() == QVideoFrameFormat::ColorRange_Full ? 1.f : 0.f;
+            uniforms.videoMaxLum = format.colorSpace() == QVideoFrameFormat::ColorSpace_BT2020 ? 1.f : 0.f;
+        }
         if (uniforms.videoEnabled && material->drawLinearTexture)
             uniforms.videoEnabled = 2;
     }
@@ -561,14 +585,14 @@ class ResampleNode final : public QObject, public QSGGeometryNode
 {
 public:
     explicit ResampleNode(QQuickWindow *window
-                          , bool reference, bool conversion
+                          , bool reference, bool conversion, bool hdr
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
                           , bool useVideoShader
 #endif
                           )
         : geometry(QSGGeometry::defaultAttributes_TexturedPoint2D(), 4),
           material(window
-                   , reference, conversion
+                   , reference, conversion, hdr
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
                    , useVideoShader
 #endif
@@ -826,6 +850,14 @@ void ViewerResampleEffect::setConvertVideoToLinear(bool enabled)
     update();
 }
 
+void ViewerResampleEffect::setHdrOutput(bool enabled)
+{
+    if (m_hdrOutput == enabled) return;
+    m_hdrOutput = enabled;
+    emit hdrOutputChanged();
+    update();
+}
+
 void ViewerResampleEffect::setRequestLinearVideoCache(bool requested)
 {
     if (m_requestLinearVideoCache == requested)
@@ -1012,14 +1044,15 @@ QSGNode *ViewerResampleEffect::updatePaintNode(QSGNode *oldNode, UpdatePaintNode
     // node when the first current video frame arrives instead of mutating the
     // image material into the video material in place.
     if (node && (node->material.videoShader != useVideoShader
-            || node->material.convertVideoToLinear != (useVideoShader && m_convertVideoToLinear))) {
+            || node->material.convertVideoToLinear != (useVideoShader && m_convertVideoToLinear)
+            || node->material.hdrOutput != (useVideoShader && m_hdrOutput))) {
         delete node;
         node = nullptr;
     }
 #endif
 
     if (!node) {
-        node = new ResampleNode(window(), m_referenceSampling, m_convertVideoToLinear
+        node = new ResampleNode(window(), m_referenceSampling, m_convertVideoToLinear, m_hdrOutput
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
                                 , useVideoShader
 #endif

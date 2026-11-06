@@ -7,7 +7,7 @@ class ImageDecodeRunner : public Runner {
     Q_OBJECT
 
 public:
-    ImageDecodeRunner(const ImageData &request);
+    ImageDecodeRunner(const ImageData &request, QThreadPool *resizePool = nullptr);
 
     RunnerType type() override { return RunnerType::ImageDecode; }
     void run() override;
@@ -30,15 +30,21 @@ public:
     int viewerPriorityOrdinal() const override {
         return _imageData.request.viewerPriorityOrdinal;
     }
+    QSharedPointer<ZoinGallery::ImageSourceCancellation>
+    sourceCancellation() const override { return _resizeCancellation; }
 
 signals:
     void imageReady(const ImageDecodeRequest &request, const QImage &image, const DecodedImageInfo &decodedInfo);
     void storeInCache(const ImageDecodeRequest &request, const QByteArray &imageData);
+    void storeViewerFit(const ImageDecodeRequest &request, const QImage &image);
 
 private:
     friend class DecodeManager;
 
     ImageData _imageData;
+    QThreadPool *const _resizePool;
+    QSharedPointer<ZoinGallery::ImageSourceCancellation> _resizeCancellation;
+    std::atomic_bool _foregroundFit{false};
 };
 
 #endif // IMAGEDECODERUNNER_H

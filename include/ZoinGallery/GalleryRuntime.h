@@ -23,6 +23,9 @@ struct RuntimeOptions {
     // Positive values bound the shared pool. A non-positive value preserves
     // ZoinGallery standalone's historical QThread::idealThreadCount policy.
     int maxDecodeThreads = 4;
+    // Let the active Fit window use idle CPU cores beyond the shared limit.
+    // Extra workers run only ranked viewer cache lookups and pixel decodes.
+    bool expandViewerFitWorkers = false;
     // Async image-provider tasks only snapshot/crop already decoded frames.
     // Embedded mode keeps this auxiliary pool small; non-positive preserves
     // the standalone provider's historical Qt ideal-thread-count default.
@@ -59,7 +62,7 @@ class GalleryRuntime final : public QObject {
     Q_PROPERTY(QObject *preferences READ preferences CONSTANT)
     Q_PROPERTY(QString asyncProviderName READ asyncProviderName CONSTANT)
     Q_PROPERTY(int decodeWorkerCount READ decodeWorkerCount CONSTANT)
-    Q_PROPERTY(qint64 thumbnailCacheByteBudget READ thumbnailCacheByteBudget CONSTANT)
+    Q_PROPERTY(qint64 thumbnailCacheByteBudget READ thumbnailCacheByteBudget NOTIFY thumbnailCacheByteBudgetChanged)
     Q_PROPERTY(qint64 thumbnailCacheRetainedBytes READ thumbnailCacheRetainedBytes)
     Q_PROPERTY(qsizetype thumbnailCacheFrameCount READ thumbnailCacheFrameCount)
     Q_PROPERTY(qsizetype thumbnailCachePendingRequestCount READ thumbnailCachePendingRequestCount)
@@ -92,6 +95,9 @@ public:
     quint64 thumbnailCacheEvictionCount() const;
 
     Q_INVOKABLE void shutdown();
+
+signals:
+    void thumbnailCacheByteBudgetChanged();
 
 private:
     class Private;

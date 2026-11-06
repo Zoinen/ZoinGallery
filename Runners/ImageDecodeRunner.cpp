@@ -1,14 +1,21 @@
 #include "ImageDecodeRunner.h"
 #include "ThumbnailLoader.h"
 #include "PersistentImageCache.h"
+#include "ViewerResampler.h"
 
 #include <ZoinGallery/MediaTimingTrace.h>
 
-ImageDecodeRunner::ImageDecodeRunner(const ImageData &request)
-    : _imageData(request) {
+ImageDecodeRunner::ImageDecodeRunner(const ImageData &request, QThreadPool *resizePool)
+    : _imageData(request), _resizePool(resizePool) {
+    if (resizePool)
+        _resizeCancellation = QSharedPointer<ZoinGallery::ImageSourceCancellation>::create();
 }
 
 void ImageDecodeRunner::run() {
+    if (isCanceled()) {
+        emit finished(this);
+        return;
+    }
     QVariantMap timingFields =
         ZoinGallery::MediaTimingTrace::sourceFields(
             _imageData.request.info.source);
@@ -36,13 +43,27 @@ void ImageDecodeRunner::run() {
         decodeSpan.set(QStringLiteral("decodedWidth"), image.width());
         decodeSpan.set(QStringLiteral("decodedHeight"), image.height());
     }
+    if (isCanceled()) {
+        emit finished(this);
+        return;
+    }
     QImage thumbnail;
     {
         ZoinGallery::MediaTimingTrace::Span resizeSpan(
             QStringLiteral("qt.gallery.decode.resize"), timingFields);
         if (_imageData.request.viewerRequest) {
-            thumbnail = ThumbnailLoader::createViewerImage(
-                image, _imageData.request.targetSize);
+            QThreadPool *helperPool = _foregroundFit.load() ? _resizePool : nullptr;
+            if (helperPool) {
+                thumbnail = ZoinGallery::ViewerResampler::downsample(
+                    image, _imageData.request.targetSize,
+                    [cancellation = _resizeCancellation] { return cancellation->isCanceled(); },
+                    helperPool);
+            } else {
+                thumbnail = ZoinGallery::ViewerResampler::downsample(
+                    image, _imageData.request.targetSize,
+                    [this] { return isCanceled(); });
+            }
+            resizeSpan.set(QStringLiteral("foregroundParallel"), helperPool != nullptr);
         } else {
             thumbnail = ThumbnailLoader::createThumbnail(
                 image, _imageData.request.targetSize);
@@ -60,13 +81,28 @@ void ImageDecodeRunner::run() {
     timingSpan.set(QStringLiteral("decodedHeight"), image.height());
     timingSpan.set(QStringLiteral("outputWidth"), thumbnail.width());
     timingSpan.set(QStringLiteral("outputHeight"), thumbnail.height());
+    if (isCanceled()) {
+        emit finished(this);
+        return;
+    }
     emit imageReady(_imageData.request, thumbnail, decodedInfo);
 
-    if (_imageData.request.storeInPersistentCache &&
-        !PersistentImageCache::hasImage(_imageData.request)) {
-        // External artifacts are keyed by request intent and stable size
-        // tier, so persist the exact frame delivered to the consumer. The
-        // standalone path keeps its historical 1024px reusable frame.
+    const auto &request = _imageData.request;
+    if (request.viewerRequest && request.fitToViewerRequest
+        && !request.backgroundViewerRequest && request.info.source.isValid()) {
+        if (!isCanceled() && request.storeInPersistentCache && !thumbnail.isNull())
+            emit storeViewerFit(request, thumbnail);
+        emit finished(this);
+        return;
+    }
+
+    const bool derivedThumbnail = !_imageData.request.viewerRequest
+        && _imageData.request.info.source.isValid();
+    if (!isCanceled() && _imageData.request.storeInPersistentCache &&
+        (derivedThumbnail || !PersistentImageCache::hasImage(_imageData.request))) {
+        // Persist the pixels delivered to the consumer for external sources.
+        // The derived cache checks actual pixels before encoding a thumbnail.
+        // The standalone path keeps its historical 1024px reusable frame.
         const QImage &cacheImage = _imageData.request.info.source.isValid()
             ? thumbnail : image;
         QByteArray imageData;

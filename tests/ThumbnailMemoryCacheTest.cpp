@@ -173,6 +173,7 @@ private slots:
             QSize(123, 77), transform);
         QCOMPARE(repeated.state, ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
         QCOMPARE(repeated.handle.providerId, decoded.providerId);
+        // Extra unused height does not enlarge the aspect-fitted pixels.
         QCOMPARE(cache.acquire("other", source, "v1", 100, QSize(123, 78), transform).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
         // More unused vertical space does not require more source pixels;
@@ -181,6 +182,25 @@ private slots:
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         QCOMPARE(cache.acquire("other", source, "v2", 100, QSize(123, 77), transform).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
+    }
+
+    void cappedFrameSurvivesResizeInMemory() {
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        ZoinGallery::ThumbnailMemoryCache cache(store, 8 * 1024 * 1024);
+        const QString source = QStringLiteral("network/portrait.jpg");
+        const QString transform = QStringLiteral("thumbnail-aspect-v1");
+        const QSize firstTarget(2000, 1800);
+        QCOMPARE(cache.acquire("owner", source, "v1", 100, firstTarget, transform).state,
+                 ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
+        const auto decoded = cache.storeDecoded("owner", source, "v1", 100,
+            firstTarget, transform, frame(QSize(768, 1024)));
+        QVERIFY(decoded.isValid());
+        for (const QSize &bounds : {QSize(400, 400), QSize(2600, 2000)}) {
+            const auto hit = cache.acquire("owner", source, "v1", 100, bounds, transform);
+            QCOMPARE(hit.state, ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
+            QCOMPARE(hit.handle.providerId, decoded.providerId);
+        }
+        QCOMPARE(cache.frameCount(), qsizetype(1));
     }
 
     void largerGridTierIsReusedByIconsAndMasonry() {
@@ -274,6 +294,45 @@ private slots:
         QCOMPARE(evictionSpy.size(), 1);
         QCOMPARE(evictionSpy.constFirst().constFirst().toString(),
                  second.providerId);
+    }
+
+    void changingBudgetPreservesFramesUntilLruEvictionIsNeeded() {
+        const auto store = QSharedPointer<ProviderImageStore>::create();
+        constexpr qint64 frameBytes = 10 * 10 * 4;
+        ZoinGallery::ThumbnailMemoryCache cache(store, frameBytes * 2);
+        QSignalSpy evictionSpy(&cache, &ZoinGallery::ThumbnailMemoryCache::frameEvicted);
+        QSignalSpy budgetSpy(&cache, &ZoinGallery::ThumbnailMemoryCache::byteBudgetChanged);
+        const QString firstPath = QStringLiteral("/virtual/cache/first.png");
+        const QString secondPath = QStringLiteral("/virtual/cache/second.png");
+        const QString thirdPath = QStringLiteral("/virtual/cache/third.png");
+        const QSize size(10, 10);
+        const auto first = storeFrame(cache, "test", firstPath, 1, frameBytes, size);
+        const auto second = storeFrame(cache, "test", secondPath, 1, frameBytes, size);
+
+        cache.setByteBudget(frameBytes * 3);
+        QCOMPARE(cache.byteBudget(), frameBytes * 3);
+        QCOMPARE(budgetSpy.count(), 1);
+        QVERIFY(evictionSpy.isEmpty());
+        QVERIFY(store->contains(first.providerId));
+        QVERIFY(store->contains(second.providerId));
+        const auto third = storeFrame(cache, "test", thirdPath, 1, frameBytes, size);
+        QCOMPARE(cache.frameCount(), 3);
+        QCOMPARE(cache.lookup(firstPath, "1", frameBytes, size).providerId,
+                 first.providerId);
+
+        cache.setByteBudget(frameBytes);
+        QCOMPARE(cache.byteBudget(), frameBytes);
+        QCOMPARE(budgetSpy.count(), 2);
+        QCOMPARE(evictionSpy.count(), 2);
+        QCOMPARE(evictionSpy.at(0).at(0).toString(), second.providerId);
+        QCOMPARE(evictionSpy.at(1).at(0).toString(), third.providerId);
+        QCOMPARE(cache.retainedBytes(), frameBytes);
+        QCOMPARE(store->retainedBytes(), frameBytes);
+        QVERIFY(store->contains(first.providerId));
+        QVERIFY(!store->contains(second.providerId));
+        QVERIFY(!store->contains(third.providerId));
+        cache.setByteBudget(frameBytes);
+        QCOMPARE(budgetSpy.count(), 2);
     }
 
     void aSingleOversizedFrameIsBoundedToOnePinnedAllocation() {

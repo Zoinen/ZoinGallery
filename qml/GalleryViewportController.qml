@@ -271,7 +271,8 @@ QtObject {
         }
 
         if (presentationMode === "details") {
-            const rowExtent = Math.max(1, Number(galleryLayout.density))
+            const rowExtent = Math.max(1, Number(
+                galleryLayout.indexGeometry(galleryLayout.currentIndex).height))
             const coordinate = target / rowExtent
             const row = revealDirection < 0
                     ? Math.floor(coordinate + epsilon)
@@ -284,7 +285,7 @@ QtObject {
     }
 
     function animatePanelScrollTo(targetY, quickScroll, keyboardReveal,
-                                  keyboardRevealDirection) {
+                                  keyboardRevealDirection, page) {
         cancelOverscroll()
         if (!keyboardReveal)
             cancelCursorChromeTransition()
@@ -315,10 +316,18 @@ QtObject {
             setPanelContentY(target, true)
             return target
         }
-        panelScrollAnimation.from = galleryLayout.contentY
-        panelScrollAnimation.to = target
-        panelScrollAnimation.duration = 150
-        panelScrollAnimation.restart()
+        panel.motionController.retargetingScroll = panelScrollAnimation.running
+        try {
+            panelScrollAnimation.from = galleryLayout.contentY
+            panelScrollAnimation.to = target
+            panelScrollAnimation.duration = 150
+            if (page)
+                panel.motionController.restartPageScroll()
+            else
+                panel.motionController.restartScroll()
+        } finally {
+            panel.motionController.retargetingScroll = false
+        }
         return target
     }
 
@@ -455,6 +464,8 @@ QtObject {
                 ? horizontalDelta : verticalDelta
         if (delta === 0)
             return macPlatform && phase === Qt.ScrollBegin
+        if (scrollingMode)
+            pointerLayer.endAutoScroll()
         if (modifiers & Qt.ControlModifier) {
             if (densityAdjustmentEnabled)
                 stepDensity(delta > 0)
@@ -482,9 +493,21 @@ QtObject {
     }
 
     onScrollingModeChanged: {
-        if (!scrollingMode && controller) {
+        if (scrollingMode) {
+            // The pointer gesture supersedes any queued initial restoration.
+            viewportUpdateTimer.stop()
+            viewportUpdateEnsuresCursor = false
+            viewportUpdateSuppressAnimation = false
+            viewportUpdatePendingAfterScroll = false
+        } else if (controller) {
             controller.panelScrollOffset = galleryLayout.contentY
             controller.panelViewportCursorEntryId = controller.cursorEntryId
+            if (viewportUpdatePendingAfterScroll) {
+                const ensureCursor = viewportUpdateEnsuresCursor
+                viewportUpdatePendingAfterScroll = false
+                viewportUpdateEnsuresCursor = false
+                scheduleViewportUpdate(ensureCursor)
+            }
         }
     }
 
@@ -822,11 +845,11 @@ QtObject {
     function scheduleViewportUpdate(ensureCursor) {
         if (ensureCursor)
             viewportUpdateEnsuresCursor = true
-        // Catalog metadata may settle while a wheel animation is in flight.
+        // Catalog metadata may settle during wheel or middle-button motion.
         // Defer the resulting restore/ensure pass until the animation has
         // persisted its destination; running it now would call
         // setPanelContentY(), stop the animation, and snap to the old offset.
-        if (panelScrollAnimation.running) {
+        if (panelScrollAnimation.running || scrollingMode) {
             viewportUpdatePendingAfterScroll = true
             return
         }

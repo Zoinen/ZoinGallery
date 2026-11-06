@@ -19,9 +19,14 @@ private:
     };
 
     bool validate();
+    bool sameInputs(const ExternalCatalogModel::Entry &previous,
+                    const ExternalCatalogModel::Entry &incoming) const;
     ExternalCatalogModel::Entry *prepareTarget(PendingRow &update);
     void removeOldIndexes(ExternalCatalogModel::Entry &entry);
     void addIndexes(const ExternalCatalogModel::Entry &entry, int row);
+    bool collectChangedRoles(const ExternalCatalogModel::Entry *previous,
+                             const ExternalCatalogModel::Entry &incoming,
+                             QList<int> &roles) const;
     void applyRows();
     void resumePipelines();
 

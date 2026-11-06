@@ -144,9 +144,9 @@ QVariantList GalleryViewModel::viewerPrefetchSourceRows(
     for (int counter = 0;
          sourceRows.size() < imageCount && !(hitStart && hitEnd);
          ++counter) {
-        const int viewRow = counter % 2 == 0
-            ? currentViewRow + counter / 2
-            : currentViewRow - (counter + 1) / 2;
+        const int viewRow = counter % 2 == 1
+            ? currentViewRow + (counter + 1) / 2
+            : currentViewRow - counter / 2;
         if (viewRow < 0) {
             hitStart = true;
         }

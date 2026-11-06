@@ -28,8 +28,8 @@
 
 namespace {
 
-constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-display-v4";
-constexpr auto VideoPosterTransform = "video-first-frame-poster-1024-display-v3";
+constexpr auto VideoContactSheetTransform = "video-contact-sheet-2x2-display-v6";
+constexpr auto VideoPosterTransform = "video-first-frame-poster-1024-display-v5";
 constexpr int VideoFrameCount = 4;
 constexpr int VideoPosterMaxLongEdge = 1024;
 constexpr int VideoFrameTimeoutMs = 1800;
@@ -289,7 +289,7 @@ void VideoThumbnailRunner::run() {
     bool posterCaptured = false;
     QSize posterSourceFrameSize;
     QRect posterViewport;
-    QSize posterFrameSize;
+    QSize posterFrameSize = posterCacheHit ? posterRequest.info.imageSize : QSize{};
 
     const auto fail = [&]() {
         if (completed) {
@@ -454,8 +454,8 @@ void VideoThumbnailRunner::run() {
         info.typedFileFields = fileFieldsForMetadata(metadata, duration,
             info.source.isValid() ? info.source.size : QFileInfo(sourcePath).size());
         const QSize resolution = metadata.value(QMediaMetaData::Resolution).toSize();
-        if (resolution.isValid()) info.imageSize = resolution;
-        else if (posterFrameSize.isValid()) info.imageSize = posterFrameSize;
+        if (posterFrameSize.isValid()) info.imageSize = posterFrameSize;
+        else if (resolution.isValid()) info.imageSize = resolution;
         info.fileFieldsRead = true;
         if (_request.storeInPersistentCache) PersistentDerivedImageCache::storeMetadata(info);
         emit imageInfoReady(info);

@@ -4,6 +4,9 @@
 #include "DisplayColorSpace.h"
 #include "StorageLocations.h"
 #include "FolderPreviewSelection.h"
+#include "src/embed/DecodeSizePolicy.h"
+
+#include <ZoinGallery/MediaTimingTrace.h>
 
 #include <QCryptographicHash>
 #include <QCache>
@@ -13,15 +16,21 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLockFile>
 #include <QMutexLocker>
 #include <QSaveFile>
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <utility>
 
 namespace {
+
+using ZoinGallery::boundedPanelThumbnailSize;
+using ZoinGallery::MaximumPanelThumbnailEdge;
+using ZoinGallery::panelThumbnailCovers;
 
 constexpr quint32 DerivedFileMagic = 0x5a474431; // "ZGD1"
 constexpr quint16 DerivedFileVersion = 3;
@@ -84,6 +93,14 @@ QDataStream &operator<<(QDataStream &stream, const MetadataKey &key);
 QDataStream &operator>>(QDataStream &stream, MetadataKey &key);
 
 QMutex cacheMutex;
+std::atomic<quint64> cacheWriteGeneration{0};
+QMutex legacyThumbnailMutex;
+QString legacyThumbnailDirectory;
+struct LegacyThumbnail {
+    QString path;
+    int longEdge = 0;
+};
+QHash<QString, LegacyThumbnail> legacyThumbnails;
 QMutex metadataMemoryMutex;
 QCache<QByteArray, ImageInfo> metadataMemory(16 * 1024 * 1024);
 QMutex lookupRegistryMutex;
@@ -152,7 +169,7 @@ QString versionForRequest(const ImageDecodeRequest &request) {
 QString transformForRequest(const ImageDecodeRequest &request,
                             Artifact artifact) {
     if (artifact == Artifact::VideoPoster) {
-        return QStringLiteral("video-first-frame-poster-1024-display-v3");
+        return QStringLiteral("video-first-frame-poster-1024-display-v5");
     }
     if (artifact == Artifact::ViewerFit) {
         // v4 invalidates full-size Fit entries produced before native JPEG
@@ -220,7 +237,7 @@ MetadataKey metadataKeyForInfo(const ImageInfo &info) {
             ? info.source.resourceId : QString{},
         .sourceSize = info.source.size,
         .schema = isVideoPreviewFormat(info.formatHint())
-            ? QStringLiteral("video-metadata-v1") : QString::fromLatin1(MetadataSchema),
+            ? QStringLiteral("video-metadata-v2") : QString::fromLatin1(MetadataSchema),
     };
 }
 
@@ -298,6 +315,16 @@ QString cacheFilePath(const DerivedKey &key) {
         : QDir(directory).filePath(name + QStringLiteral(".zgd"));
 }
 
+QString reusableThumbnailPath(DerivedKey key) {
+    if (key.artifact != Artifact::Thumbnail) {
+        return {};
+    }
+    // A zero target reserves a filename for the reusable frame. Its header
+    // still records the real request size and the actual encoded dimensions.
+    key.targetTier = QSize(0, 0);
+    return cacheFilePath(key);
+}
+
 QByteArray serializedMetadataKey(const MetadataKey &key) {
     QByteArray result;
     QDataStream stream(&result, QIODevice::WriteOnly);
@@ -324,7 +351,11 @@ QString metadataCacheFilePath(const MetadataKey &key) {
 QString lookupKey(const ImageDecodeRequest &request) {
     const DerivedKey key = keyForRequest(request);
     if (key.isValid()) {
-        return cacheFilePath(key);
+        const QString path = cacheFilePath(key);
+        // Navigation cancels lookup and read stages together for one viewer.
+        // A different viewer must wait on its own lookup, not a canceled one.
+        return request.viewerRequest && !request.requestNamespace.isEmpty()
+            ? path + QChar(0x1f) + request.requestNamespace : path;
     }
     // Local files still use the legacy path/stat cache.  Video requests for
     // those files must join the same cache-before-source gate as derived
@@ -353,15 +384,30 @@ QString lookupKey(const ImageDecodeRequest &request) {
         QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
 }
 
-bool keysEqual(const DerivedKey &left, const DerivedKey &right) {
+bool sameArtifactRevision(const DerivedKey &left, const DerivedKey &right) {
     return left.sourceKey == right.sourceKey &&
         left.contentVersion == right.contentVersion &&
         left.authorityResourceId == right.authorityResourceId &&
         left.sourceSize == right.sourceSize &&
         left.artifact == right.artifact &&
-        left.targetTier == right.targetTier &&
         left.transformSchema == right.transformSchema &&
         left.decoderSchema == right.decoderSchema;
+}
+
+bool keysEqual(const DerivedKey &left, const DerivedKey &right) {
+    return sameArtifactRevision(left, right) && left.targetTier == right.targetTier;
+}
+
+bool servesThumbnailRequest(const DerivedKey &stored, const QSize &storedPixels,
+                            const DerivedKey &request) {
+    // An exact-size request can finish with fewer pixels, for example when
+    // the source only contains a small embedded preview.
+    const bool aspectPreserved =
+        request.transformSchema == QStringLiteral("thumbnail-aspect-v1") ||
+        request.transformSchema == QStringLiteral("video-contact-sheet-2x2-display-v6");
+    return sameArtifactRevision(stored, request) &&
+        (stored.targetTier == request.targetTier ||
+         panelThumbnailCovers(storedPixels, request.targetTier, aspectPreserved));
 }
 
 bool metadataKeysEqual(const MetadataKey &left, const MetadataKey &right) {
@@ -370,6 +416,20 @@ bool metadataKeysEqual(const MetadataKey &left, const MetadataKey &right) {
         left.authorityResourceId == right.authorityResourceId &&
         left.sourceSize == right.sourceSize &&
         left.schema == right.schema;
+}
+
+bool readImageHeader(QDataStream &stream, DerivedKey &key, QSize &storedPixelSize) {
+    stream.setVersion(QDataStream::Qt_6_0);
+    quint32 magic = 0;
+    quint16 version = 0;
+    stream >> magic >> version;
+    if (magic != DerivedFileMagic || version != DerivedFileVersion) {
+        return false;
+    }
+    stream >> key >> storedPixelSize;
+    return stream.status() == QDataStream::Ok && key.isValid() &&
+        key.decoderSchema == QString::fromLatin1(DerivedDecoderSchema) &&
+        !storedPixelSize.isEmpty();
 }
 
 bool parsePreparedEntry(const QByteArray &entry, DerivedKey &key,
@@ -383,16 +443,73 @@ bool parsePreparedEntry(const QByteArray &entry, DerivedKey &key,
         return false;
     }
     QDataStream stream(&buffer);
-    stream.setVersion(QDataStream::Qt_6_0);
-    quint32 magic = 0;
-    quint16 version = 0;
-    stream >> magic >> version >> key >> storedPixelSize >> encodedImage;
+    if (!readImageHeader(stream, key, storedPixelSize)) {
+        return false;
+    }
+    stream >> encodedImage;
     return stream.status() == QDataStream::Ok &&
-        magic == DerivedFileMagic && version == DerivedFileVersion &&
-        key.isValid() &&
-        key.decoderSchema == QString::fromLatin1(DerivedDecoderSchema) &&
-        storedPixelSize.isValid() && !encodedImage.isEmpty() &&
-        encodedImage.size() <= MaximumEntryBytes;
+        !encodedImage.isEmpty() && encodedImage.size() <= MaximumEntryBytes;
+}
+
+bool readCachedImageHeader(const QString &path, DerivedKey &key, QSize &pixels) {
+    if (path.isEmpty()) {
+        return false;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > MaximumEntryBytes) {
+        return false;
+    }
+    QDataStream stream(&file);
+    return readImageHeader(stream, key, pixels);
+}
+
+QString legacyThumbnailPath(const DerivedKey &requested) {
+    if (!requested.authorityResourceId.isEmpty()) return {};
+    const QString directory = cacheDirectoryPath();
+    QMutexLocker locker(&legacyThumbnailMutex);
+    if (legacyThumbnailDirectory != directory) {
+        ZoinGallery::MediaTimingTrace::Span span(
+            QStringLiteral("qt.gallery.thumbnail_cache.legacy_index"));
+        legacyThumbnails.clear();
+        // Old builds hashed the requested dimensions into the filename. Read
+        // just the headers once on a cache worker to recover the revision keys.
+        const QDir cache(directory);
+        const auto files = cache.entryList({QStringLiteral("*.zgd")},
+                                          QDir::Files, QDir::NoSort);
+        for (const QString &file : files) {
+            const QString path = cache.filePath(file);
+            DerivedKey stored;
+            QSize pixels;
+            if (!readCachedImageHeader(path, stored, pixels)
+                || stored.artifact != Artifact::Thumbnail
+                || path != cacheFilePath(stored)) continue;
+            auto &candidate = legacyThumbnails[reusableThumbnailPath(stored)];
+            const int longEdge = qMax(pixels.width(), pixels.height());
+            if (longEdge > candidate.longEdge) candidate = {path, longEdge};
+        }
+        legacyThumbnailDirectory = directory;
+        span.set(QStringLiteral("revisions"), legacyThumbnails.size());
+    }
+    return legacyThumbnails.value(reusableThumbnailPath(requested)).path;
+}
+
+// The caller holds cacheMutex. Compare actual pixels: a larger request may
+// still have yielded a smaller embedded preview.
+bool thumbnailSlotNeedsUpgrade(const QString &path, const DerivedKey &key,
+                               const QSize &pixels) {
+    DerivedKey previous;
+    QSize previousPixels;
+    if (!readCachedImageHeader(path, previous, previousPixels) ||
+        !sameArtifactRevision(previous, key)) {
+        return true;
+    }
+    const int oldEdge = qMax(previousPixels.width(), previousPixels.height());
+    const int newEdge = qMax(pixels.width(), pixels.height());
+    if (oldEdge > MaximumPanelThumbnailEdge) {
+        // An oversized entry from an older build can be normalized in place.
+        return newEdge == MaximumPanelThumbnailEdge;
+    }
+    return newEdge > oldEdge;
 }
 
 bool parseMetadataEntry(const QByteArray &entry, MetadataKey &key,
@@ -417,7 +534,7 @@ bool parseMetadataEntry(const QByteArray &entry, MetadataKey &key,
     if (stream.status() != QDataStream::Ok ||
         magic != MetadataFileMagic || version != MetadataFileVersion ||
         !key.isValid() ||
-        (key.schema != QString::fromLatin1(MetadataSchema) && key.schema != QStringLiteral("video-metadata-v1")) ||
+        (key.schema != QString::fromLatin1(MetadataSchema) && key.schema != QStringLiteral("video-metadata-v2")) ||
         !imageSize.isValid() || imageSize.width() <= 0 ||
         imageSize.height() <= 0 ||
         orientationValue < ExifOrientation::Horizontal ||
@@ -559,7 +676,11 @@ void invalidateKnownSizeForKey(const DerivedKey &key) {
 }
 
 void removeIfUnchanged(const QString &path, const QByteArray &observed,
-                       const DerivedKey &key) {
+                       const DerivedKey &key, bool reusable = false) {
+    QLockFile entryLock(path + QStringLiteral(".lock"));
+    if (reusable && !entryLock.tryLock(0)) {
+        return;
+    }
     QMutexLocker locker(&cacheMutex);
     QFile current(path);
     if (!current.open(QIODevice::ReadOnly) ||
@@ -572,14 +693,89 @@ void removeIfUnchanged(const QString &path, const QByteArray &observed,
     }
 }
 
-bool writePreparedEntry(const DerivedKey &key, const QByteArray &entry) {
+bool writePreparedEntry(const DerivedKey &key, const QSize &pixels,
+                        const QByteArray &entry);
+
+QByteArray encodePreparedImage(const DerivedKey &key, const QImage &image) {
+    // Keep the final viewer Fit pixels (including quantization dither).
+    const bool lossless = key.artifact == Artifact::ViewerFit;
+    const QByteArray encoded = WebpCodec::encode(image, CacheWebpQuality, lossless);
+    if (encoded.isEmpty()) {
+        return {};
+    }
+    QByteArray entry;
+    QDataStream stream(&entry, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_6_0);
+    stream << DerivedFileMagic << DerivedFileVersion
+           << key << image.size() << encoded;
+    return stream.status() == QDataStream::Ok ? entry : QByteArray{};
+}
+
+QImage readCachedImage(const QString &path, const DerivedKey &requested,
+                       bool reusable) {
+    if (path.isEmpty()) {
+        return {};
+    }
+    QByteArray entry;
+    {
+        // Release the cache mutex before WebP decode and color conversion.
+        QMutexLocker locker(&cacheMutex);
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return {};
+        }
+        const qint64 size = file.size();
+        if (size <= 0 || size > MaximumEntryBytes) {
+            return {};
+        }
+        entry = file.readAll();
+        if (entry.size() != size) {
+            return {};
+        }
+    }
+
+    DerivedKey stored;
+    QSize pixels;
+    QByteArray encoded;
+    if (!parsePreparedEntry(entry, stored, pixels, encoded) ||
+        !(reusable ? sameArtifactRevision(stored, requested) : keysEqual(stored, requested))) {
+        removeIfUnchanged(path, entry, requested, reusable);
+        return {};
+    }
+    if (reusable && !servesThumbnailRequest(stored, pixels, requested)) {
+        return {};
+    }
+    QImage image = WebpCodec::decode(encoded);
+    if (image.isNull() || image.size() != pixels) {
+        removeIfUnchanged(path, entry, requested, reusable);
+        return {};
+    }
+    image.setColorSpace(DisplayColorSpace::cacheColorSpace());
+    if (stored.artifact == Artifact::Thumbnail) {
+        const QSize bounded = boundedPanelThumbnailSize(pixels);
+        if (bounded != pixels) {
+            image = image.scaled(bounded, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            // Normalize the old reusable slot only when it is used. Legacy
+            // exact keys stay read-only and expire under the normal budget.
+            if (reusable && !image.isNull()) {
+                const QByteArray normalized = encodePreparedImage(stored, image);
+                if (!normalized.isEmpty()) {
+                    writePreparedEntry(stored, bounded, normalized);
+                }
+            }
+        }
+    }
+    touchFile(path);
+    return DisplayColorSpace::convertImage(image);
+}
+
+bool writePreparedEntryLocked(const DerivedKey &key, const QString &path,
+                              const QByteArray &entry) {
     const QString directoryPath = cacheDirectoryPath(key);
-    const QString path = cacheFilePath(key);
     if (directoryPath.isEmpty() || path.isEmpty()) {
         return false;
     }
 
-    QMutexLocker locker(&cacheMutex);
     if (!QDir().mkpath(directoryPath)) {
         return false;
     }
@@ -597,6 +793,43 @@ bool writePreparedEntry(const DerivedKey &key, const QByteArray &entry) {
                                QFileInfo(path).size());
     pruneDiskCacheLocked(directoryPath, knownSize);
     return true;
+}
+
+bool writePreparedEntry(const DerivedKey &key, const QSize &pixels,
+                        const QByteArray &entry) {
+    const QString reusablePath = reusableThumbnailPath(key);
+    if (key.artifact == Artifact::Thumbnail) {
+        if (reusablePath.isEmpty() || pixels != boundedPanelThumbnailSize(pixels) ||
+            !QDir().mkpath(cacheDirectoryPath(key))) {
+            return false;
+        }
+        {
+            // Serialize upgrades between processes. If the slot stays busy,
+            // skip the write; a different filename would break the one-slot policy.
+            QLockFile entryLock(reusablePath + QStringLiteral(".lock"));
+            if (!entryLock.tryLock(100)) {
+                return false;
+            }
+            QMutexLocker locker(&cacheMutex);
+            if (!thumbnailSlotNeedsUpgrade(reusablePath, key, pixels)) {
+                return true;
+            }
+            if (!writePreparedEntryLocked(key, reusablePath, entry)) {
+                return false;
+            }
+        }
+        if (ZoinGallery::MediaTimingTrace::enabled()) {
+            ZoinGallery::MediaTimingTrace::event(
+                QStringLiteral("qt.gallery.thumbnail_cache.update"),
+                {{QStringLiteral("fix"), QStringLiteral("[FIX:thumbnail-cache-cap]")},
+                 {QStringLiteral("width"), pixels.width()},
+                 {QStringLiteral("height"), pixels.height()}});
+        }
+        return true;
+    }
+
+    QMutexLocker locker(&cacheMutex);
+    return writePreparedEntryLocked(key, cacheFilePath(key), entry);
 }
 
 qint64 &knownSizeForMetadataKey(const MetadataKey &key) {
@@ -679,8 +912,15 @@ bool PersistentDerivedImageCache::hasImage(
     if (!isEligible(request)) {
         return false;
     }
+    const auto key = keyForRequest(request);
     QMutexLocker locker(&cacheMutex);
-    const QFileInfo file(cacheFilePath(keyForRequest(request)));
+    DerivedKey stored;
+    QSize pixels;
+    if (readCachedImageHeader(reusableThumbnailPath(key), stored, pixels)
+        && servesThumbnailRequest(stored, pixels, key)) {
+        return true;
+    }
+    const QFileInfo file(cacheFilePath(key));
     return file.isFile() && file.size() > 0 &&
         file.size() <= MaximumEntryBytes;
 }
@@ -690,51 +930,13 @@ QImage PersistentDerivedImageCache::retrieveImage(
     if (!isEligible(request)) {
         return {};
     }
-    const DerivedKey requestedKey = keyForRequest(request);
-    const QString path = cacheFilePath(requestedKey);
-
-    QByteArray entry;
-    {
-        // Serialize filesystem mutation and the short read only. WebP decode
-        // and colorspace conversion are deliberately outside this global
-        // critical section so unrelated cache hits can progress in parallel.
-        QMutexLocker locker(&cacheMutex);
-        const QFileInfo fileInfo(path);
-        if (!fileInfo.isFile() || fileInfo.size() <= 0 ||
-            fileInfo.size() > MaximumEntryBytes) {
-            return {};
-        }
-        QFile file(path);
-        if (!file.open(QIODevice::ReadOnly)) {
-            return {};
-        }
-        entry = file.readAll();
-        if (entry.size() != fileInfo.size()) {
-            return {};
-        }
+    const auto key = keyForRequest(request);
+    QImage image = readCachedImage(reusableThumbnailPath(key), key, true);
+    if (!image.isNull()) return image;
+    if (request.viewerThumbnailRequest && key.artifact == Artifact::Thumbnail) {
+        return readCachedImage(legacyThumbnailPath(key), key, true);
     }
-
-    DerivedKey storedKey;
-    QSize storedPixelSize;
-    QByteArray encodedImage;
-    if (!parsePreparedEntry(entry, storedKey, storedPixelSize,
-                            encodedImage) ||
-        !keysEqual(requestedKey, storedKey) ||
-        !storedPixelSize.isValid() || encodedImage.isEmpty() ||
-        encodedImage.size() > MaximumEntryBytes) {
-        removeIfUnchanged(path, entry, requestedKey);
-        return {};
-    }
-
-    QImage result = WebpCodec::decode(encodedImage);
-    if (result.isNull() || result.size() != storedPixelSize) {
-        removeIfUnchanged(path, entry, requestedKey);
-        return {};
-    }
-    result.setColorSpace(DisplayColorSpace::cacheColorSpace());
-    result = DisplayColorSpace::convertImage(result);
-    touchFile(path);
-    return result;
+    return readCachedImage(cacheFilePath(key), key, false);
 }
 
 void PersistentDerivedImageCache::storeImage(
@@ -750,16 +952,11 @@ void PersistentDerivedImageCache::storeImage(
         !keysEqual(key, keyForRequest(request))) {
         return;
     }
-    const QString path = cacheFilePath(key);
-    if (path.isEmpty()) {
-        return;
-    }
-
     QImage decoded = WebpCodec::decode(encodedImage);
     if (decoded.isNull() || decoded.size() != storedPixelSize) {
         return;
     }
-    writePreparedEntry(key, preparedEntry);
+    writePreparedEntry(key, storedPixelSize, preparedEntry);
 }
 
 void PersistentDerivedImageCache::storePreparedImage(
@@ -790,15 +987,11 @@ void PersistentDerivedImageCache::storePreparedImage(
          key.contentVersion != requestVersion)) {
         return;
     }
-    const QString path = cacheFilePath(key);
-    if (path.isEmpty()) {
-        return;
-    }
     QImage decoded = WebpCodec::decode(encodedImage);
     if (decoded.isNull() || decoded.size() != storedPixelSize) {
         return;
     }
-    writePreparedEntry(key, preparedEntry);
+    writePreparedEntry(key, storedPixelSize, preparedEntry);
 }
 
 QByteArray PersistentDerivedImageCache::createImageForCache(
@@ -806,25 +999,43 @@ QByteArray PersistentDerivedImageCache::createImageForCache(
     if (!isEligible(request) || image.isNull()) {
         return {};
     }
-    QImage converted = DisplayColorSpace::convertImageToColorSpace(
-        image, DisplayColorSpace::cacheColorSpace());
+    const DerivedKey key = keyForRequest(request);
+    QSize pixels = image.size();
+    if (key.artifact == Artifact::Thumbnail) {
+        pixels = boundedPanelThumbnailSize(pixels);
+        const QString path = reusableThumbnailPath(key);
+        QMutexLocker locker(&cacheMutex);
+        if (path.isEmpty() || !thumbnailSlotNeedsUpgrade(path, key, pixels)) {
+            return {};
+        }
+    }
+    const QImage bounded = pixels == image.size() ? image
+        : image.scaled(pixels, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    const QImage converted = DisplayColorSpace::convertImageToColorSpace(
+        bounded, DisplayColorSpace::cacheColorSpace());
     if (converted.isNull()) {
         return {};
     }
-    // A Fit frame already contains the viewer filter's final pixels, including
-    // quantization dither. Preserve them through the disk-cache round trip.
-    const bool lossless = artifactForRequest(request) == Artifact::ViewerFit;
-    const QByteArray encoded = WebpCodec::encode(converted,
-                                                CacheWebpQuality, lossless);
-    if (encoded.isEmpty()) {
-        return {};
-    }
-    QByteArray entry;
-    QDataStream stream(&entry, QIODevice::WriteOnly);
-    stream.setVersion(QDataStream::Qt_6_0);
-    stream << DerivedFileMagic << DerivedFileVersion
-           << keyForRequest(request) << converted.size() << encoded;
-    return stream.status() == QDataStream::Ok ? entry : QByteArray{};
+    return encodePreparedImage(key, converted);
+}
+
+quint64 PersistentDerivedImageCache::writeGeneration() {
+    return cacheWriteGeneration.load();
+}
+
+void PersistentDerivedImageCache::storeViewerFitFrame(
+    const ImageDecodeRequest &request, const QImage &image, quint64 generation) {
+    if (generation != writeGeneration() || image.isNull() || !isEligible(request)) return;
+    const DerivedKey key = keyForRequest(request);
+    if (key.artifact != Artifact::ViewerFit || hasImage(request)) return;
+    ZoinGallery::MediaTimingTrace::Span span(
+        QStringLiteral("qt.gallery.viewer_fit_cache.write"),
+        ZoinGallery::MediaTimingTrace::sourceFields(request.info.source));
+    const QByteArray entry = createImageForCache(request, image);
+    QMutexLocker locker(&cacheMutex);
+    const bool stored = generation == writeGeneration() && !entry.isEmpty()
+        && writePreparedEntryLocked(key, cacheFilePath(key), entry);
+    span.set(QStringLiteral("ok"), stored);
 }
 
 bool PersistentDerivedImageCache::retrieveMetadata(ImageInfo &info) {
@@ -1026,7 +1237,13 @@ qint64 PersistentDerivedImageCache::sessionCacheSize() {
 
 void PersistentDerivedImageCache::clear() {
     QMutexLocker locker(&cacheMutex);
+    ++cacheWriteGeneration;
     clearMemoryMetadata();
+    {
+        QMutexLocker indexLocker(&legacyThumbnailMutex);
+        legacyThumbnailDirectory.clear();
+        legacyThumbnails.clear();
+    }
     QDir directory(cacheDirectoryPath());
     if (directory.exists() && !directory.removeRecursively()) {
         knownPersistentDiskSize = -1;
@@ -1046,6 +1263,7 @@ void PersistentDerivedImageCache::clear() {
 
 void PersistentDerivedImageCache::clearSession() {
     QMutexLocker locker(&cacheMutex);
+    ++cacheWriteGeneration;
     clearMemoryMetadata();
     QDir directory(sessionCacheDirectoryPath());
     if (directory.exists() && !directory.removeRecursively()) {

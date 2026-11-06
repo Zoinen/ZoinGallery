@@ -321,9 +321,23 @@ void ExternalCatalogModel::handleImageReady(
                 {QStringLiteral("imageWidth"), image.width()},
                 {QStringLiteral("imageHeight"), image.height()},
                 {QStringLiteral("null"), image.isNull()},
+                {QStringLiteral("viewerThumbnail"), request.viewerThumbnailRequest},
             }));
     const QList<int> authorityRows = decodeAuthorityRows(request);
     if (authorityRows.isEmpty()) {
+        return;
+    }
+    if (request.viewerThumbnailRequest) {
+        if (_shutdown || image.isNull() || !_thumbnailCache) return;
+        const int row = rowForEntryId(_viewerEntryId);
+        if (!authorityRows.contains(row)) return;
+        Entry *entry = validatedDecodedEntry(row, request);
+        if (!entry) return;
+        _thumbnailCache->storeDecoded(
+            _sessionId, entry->sourceIdentity, entry->contentVersion,
+            entry->size, request.targetSize, thumbnailTransformKey(request), image);
+        emit viewerSourceAtChanged(row);
+        notifyViewerImageUrlChanged();
         return;
     }
     clearCompletedDecodeRequest(request, !image.isNull());
@@ -356,7 +370,13 @@ void ExternalCatalogModel::handleImageReady(
         info.orientation = ExifOrientation::Horizontal;
         info.requestNamespace = _sessionId;
         info.isLast = true;
-        handleImageInfo(info);
+        // A late frame can refine dimensions even when its pixels came from
+        // cache. Coalesce that geometry with other completions; only metadata
+        // restoration batches should request an immediate cached-layout flush.
+        ImageInfoBatchState state;
+        state.allChangedMetadataCached = false;
+        applyImageInfoResult(info, state);
+        publishImageInfoBatch(state);
     }
     if (request.viewerRequest) {
         publishViewerImage(decodedRows, request, image, decodedInfo);
@@ -557,7 +577,7 @@ void ExternalCatalogModel::publishThumbnailImage(
         _thumbnailCache->storeDecoded(
             _sessionId, entry.sourceIdentity, entry.contentVersion,
             entry.size, request.targetSize,
-            QStringLiteral("video-first-frame-poster-1024-display-v3"), image);
+            QStringLiteral("video-first-frame-poster-1024-display-v5"), image);
         const int row = rowForEntryId(entry.id);
         if (validRow(row)) {
             emit viewerSourceAtChanged(row);

@@ -14,6 +14,8 @@ Item {
 
     property var layout: null
     property var pointerSource: null
+    property var nativeScrollAnimation: null
+    property bool nativeDriving: false
     property bool horizontal: false
     // MasonryMode historically used the available screen height as the speed
     // scale. Embedders provide that extent explicitly; the viewport is a
@@ -22,7 +24,7 @@ Item {
     property real startCoordinate: 0
     property bool scrollingStarted: false
     property bool scrollingMode: false
-    readonly property bool animationRunning: autoScrollAnimation.running
+    readonly property bool animationRunning: autoScrollAnimation.running || nativeDriving
 
     function pointerCoordinate() {
         if (!root.pointerSource)
@@ -37,6 +39,21 @@ Item {
         return Math.min(Math.max(0, distance - 25), distance + 25)
     }
 
+    function velocityForDistance(distance) {
+        const extent = Math.max(25, Number(root.scrollExtent || 0))
+        let fraction = Math.abs(distance) / Math.max(1, extent - 25)
+        if (fraction > 0)
+            fraction += 0.05
+        return Math.pow(fraction, 3) * extent * 60 * (distance < 0 ? -1 : 1)
+    }
+
+    function stopNativeMotion() {
+        const wasDriving = root.nativeDriving
+        root.nativeDriving = false
+        if (wasDriving && root.nativeScrollAnimation)
+            root.nativeScrollAnimation.stopContinuous()
+    }
+
     // Keep the middle-click gesture armed (and therefore keep its neutral
     // cursor) without driving Qt Quick's animation loop while the pointer is
     // stationary in the dead zone. Pointer motion is the event which starts
@@ -45,6 +62,7 @@ Item {
     function updatePointerMotion() {
         if (!root.scrollingMode) {
             autoScrollAnimation.stop()
+            root.stopNativeMotion()
             return
         }
 
@@ -53,10 +71,19 @@ Item {
             root.layout.setScrollingMode(true,
                                          distance < 0 ? -1
                                                       : distance > 0 ? 1 : 0)
-        if (distance === 0)
+        if (distance === 0) {
             autoScrollAnimation.stop()
-        else if (!autoScrollAnimation.running)
-            autoScrollAnimation.start()
+            root.stopNativeMotion()
+        } else if (root.nativeScrollAnimation
+                   && root.nativeScrollAnimation.setContinuousVelocity(root.velocityForDistance(distance))) {
+            root.nativeDriving = true
+            autoScrollAnimation.stop()
+            root.scrollingStarted = true
+        } else {
+            root.stopNativeMotion()
+            if (!autoScrollAnimation.running)
+                autoScrollAnimation.start()
+        }
     }
 
     function start() {
@@ -76,6 +103,7 @@ Item {
         root.scrollingStarted = false
         root.scrollingMode = false
         autoScrollAnimation.stop()
+        root.stopNativeMotion()
         if (root.layout)
             root.layout.setScrollingMode(false)
     }
@@ -96,17 +124,7 @@ Item {
                 root.updatePointerMotion()
                 return
             }
-            const totalExtent = Math.max(
-                        25, Number(root.scrollExtent || 0))
-            let fraction = Math.abs(distance) / Math.max(1, totalExtent - 25)
-            if (fraction > 0)
-                fraction += 0.05
-
-            const speed = frameTime * 30
-            const increment = (Math.pow(fraction, 3) * totalExtent)
-                    * speed * 2
-            root.layout.contentY += increment
-                    * (distance < 0 ? -1 : 1)
+            root.layout.contentY += root.velocityForDistance(distance) * frameTime
 
             if (distance !== 0 && !root.scrollingStarted)
                 root.scrollingStarted = true
@@ -117,6 +135,27 @@ Item {
                 root.layout.setScrollingMode(true, -1)
             else
                 root.layout.setScrollingMode(true)
+        }
+    }
+
+    Connections {
+        target: root.nativeScrollAnimation
+        ignoreUnknownSignals: true
+        function onNativeRunningChanged() {
+            if (root.nativeDriving && !root.nativeScrollAnimation.continuousRunning) {
+                root.nativeDriving = false
+                if (root.scrollingMode)
+                    Qt.callLater(root.updatePointerMotion)
+            }
+        }
+    }
+
+    Connections {
+        target: root.Window.window
+        function onVisibilityChanged(visibility) {
+            if (root.scrollingMode && (visibility === Window.Hidden
+                                      || visibility === Window.Minimized))
+                root.end()
         }
     }
 

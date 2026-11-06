@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import ZoinGallery as ZG
 
 import ZoinGallery.Native 1.0
@@ -9,6 +10,15 @@ BrickItem {
     id: entry
 
     required property Item panelRoot
+    Accessible.role: Accessible.ListItem
+    Accessible.ignored: !entry.masonryMode || entry.viewIndex < 0
+    Accessible.name: entry.effectiveDisplayName
+    Accessible.selected: entry.selected
+    accessibleChildrenDecorative: entry.masonryMode && !entry.panelRoot.controller.canRemoveEntries
+    Accessible.onPressAction: {
+        if (entry.masonryMode && entry.sceneVisible && entry.viewIndex >= 0)
+            entry.panelRoot.selectIndex(entry.viewIndex, true)
+    }
     property var model
     // Installed by the layout after committing the whole metadata-ready row.
     property bool masonryGeometryReady: false
@@ -22,7 +32,7 @@ BrickItem {
         folderPreviewActive ? height : (modeVisual.item ? modeVisual.item.paintedHeight : height)
 
     readonly property bool pointerHovered:
-        panelRoot.hoveredIndex === viewIndex
+        viewIndex >= 0 && panelRoot.hoveredIndex === viewIndex
     // A sparse page hand-off may briefly invalidate the row facade while the
     // bounded replacement snapshot is being installed. Keep the already
     // supplied row paintable through the typed controller's one-row lookup;
@@ -62,45 +72,21 @@ BrickItem {
     readonly property real cellVerticalInset: {
         // Native layout can clamp the requested inset to reserve caption space
         // or preserve a positive Masonry preview at minimum zoom.
-        const rect = previewRect
         if ((masonryMode || gridMode || iconsMode)
-            && rect && rect.width > 0 && rect.height > 0)
-            return Math.max(0, rect.y)
+            && previewWidth > 0 && previewHeight > 0)
+            return Math.max(0, previewY)
         return Math.min(
             Math.max(0, Math.floor((Math.round(height * renderDpr) - 1) / 2)) / renderDpr,
             Math.round(Math.max(0, panelRoot.metrics.cellVerticalPadding) * renderDpr) / renderDpr)
     }
-    readonly property point iconSceneOrigin: {
-        if (detailsMode)
-            return Qt.point(0, 0)
-        // mapToItem() does not register dependencies on ancestor geometry.
-        // Track geometry through the complete chain so host
-        // panel placement invalidates the correction without any scrolling.
-        let dependency = 0
-        let ancestor = entry
-        while (ancestor) {
-            dependency += ancestor.x + ancestor.y + ancestor.scale + ancestor.rotation
-            // Size does not affect an untransformed item's origin. Anchors
-            // publish x/y when resizing actually moves it; subscribing every
-            // row to every ancestor's size repeats the whole chain on resize.
-            if (ancestor.scale !== 1 || ancestor.rotation !== 0)
-                dependency += ancestor.width + ancestor.height + ancestor.transformOrigin
-            ancestor = ancestor.parent
-        }
-        return entry.mapToItem(null, dependency * 0, dependency * 0)
-    }
-    readonly property real iconPixelAlignmentRevision: {
-        if (!visible)
-            return 0
-        const viewport = detailsMode ? Qt.point(0, 0)
-                                     : panelRoot.cursorPixelGridViewportOrigin
-        const preview = previewContainerItem
-        return Number(viewport.x || 0) + Number(viewport.y || 0)
-                + (detailsMode ? 0 : x + y) + width + height
-                + (preview ? preview.x + preview.y
-                             + preview.width + preview.height : 0)
-                + presentationMode
-    }
+    readonly property bool iconPixelAlignmentActive:
+        visible && sceneVisible && !geometryAnimationRunning
+    readonly property bool motionActive:
+        geometryAnimationRunning || panelRoot.cursorPixelAlignmentSuspended
+    // Compatibility values for embedders; local placement is now owned by the
+    // cached grid scope rather than reactive scene-origin dependency walks.
+    readonly property point iconSceneOrigin: Qt.point(0, 0)
+    readonly property real iconPixelAlignmentRevision: 0
 
     function snapIconExtent(value) {
         // sourceSize is an integer logical QSize. Derive the displayed
@@ -110,23 +96,20 @@ BrickItem {
                            / renderDpr)
     }
 
+    function iconPixelAlignment(item) {
+        if (!iconPixelAlignmentActive || !item || !item.parent || !item.visible)
+            return null
+        return item.PixelGridAlignment
+    }
+
     function iconPixelOffset(item) {
-        if (!visible || !item || !item.parent || !item.visible)
+        if (!iconPixelAlignmentActive || !item || !item.parent || !item.visible)
             return Qt.point(0, 0)
-        const revision = iconPixelAlignmentRevision
-        const origin = iconSceneOrigin
-        // Details' brick origin is already aligned by C++; only the short
-        // chain inside the brick can contribute a local centering offset.
-        const scenePoint = item.parent.mapToItem(detailsMode ? entry : null, item.x, item.y)
-        return Qt.point(
-            Math.round(scenePoint.x * renderDpr) / renderDpr
-                - scenePoint.x + revision * 0 + origin.x * 0,
-            Math.round(scenePoint.y * renderDpr) / renderDpr
-                - scenePoint.y + origin.y * 0)
+        return item.PixelGridAlignment.offset
     }
 
     readonly property bool current:
-        panelRoot.visualCursorIndex === viewIndex
+        viewIndex >= 0 && panelRoot.visualCursorIndex === viewIndex
     readonly property bool selected: panelRoot.effectiveEntrySelected(
         entryId, visualModel.isSelected)
     readonly property bool cursorChromeSuppressed:
@@ -177,32 +160,45 @@ BrickItem {
          ? (masonryMode ? ZG.Style.brickInfoPanelSelected : visualModel.cursorBackground)
          : visualModel.normalBackground)
         || panelRoot.labelBackgroundColor
-    readonly property rect effectivePreviewRect: {
-        if (detailsMode || columnsMode) {
-            // Keep the slot tied to the scaled icon, not unused row height:
-            // both the preview centering and filename origin use this extent.
-            const extent = Math.max(0, Math.round((height
+    // Keep component reads scalar: a rect read from QML creates a GC wrapper,
+    // including a notify connection for referenced value types.
+    readonly property bool compactPreview: detailsMode || columnsMode
+    readonly property bool nativePreviewValid: previewWidth > 0 && previewHeight > 0
+    readonly property bool useMasonryPreview: masonryMode && nativePreviewValid
+        && (isImage || visualModel.isVideo)
+    readonly property real compactPreviewExtent: compactPreview
+        ? Math.max(0, Math.round((height
                 - 2 * panelRoot.metrics.detailsIconVerticalPadding
                 + panelRoot.detailsIconSlotSize - panelRoot.detailsIconSize)
-                * renderDpr) / renderDpr)
-            const origin = detailsMode ? Qt.point(0, 0) : iconSceneOrigin
-            const left = panelRoot.detailsRowInset
-            const top = Math.max(0, (height - extent) / 2)
-            return Qt.rect(Math.round((origin.x + left) * renderDpr) / renderDpr - origin.x,
-                           Math.round((origin.y + top) * renderDpr) / renderDpr - origin.y,
-                           extent, extent)
-        }
-        const rect = previewRect
-        if (rect && rect.width > 0 && rect.height > 0)
-            return Qt.rect(cellHorizontalInset, rect.y, cellContentWidth,
-                           Math.max(1 / renderDpr, rect.height - masonryCaptionReserve))
-        return Qt.rect(cellHorizontalInset, cellVerticalInset,
-                       cellContentWidth,
-                       Math.max(0, height - cellVerticalInset * 2))
+                * renderDpr) / renderDpr) : 0
+    readonly property real effectivePreviewX: {
+        if (!compactPreview)
+            return useMasonryPreview ? previewX : cellHorizontalInset
+        const originX = detailsMode ? 0 : iconSceneOrigin.x
+        return Math.round((originX + panelRoot.detailsRowInset) * renderDpr) / renderDpr - originX
     }
+    readonly property real effectivePreviewY: {
+        if (!compactPreview)
+            return nativePreviewValid ? previewY : cellVerticalInset
+        const originY = detailsMode ? 0 : iconSceneOrigin.y
+        const top = Math.max(0, (height - compactPreviewExtent) / 2)
+        return Math.round((originY + top) * renderDpr) / renderDpr - originY
+    }
+    readonly property real effectivePreviewWidth:
+        compactPreview ? compactPreviewExtent
+                       : useMasonryPreview ? previewWidth : cellContentWidth
+    readonly property real effectivePreviewHeight: compactPreview
+        ? compactPreviewExtent
+        : (nativePreviewValid
+           ? Math.max(1 / renderDpr, previewHeight - masonryCaptionReserve)
+           : Math.max(0, height - cellVerticalInset * 2))
+    // Preserve the public rectangle for embedders and geometric operations.
+    readonly property rect effectivePreviewRect:
+        Qt.rect(effectivePreviewX, effectivePreviewY,
+                effectivePreviewWidth, effectivePreviewHeight)
 
     readonly property real compactImageContentWidth: {
-        const extent = effectivePreviewRect.width
+        const extent = effectivePreviewWidth
         if (!(detailsMode || columnsMode) || !isImage)
             return extent
         // Position a portrait inside the shared square slot rather than
@@ -281,10 +277,10 @@ BrickItem {
     GalleryLayoutDebugZone {
         objectName: "galleryPreviewZone-" + entry.viewIndex
         anchors.fill: undefined
-        x: entry.effectivePreviewRect.x
-        y: entry.effectivePreviewRect.y
-        width: entry.effectivePreviewRect.width
-        height: entry.effectivePreviewRect.height
+        x: visible ? entry.effectivePreviewX : 0
+        y: visible ? entry.effectivePreviewY : 0
+        width: visible ? entry.effectivePreviewWidth : 0
+        height: visible ? entry.effectivePreviewHeight : 0
         zone: "preview"
         visible: entry.debugLayoutZones && !entry.folderPreviewActive
     }
@@ -297,80 +293,52 @@ BrickItem {
         id: sharedPreview
         entry: entry
         shaderThumbnail: entry.masonryMode || entry.gridMode
-        activePresentation: entry.visualGeometryReady && !entry.visualIdentityChanging
+        activePresentation: entry.viewIndex >= 0
+            && entry.visualGeometryReady && !entry.visualIdentityChanging
             && (!entry.folderPreviewRequested
             || entry.visualModel.folderPreviewState !== 2)
         z: 1
     }
 
-    Loader {
-        id: modeVisual
-        active: entry.visualGeometryReady && !(entry.folderPreviewRequested
-            && (entry.visualModel.folderPreviewState === 2 || entry.folderPreviewActive))
-        visible: !entry.folderPreviewActive
-        anchors.fill: parent
-        asynchronous: false
-        z: 2
-        sourceComponent: entry.detailsMode ? detailsVisual
-                         : entry.columnsMode ? columnsVisual
-                         : entry.gridMode ? gridVisual
-                         : entry.iconsMode ? iconsVisual
-                         : masonryVisual
-    }
-
-    Component {
-        id: masonryVisual
-        GalleryMasonryEntryDelegate {
-            anchors.fill: parent
-            entry: entry
-        }
-    }
-
-    Loader {
-        id: folderLoader
-        // This small shell follows the existing bounded delegate pool. Its
-        // image grid has a separate lifetime inside GalleryFolderPreview.
-        property bool frameCreated: false
+    GallerySceneItem {
         anchors.fill: parent
         z: 2
-        active: entry.folderPreviewRequested || frameCreated
-        visible: entry.folderPreviewRequested
-        onLoaded: frameCreated = true
-        sourceComponent: Component {
-            GalleryFolderPreview { entry: entry }
+        sceneVisible: !entry.folderPreviewActive
+        visible: (entry.masonryMode && nativeCullingAvailable) || sceneVisible
+        GalleryVisualHost {
+            id: modeVisual
+            objectName: "galleryEntryModeHost-" + entry.viewIndex
+            entry: entry
+            active: entry.visualGeometryReady && !(entry.folderPreviewRequested
+                && (entry.visualModel.folderPreviewState === 2 || entry.folderPreviewActive))
+            anchors.fill: parent
+            asynchronous: false
+            sourceComponent: entry.detailsMode ? entry.panelRoot.entryVisualFactories.details
+                             : entry.columnsMode ? entry.panelRoot.entryVisualFactories.columns
+                             : entry.gridMode ? entry.panelRoot.entryVisualFactories.grid
+                             : entry.iconsMode ? entry.panelRoot.entryVisualFactories.icons
+                             : entry.panelRoot.entryVisualFactories.masonry
         }
     }
 
-    Component {
-        id: columnsVisual
-        ColumnsEntryDelegate {
-            anchors.fill: parent
+    GallerySceneItem {
+        anchors.fill: parent
+        z: 2
+        sceneVisible: entry.folderPreviewRequested
+        visible: (entry.masonryMode && nativeCullingAvailable) || sceneVisible
+        GalleryVisualHost {
+            id: folderLoader
+            objectName: "galleryEntryFolderHost-" + entry.viewIndex
             entry: entry
+            // This small shell follows the existing bounded delegate pool. Its
+            // image grid has a separate lifetime inside GalleryFolderPreview.
+            property bool frameCreated: false
+            anchors.fill: parent
+            active: entry.folderPreviewRequested || frameCreated
+            onLoaded: frameCreated = true
+            sourceComponent: entry.panelRoot.entryVisualFactories.folder
         }
     }
 
-    Component {
-        id: detailsVisual
-        DetailsEntryDelegate {
-            anchors.fill: parent
-            entry: entry
-        }
-    }
-
-    Component {
-        id: gridVisual
-        GridEntryDelegate {
-            anchors.fill: parent
-            entry: entry
-        }
-    }
-
-    Component {
-        id: iconsVisual
-        IconsEntryDelegate {
-            anchors.fill: parent
-            entry: entry
-        }
-    }
 
 }

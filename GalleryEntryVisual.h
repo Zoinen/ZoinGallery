@@ -25,8 +25,8 @@ class GalleryEntryVisual final : public QObject {
     Q_PROPERTY(bool isVideo READ isVideo NOTIFY mediaChanged)
     Q_PROPERTY(bool imageDimensionsKnown READ imageDimensionsKnown NOTIFY mediaChanged)
     Q_PROPERTY(bool isSelected READ isSelected NOTIFY stateChanged)
-    Q_PROPERTY(QString iconPath READ iconPath NOTIFY mediaChanged)
-    Q_PROPERTY(QString iconKey READ iconKey NOTIFY mediaChanged)
+    Q_PROPERTY(QString iconPath READ iconPath NOTIFY iconChanged)
+    Q_PROPERTY(QString iconKey READ iconKey NOTIFY iconChanged)
     Q_PROPERTY(QString displayBaseName READ displayBaseName
                NOTIFY identityChanged)
     Q_PROPERTY(QString displayExtension READ displayExtension
@@ -106,6 +106,7 @@ signals:
     void mediaChanged();
     void stateChanged();
     void styleChanged();
+    void iconChanged();
 
 private:
     struct SnapshotValues;

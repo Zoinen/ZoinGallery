@@ -12,6 +12,11 @@ Item {
 
     Image {
         id: sourceImage
+        property string readyEntryId: ""
+        onStatusChanged: {
+            if (status === Image.Ready && layer.activePresentation)
+                readyEntryId = layer.entry.entryId
+        }
         objectName: layer.activePresentation
                     ? "galleryThumbnailImage-" + layer.entry.viewIndex : ""
         x: Math.round((parent.width - width) * layer.entry.renderDpr / 2)
@@ -27,8 +32,14 @@ Item {
         verticalAlignment: layer.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
         asynchronous: false
         cache: false
-        retainWhileLoading: true
+        retainWhileLoading: layer.activePresentation && readyEntryId === layer.entry.entryId
         smooth: true
         visible: source.toString() !== ""
+        readonly property var pixelCorrection:
+            layer.entry.iconPixelAlignment(sourceImage)
+        transform: Translate {
+            x: (sourceImage.pixelCorrection ? sourceImage.pixelCorrection.offsetX : 0)
+            y: (sourceImage.pixelCorrection ? sourceImage.pixelCorrection.offsetY : 0)
+        }
     }
 }

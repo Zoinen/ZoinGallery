@@ -12,12 +12,34 @@
 #include <QVariantMap>
 
 #include <atomic>
+#include <optional>
 
 namespace ZoinGallery {
 
 class ImageSourceProvider;
 class ImageSourceCancellation;
 class VideoPlaybackWorker;
+class ViewerVideoFrameSource;
+
+class VideoMutePreference final : public QObject {
+    Q_OBJECT
+
+public:
+    using QObject::QObject;
+    std::optional<bool> overrideValue() const { return m_override; }
+
+    void setOverride(bool muted) {
+        if (m_override == muted) return;
+        m_override = muted;
+        emit overrideChanged(muted);
+    }
+
+signals:
+    void overrideChanged(bool muted);
+
+private:
+    std::optional<bool> m_override;
+};
 
 class VideoPlaybackController final : public QObject {
     Q_OBJECT
@@ -34,7 +56,8 @@ class VideoPlaybackController final : public QObject {
 public:
     explicit VideoPlaybackController(
         QSharedPointer<ImageSourceProvider> provider,
-        QObject *parent = nullptr);
+        QObject *parent = nullptr,
+        VideoMutePreference *mutePreference = nullptr);
     ~VideoPlaybackController() override;
 
     bool available() const { return m_available; }
@@ -58,6 +81,7 @@ public:
     Q_INVOKABLE void adjustVolume(qreal delta);
     Q_INVOKABLE void setPresentationVisible(bool visible);
     Q_INVOKABLE void setOutputSink(QObject *sink);
+    Q_INVOKABLE void setFrameSource(QObject *source);
 
 signals:
     void availableChanged();
@@ -68,14 +92,14 @@ private slots:
     void acceptAvailability(bool available);
     void acceptSnapshot(qulonglong generation, const QString &state,
                         const QString &error, qint64 position,
-                        qint64 duration, bool playing, bool muted,
-                        qreal volume);
+                        qint64 duration, bool playing);
 
 private:
     friend class VideoPlaybackWorker;
 
     void invalidateSource(bool clearFrame);
     void postWorkerStop();
+    void applyMutePreference(bool muted);
 
     struct FrameMailbox {
         QMutex mutex;
@@ -88,6 +112,8 @@ private:
     bool m_backendReady = false;
     bool m_presentationVisible = true;
     QPointer<QVideoSink> m_videoSink;
+    QPointer<ViewerVideoFrameSource> m_frameSource;
+    QPointer<VideoMutePreference> m_mutePreference;
     QPointer<QThread> m_workerThread;
     QPointer<VideoPlaybackWorker> m_worker;
     QSharedPointer<ImageSourceProvider> m_provider;
@@ -102,7 +128,6 @@ private:
     bool m_playing = false;
     bool m_looping = false;
     bool m_muted = true;
-    bool m_muteOverridden = false;
     qreal m_volume = 1.0;
 };
 

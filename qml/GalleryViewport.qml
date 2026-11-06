@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import QtQuick.Controls
 
 import ZoinGallery.Native 1.0
@@ -29,6 +30,7 @@ Item {
     readonly property bool advancedEntryActions:
         controller.dragEnabled || controller.directoryDropEnabled
         || controller.canRemoveEntries
+    readonly property bool autoScrollAnimationRunning: pointerLayer.animationRunning
 
     GalleryNativeTextMetrics { id: nativeTextMetrics }
 
@@ -257,6 +259,8 @@ Item {
         objectName: "galleryViewportItem"
         clip: true
         persistSettings: false
+        scrollAnimationRunning: viewportRoot.panelRoot.panelScrollAnimationRunning
+                                || pointerLayer.animationRunning
         visible: !viewportRoot.panelRoot.presentationLayoutHidden
         opacity: viewportRoot.panelRoot.pathViewportPlacementPending ? 0 : 1
         anchors {
@@ -321,6 +325,7 @@ Item {
             viewportRoot.panelRoot.publishMetadataVisibleRange()
             viewportRoot.panelRoot.refreshHoveredIndex()
         }
+        onMetadataDemandChanged: viewportRoot.panelRoot.publishMetadataVisibleRange()
         onCountChanged: {
             const panel = viewportRoot.panelRoot
             panel.traceBenchmarkStage("layout.count.changed", {})
@@ -340,7 +345,8 @@ Item {
         onContentHeightChanged: {
             const panel = viewportRoot.panelRoot
             panel.traceBenchmarkStage("layout.content-height.changed", {})
-            panel.resetMasonryPageSequence()
+            if (galleryLayout.presentationMode === GalleryViewportItem.Masonry)
+                panel.invalidateMasonryPageGeometry()
             if (panel.pathViewportPlacementPending)
                 panel.schedulePathViewportPlacement("content-height-changed")
             else if (!panel.densityViewportTransaction)
@@ -353,6 +359,15 @@ Item {
                 viewportRoot.panelRoot.traceBenchmarkStage(
                             "layout.content-y.changed", {})
             }
+        }
+        onRewrapFinished: {
+            const panel = viewportRoot.panelRoot
+            // Native reflow has already preserved the row anchor. Publish its
+            // new offset before a queued content-height update restores the
+            // previous layout's numeric scroll position.
+            if (galleryLayout.presentationMode === GalleryViewportItem.Masonry
+                    && !panel.panelScrollAnimationRunning && !panel.scrollingMode)
+                panel.viewportController.persistCommittedViewport()
         }
         onWidthChanged: {
             viewportRoot.panelRoot.refreshHoveredIndex()
@@ -397,15 +412,9 @@ Item {
     // Section headers are layout elements, not catalog rows. The native
     // layout only returns the viewport/overscan intersection, so this layer
     // stays bounded even for very large grouped catalogs.
-    Item {
+    PixelGridScope {
         id: groupHeaderLayer
-        readonly property point sceneOrigin: {
-            // mapToItem does not subscribe to ancestor translations itself.
-            let dependency = 0
-            for (let ancestor = groupHeaderLayer; ancestor; ancestor = ancestor.parent)
-                dependency += ancestor.x + ancestor.y + ancestor.scale + ancestor.rotation
-            return groupHeaderLayer.mapToItem(null, dependency * 0, dependency * 0)
-        }
+        readonly property point sceneOrigin: Qt.point(0, 0)
         objectName: "galleryGroupHeaderLayer"
         parent: viewportRoot
         x: galleryLayout.x
@@ -416,12 +425,12 @@ Item {
         clip: true
 
         Repeater {
-            model: galleryLayout.visibleGroupHeaders
+            model: galleryLayout.visibleGroupHeaders.length
 
-            delegate: Item {
+            delegate: PixelGridScope {
                 id: groupHeader
-                required property var modelData
                 required property int index
+                readonly property var modelData: galleryLayout.visibleGroupHeaders[index] || ({})
                 readonly property string groupKey:
                     String(modelData.key || "")
                 readonly property bool horizontal:
@@ -482,28 +491,22 @@ Item {
                    ? Math.min(-topSpacing,
                               nextHeaderViewportPosition - height)
                    : Number(modelData.y || 0)
-                readonly property point layerSceneOrigin:
-                    groupHeaderLayer.sceneOrigin
-                readonly property real snappedX:
-                    Math.round((layerSceneOrigin.x + rawX) * hostDpr)
-                        / hostDpr - layerSceneOrigin.x
-                readonly property real snappedY:
-                    Math.round((layerSceneOrigin.y + rawY) * hostDpr)
-                        / hostDpr - layerSceneOrigin.y
+                readonly property point layerSceneOrigin: Qt.point(0, 0)
                 function snapLogical(value) {
                     return Math.round(value * hostDpr) / hostDpr
                 }
                 readonly property real topSpacing: snapLogical(8)
                 readonly property real interactiveWidth:
                     Math.max(0, snapLogical(width - viewportRoot.groupHeaderScrollClearance))
-                x: snappedX
-                y: snappedY
+                motionActive: galleryLayout.scrollAnimationRunning && !currentSticky
+                x: rawX
+                y: rawY
                 width: snapLogical(Number(modelData.width || 0))
                 height: snapLogical(Number(modelData.height || 0))
                 objectName: "galleryGroupHeader-"
                             + viewportRoot.panelRoot.groupHeaderObjectSuffix
                             + "-" + groupKey
-                activeFocusOnTab: true
+                tabFocus: true
                 Accessible.role: Accessible.Button
                 Accessible.name: String(modelData.title || "")
                                  + ", " + String(modelData.count || 0)
@@ -547,19 +550,14 @@ Item {
 
                 Rectangle {
                     objectName: groupHeader.objectName + "-separator"
-                    parent: viewportRoot
+                    parent: groupHeaderLayer
                     visible: !groupHeader.currentSticky
-                    readonly property real viewportSceneX:
-                        groupHeader.layerSceneOrigin.x - galleryLayout.x
-                    readonly property real scrollClearance:
-                        viewportRoot.groupHeaderScrollClearance
-                    x: groupHeader.snapLogical(viewportSceneX) - viewportSceneX
-                    y: galleryLayout.y + groupHeader.y + groupHeader.topSpacing
+                    x: 0
+                    y: groupHeader.y + groupHeader.PixelGridAlignment.offset.y
+                       + groupHeader.topSpacing
                     width: Math.max(0, groupHeader.snapLogical(
-                        viewportSceneX + viewportRoot.width - scrollClearance)
-                        - groupHeader.snapLogical(viewportSceneX))
-                    height: groupHeader.hostDpr > 0
-                            ? 1 / groupHeader.hostDpr : 1
+                        viewportRoot.width - viewportRoot.groupHeaderScrollClearance))
+                    height: 1 / groupHeader.hostDpr
                     color: viewportRoot.panelRoot.separatorColor
                     z: groupHeaderLayer.z
                 }
@@ -597,7 +595,8 @@ Item {
                             groupHeader.horizontal ? 0
                             : viewportRoot.panelRoot.groupHeaderRightInset + 4))
 
-                    Text {
+                    GalleryMotionText {
+                        motionActive: groupHeader.motionActive
                         id: groupHeaderTitle
                         objectName: groupHeader.objectName + "-title"
                         anchors.left: parent.left
@@ -644,10 +643,11 @@ Item {
                         // physical pixels here scales twice and resamples the glyph.
                         sourceSize: Qt.size(14, 14)
                         fillMode: Image.PreserveAspectFit
-                        smooth: false
+                        smooth: groupHeader.motionActive
                         mipmap: false
                     }
-                    Text {
+                    GalleryMotionText {
+                        motionActive: groupHeader.motionActive
                         id: groupHeaderCount
                         objectName: groupHeader.objectName + "-count"
                         anchors.right: parent.right
@@ -703,6 +703,7 @@ Item {
 
     GalleryPointerLayer {
         id: pointerLayer
+        nativeScrollAnimation: viewportRoot.panelRoot.panelScrollAnimationObject
         anchors.fill: parent
         layout: galleryLayout
         wheelMode: viewportRoot.panelRoot.mouseWheelMode

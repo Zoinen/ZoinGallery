@@ -15,25 +15,13 @@ Item {
     }
 
     function pixelOffset(item) {
-        // The row observes its complete ancestor chain once. Labels only
-        // need their local chain plus that shared scene-space origin.
-        const origin = content.entry.iconSceneOrigin
-        let revision = origin.x + origin.y
-        for (let parent = item.parent; parent && parent !== content.entry; parent = parent.parent) {
-            revision += parent.x + parent.y + parent.scale + parent.rotation
-            if (parent.scale !== 1 || parent.rotation !== 0)
-                revision += parent.width + parent.height + parent.transformOrigin
-        }
-        const point = item.parent.mapToItem(null, item.x, item.y)
-        const dpr = content.entry.renderDpr
-        return Qt.point(Math.round(point.x * dpr) / dpr - point.x + revision * 0,
-                        Math.round(point.y * dpr) / dpr - point.y)
+        return content.entry.iconPixelAlignment(item)
     }
 
     Item {
         id: textRow
-        x: content.entry.effectivePreviewRect.x
-           + content.entry.effectivePreviewRect.width
+        x: content.entry.effectivePreviewX
+           + content.entry.effectivePreviewWidth
            + content.entry.panelRoot.detailsRowSpacing
         width: Math.max(0, parent.width - x - content.entry.panelRoot.detailsRowInset)
         height: parent.height
@@ -47,10 +35,11 @@ Item {
             devicePixelRatio: content.entry.renderDpr
         }
 
-        Text {
+        GalleryMotionText {
+            motionActive: content.entry.motionActive
             id: baseNameLabel
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
-            readonly property point pixelCorrection: content.pixelOffset(baseNameLabel)
+            readonly property var pixelCorrection: content.pixelOffset(baseNameLabel)
             objectName: "galleryBaseName-" + content.entry.viewIndex
             x: 0
             width: Math.max(0, Math.round(
@@ -79,15 +68,16 @@ Item {
             verticalAlignment: Text.AlignVCenter
             font: content.entry.panelRoot.iconLabelFont
             transform: Translate {
-                x: baseNameLabel.pixelCorrection.x
-                y: baseNameLabel.pixelCorrection.y
+                x: (baseNameLabel.pixelCorrection ? baseNameLabel.pixelCorrection.offsetX : 0)
+                y: (baseNameLabel.pixelCorrection ? baseNameLabel.pixelCorrection.offsetY : 0)
             }
         }
 
-        Text {
+        GalleryMotionText {
+            motionActive: content.entry.motionActive
             id: extensionLabel
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
-            readonly property point pixelCorrection: content.pixelOffset(extensionLabel)
+            readonly property var pixelCorrection: content.pixelOffset(extensionLabel)
             objectName: "galleryExtension-" + content.entry.viewIndex
             visible: content.entry.panelRoot.separateFileExtensions
                      && content.entry.displayExtension !== ""
@@ -110,8 +100,8 @@ Item {
             elide: Text.ElideLeft
             font: content.entry.panelRoot.iconLabelFont
             transform: Translate {
-                x: extensionLabel.pixelCorrection.x
-                y: extensionLabel.pixelCorrection.y
+                x: (extensionLabel.pixelCorrection ? extensionLabel.pixelCorrection.offsetX : 0)
+                y: (extensionLabel.pixelCorrection ? extensionLabel.pixelCorrection.offsetY : 0)
             }
         }
 

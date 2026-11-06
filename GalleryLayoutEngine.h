@@ -99,6 +99,7 @@ struct GalleryLayoutResult {
     QVector<GalleryLayoutCell> cells;
     QVector<GalleryLayoutBand> bands;
     qreal contentExtent = 0;
+    qreal lastMasonryRowHeight = -1;
 };
 
 // Fixed presentations are analytical. Icons additionally keep compact row
@@ -122,6 +123,7 @@ struct GalleryFixedLayoutPlan {
     qreal gridLabelLineHeight = 16;
     QVector<GalleryLayoutSection> sections;
     QVector<GalleryGroupHeader> groupHeaders;
+    QVector<qreal> columnEdges;
     QVector<qreal> iconRowTops;
     QVector<qreal> iconRowHeights;
     qreal iconPreviewHeight = 0;
@@ -173,9 +175,18 @@ public:
 
 class JustifiedMasonryStrategy final {
 public:
+    struct Chunk {
+        bool hasFollowingEntries = false;
+        qreal previousRowHeight = -1;
+    };
+
     [[nodiscard]] static GalleryLayoutResult layout(
         const GalleryLayoutRequest &request,
         const QVector<GalleryLayoutEntry> &entries);
+    [[nodiscard]] static GalleryLayoutResult layoutChunk(
+        const GalleryLayoutRequest &request,
+        const QVector<GalleryLayoutEntry> &entries,
+        Chunk chunk);
 };
 
 class GalleryLayoutEngine final {

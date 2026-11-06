@@ -1,4 +1,5 @@
 #include "MasonryLayout.h"
+#include <ZoinGallery/PixelGrid.h>
 #include "FileListModel.h"
 #include "GalleryPixelGrid.h"
 #include "MasonryLayoutQuickSearch.h"
@@ -108,6 +109,14 @@ MasonryLayout::MasonryLayout(QQuickItem *parent)
     _preservedViewportAnchorOffset = 0;
 
     _quickSearch = new MasonryLayoutQuickSearch(this);
+    connect(this, &MasonryLayout::presentationModeChanged,
+            this, &MasonryLayout::updateSceneBranchParents);
+    connect(this, &MasonryLayout::containedPreviewChanged,
+            this, &MasonryLayout::updateSceneBranchParents);
+    connect(this, &QQuickItem::widthChanged,
+            this, &MasonryLayout::updateSceneBranchBounds);
+    connect(this, &QQuickItem::heightChanged,
+            this, &MasonryLayout::updateSceneBranchBounds);
 }
 
 MasonryLayout::~MasonryLayout() {
@@ -166,7 +175,7 @@ void MasonryLayout::itemChange(ItemChange change, const ItemChangeData &data) {
     if (change == ItemDevicePixelRatioHasChanged && isComponentComplete()
         && _devicePixelRatioOverride <= 0) {
         emit devicePixelRatioChanged();
-        positionViewport();
+        updatePixelGridOrigin();
         rewrap(false);
     }
 }
@@ -317,20 +326,11 @@ void MasonryLayout::setScrollingMode(bool scrollingMode, int direction) {
 BrickItem *MasonryLayout::createComponent(
     PresentationMode mode, const QVariantMap &delegateProperties) {
     if (!_viewport) {
-        QQmlComponent component(qmlEngine(this));
-        component.setData(R"QML(
-        import QtQuick
-
-        Item {
-        }
-        )QML", QUrl());
-        if (component.status() != QQmlComponent::Ready) {
-            qDebug() << "Error in component:" << component.status() << component.errors();
-        }
-
-        _viewport = qobject_cast<QQuickItem*>(component.create(QQmlEngine::contextForObject(this)));
-        _viewport->setParentItem(this);
-        _viewport->setParent(this);
+        _viewport = new ZoinGallery::PixelGridScope(this);
+        QQmlEngine::setContextForObject(_viewport, QQmlEngine::contextForObject(this));
+        connect(ZoinGallery::PixelGridAlignment::forItem(_viewport),
+                &ZoinGallery::PixelGridAlignment::offsetChanged,
+                this, &MasonryLayout::positionViewport);
         positionViewport();
         emit viewportChanged();
     }
@@ -361,14 +361,12 @@ BrickItem *MasonryLayout::createComponent(
                  << component->errors();
         return nullptr;
     }
-    object->setProperty(
-        "_zoinGalleryDelegateComponent",
-        QVariant::fromValue(reinterpret_cast<quintptr>(component)));
     // A newly allocated viewport slot becomes visible only after its row
     // bindings and final geometry have been committed.
     object->setVisible(false);
     object->setParentItem(_viewport);
     object->setParent(_viewport);
+    watchSceneBranchChanges(object);
     return object;
 }
 

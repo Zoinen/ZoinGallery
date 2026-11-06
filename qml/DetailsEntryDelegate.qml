@@ -38,13 +38,14 @@ Item {
         Item {
             id: detailsIconSlot
             objectName: "galleryDetailsIconSlot-" + content.entry.viewIndex
-            x: content.entry.effectivePreviewRect.x
-            y: content.entry.effectivePreviewRect.y
-            width: content.entry.effectivePreviewRect.width
-            height: content.entry.effectivePreviewRect.height
+            x: content.entry.effectivePreviewX
+            y: content.entry.effectivePreviewY
+            width: content.entry.effectivePreviewWidth
+            height: content.entry.effectivePreviewHeight
         }
 
-        Text {
+        GalleryMotionText {
+            motionActive: content.entry.motionActive
             id: baseNameText
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             font.family: content.entry.panelRoot.metrics.panelFontFamily
@@ -82,7 +83,8 @@ Item {
                 content.entry.panelRoot.detailsNameFontPixelSize
         }
 
-        Text {
+        GalleryMotionText {
+            motionActive: content.entry.motionActive
             id: extensionText
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             font.family: content.entry.panelRoot.metrics.panelFontFamily
@@ -113,7 +115,8 @@ Item {
             id: detailsFieldColumnsRepeater
             model: content.entry.panelRoot.fileFieldPresentationHelper.detailsFieldColumns()
 
-            delegate: Text {
+            delegate: GalleryMotionText {
+                motionActive: content.entry.motionActive
                 id: detailsFieldText
                 GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
                 font.family: content.entry.panelRoot.metrics.panelFontFamily
@@ -148,7 +151,8 @@ Item {
             }
         }
 
-        Text {
+        GalleryMotionText {
+            motionActive: content.entry.motionActive
             id: sizeText
             GalleryLayoutDebugZone { visible: content.entry.debugLayoutZones }
             font.family: content.entry.panelRoot.metrics.panelFontFamily

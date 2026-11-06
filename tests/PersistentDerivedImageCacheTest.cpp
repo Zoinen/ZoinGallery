@@ -14,6 +14,7 @@
 
 #include <QFileInfo>
 #include <QColorSpace>
+#include <QCryptographicHash>
 #include <QDataStream>
 #include <QImage>
 #include <QSignalSpy>
@@ -505,6 +506,191 @@ private slots:
         QCOMPARE(provider->rangeReads.load(), 0);
     }
 
+    void largerThumbnailReplacesSmallerAndServesOtherSizes_data() {
+        QTest::addColumn<QString>("transform");
+        QTest::newRow("image") << QStringLiteral("thumbnail-aspect-v1");
+        QTest::newRow("video") << QStringLiteral("video-contact-sheet-2x2-display-v6");
+    }
+
+    void largerThumbnailReplacesSmallerAndServesOtherSizes() {
+        QFETCH(QString, transform);
+        auto smaller = requestFor(QStringLiteral("localStat"));
+        smaller.thumbnailTransformKey = transform;
+        smaller.targetSize = QSize(240, 180);
+        const auto staleSmaller = PersistentImageCache::createImageForCache(
+            smaller, testImage(smaller.targetSize));
+        QVERIFY(!staleSmaller.isEmpty());
+        PersistentImageCache::storeImage(smaller.info, staleSmaller);
+
+        auto taller = smaller;
+        taller.targetSize = QSize(410, 320);
+        const auto staleTaller = PersistentImageCache::createImageForCache(
+            taller, testImage(QSize(350, 263)));
+        QVERIFY(!staleTaller.isEmpty());
+
+        auto large = smaller;
+        large.targetSize = QSize(400, 300);
+        QVERIFY(!PersistentImageCache::hasImage(large));
+        QVERIFY(PersistentImageCache::retrieveImage(large, true).isNull());
+        persist(large, testImage(large.targetSize));
+
+        auto between = smaller;
+        between.targetSize = QSize(362, 271);
+        auto provider = QSharedPointer<CountingSourceProvider>::create();
+        CachedImageRetrieveRunner cacheRunner(between, true);
+        ImageReadRunner sourceRunner(between, provider);
+        QSignalSpy readySpy(&cacheRunner, &CachedImageRetrieveRunner::cachedThumbnailRetrieved);
+        cacheRunner.run();
+        sourceRunner.run();
+        QCOMPARE(readySpy.count(), 1);
+        QCOMPARE(provider->materializations.load(), 0);
+        QCOMPARE(provider->rangeReads.load(), 0);
+
+        // A smaller decode can finish after a larger one.
+        PersistentImageCache::storeImage(smaller.info, staleSmaller);
+        QCOMPARE(PersistentImageCache::retrieveImage(large, true).size(), large.targetSize);
+        QCOMPARE(QDir(cacheRoot.filePath("zg_derived_v1")).entryList({"*.zgd"}, QDir::Files).size(), 1);
+
+        QVERIFY(PersistentImageCache::retrieveImage(taller, true).isNull());
+        // The bounding box requests more height, but the source yields a
+        // smaller frame. A resize must not leave a second size on disk.
+        PersistentImageCache::storeImage(taller.info, staleTaller);
+        QCOMPARE(QDir(cacheRoot.filePath("zg_derived_v1")).entryList({"*.zgd"}, QDir::Files).size(), 1);
+        QCOMPARE(PersistentImageCache::retrieveImage(large, true).size(), large.targetSize);
+
+        auto revised = between;
+        revised.info.source.contentVersion = QStringLiteral("revision-2");
+        revised.info.sourceVersionToken = revised.info.source.contentVersion;
+        QVERIFY(PersistentImageCache::retrieveImage(revised, true).isNull());
+    }
+
+    void cappedThumbnailSurvivesLargerResizeRequests_data() {
+        QTest::addColumn<QString>("transform");
+        QTest::addColumn<QSize>("generatedSize");
+        QTest::addColumn<QSize>("cachedSize");
+        QTest::newRow("portrait") << QStringLiteral("thumbnail-aspect-v1")
+                                 << QSize(1200, 1600) << QSize(768, 1024);
+        QTest::newRow("video") << QStringLiteral("video-contact-sheet-2x2-display-v6")
+                              << QSize(1600, 900) << QSize(1024, 576);
+    }
+
+    void cappedThumbnailSurvivesLargerResizeRequests() {
+        QFETCH(QString, transform);
+        QFETCH(QSize, generatedSize);
+        QFETCH(QSize, cachedSize);
+        auto request = requestFor(QStringLiteral("localStat"));
+        request.thumbnailTransformKey = transform;
+        request.targetSize = QSize(1600, 1600);
+        persist(request, testImage(generatedSize));
+        QCOMPARE(PersistentImageCache::retrieveImage(request, true).size(), cachedSize);
+
+        const QDir cache(cacheRoot.filePath("zg_derived_v1"));
+        const auto entries = cache.entryList({"*.zgd"}, QDir::Files);
+        QCOMPARE(entries.size(), 1);
+        QFile stored(cache.filePath(entries.first()));
+        QVERIFY(stored.open(QIODevice::ReadOnly));
+        const QByteArray original = stored.readAll();
+        stored.close();
+
+        auto larger = request;
+        larger.targetSize = QSize(2400, 2200);
+        QVERIFY(PersistentImageCache::hasImage(larger));
+        auto provider = QSharedPointer<CountingSourceProvider>::create();
+        CachedImageRetrieveRunner cacheRunner(larger, true);
+        ImageReadRunner sourceRunner(larger, provider);
+        QSignalSpy readySpy(&cacheRunner, &CachedImageRetrieveRunner::cachedThumbnailRetrieved);
+        cacheRunner.run();
+        sourceRunner.run();
+        QCOMPARE(readySpy.count(), 1);
+        QCOMPARE(provider->materializations.load(), 0);
+        QCOMPARE(provider->rangeReads.load(), 0);
+
+        QVERIFY(PersistentImageCache::createImageForCache(
+            larger, testImage(generatedSize, qRgb(180, 25, 90))).isEmpty());
+        auto smaller = request;
+        smaller.targetSize = QSize(400, 400);
+        QCOMPARE(PersistentImageCache::retrieveImage(smaller, true).size(), cachedSize);
+        QCOMPARE(cache.entryList({"*.zgd"}, QDir::Files), entries);
+        QVERIFY(stored.open(QIODevice::ReadOnly));
+        QCOMPARE(stored.readAll(), original);
+    }
+
+    void viewerPreviewKeepsLegacyLocalThumbnailDimensions() {
+        const QImage thumbnail = testImage(QSize(120, 80));
+        ImageDecodeRequest request;
+        request.info.path = cacheRoot.filePath("legacy-local.png");
+        QVERIFY(thumbnail.save(request.info.path));
+        const QFileInfo file(request.info.path);
+        request.info.lastModified = file.lastModified();
+        request.info.fileSize = file.size();
+        request.info.imageSize = thumbnail.size();
+        const auto encoded = PersistentImageCache::createImageForCache(thumbnail);
+        QVERIFY(!encoded.isEmpty());
+        PersistentImageCache::storeImage(request.info, encoded);
+        request.targetSize = QSize(1, 1);
+        request.viewerThumbnailRequest = true;
+        QCOMPARE(PersistentImageCache::retrieveImage(request, true).size(), thumbnail.size());
+    }
+
+    void viewerFitWriterRespectsCacheClear() {
+        auto request = requestFor(QStringLiteral("localStat"));
+        request.viewerRequest = true;
+        request.fitToViewerRequest = true;
+        const QImage frame = testImage(request.targetSize);
+        const quint64 generation = PersistentDerivedImageCache::writeGeneration();
+        PersistentDerivedImageCache::clear();
+        PersistentDerivedImageCache::storeViewerFitFrame(request, frame, generation);
+        QVERIFY(PersistentImageCache::retrieveImage(request, true).isNull());
+        PersistentDerivedImageCache::storeViewerFitFrame(
+            request, frame, PersistentDerivedImageCache::writeGeneration());
+        QCOMPARE(PersistentImageCache::retrieveImage(request, true).size(), frame.size());
+    }
+
+    void exactSizeThumbnailFromExistingCacheStillLoads() {
+        auto request = requestFor(QStringLiteral("localStat"));
+        request.thumbnailTransformKey = QStringLiteral("thumbnail-aspect-v1");
+        const auto entry = PersistentImageCache::createImageForCache(
+            request, testImage(request.targetSize));
+        QVERIFY(!entry.isEmpty());
+
+        QDataStream header(entry);
+        header.setVersion(QDataStream::Qt_6_0);
+        quint32 magic;
+        quint16 version;
+        QString sourceKey, revision, authority, transform, decoder;
+        qint64 sourceSize;
+        quint8 artifact;
+        QSize target;
+        header >> magic >> version;
+        const auto keyStart = header.device()->pos();
+        header >> sourceKey >> revision >> authority >> sourceSize >> artifact
+               >> target >> transform >> decoder;
+        QCOMPARE(header.status(), QDataStream::Ok);
+        const auto key = entry.mid(keyStart, header.device()->pos() - keyStart);
+        const auto name = QCryptographicHash::hash(key, QCryptographicHash::Sha256).toHex();
+        const QDir cache(cacheRoot.filePath("zg_derived_v1"));
+        QVERIFY(QDir().mkpath(cache.path()));
+        QFile legacy(cache.filePath(QString::fromLatin1(name) + QStringLiteral(".zgd")));
+        QVERIFY(legacy.open(QIODevice::WriteOnly));
+        QCOMPARE(legacy.write(entry), entry.size());
+        legacy.close();
+
+        QCOMPARE(PersistentImageCache::retrieveImage(request, true).size(), request.targetSize);
+        auto viewerThumbnail = request;
+        viewerThumbnail.viewerThumbnailRequest = true;
+        viewerThumbnail.targetSize = QSize(1, 1);
+        QCOMPARE(PersistentImageCache::retrieveImage(viewerThumbnail, true).size(),
+                 request.targetSize);
+        viewerThumbnail.info.source.contentVersion = QStringLiteral("changed");
+        viewerThumbnail.info.sourceVersionToken = QStringLiteral("changed");
+        QVERIFY(PersistentImageCache::retrieveImage(viewerThumbnail, true).isNull());
+        request.targetSize = QSize(512, 288);
+        persist(request, testImage(request.targetSize));
+        QVERIFY(legacy.open(QIODevice::ReadOnly));
+        QCOMPARE(legacy.readAll(), entry);
+        QCOMPARE(cache.entryList({"*.zgd"}, QDir::Files).size(), 2);
+    }
+
     void legacyVideoHitCompletesSourceLookupGate() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -548,7 +734,9 @@ private slots:
 
 #if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     void portraitVideoContactSheetKeepsDisplayAspectRatio() {
-        const QString fixture = QFINDTESTDATA("data/video-thumbnail-portrait.mp4");
+        const QString externalFixture = qEnvironmentVariable("ZOIN_PORTRAIT_VIDEO_FILE");
+        const QString fixture = externalFixture.isEmpty()
+            ? QFINDTESTDATA("data/video-thumbnail-portrait.mp4") : externalFixture;
         QVERIFY(!fixture.isEmpty());
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -565,10 +753,16 @@ private slots:
         request.storeInPersistentCache = false;
         VideoThumbnailRunner runner(request);
         QImage sheet;
+        QImage poster;
+        QSize displaySize;
+        connect(&runner, &VideoThumbnailRunner::imageInfoReady, this,
+                [&](const ImageInfo &info) { displaySize = info.imageSize; });
         connect(&runner, &VideoThumbnailRunner::imageReady, this,
                 [&](const ImageDecodeRequest &ready, const QImage &image,
                     const DecodedImageInfo &) {
-            if (!ready.videoPosterRequest)
+            if (ready.videoPosterRequest)
+                poster = image;
+            else
                 sheet = image;
         });
         runner.run();
@@ -577,9 +771,25 @@ private slots:
                      < 0.01, qPrintable(QStringLiteral("sheet is %1x%2")
                          .arg(sheet.width()).arg(sheet.height())));
         QVERIFY(sheet.width() <= 320 && sheet.height() <= 180);
+        QVERIFY(!poster.isNull());
+        QVERIFY(qAbs(qreal(poster.width()) / poster.height() - 9.0 / 16.0) < 0.01);
+        for (const QImage &image : {poster, sheet})
+            for (const QPoint point : {QPoint(0, 0), QPoint(image.width() / 2, image.height() / 2),
+                                       QPoint(image.width() - 1, image.height() - 1)})
+                QCOMPARE(image.pixelColor(point).alpha(), 255);
+        QVERIFY(qAbs(qreal(displaySize.width()) / displaySize.height() - 9.0 / 16.0) < 0.01);
+        qInfo() << "Portrait video display" << displaySize << "poster" << poster.size()
+                << "contact sheet" << sheet.size();
+        const QString capture = qEnvironmentVariable("ZOIN_PORTRAIT_VIDEO_CAPTURE");
+        if (!capture.isEmpty()) {
+            QVERIFY(sheet.save(capture + "-sheet.png"));
+            QVERIFY(poster.save(capture + "-poster.png"));
+        }
         // A solid frame must reach both edges of each cell, without bars.
-        QVERIFY(sheet.pixelColor(0, 0).red() > 200);
-        QVERIFY(sheet.pixelColor(sheet.width() - 1, sheet.height() - 1).red() > 200);
+        if (externalFixture.isEmpty()) {
+            QVERIFY(sheet.pixelColor(0, 0).red() > 200);
+            QVERIFY(sheet.pixelColor(sheet.width() - 1, sheet.height() - 1).red() > 200);
+        }
     }
 
     void decodedVideoPosterSizeIsIndependentOfPanelSize() {
@@ -635,19 +845,50 @@ private slots:
         }
     }
 
+    void videoFieldsArePublishedWithThumbnailAndCached_data() {
+        QTest::addColumn<bool>("rotated");
+        QTest::newRow("landscape") << false;
+        QTest::newRow("portrait-track-matrix") << true;
+    }
+
     void videoFieldsArePublishedWithThumbnailAndCached() {
-        const QString path = QFINDTESTDATA("data/video-fields-av.mp4");
-        QVERIFY(!path.isEmpty());
+        QFETCH(bool, rotated);
+        const QString fixture = QFINDTESTDATA("data/video-fields-av.mp4");
+        QVERIFY(!fixture.isEmpty());
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath("video.mp4");
+        QFile input(fixture);
+        QVERIFY(input.open(QIODevice::ReadOnly));
+        QByteArray bytes = input.readAll();
+        if (rotated) {
+            // This fixture has a version-0 video tkhd. Replace only its
+            // identity display matrix; encoded pixels and dimensions stay put.
+            const qsizetype tkhd = bytes.indexOf("tkhd");
+            QVERIFY(tkhd >= 0 && tkhd + 80 <= bytes.size());
+            QCOMPARE(bytes.at(tkhd + 4), char(0));
+            QByteArray matrix;
+            QDataStream stream(&matrix, QIODevice::WriteOnly);
+            for (qint32 value : {0, 65536, 0, -65536, 0, 0, 0, 0, 1073741824})
+                stream << value;
+            bytes.replace(tkhd + 44, matrix.size(), matrix);
+        }
+        QFile output(path);
+        QVERIFY(output.open(QIODevice::WriteOnly));
+        QCOMPARE(output.write(bytes), bytes.size());
+        output.close();
+        const QSize displaySize = rotated ? QSize(240, 320) : QSize(320, 240);
         ImageDecodeRequest request;
         request.info.path = path;
         request.info.thumbnailKind = "video";
         request.info.imageSize = QSize(16, 9);
         request.info.source = {.resourceId="video-fields-resource", .sourceKey="video-fields/sample.mp4",
-            .contentVersion="video-fields-v2", .versionStrength="strong", .storageClass="network",
+            .contentVersion=rotated ? "video-fields-portrait-v1" : "video-fields-v2",
+            .versionStrength="strong", .storageClass="network",
             .displayName="sample.mp4", .size=QFileInfo(path).size()};
         request.info.sourceVersionToken = request.info.source.contentVersion;
         request.targetSize = QSize(160, 160);
-        request.thumbnailTransformKey = "video-contact-sheet-2x2-display-v4";
+        request.thumbnailTransformKey = "video-contact-sheet-2x2-display-v6";
         request.checkCache = true;
         request.storeInPersistentCache = true;
         auto provider = QSharedPointer<MetadataSourceProvider>::create(path);
@@ -655,6 +896,15 @@ private slots:
         VideoThumbnailRunner runner(request, provider);
         firstLookup.run();
         ImageInfo metadata;
+        QImage poster;
+        QImage sheet;
+        connect(&runner, &VideoThumbnailRunner::imageReady, this,
+                [&](const ImageDecodeRequest &ready, const QImage &image, const DecodedImageInfo &) {
+            if (ready.videoPosterRequest)
+                poster = image;
+            else
+                sheet = image;
+        });
         connect(&runner, &VideoThumbnailRunner::imageInfoReady, this,
                 [&](const ImageInfo &info) { metadata = info; });
         connect(&runner, &VideoThumbnailRunner::storeInCache, this,
@@ -663,6 +913,9 @@ private slots:
         });
         runner.run();
         QVERIFY(metadata.fileFieldsRead);
+        QCOMPARE(metadata.imageSize, displaySize);
+        QCOMPARE(poster.size(), displaySize);
+        QCOMPARE(sheet.size(), displaySize.scaled(request.targetSize, Qt::KeepAspectRatio));
         const auto fields = metadata.typedFileFields;
         for (const auto *key : {"media.duration", "media.bitrate", "media.format",
                                "video.codec", "video.resolution", "video.frame_rate",
@@ -713,6 +966,7 @@ private slots:
                 [&](const ImageInfo &info) { reloaded = info; });
         missing.run();
         QVERIFY(reloaded.fileFieldsRead);
+        QCOMPARE(reloaded.imageSize, displaySize);
         QCOMPARE(reloaded.typedFileFields, fields);
         QCOMPARE(provider->materializations.load(), 2);
     }
@@ -746,7 +1000,7 @@ private slots:
         sheet.targetSize = QSize(384, 216);
         sheet.checkCache = true;
         sheet.thumbnailTransformKey = QStringLiteral(
-            "video-contact-sheet-2x2-display-v4");
+            "video-contact-sheet-2x2-display-v6");
         const QImage sheetImage = testImage(sheet.targetSize, qRgb(30, 60, 90));
         const QByteArray sheetBytes = PersistentImageCache::createImageForCache(
             sheet, sheetImage);
@@ -757,7 +1011,7 @@ private slots:
         poster.videoPosterRequest = true;
         poster.targetSize = QSize(1024, 1024);
         poster.thumbnailTransformKey = QStringLiteral(
-            "video-first-frame-poster-1024-display-v3");
+            "video-first-frame-poster-1024-display-v5");
         const QImage posterImage = testImage(QSize(960, 540), qRgb(200, 120, 40));
         const QByteArray posterBytes = PersistentDerivedImageCache::
             createImageForCache(poster, posterImage);
@@ -1136,7 +1390,10 @@ private slots:
             requestFor(QStringLiteral("weak"),
                        QStringLiteral("revision-1"),
                        QStringLiteral("authority-a/resource-17"));
-        persist(first, testImage(first.targetSize));
+        const QByteArray oldPrepared = PersistentImageCache::createImageForCache(
+            first, testImage(first.targetSize));
+        QVERIFY(!oldPrepared.isEmpty());
+        PersistentImageCache::storeImage(first.info, oldPrepared);
 
         ImageDecodeRequest firstCopy = first;
         QVERIFY(!PersistentImageCache::retrieveImage(firstCopy, true)
@@ -1151,9 +1408,6 @@ private slots:
 
         // A delayed store runner from the old authority cannot populate the
         // new authority's key even if source/version/tier are identical.
-        const QByteArray oldPrepared =
-            PersistentImageCache::createImageForCache(
-                first, testImage(first.targetSize));
         PersistentImageCache::storeImage(newAuthority.info, oldPrepared);
         QVERIFY(PersistentImageCache::retrieveImage(newAuthority, true)
                     .isNull());

@@ -47,6 +47,7 @@ class ViewerResampleEffect : public QQuickItem
     Q_PROPERTY(bool requestLinearVideoCache READ requestLinearVideoCache
                WRITE setRequestLinearVideoCache NOTIFY requestLinearVideoCacheChanged)
     Q_PROPERTY(bool referenceSampling READ referenceSampling CONSTANT)
+    Q_PROPERTY(bool hdrOutput READ hdrOutput WRITE setHdrOutput NOTIFY hdrOutputChanged)
 
 public:
     explicit ViewerResampleEffect(QQuickItem *parent = nullptr);
@@ -89,6 +90,8 @@ public:
     bool requestLinearVideoCache() const { return m_requestLinearVideoCache; }
     void setRequestLinearVideoCache(bool requested);
     bool referenceSampling() const { return m_referenceSampling; }
+    bool hdrOutput() const { return m_hdrOutput; }
+    void setHdrOutput(bool enabled);
     Q_INVOKABLE bool windowProjectionMatches(qreal dpr) const;
 
 signals:
@@ -109,6 +112,7 @@ signals:
     void convertVideoToLinearChanged();
     void linearVideoCacheSupportedChanged();
     void requestLinearVideoCacheChanged();
+    void hdrOutputChanged();
 
 protected:
     QSGNode *updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *) override;
@@ -137,6 +141,7 @@ private:
     QSize m_linearVideoCacheSize;
     bool m_requestLinearVideoCache = false;
     bool m_referenceSampling = false;
+    bool m_hdrOutput = false;
     bool m_disableLinearVideoCache = false;
 #ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
     void releaseLinearProvider();

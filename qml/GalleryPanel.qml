@@ -8,10 +8,23 @@ import ZoinGallery.Native 1.0
 
 GalleryPanelFacade {
     id: root
+    Accessible.role: Accessible.List
+    Accessible.name: root.controllerReady ? root.controller.currentPath : ""
     // Delegates recycle beyond the viewport; the host owns trailing clipping.
     clip: false
 
     property GallerySession session
+    readonly property alias entryVisualFactories: entryVisualFactoriesObject
+    GalleryEntryVisualFactories { id: entryVisualFactoriesObject }
+    readonly property GalleryVectorSceneCache vectorSceneCache: GalleryVectorSceneCache {
+        parent: root
+        enabled: !root.session || !root.session.viewerOpen
+    }
+    Connections {
+        target: root.session
+        function onCurrentPathChanged() { root.vectorSceneCache.invalidate() }
+    }
+    onSessionChanged: { if (vectorSceneCache) vectorSceneCache.invalidate() }
     // The default typed controller wraps GallerySession without catalog copies.
     property GalleryPanelController controller: GalleryPanelController {
         session: root.session
@@ -79,7 +92,7 @@ GalleryPanelFacade {
         motionState.cursorAfterScrollTimer
     readonly property Timer densityCommitTimerObject: motionState.densityTimer
     readonly property bool panelScrollAnimationRunning:
-        motionState.scrollAnimation.running
+        motionState.scrollAnimation.running || motionState.retargetingScroll
 
     readonly property GalleryPanelMotion motionController: motionState
     GalleryPanelMotion {
@@ -109,6 +122,7 @@ GalleryPanelFacade {
     property alias scrollingStarted: galleryViewport.scrollingStarted
     property alias scrollingStartedAtY: galleryViewport.scrollingStartedAtY
     property alias scrollingMode: galleryViewport.scrollingMode
+    readonly property bool autoScrollAnimationRunning: galleryViewport.autoScrollAnimationRunning
     property int columnCount: 2
     property var columnSchema: []
     property var fileFieldDescriptors: []

@@ -1,4 +1,10 @@
 #include "DecodeManager.h"
+#include "Runners/CacheImageRunners.h"
+#include "Runners/ImageDecodeRunner.h"
+#include "Runners/ImageReadRunner.h"
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+#include "Runners/VideoThumbnailRunner.h"
+#endif
 #include <QDebug>
 
 namespace {
@@ -95,6 +101,45 @@ void DecodeManager::cancelAllDecodeViewerRunners() {
     }
 }
 
+void DecodeManager::cancelObsoleteViewerRequests(
+    const QString &requestNamespace, const QHash<QString, int> &ranks) {
+    QList<ImageDecodeRequest> canceled;
+    const auto cancelIfObsolete = [&](Runner *runner) {
+        if (!runner || runner->isCanceled()
+            || runner->requestNamespace() != requestNamespace) return false;
+
+        const ImageDecodeRequest *request = nullptr;
+        if (auto *lookup = qobject_cast<CachedImageRetrieveRunner *>(runner)) {
+            if (lookup->_request.viewerThumbnailRequest) {
+                if (ranks.value(runner->path(), -1) == 0) return false;
+                runner->cancel();
+                return true;
+            }
+            request = &lookup->_request;
+        } else if (auto *read = qobject_cast<ImageReadRunner *>(runner)) {
+            request = &read->_request;
+        } else if (auto *decode = qobject_cast<ImageDecodeRunner *>(runner)) {
+            request = &decode->_imageData.request;
+        }
+        if (!request || !runner->isViewerRequest()
+            || ranks.contains(runner->path())) return false;
+        canceled.append(*request);
+        runner->cancel();
+        return true;
+    };
+    for (const WorkerInfo &worker : std::as_const(_workers)) {
+        cancelIfObsolete(worker.runner);
+    }
+    _taskQueue.removeIf([&](Runner *runner) {
+        if (!cancelIfObsolete(runner)) return false;
+        runner->deleteLater();
+        return true;
+    });
+    for (const ImageDecodeRequest &request : std::as_const(canceled)) {
+        emit viewerDemandRequestCanceled(request);
+    }
+}
+
 void DecodeManager::cancelThumbnailRequests(
     const QString &requestNamespace) {
     cancelDecodeRequests(requestNamespace, false);
@@ -125,6 +170,40 @@ void DecodeManager::cancelPanelThumbnailRequests(
         runner->deleteLater();
     }
     processQueue();
+}
+
+QList<ImageDecodeRequest> DecodeManager::cancelQueuedPanelThumbnailRequests(
+    const QString &requestNamespace) {
+    QList<ImageDecodeRequest> canceled;
+    if (requestNamespace.isEmpty()) return canceled;
+
+    for (int index = _taskQueue.size() - 1; index >= 0; --index) {
+        Runner *runner = _taskQueue.at(index);
+        if (runner->requestNamespace() != requestNamespace
+            || !runner->isPanelThumbnailRequest()) continue;
+
+        ImageDecodeRequest request;
+        if (auto *read = qobject_cast<ImageReadRunner *>(runner)) {
+            request = read->_request;
+        } else if (auto *decode = qobject_cast<ImageDecodeRunner *>(runner)) {
+            request = decode->_imageData.request;
+        } else if (auto *cache = qobject_cast<CachedImageRetrieveRunner *>(runner)) {
+            request = cache->_request;
+#if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
+        } else if (auto *video = qobject_cast<VideoThumbnailRunner *>(runner)) {
+            request = video->request();
+#endif
+        } else {
+            continue;
+        }
+        _taskQueue.removeAt(index);
+        runner->cancel();
+        runner->deleteLater();
+        canceled.append(request);
+    }
+    // Do not start the old queue while its caller is replacing the viewport
+    // lease. The following demand/decode submission resumes scheduling.
+    return canceled;
 }
 
 void DecodeManager::cancelViewerRequests(

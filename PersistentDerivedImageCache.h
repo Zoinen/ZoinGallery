@@ -41,6 +41,9 @@ public:
                                    const QByteArray &preparedEntry);
     static QByteArray createImageForCache(const ImageDecodeRequest &request,
                                           const QImage &image);
+    static quint64 writeGeneration();
+    static void storeViewerFitFrame(const ImageDecodeRequest &request,
+                                    const QImage &image, quint64 generation);
     // Small source metadata manifest keyed by the same immutable revision and
     // authority rules as derived pixels. This lets a cold catalog compute its
     // Fit key before opening a slow source and therefore reach a persisted

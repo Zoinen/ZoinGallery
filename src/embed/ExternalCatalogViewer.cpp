@@ -40,7 +40,7 @@ QString ExternalCatalogModel::videoThumbnailUrlAt(int row) const {
 
 QString ExternalCatalogModel::videoPosterUrlAt(int row) const {
     constexpr auto VideoPosterTransform =
-        "video-first-frame-poster-1024-display-v3";
+        "video-first-frame-poster-1024-display-v5";
     if (!validRow(row) || !isVideoAt(row) || !_thumbnailCache) {
         return {};
     }
@@ -87,13 +87,42 @@ QList<QPair<QString, int>> ExternalCatalogModel::viewerImageSourcesAt(
         [this](ImageDecodeRequest &request) {
             stabilizeViewerFitRequest(request);
         });
-    if (!entry.thumbnailProviderId.isEmpty()
-        && std::none_of(sources.cbegin(), sources.cend(),
+    if (std::none_of(sources.cbegin(), sources.cend(),
             [](const auto &source) { return source.second == 0; })) {
-        sources.prepend({QStringLiteral("image://") + _thumbnailProviderName
-            + QLatin1Char('/') + entry.thumbnailProviderId, 0});
+        QString providerId = entry.thumbnailProviderId;
+        if (providerId.isEmpty() && _thumbnailCache) {
+            providerId = _thumbnailCache->lookup(
+                entry.sourceIdentity, entry.contentVersion, entry.size,
+                QSize(1, 1)).providerId;
+        }
+        if (!providerId.isEmpty()) {
+            sources.prepend({QStringLiteral("image://") + _thumbnailProviderName
+                + QLatin1Char('/') + providerId, 0});
+        }
     }
     return sources;
+}
+
+void ExternalCatalogModel::restoreViewerThumbnail(int row) {
+    const Entry &entry = loadedEntry(row);
+    if (isVectorSource(entry.imageInfo) || !viewerImageSourcesAt(row).isEmpty()) return;
+
+    ImageDecodeRequest request;
+    request.info = ensureItem(row)->info();
+    request.info.source = entry.source;
+    request.info.path = entry.sourceIdentity;
+    request.info.sourceVersionToken = entry.contentVersion;
+    request.info.requestNamespace = _sessionId;
+    request.requestNamespace = _sessionId;
+    request.targetSize = QSize(1, 1);
+    request.thumbnailTransformKey =
+        QString::fromLatin1(ThumbnailMemoryCache::DefaultTransformKey);
+    request.viewerThumbnailRequest = true;
+    request.highPriority = true;
+    const QString key = thumbnailRequestKey(request);
+    if (_viewerThumbnailLookupKey == key) return;
+    _viewerThumbnailLookupKey = key;
+    _decodeManager->restoreCachedViewerThumbnail(request);
 }
 
 bool ExternalCatalogModel::viewerDecodeFailedAt(int row) const {
@@ -210,14 +239,17 @@ void ExternalCatalogModel::clearViewerRequestStates() {
 }
 
 void ExternalCatalogModel::requestViewer(
-    int row, const QSize &viewportSize) {
-    if (_shutdown || !validRow(row) || !loadedEntry(row).image
-        || loadedEntry(row).thumbnailKind == QStringLiteral("video") ||
-        !viewportSize.isValid()) {
+    int row, const QSize &requestedViewportSize) {
+    if (_shutdown || !validRow(row)
+        || (!loadedEntry(row).image && !isVideoAt(row))
+        || !requestedViewportSize.isValid()) {
         clearViewer();
         return;
     }
 
+    const bool videoAnchor = isVideoAt(row);
+    const QSize viewportSize = videoAnchor && requestedViewportSize.isEmpty()
+        ? _lastViewerFitViewportSize : requestedViewportSize;
     const QString entryId = loadedEntry(row).id;
     const bool entryChanged = _viewerEntryId != entryId;
     const bool viewportChanged = _viewerViewportSize != viewportSize;
@@ -239,9 +271,10 @@ void ExternalCatalogModel::requestViewer(
     }
     if (entryChanged) {
         _viewerEntryId = entryId;
+        _viewerThumbnailLookupKey.clear();
         notifyViewerImageUrlChanged();
     }
-    if (viewerDecodeFailedAt(row)) {
+    if (!videoAnchor && viewerDecodeFailedAt(row)) {
         setViewerRequestState({row}, QStringLiteral("failed"));
         return;
     }
@@ -252,6 +285,11 @@ void ExternalCatalogModel::requestViewer(
     // frame; finishDeferredNativeDwell() widens it to the +/-2 window.
     _viewerPlans.insert(
         entryId, {viewportSize, nativeRequest ? 1 : prefetchCount});
+    if (videoAnchor) {
+        _decodeManager->setInteractiveSource(_sessionId, {});
+        scheduleViewerDecodeAt(row, viewportSize, 16);
+        return;
+    }
     const int requiredLevel = nativeRequest ? 2 : 1;
     const auto currentSources = viewerImageSourcesAt(row);
     const bool requestedTierReady = std::any_of(
@@ -330,8 +368,8 @@ void ExternalCatalogModel::requestViewerAt(
 }
 
 void ExternalCatalogModel::setViewerIndex(int row) {
-    if (_shutdown || !validRow(row) || !loadedEntry(row).image
-        || loadedEntry(row).thumbnailKind == QStringLiteral("video")) {
+    if (_shutdown || !validRow(row)
+        || (!loadedEntry(row).image && !isVideoAt(row))) {
         clearViewer();
         return;
     }
@@ -344,7 +382,14 @@ void ExternalCatalogModel::setViewerIndex(int row) {
 
     invalidateNativeDwell();
     _viewerEntryId = entryId;
+    _viewerThumbnailLookupKey.clear();
     _viewerPlans.clear();
+    if (isVideoAt(row)) {
+        _deferredNativeEntryId.clear();
+        _decodeManager->setInteractiveSource(_sessionId, {});
+        if (_viewerViewportSize.isEmpty())
+            _viewerViewportSize = _lastViewerFitViewportSize;
+    }
     if (_viewerViewportSize.isValid()) {
         const int prefetchCount = _viewerViewportSize.isEmpty() ? 1 : 16;
         _viewerPlans.insert(
@@ -361,6 +406,7 @@ void ExternalCatalogModel::clearViewer() {
     _deferredNativeEntryId.clear();
     invalidateNativeDwell();
     _viewerEntryId.clear();
+    _viewerThumbnailLookupKey.clear();
     _decodeManager->setViewerDemand(_sessionId, {});
     _decodeManager->setInteractiveSource(_sessionId, {});
     _viewerViewportSize = {};
@@ -518,19 +564,23 @@ void ExternalCatalogModel::cancelAllDecodeRunners() {
     // MasonryLayout calls this before replacing DPR/geometry-specific tiles.
     // Expensive source reads/materializations remain reusable across a small
     // layout or DPR change. Their stale presentation subscriber is forgotten
-    // below, while completion may still populate a covering tier. Local files
-    // retain the historical aggressive cancellation policy.
+    // below, while completion may still populate a covering tier.
     const bool hasExpensiveSource = std::any_of(
         _entries.cbegin(), _entries.cend(), [](const Entry &entry) {
             return entry.image && entry.thumbnailKind != QStringLiteral("video") && expensiveSource(entry.source);
         });
     if (!hasExpensiveSource) {
-        _decodeManager->cancelThumbnailRequests(_sessionId);
-        if (_thumbnailCache) {
-            _thumbnailCache->cancelRequests(_sessionId);
+        // A local read/decode already running is also useful cache work.
+        // Canceling it on every layout lease can starve large PNGs forever.
+        // Drop obsolete queued work to keep the queue bounded, but let the
+        // configured worker count finish its existing immutable tiers.
+        const auto canceled =
+            _decodeManager->cancelQueuedPanelThumbnailRequests(_sessionId);
+        for (const auto &request : canceled) {
+            releaseFailedThumbnailRequest(request, true);
         }
     }
-    // When expensive work remains alive, its shared-cache Owner admission must
+    // When running work remains alive, its shared-cache Owner admission must
     // remain alive with it. Dropping only that admission would let the same
     // stable tier become Owner again and launch a duplicate decode after every
     // geometry/DPR lease change. This map is merely the stale local waiter;

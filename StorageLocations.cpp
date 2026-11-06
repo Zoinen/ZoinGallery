@@ -11,6 +11,7 @@ namespace {
 QMutex storageMutex;
 QString configuredNamespace;
 QString configuredCacheRoot;
+QString resolvedCacheRoot;
 bool cacheRootInUse = false;
 
 QString normalizedNamespace(QString value) {
@@ -81,8 +82,14 @@ QString dataRootForNamespace(const QString &storageNamespace) {
 
 QString cacheRoot() {
     QMutexLocker locker(&storageMutex);
-    cacheRootInUse = true;
-    return configuredCacheRoot.isEmpty() ? cacheRootForNamespace(currentNamespaceLocked()) : configuredCacheRoot;
+    if (!cacheRootInUse) {
+        // Freeze the default just like an explicitly configured root. Resolving
+        // the OS temporary directory can be expensive on every cache request.
+        resolvedCacheRoot = configuredCacheRoot.isEmpty()
+            ? cacheRootForNamespace(currentNamespaceLocked()) : configuredCacheRoot;
+        cacheRootInUse = true;
+    }
+    return resolvedCacheRoot;
 }
 
 bool configureCacheRoot(const QString &path) {

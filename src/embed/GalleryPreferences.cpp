@@ -5,6 +5,7 @@
 #include "StorageLocations.h"
 #include "PersistentImageCache.h"
 #include "PersistentDerivedImageCache.h"
+#include "ThumbnailMemoryCache.h"
 #include "Decoders/ImageDecoderInterface.h"
 #include <QDir>
 #include <QFutureWatcher>
@@ -15,6 +16,13 @@
 
 namespace ZoinGallery {
 namespace {
+constexpr qint64 bytesPerMiB = 1024 * 1024;
+constexpr auto thumbnailMemoryLimitKey = "Cache/thumbnailMemoryLimitMiB";
+
+bool validThumbnailMemoryLimit(int limit) {
+    return limit >= 16 && limit <= 16384;
+}
+
 const QSet<QString> &videoPlaybackModes() {
     static const QSet<QString> modes{
         QStringLiteral("autoplay-muted"), QStringLiteral("autoplay-sound"),
@@ -30,13 +38,27 @@ QString storedVideoPlaybackMode(const QSettings &settings) {
 }
 }
 
-GalleryPreferences::GalleryPreferences(DecodeManager *decoder, bool persistent, QObject *parent)
-    : QObject(parent), _decoder(decoder), _decoders(ImageDecoderFactory::decoderInventory()) {
+GalleryPreferences::GalleryPreferences(DecodeManager *decoder, bool persistent, QObject *parent,
+                                       ThumbnailMemoryCache *thumbnailCache)
+    : QObject(parent), _decoder(decoder), _thumbnailCache(thumbnailCache),
+      _decoders(ImageDecoderFactory::decoderInventory()) {
     _cachePool.setMaxThreadCount(1);
     QSettings settings;
+    const qint64 defaultBudget = _thumbnailCache ? _thumbnailCache->byteBudget()
+                                               : ThumbnailMemoryCache::DefaultByteBudget;
+    int memoryLimit = int(defaultBudget / bytesPerMiB);
+    if (persistent) {
+        const int savedLimit = settings.value(thumbnailMemoryLimitKey).toString().toInt();
+        if (validThumbnailMemoryLimit(savedLimit)) {
+            memoryLimit = savedLimit;
+            if (_thumbnailCache)
+                _thumbnailCache->setByteBudget(memoryLimit * bytesPerMiB);
+        }
+    }
     _values = {{"imageMode", int(decoder->imageCacheMode())},
         {"folderMode", int(decoder->fileListCacheMode())},
         {"diskLimitMiB", qBound(64, settings.value("Cache/diskLimitMiB", 512).toInt(), 65536)},
+        {"thumbnailMemoryLimitMiB", memoryLimit},
         {"location", settings.value("Cache/location", QString()).toString()},
         {"activeLocation", StorageLocations::cacheRoot()},
         {"convertColors", DisplayColorSpace::conversionEnabled()},
@@ -67,10 +89,22 @@ void GalleryPreferences::setShowCheckerboard(bool enabled) {
 }
 
 bool GalleryPreferences::apply(const QVariantMap &values) {
+    const int previousMemoryLimit = _values.value("thumbnailMemoryLimitMiB").toInt();
+    const int memoryLimit = values.value("thumbnailMemoryLimitMiB", previousMemoryLimit)
+                                .toString().toInt();
+    if (values.contains("thumbnailMemoryLimitMiB")
+        && !validThumbnailMemoryLimit(memoryLimit)) {
+        _error = tr("Thumbnail memory cache size must be between 16 and 16384 MiB.");
+        emit changed();
+        return false;
+    }
+    const bool memoryLimitChanged = memoryLimit != previousMemoryLimit;
     const int limit = values.value("diskLimitMiB").toInt();
+    const bool diskLimitChanged = limit != _values.value("diskLimitMiB").toInt();
     const QString location = values.value("location").toString().trimmed();
     const int imageMode = values.value("imageMode").toInt();
     const int folderMode = values.value("folderMode").toInt();
+    const bool folderModeChanged = folderMode != _values.value("folderMode").toInt();
     const QString videoPlaybackMode = values.value(
         "videoPlaybackMode", _values.value("videoPlaybackMode",
         QStringLiteral("autoplay-muted"))).toString();
@@ -93,6 +127,7 @@ bool GalleryPreferences::apply(const QVariantMap &values) {
     settings.setValue("Cache/imageUsageMode", imageMode);
     settings.setValue("Cache/fileListUsageMode", folderMode);
     settings.setValue("Cache/diskLimitMiB", limit);
+    if (memoryLimitChanged) settings.setValue(thumbnailMemoryLimitKey, memoryLimit);
     settings.setValue("Cache/location", location);
     settings.setValue("Gallery/animateResizing", values.value("animateResizing").toBool());
     settings.setValue("Gallery/videoPlaybackMode", videoPlaybackMode);
@@ -101,18 +136,21 @@ bool GalleryPreferences::apply(const QVariantMap &values) {
     settings.sync();
     if (settings.status() != QSettings::NoError) { _error = tr("Could not save Gallery settings."); emit changed(); return false; }
     _values = values;
+    _values["thumbnailMemoryLimitMiB"] = memoryLimit;
     _values["showCheckerboard"] = checkerboard;
     _values["videoPlaybackMode"] = videoPlaybackMode;
     _values["location"] = location;
     _values["activeLocation"] = StorageLocations::cacheRoot();
     _decoder->setImageCacheMode(cacheUsageModeFromInt(imageMode));
     _decoder->setFileListCacheMode(cacheUsageModeFromInt(folderMode));
-    if (folderMode == 0) emit clearSnapshotsRequested();
+    if (memoryLimitChanged && _thumbnailCache)
+        _thumbnailCache->setByteBudget(memoryLimit * bytesPerMiB);
+    if (folderMode == 0 && folderModeChanged) emit clearSnapshotsRequested();
     if (colorsChanged) emit pixelsInvalidated();
     MediaTimingTrace::event("qt.gallery.preferences", {{"diskLimitMiB", limit}, {"imageMode", imageMode}, {"folderMode", folderMode}});
     _error.clear();
     emit changed();
-    runCacheOperation(false, true);
+    if (diskLimitChanged) runCacheOperation(false, true);
     return true;
 }
 void GalleryPreferences::refresh() { runCacheOperation(false, false); }

@@ -1,4 +1,6 @@
 #include "MasonryLayout.h"
+#include "GalleryViewportMotion.h"
+#include "VectorSource.h"
 
 #include <ZoinGallery/GalleryCatalogSource.h>
 #include <ZoinGallery/MediaTimingTrace.h>
@@ -24,9 +26,7 @@ ZoinGallery::GalleryPresentationMode enginePresentationMode(
 }
 
 bool isScalableVectorThumbnail(const ImageInfo &info) {
-    const QString suffix = QFileInfo(info.path).suffix();
-    return suffix.compare(QStringLiteral("svg"), Qt::CaseInsensitive) == 0
-        || suffix.compare(QStringLiteral("svgz"), Qt::CaseInsensitive) == 0;
+    return isVectorSource(info);
 }
 
 } // namespace
@@ -36,11 +36,30 @@ MasonryLayout::viewportMaterializationPlan() const {
     const qreal extent = _presentationMode == Columns ? width() : height();
     const qreal itemExtent = _presentationMode == Columns
         ? columnStride()
-        : (_presentationMode == Icons || sparseVirtualLayout())
+        : _presentationMode == Icons
             ? virtualGridRowHeight() : effectiveTargetExtent();
-    return ZoinGallery::GalleryViewportMaterializer::plan(
+    auto plan = ZoinGallery::GalleryViewportMaterializer::plan(
         enginePresentationMode(_presentationMode), _contentY,
         extent, itemExtent);
+    if (_presentationMode == Masonry && _viewportMotionState
+        && _viewportMotionState->active.load(std::memory_order_acquire)) {
+        auto leading = ZoinGallery::GalleryViewportMaterializer::withMotionTarget(
+            plan, _viewportMotionState->targetY.load(std::memory_order_acquire));
+        if (_viewportMotionState->page) {
+            // Page motion prepares the leading rows in slices. A synchronous
+            // commit only has to recover rows already inside the viewport.
+            leading.delegateStart = plan.visibleStart;
+            leading.delegateEnd = plan.visibleEnd;
+        }
+        return leading;
+    }
+    return plan;
+}
+
+bool MasonryLayout::preparingViewportMotion() const {
+    return _presentationMode == Masonry && _viewportMotionState
+        && _viewportMotionState->prepareAlongPath
+        && _viewportMotionState->active.load(std::memory_order_acquire);
 }
 
 void MasonryLayout::updateViewportIndexSets() {
@@ -122,7 +141,8 @@ void MasonryLayout::updateViewportIndexSets() {
     if (overscanChanged) {
         emit overscanIndexesChanged();
     }
-    if (visibleChanged || overscanChanged) {
+    if ((visibleChanged || overscanChanged)
+        && !(_viewportMotionState && _viewportMotionState->edgeJump)) {
         planViewportThumbnails(_overscanIndexSet);
     }
 }
@@ -164,14 +184,21 @@ void MasonryLayout::planThumbnailForIndex(
         // (or materializing the whole catalog during model reset).
         if (_delegateRefreshPending || _visualSnapshotRefresh
             || _delegateMaterializationPending
-            || !brick.modelIsImage || !brick.modelKnownSize.isValid()
-            || brick.modelKnownSize.isEmpty()) {
+            || !brick.modelIsImage) {
+            traceSkipped(QStringLiteral("facade-deferred"));
+            return;
+        }
+        if ((!brick.modelKnownSize.isValid() || brick.modelKnownSize.isEmpty())
+            && (_visualSnapshotRole < 0
+                || !_model->index(index, 0).data(_visualSnapshotRole).toMap()
+                        .value(QStringLiteral("isVector")).toBool())) {
             traceSkipped(QStringLiteral("facade-deferred"));
             return;
         }
         image = materializeImageForIndex(index);
     }
-    if (!image || !image->isImage() || !image->fullSize().isValid()) {
+    if (!image || !image->isImage()
+        || (!image->fullSize().isValid() && !isScalableVectorThumbnail(image->info()))) {
         traceSkipped(QStringLiteral("facade-not-decodable"));
         return;
     }
@@ -197,7 +224,7 @@ void MasonryLayout::planThumbnailForIndex(
     const ImageInfo info = image->info();
     const QString transformKey = image->info().thumbnailKind
         == QStringLiteral("video")
-        ? QStringLiteral("video-contact-sheet-2x2-display-v4")
+        ? QStringLiteral("video-contact-sheet-2x2-display-v6")
         : previewTransformKey();
     const bool sameSource =
         brick.lastPlannedSourcePath == info.sourceIdentity() &&
@@ -261,26 +288,32 @@ void MasonryLayout::planThumbnailForIndex(
 
 QSize MasonryLayout::previewDecodeTargetSize(
     const MasonryBrick &brick, const QSizeF &previewBounds) {
-    if (!brick.image || !brick.image->fullSize().isValid() ||
-        brick.image->fullSize().isEmpty() ||
-        previewBounds.width() <= 0 || previewBounds.height() <= 0) {
+    if (!brick.image || previewBounds.width() <= 0 || previewBounds.height() <= 0) {
         return {};
     }
-
-    const QSize source = brick.image->fullSize();
     const QSizeF physicalBounds(
         dp(previewBounds.width()), dp(previewBounds.height()));
     if (physicalBounds.width() <= 0 || physicalBounds.height() <= 0) {
         return {};
     }
+    const QSize source = brick.image->fullSize();
+    if (!source.isValid() || source.isEmpty()) {
+        // A vector request acquires scalable source geometry, whose authoring
+        // viewport is supplied by the source itself. Bitmap metadata is not
+        // a prerequisite and the target is only the existing queue's ticket.
+        return isScalableVectorThumbnail(brick.image->info())
+            ? QSize(qMax(1, qCeil(physicalBounds.width())),
+                    qMax(1, qCeil(physicalBounds.height()))) : QSize{};
+    }
 
     const qreal horizontalScale = physicalBounds.width() / source.width();
     const qreal verticalScale = physicalBounds.height() / source.height();
-    // Only Masonry gives the preview surface the source aspect ratio itself.
-    // Every fixed presentation displays the complete image with
-    // PreserveAspectFit, so decode the smallest aspect-preserving frame that
-    // covers that fitted surface instead of the old Grid crop tier.
-    qreal scale = qMin(horizontalScale, verticalScale);
+    // Masonry gives the preview its own pixel-aligned rectangle. Its rounded
+    // edges can differ slightly from the source aspect, and the shader fills
+    // both axes. The other modes fit the image inside a larger shared slot.
+    qreal scale = _presentationMode == Masonry
+        ? qMax(horizontalScale, verticalScale)
+        : qMin(horizontalScale, verticalScale);
     // Raster thumbnails never need synthesized pixels: if the native image
     // is smaller than the preview, publish native dimensions and let the
     // scene graph perform the unavoidable display upscale. SVG metadata is
@@ -301,9 +334,8 @@ QSize MasonryLayout::previewDecodeTargetSize(
         return {};
     }
 
-    const auto scaledDimension = [scale, this](int dimension) {
-        const qreal scaled = dimension * scale;
-        return qMax(1, qFloor(scaled));
+    const auto scaledDimension = [scale](int dimension) {
+        return qMax(1, qCeil(dimension * scale));
     };
     return QSize(scaledDimension(source.width()),
                  scaledDimension(source.height()));
@@ -315,6 +347,22 @@ QString MasonryLayout::previewTransformKey() const {
     return QStringLiteral("thumbnail-aspect-v1");
 }
 
+QList<int> MasonryLayout::edgeThumbnailIndexes() const {
+    if (!_viewportMotionState || !_viewportMotionState->edgeJump)
+        return {};
+    const qreal target = _viewportMotionState->targetY.load(std::memory_order_acquire);
+    return indexesForVerticalRange(target, target + height());
+}
+
+QVariantList MasonryLayout::metadataDemandIndexes() const {
+    const auto edge = edgeThumbnailIndexes();
+    if (edge.isEmpty()) return visibleIndexes();
+    QVariantList result;
+    result.reserve(edge.size());
+    for (int index : edge) result.append(index);
+    return result;
+}
+
 void MasonryLayout::planViewportThumbnails(
     const QSet<int> &candidateIndexes, bool force) {
     if (!thumbnailsEnabled()) {
@@ -322,17 +370,23 @@ void MasonryLayout::planViewportThumbnails(
     }
     auto *requestModel =
         dynamic_cast<ZoinGallery::GalleryCatalogSource *>(_model);
-    if (!requestModel || candidateIndexes.isEmpty()
-        || _cancelingThumbnailPlan) {
+    if (!requestModel || _cancelingThumbnailPlan) {
         return;
     }
 
+    const auto edge = edgeThumbnailIndexes();
+    const QSet<int> edgeIndexes(edge.cbegin(), edge.cend());
+    const auto &candidates = edge.isEmpty() ? candidateIndexes : edgeIndexes;
+    const auto &visible = edge.isEmpty() ? _visibleIndexSet : edgeIndexes;
+    const auto &overscan = edge.isEmpty() ? _overscanIndexSet : edgeIndexes;
+    if (candidates.isEmpty()) return;
+
     const bool tracksViewportWindow =
-        force || candidateIndexes == _overscanIndexSet;
+        force || !edge.isEmpty() || candidateIndexes == _overscanIndexSet;
     const ZoinGallery::GalleryThumbnailWindowPlan windowPlan =
         _thumbnailPlanner.planWindow({
-            .candidates = candidateIndexes,
-            .visible = _visibleIndexSet,
+            .candidates = candidates,
+            .visible = visible,
             .logicalCount = logicalBrickCount(),
             .mode = enginePresentationMode(_presentationMode),
             .force = force,
@@ -358,11 +412,11 @@ void MasonryLayout::planViewportThumbnails(
     // A model delta plans pixels only for its dirty rows. Metadata demand is
     // the complete viewport lease; replacing it with those rows would demote
     // and cancel other images which are still visible.
-    QList<int> visibleDemand(_visibleIndexSet.cbegin(), _visibleIndexSet.cend());
+    QList<int> visibleDemand(visible.cbegin(), visible.cend());
     QList<int> backgroundDemand;
-    backgroundDemand.reserve(_overscanIndexSet.size());
-    for (const int index : _overscanIndexSet) {
-        if (!_visibleIndexSet.contains(index)) backgroundDemand.append(index);
+    backgroundDemand.reserve(overscan.size());
+    for (const int index : overscan) {
+        if (!visible.contains(index)) backgroundDemand.append(index);
     }
     std::sort(visibleDemand.begin(), visibleDemand.end());
     std::sort(backgroundDemand.begin(), backgroundDemand.end());

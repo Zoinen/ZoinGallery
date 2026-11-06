@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <memory>
+#include <utility>
 
 #include "GalleryDelegateItem.h"
 #include "GalleryDelegatePool.h"
@@ -25,6 +26,8 @@
 #include "ImageFile.h"
 
 #include <ZoinGallery/GallerySession.h>
+
+struct GalleryViewportMotionState;
 
 class MasonryLayout : public QQuickItem {
     Q_OBJECT
@@ -59,6 +62,8 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(int targetHeight READ targetHeight WRITE setTargetHeight NOTIFY targetHeightChanged)
     Q_PROPERTY(qreal contentY READ contentY WRITE setContentY NOTIFY contentYChanged)
     Q_PROPERTY(qreal overscrollLimit READ overscrollLimit WRITE setOverscrollLimit NOTIFY overscrollLimitChanged)
+    Q_PROPERTY(bool scrollAnimationRunning READ scrollAnimationRunning
+               WRITE setScrollAnimationRunning NOTIFY scrollAnimationRunningChanged)
     Q_PROPERTY(qreal contentHeight READ contentHeight NOTIFY contentHeightChanged)
     Q_PROPERTY(QAbstractItemModel *model READ model WRITE setModel NOTIFY modelChanged)
     Q_PROPERTY(QQmlComponent *delegate MEMBER _delegate)
@@ -105,6 +110,13 @@ class MasonryLayout : public QQuickItem {
     Q_PROPERTY(qreal paddingBottom READ paddingBottom WRITE setPaddingBottom NOTIFY paddingBottomChanged)
 
 public:
+    bool rewrapInProgress() const { return _rewrapDepth > 0; }
+    void setViewportMotionState(std::shared_ptr<GalleryViewportMotionState> state) {
+        _viewportMotionState = std::move(state);
+    }
+    void clearViewportMotionState(const std::shared_ptr<GalleryViewportMotionState> &owner) {
+        if (_viewportMotionState == owner) _viewportMotionState.reset();
+    }
     enum PresentationMode {
         Masonry = 0,
         Columns,
@@ -137,6 +149,13 @@ public:
     Q_INVOKABLE int indexAtViewport(qreal x, qreal y) const;
     Q_INVOKABLE QVariantList indexesInViewportRect(qreal x, qreal y, qreal width, qreal height) const;
     Q_INVOKABLE QRectF indexGeometry(int index) const;
+    // Content coordinates, without the active camera correction used by hit
+    // testing. The layout index bounds work to this synchronization window.
+    QList<int> viewportMotionCandidates(const QRectF &contentRect) const;
+    bool isMotionDelegatePrepared(int index) const;
+    void prepareViewportMotionTarget(qreal targetY);
+    Q_INVOKABLE bool indexIntersectsViewport(int index) const;
+    Q_INVOKABLE QVariantList metadataDemandIndexes() const;
     Q_INVOKABLE QRectF indexPreviewGeometry(int index) const;
     Q_INVOKABLE QString indexImageIdUrl(int index) const;
     Q_INVOKABLE QString indexText(int index) const;
@@ -228,6 +247,8 @@ public:
     void setContentY(qreal newContentY);
     qreal overscrollLimit() const;
     void setOverscrollLimit(qreal limit);
+    bool scrollAnimationRunning() const { return _scrollAnimationRunning; }
+    void setScrollAnimationRunning(bool running);
 
     qreal contentHeight() const;
 
@@ -304,6 +325,10 @@ signals:
     void visibleIndexesChanged();
     void overscanIndexesChanged();
     void layoutBandsChanged();
+    // Bracket the complete geometry/extent/viewport-anchor transaction.
+    void rewrapAboutToBegin();
+    void rewrapFinished();
+    void metadataDemandChanged();
     void groupRangesChanged();
     void groupHeaderGeometriesChanged();
     void groupHeaderHeightChanged();
@@ -316,6 +341,7 @@ signals:
     void targetHeightChanged();
     void contentYChanged();
     void overscrollLimitChanged();
+    void scrollAnimationRunningChanged();
     void contentHeightChanged();
     void modelChanged();
 
@@ -367,6 +393,7 @@ private slots:
 
 private:
     friend class MasonryLayoutQuickSearch;
+    friend class MasonryLayoutModesTest;
 
     void updatePolish() override;
 
@@ -389,6 +416,7 @@ private:
         quint64 iconLabelStyleRevision = 0;
         size_t iconLabelNameHash = 0;
         qreal iconLabelWidth = 0;
+        int iconLabelPresentationMode = -1;
         QSize lastPlannedTargetSize;
         QString lastPlannedTransformKey;
         QString lastPlannedSourcePath;
@@ -454,12 +482,29 @@ private:
     void invalidateIconCaptionMetrics();
     ZoinGallery::GalleryLayoutRequest layoutRequest() const;
     ZoinGallery::GalleryFixedLayoutPlan fixedLayoutPlan() const;
-    bool sparseFixedLayout() const;
-    // Sparse external catalogs keep only the rows needed by the active
-    // viewport. Masonry and Icons still need a deterministic position for
-    // every logical row, so these helpers provide a bounded, placeholder
-    // geometry without allocating a brick for the whole catalog.
-    bool sparseVirtualLayout() const;
+    bool sparseMasonryLayout() const;
+    struct SparseMasonryBlock {
+        int first = 0;
+        int rowBase = 0;
+        qreal top = 0;
+        ZoinGallery::GalleryLayoutResult layout;
+        qreal previousRowHeight = -1;
+        bool endsRange = false;
+        bool dirty = false;
+
+        int end() const { return first + layout.cells.size(); }
+        qreal bottom() const { return top + layout.contentExtent; }
+    };
+    void rebuildSparseMasonryGeometry();
+    void invalidateSparseMasonryGeometry(int first, int last);
+    const SparseMasonryBlock *sparseMasonryBlockForIndex(int index) const;
+    ZoinGallery::GalleryLayoutCell sparseMasonryCell(int index) const;
+    QList<int> sparseMasonryIndexesForRange(qreal top, qreal bottom) const;
+    int sparseMasonryIndexInBand(const SparseMasonryBlock &block,
+                                const ZoinGallery::GalleryLayoutBand &band,
+                                qreal x) const;
+    int sparseMasonryIndexNear(qreal x, qreal y) const;
+    int sparseMasonryNeighbor(int index, NavigationDirection direction) const;
     QVector<ZoinGallery::GalleryGroupHeader> groupHeaderGeometryVector() const;
     int virtualGridColumnCount() const;
     qreal virtualGridRowHeight() const;
@@ -517,7 +562,10 @@ private:
         const MasonryPageState &state, QVariantMap result) const;
     void updateWindowTopFromContentY();
     ZoinGallery::GalleryViewportWindow viewportMaterializationPlan() const;
+    bool preparingViewportMotion() const;
+    bool commitPreparedMotionViewport(const QSet<int> &previousVisible);
     void updateViewportIndexSets();
+    QList<int> edgeThumbnailIndexes() const;
     void planViewportThumbnails(const QSet<int> &candidateIndexes,
                                 bool force = false);
     void planThumbnailForIndex(int index, bool highPriority,
@@ -545,6 +593,7 @@ private:
                            CalcLayoutMode layoutMode);
     void updateProperties(bool animate = false);
     QList<int> delegateIndexesForCurrentViewport() const;
+    QList<int> motionLeadIndexes(const ZoinGallery::GalleryViewportWindow &plan) const;
     void retireInactiveDelegates(const QSet<int> &retainedIndexes,
                                  DelegateCommitContext *context);
     bool prepareDelegateRow(int index, DelegateRowCommit *row,
@@ -557,6 +606,13 @@ private:
                                 DelegateCommitContext *context);
     void finalizeDelegateRow(DelegateRowCommit *row,
                              DelegateCommitContext *context);
+    void setDelegateVisible(BrickItem *item, bool visible);
+    QSet<int> retainedVectorSceneIndexes() const;
+    void updateRetainedVectorScenes();
+    void watchSceneBranchChanges(BrickItem *item);
+    void updateSceneBranchParent(BrickItem *item);
+    void updateSceneBranchParents();
+    void updateSceneBranchBounds();
     void releaseUnclaimedDelegates(DelegateCommitContext *context);
     void traceDeferredDelegateCommit(
         const QList<int> &delegateIndexes,
@@ -617,7 +673,7 @@ private:
     bool brickIsFolder(int index) const;
     QString brickPath(int index) const;
     bool resetSlotLayoutMatches() const;
-    void releaseResetSlotItems(bool clearBindings = true);
+    void releaseResetSlotItems(bool keepVisualSnapshots = false);
     void scheduleDeferredDelegateRefresh();
     void flushDeferredDelegateRefresh();
     void cancelDeferredDelegateMaterialization();
@@ -635,10 +691,11 @@ private:
     void updateNeedScroll();
 
     void pushBrickItem(BrickItem *item);
-    BrickItem *popBrickItem(
-        int viewIndex = -1,
-        const QVariantMap &initialProperties = {});
+    bool keepsMasonryResetSpares() const;
     void trimFreeDelegatePool();
+    bool keepsNearbyDelegates() const;
+    void scheduleNearbyPreparation();
+    void prepareNearbyDelegates();
 
     QSize dp(QSizeF value);
     qreal dp(qreal value);
@@ -647,6 +704,7 @@ private:
     ZoinGallery::GalleryDelegatePool _delegatePool;
     quint64 _delegateCatalogGeneration = 1;
     QSet<int> _activeBrickIndexes;
+    bool _nearbyPreparationScheduled = false;
     // A model reset is synchronous on the GUI thread. Keep the currently
     // painted delegate assigned to its visual row until endResetModel(), so
     // a directory replacement performs one old->new binding change instead
@@ -699,6 +757,10 @@ private:
     // with empty MasonryBrick objects: sparse rows exist only while they own
     // an active/overscan delegate.  The model remains the source of row data.
     QHash<int, MasonryBrick> _sparseBricks;
+    QVector<SparseMasonryBlock> _sparseMasonryBlocks;
+    ZoinGallery::GalleryLayoutRequest _sparseMasonryRequest;
+    bool _sparseMasonryThumbnailsEnabled = false;
+    bool _sparseMasonryRewrapPending = false;
     QList<MasonryBrick> _currentLoadingRow;
     ZoinGallery::GalleryGeometryIndex _geometryIndex;
     ZoinGallery::GalleryGroupIndex _groupIndex;
@@ -720,6 +782,8 @@ private:
     const QVector<LayoutBand> &_layoutBands;
     quint64 _layoutRevision = 0;
     quint64 _delegateCommitRevision = 0;
+    quint64 _delegateLayoutRevision = 0;
+    quint64 _vectorSceneUseSerial = 0;
     QSet<int> _visibleIndexSet;
     QSet<int> _overscanIndexSet;
     ZoinGallery::GalleryThumbnailPlanner _thumbnailPlanner;
@@ -730,9 +794,16 @@ private:
     qreal _topItemOffset;
     qreal _currentIndexOffsetOverride;
     QQuickItem *_viewport;
+    QQuickItem *_masonryVectorBranch = nullptr;
+    QQuickItem *_masonryRasterBranch = nullptr;
+    bool _sceneBranchesSuspended = false;
     QPointF _parentPixelGridOffset;
+    QPointF _viewportPixelGridOffset;
     QPointF _viewportSceneOrigin;
+    std::shared_ptr<GalleryViewportMotionState> _viewportMotionState;
+    int _rewrapDepth = 0;
     QVector<QMetaObject::Connection> _pixelGridConnections;
+    void updatePixelGridOrigin();
 
     const QSizeF GridView_Folder = QSizeF(1, 1);
 
@@ -820,6 +891,7 @@ private:
     int _incrementalModelPreviousCount = 0;
     int _incrementalInsertedFirst = -1;
     int _incrementalInsertedLast = -1;
+    bool _scrollAnimationRunning = false;
 };
 
 #endif // MASONRYLAYOUT_H

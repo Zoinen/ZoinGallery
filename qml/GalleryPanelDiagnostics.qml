@@ -8,7 +8,7 @@ QtObject {
     required property GalleryPanel panel
 
     function publishMetadataVisibleRange() {
-        const indexes = panel.galleryLayout.visibleIndexes || []
+        const indexes = panel.galleryLayout.metadataDemandIndexes()
         let first = -1
         let last = -1
         for (let offset = 0; offset < indexes.length; ++offset) {

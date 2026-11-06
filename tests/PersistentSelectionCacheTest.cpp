@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QSet>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -113,6 +114,36 @@ private slots:
         QVERIFY(standaloneData != f4Data);
         QVERIFY(f4Cache.endsWith(QStringLiteral("ZoinGallery/f4")));
         QVERIFY(f4Data.endsWith(QStringLiteral("ZoinGallery/f4")));
+    }
+
+    void activeCacheRootDoesNotFollowEnvironmentChanges() {
+        QTemporaryDir first;
+        QTemporaryDir second;
+        QVERIFY(first.isValid() && second.isValid());
+        const auto originalTmp = qgetenv("TMP");
+        const auto originalTemp = qgetenv("TEMP");
+        const auto originalTmpDir = qgetenv("TMPDIR");
+        const auto restore = qScopeGuard([&] {
+            for (const auto &entry : {qMakePair("TMP", originalTmp),
+                                      qMakePair("TEMP", originalTemp),
+                                      qMakePair("TMPDIR", originalTmpDir)}) {
+                if (entry.second.isNull()) qunsetenv(entry.first);
+                else qputenv(entry.first, entry.second);
+            }
+        });
+        const auto setTemp = [](const QString &path) {
+            const auto bytes = path.toUtf8();
+            qputenv("TMP", bytes);
+            qputenv("TEMP", bytes);
+            qputenv("TMPDIR", bytes);
+        };
+        setTemp(first.path());
+        const QString storageNamespace = ZoinGallery::StorageLocations::storageNamespace();
+        const QString activeRoot = ZoinGallery::StorageLocations::cacheRoot();
+        QCOMPARE(activeRoot, ZoinGallery::StorageLocations::cacheRootForNamespace(storageNamespace));
+        setTemp(second.path());
+        QVERIFY(ZoinGallery::StorageLocations::cacheRootForNamespace(storageNamespace) != activeRoot);
+        QCOMPARE(ZoinGallery::StorageLocations::cacheRoot(), activeRoot);
     }
 
     void createsDistinctPresetGroups() {

@@ -1,26 +1,20 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import QtQuick.Controls
 
 import ZoinGallery.Native 1.0
 
-Item {
+PixelGridScope {
     id: root
 
     required property Item viewer
 
     function alignedCenter(item) {
-        // Read the complete ancestor chain so host movement and resize both
-        // invalidate the scene-space correction, including fractional DPR.
-        let dependency = 0
-        for (let ancestor = root; ancestor; ancestor = ancestor.parent)
-            dependency += ancestor.x + ancestor.y + ancestor.width + ancestor.height
         const dpr = Math.max(0.5, root.viewer.devicePixelRatio)
-        const point = root.mapToItem(null, (root.width - item.width) / 2 + dependency * 0,
-                                     (root.height - item.height) / 2)
-        return root.mapFromItem(null, Math.round(point.x * dpr) / dpr,
-                                Math.round(point.y * dpr) / dpr)
+        return Qt.point(Math.floor((root.width - item.width) * dpr / 2) / dpr,
+                        Math.floor((root.height - item.height) * dpr / 2) / dpr)
     }
 
     readonly property alias viewport: viewportItem
@@ -34,9 +28,16 @@ Item {
         id: background
         objectName: "galleryViewerBackground"
         anchors.fill: parent
-        color: root.viewer.backgroundColor
+        color: root.Window.visibility === Window.FullScreen
+               ? "#000000" : root.viewer.backgroundColor
         opacity: root.viewer.surfaceProgress
         visible: !root.viewer.customContent && opacity > 0
+        Behavior on color {
+            ColorAnimation {
+                duration: root.viewer.animationDuration
+                easing.type: Easing.OutSine
+            }
+        }
     }
 
     Item {
@@ -180,6 +181,7 @@ Item {
             Loader {
                 id: videoPlaybackLoader
                 objectName: "galleryVideoPlaybackLoader"
+                asynchronous: true
                 // Native text/icons must not inherit the image's flight scale.
                 anchors.fill: parent
                 opacity: root.viewer.transitionHasGeometry
@@ -191,6 +193,11 @@ Item {
                         && root.viewer.session
                         && root.viewer.session.videoPlaybackAvailable === true
                 source: active ? Qt.resolvedUrl("GalleryVideoPlaybackSurface.qml") : ""
+            }
+
+            Connections {
+                target: videoPlaybackLoader.item
+                function onNavigationRequested(direction) { root.viewer.navigate(direction) }
             }
 
             Binding {
@@ -211,13 +218,6 @@ Item {
                 target: videoPlaybackLoader.item
                 property: "videoIdentity"
                 value: root.viewer.currentVideoIdentityValue
-                when: videoPlaybackLoader.item !== null
-            }
-
-            Binding {
-                target: videoPlaybackLoader.item
-                property: "previewVisible"
-                value: viewportItem.imageTextureReady
                 when: videoPlaybackLoader.item !== null
             }
 
@@ -360,17 +360,39 @@ Item {
     }
 
     BusyIndicator {
+        id: imageLoading
         objectName: "galleryViewerBusyIndicator"
-        anchors.centerIn: parent
-        running: !root.viewer.customContent
-                 && !root.viewer.currentIsVideo
+        readonly property point alignedPosition: root.alignedCenter(imageLoading)
+        x: alignedPosition.x
+        y: alignedPosition.y
+        readonly property bool waitingForVideo: videoPlaybackLoader.active
+                 && (videoPlaybackLoader.status === Loader.Loading
+                     || (videoPlaybackLoader.status === Loader.Ready
+                         && videoPlaybackLoader.item.playbackPending))
+        readonly property string waitingEntry: !root.viewer.customContent
                  && root.viewer.visible
                  && root.viewer.viewerContentVisible
+                 && !root.viewer.completingClose
                  && root.viewer.transitionProgress > 0.5
                  && root.viewer.session
                  && root.viewer.presentedIndex >= 0
-                 && root.viewer.currentViewerRequestState === "pending"
-                 && root.viewer.currentSourceValue.toString() === ""
+                 && (root.viewer.currentIsVideo ? waitingForVideo
+                     : (root.viewer.currentViewerRequestState === "pending"
+                        && root.viewer.currentSourceValue.toString() === ""))
+                 ? root.viewer.presentedEntryId : ""
+        property bool showAfterGrace: false
+        onWaitingEntryChanged: {
+            previewGrace.stop()
+            showAfterGrace = false
+            if (waitingEntry !== "")
+                previewGrace.start()
+        }
+        Timer {
+            id: previewGrace
+            interval: 300
+            onTriggered: imageLoading.showAfterGrace = true
+        }
+        running: showAfterGrace && waitingEntry !== ""
         visible: running
     }
 

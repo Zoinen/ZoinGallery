@@ -4,6 +4,7 @@
 #include "GalleryGeometryIndex.h"
 #include "GalleryDelegatePool.h"
 #include "GalleryViewportMaterializer.h"
+#include "GalleryViewportMotion.h"
 
 using namespace ZoinGallery;
 
@@ -11,6 +12,7 @@ class GalleryLayoutEngineTest final : public QObject {
     Q_OBJECT
 
 private slots:
+    void cachedPlansPublishPhysicalEdges();
     void columnMajorUsesOnePhysicalPixelStride_data();
     void columnMajorUsesOnePhysicalPixelStride();
     void detailsPlanIncludesBottomAlignmentSlack();
@@ -30,8 +32,40 @@ private slots:
     void densityPolicyIsPresentationSpecific();
     void geometryIndexBuildsOneSortedActiveBandSet();
     void delegatePoolRetainsOnlyClaimedViewportSlots();
+    void delegatePoolBoundsReusableSparesByComponent();
+    void delegatePoolPreservesNativeComponentIdentity();
+    void delegatePoolUsesPreparedRowBeforeFreeSlot();
+    void delegatePoolTracksPreparedComponentAcrossReuse();
     void viewportMaterializationUsesBoundedOverscan();
+    void cameraCoverageRejectsMissingCellsInsidePreparedUnion();
+    void cameraCoveragePreservesGapsAndReversal();
+    void motionTargetPreparesOnlyBoundedLeadingCells();
+    void motionTargetReusesTrailingBudgetForFastScroll();
 };
+
+void GalleryLayoutEngineTest::cachedPlansPublishPhysicalEdges() {
+    GalleryLayoutRequest request;
+    request.viewportSize = QSizeF(1001.3, 509.7);
+    request.density = 123.7;
+    request.insets = {.left = 3.3, .right = 4.2, .top = 7.1, .bottom = 9.3};
+    request.spacing = 5.3;
+    request.devicePixelRatio = 1.75;
+    QVector<GalleryLayoutEntry> entries(50);
+    for (int i = 0; i < entries.size(); ++i)
+        entries[i].originalSize = QSizeF(71 + i * 3, 53 + i);
+    for (auto mode : {GalleryPresentationMode::Details, GalleryPresentationMode::Columns,
+                      GalleryPresentationMode::Grid, GalleryPresentationMode::Icons,
+                      GalleryPresentationMode::Masonry}) {
+        request.mode = mode;
+        const auto result = GalleryLayoutEngine::layout(request, entries);
+        for (const auto &cell : result.cells) {
+            for (const auto &rect : {cell.geometry, cell.previewGeometry})
+                for (qreal edge : {rect.left(), rect.top(), rect.right(), rect.bottom()})
+                    QVERIFY2(qAbs(edge * 1.75 - std::round(edge * 1.75)) < .001,
+                        qPrintable(QString("mode %1 physical edge %2").arg(int(mode)).arg(edge * 1.75, 0, 'f', 6)));
+        }
+    }
+}
 
 void GalleryLayoutEngineTest::columnMajorUsesOnePhysicalPixelStride_data() {
     QTest::addColumn<qreal>("devicePixelRatio");
@@ -52,14 +86,14 @@ void GalleryLayoutEngineTest::columnMajorUsesOnePhysicalPixelStride() {
 
     const GalleryFixedLayoutPlan plan =
         GalleryLayoutEngine::fixedPlan(request, 100);
-    QCOMPARE(plan.rowsPerColumn, 20);
+    QCOMPARE(plan.rowsPerColumn, int(std::floor(500 / plan.extent)));
     QCOMPARE(plan.columns, 3);
     const qreal expectedPhysicalStride = std::floor(
         std::floor(1001 * request.devicePixelRatio) / 3);
     QVERIFY(qAbs(plan.cellWidth * request.devicePixelRatio
                  - expectedPhysicalStride) < 0.001);
-    QVERIFY(qAbs(plan.geometryFor(20).x() - plan.cellWidth) < 0.001);
-    QVERIFY(qAbs(plan.geometryFor(40).x() - plan.cellWidth * 2) < 0.001);
+    QVERIFY(qAbs(plan.geometryFor(plan.rowsPerColumn).x() - plan.cellWidth) < 0.001);
+    QVERIFY(qAbs(plan.geometryFor(2 * plan.rowsPerColumn).x() - plan.cellWidth * 2) < 0.001);
     QVERIFY(qAbs(plan.geometryFor(40).width()
                  - plan.geometryFor(0).width()) < 0.001);
 }
@@ -73,11 +107,11 @@ void GalleryLayoutEngineTest::detailsPlanIncludesBottomAlignmentSlack() {
 
     const GalleryFixedLayoutPlan plan =
         GalleryLayoutEngine::fixedPlan(request, 101);
-    QCOMPARE(plan.geometryFor(100).top(), 7 + 100 * 23.5);
+    QCOMPARE(plan.geometryFor(100).top(), 7 + 100 * plan.extent);
     const qreal usableHeight = 479 - 7 - 13;
     const qreal remainder = usableHeight
-        - std::floor(usableHeight / 23.5) * 23.5;
-    QCOMPARE(plan.contentExtent, 7 + 101 * 23.5 + remainder + 13);
+        - std::floor(usableHeight / plan.extent) * plan.extent;
+    QCOMPARE(plan.contentExtent, 7 + 101 * plan.extent + remainder + 13);
 }
 
 void GalleryLayoutEngineTest::analyticalRangeIsBoundedByViewport() {
@@ -340,7 +374,9 @@ void GalleryLayoutEngineTest::graphicalCellPaddingKeepsPreviewsAndAspectRatios()
                     QVERIFY(preview.bottom() <= cell.geometry.bottom());
                     if (mode == GalleryPresentationMode::Masonry) {
                         const auto &size = entries[index].originalSize;
-                        QVERIFY(qAbs(preview.width() / preview.height() - size.width() / size.height()) < .001);
+                        // Committed physical edges approximate the authored ratio within one pixel.
+                        QVERIFY(qAbs(preview.width() - preview.height() * size.width() / size.height())
+                                <= (1 + size.width() / size.height()) / request.devicePixelRatio);
                         QVERIFY(qAbs(cell.geometry.bottom() - preview.bottom() - expectedVerticalInset) < .001);
                     }
                 }
@@ -475,6 +511,108 @@ void GalleryLayoutEngineTest::delegatePoolRetainsOnlyClaimedViewportSlots() {
     QCOMPARE(pool.liveCount(), 0);
 }
 
+void GalleryLayoutEngineTest::delegatePoolBoundsReusableSparesByComponent() {
+    GalleryDelegatePool pool;
+    int allocations = 0;
+    const auto factory = [&] { ++allocations; return new GalleryDelegateItem; };
+    auto *active = pool.acquire(1, factory);
+    QPointer<GalleryDelegateItem> first = pool.acquire(1, factory);
+    QPointer<GalleryDelegateItem> second = pool.acquire(1, factory);
+    QPointer<GalleryDelegateItem> incompatible = pool.acquire(2, factory);
+    pool.release(first);
+    pool.release(second);
+    pool.release(incompatible);
+    pool.trimSurplus(1, 1);
+    QCOMPARE(pool.transientFreeCount(), 1);
+    QCOMPARE(pool.liveCount(), 1);
+    QVERIFY(incompatible.isNull());
+    QCOMPARE(int(!first.isNull()) + int(!second.isNull()), 1);
+    auto *reused = pool.acquire(1, factory);
+    QCOMPARE(allocations, 4);
+    QVERIFY(reused == first.data() || reused == second.data());
+    pool.release(active);
+    pool.release(reused);
+    pool.trimSurplus();
+    QCOMPARE(pool.transientFreeCount(), 0);
+    QCOMPARE(pool.liveCount(), 0);
+}
+
+void GalleryLayoutEngineTest::delegatePoolPreservesNativeComponentIdentity() {
+    GalleryDelegatePool pool;
+    const auto factory = [] { return new GalleryDelegateItem; };
+    auto *first = pool.acquire(11, factory);
+    auto *other = pool.acquire(22, factory);
+    QCOMPARE(pool.delegateKey(first), quintptr(11));
+    QCOMPARE(pool.delegateKey(other), quintptr(22));
+    QCOMPARE(pool.delegateKey(nullptr), quintptr(0));
+    QCOMPARE(first->vectorSceneUseSerial(), quint64(0));
+    first->setVectorSceneUseSerial(9);
+
+    pool.release(first);
+    QCOMPARE(pool.delegateKey(first), quintptr(11));
+    // A different component cannot consume this spare or change its identity.
+    auto *second = pool.acquire(22, factory);
+    QVERIFY(second != first);
+    QCOMPARE(pool.acquire(11, factory), first);
+    QCOMPARE(first->vectorSceneUseSerial(), quint64(9));
+    pool.resetTracking({first});
+    pool.adopt(first);
+    QCOMPARE(pool.delegateKey(first), quintptr(11));
+    QCOMPARE(pool.delegateKey(other), quintptr(22));
+    QCOMPARE(pool.delegateKey(second), quintptr(22));
+    pool.trimSurplus();
+    pool.release(first);
+    QPointer<GalleryDelegateItem> retired(first);
+    pool.trimSurplus();
+    QVERIFY(retired.isNull());
+    QCOMPARE(pool.liveCount(), 0);
+    QCOMPARE(pool.transientFreeCount(), 0);
+}
+
+void GalleryLayoutEngineTest::delegatePoolUsesPreparedRowBeforeFreeSlot() {
+    QQuickItem owner;
+    GalleryDelegatePool pool;
+    auto *spare = pool.acquire(11, [&] { return new GalleryDelegateItem(&owner); });
+    pool.release(spare);
+    auto *prepared = new GalleryDelegateItem(&owner);
+    int fallbacks = 0;
+    auto *result = pool.acquire(11, prepared, [&] {
+        ++fallbacks;
+        return new GalleryDelegateItem(&owner);
+    });
+    QCOMPARE(result, prepared);
+    QCOMPARE(fallbacks, 0);
+    QCOMPARE(pool.delegateKey(prepared), quintptr(11));
+    QCOMPARE(pool.liveCount(), 1);
+    QCOMPARE(pool.transientFreeCount(), 1);
+    pool.release(prepared);
+    pool.trimSurplus();
+    QCOMPARE(pool.liveCount(), 0);
+    QCOMPARE(pool.transientFreeCount(), 0);
+}
+
+void GalleryLayoutEngineTest::delegatePoolTracksPreparedComponentAcrossReuse() {
+    QQuickItem owner;
+    GalleryDelegatePool pool;
+    auto *prepared = new GalleryDelegateItem(&owner);
+    QCOMPARE(pool.acquire(22, prepared, {}), prepared);
+    QCOMPARE(pool.delegateKey(prepared), quintptr(22));
+    pool.release(prepared);
+    int allocations = 0;
+    const auto factory = [&] { ++allocations; return new GalleryDelegateItem(&owner); };
+    auto *other = pool.acquire(11, nullptr, factory);
+    QVERIFY(other != prepared);
+    QCOMPARE(pool.delegateKey(other), quintptr(11));
+    QCOMPARE(pool.delegateKey(prepared), quintptr(22));
+    QCOMPARE(pool.acquire(22, nullptr, factory), prepared);
+    QCOMPARE(allocations, 1);
+    pool.release(other);
+    pool.release(prepared);
+    pool.trimSurplus();
+    QCOMPARE(pool.liveCount(), 0);
+    QCOMPARE(pool.transientFreeCount(), 0);
+}
+
 void GalleryLayoutEngineTest::viewportMaterializationUsesBoundedOverscan() {
     const GalleryViewportWindow details = GalleryViewportMaterializer::plan(
         GalleryPresentationMode::Details, 1000, 900, 22);
@@ -503,6 +641,102 @@ void GalleryLayoutEngineTest::viewportMaterializationUsesBoundedOverscan() {
         GalleryPresentationMode::Masonry, 1000, 900, 140);
     QCOMPARE(masonry.delegateStart, 952.0);
     QCOMPARE(masonry.delegateEnd, 1948.0);
+
+    const auto smallMasonry = GalleryViewportMaterializer::plan(
+        GalleryPresentationMode::Masonry, 1000, 360, 150);
+    QCOMPARE(smallMasonry.metadataStart, 850.0);
+    QCOMPARE(smallMasonry.metadataEnd, 1510.0);
+}
+
+void GalleryLayoutEngineTest::cameraCoverageRejectsMissingCellsInsidePreparedUnion() {
+    const QRectF viewport(0, 200, 320, 160);
+    const QRectF missing(160, 400, 160, 80);
+    // A ready tile in the left column extends the union past the missing tile.
+    const QRectF unionOfReady(0, 0, 320, 1000);
+    QVERIFY(unionOfReady.contains(viewport.translated(0, 120)));
+    GalleryViewportMotionRange range{200, 0, 840};
+    range.excludeUnprepared(missing, viewport);
+    QCOMPARE(range.maximum, 240.0);
+    QCOMPARE(range.constrained(320), 240.0);
+    QVERIFY(!missing.intersects(viewport.translated(0, range.constrained(320) - 200)));
+
+    GalleryViewportMotionRange missingAtAnchor{200, 0, 840};
+    missingAtAnchor.excludeUnprepared(QRectF(160, 250, 160, 80), viewport);
+    QVERIFY(!missingAtAnchor.coversAnchor);
+    QCOMPARE(missingAtAnchor.constrained(500), 200.0);
+    QCOMPARE(missingAtAnchor.constrained(0), 200.0);
+}
+
+void GalleryLayoutEngineTest::cameraCoveragePreservesGapsAndReversal() {
+    const QRectF viewport(0, 200, 320, 160);
+    GalleryViewportMotionRange range{200, 0, 840};
+    range.excludeUnprepared(QRectF(0, 80, 160, 80), viewport);
+    range.excludeUnprepared(QRectF(160, 400, 160, 80), viewport);
+    // An off-column item cannot constrain this viewport.
+    range.excludeUnprepared(QRectF(320, 250, 80, 80), viewport);
+    // Empty/collapsed cells and authored blank gaps are not missing content.
+    range.excludeUnprepared(QRectF(), viewport);
+    QCOMPARE(range.minimum, 160.0);
+    QCOMPARE(range.maximum, 240.0);
+    QCOMPARE(range.constrained(100), 160.0);
+    QCOMPARE(range.constrained(220), 220.0);
+    QCOMPARE(range.constrained(300), 240.0);
+    // Rebuilt snapshots can expand the range as cells become ready.
+    GalleryViewportMotionRange ready{200, 0, 840};
+    QCOMPARE(ready.constrained(300), 300.0);
+}
+
+void GalleryLayoutEngineTest::motionTargetPreparesOnlyBoundedLeadingCells() {
+    const auto base = GalleryViewportMaterializer::plan(
+        GalleryPresentationMode::Masonry, 1000, 900, 140);
+    const auto forward = GalleryViewportMaterializer::withMotionTarget(base, 1200);
+    QCOMPARE(forward.delegateStart, base.delegateStart);
+    QCOMPARE(forward.delegateEnd, 2100.0);
+    const auto backward = GalleryViewportMaterializer::withMotionTarget(base, 800);
+    QCOMPARE(backward.delegateStart, 800.0);
+    QCOMPARE(backward.delegateEnd, base.delegateEnd);
+    const auto distantForward = GalleryViewportMaterializer::withMotionTarget(base, 100000);
+    const auto distantBackward = GalleryViewportMaterializer::withMotionTarget(base, -100000);
+    QCOMPARE(distantForward.delegateEnd, distantForward.metadataEnd);
+    QCOMPARE(distantBackward.delegateStart, distantBackward.metadataStart);
+    QCOMPARE(distantForward.metadataStart, base.delegateStart);
+    QCOMPARE(distantBackward.metadataEnd, base.delegateEnd);
+    QCOMPARE(distantForward.metadataEnd - distantForward.metadataStart,
+        base.metadataEnd - base.metadataStart);
+    QCOMPARE(distantBackward.metadataEnd - distantBackward.metadataStart,
+        base.metadataEnd - base.metadataStart);
+    QCOMPARE(forward.metadataStart, base.metadataStart);
+    QCOMPARE(forward.metadataEnd, base.metadataEnd);
+    const auto unchanged = GalleryViewportMaterializer::withMotionTarget(base, 1000);
+    QCOMPARE(unchanged.delegateStart, base.delegateStart);
+    QCOMPARE(unchanged.delegateEnd, base.delegateEnd);
+    // A short target must not shrink the ordinary delegate margin.
+    const auto shortStep = GalleryViewportMaterializer::withMotionTarget(base, 1001);
+    QCOMPARE(shortStep.delegateEnd, base.delegateEnd);
+}
+
+void GalleryLayoutEngineTest::motionTargetReusesTrailingBudgetForFastScroll() {
+    // Live Downloads capture: the first absent row starts at 1916 while the
+    // GUI snapshot is at 609.7595. The next camera pose already needs it.
+    const auto base = GalleryViewportMaterializer::plan(
+        GalleryPresentationMode::Masonry, 609.7595321660391,
+        1035.4285714285716, 152);
+    const auto forward = GalleryViewportMaterializer::withMotionTarget(base, 2000);
+    QVERIFY2(forward.delegateEnd > 1916,
+        qPrintable(QString("missing row starts at 1916, preparation ends at %1")
+            .arg(forward.delegateEnd, 0, 'f', 6)));
+    QCOMPARE(forward.metadataEnd - forward.metadataStart,
+        base.metadataEnd - base.metadataStart);
+    QVERIFY(forward.metadataStart <= base.delegateStart);
+    QCOMPARE(forward.visibleStart, base.visibleStart);
+    QCOMPARE(forward.visibleEnd, base.visibleEnd);
+    // Apply the same budget in reverse, preserving the ordinary trailing
+    // delegate margin for an immediate direction change.
+    const auto backward = GalleryViewportMaterializer::withMotionTarget(base, -1000);
+    QVERIFY(backward.delegateStart < base.metadataStart);
+    QCOMPARE(backward.metadataEnd - backward.metadataStart,
+        base.metadataEnd - base.metadataStart);
+    QVERIFY(backward.metadataEnd >= base.delegateEnd);
 }
 
 QTEST_MAIN(GalleryLayoutEngineTest)

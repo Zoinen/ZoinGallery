@@ -5,6 +5,13 @@
 
 namespace ZoinGallery {
 
+inline constexpr int MaximumPanelThumbnailEdge = 1024;
+
+// Bound actual frame pixels while preserving aspect and a nonzero short edge.
+QSize boundedPanelThumbnailSize(const QSize &size);
+bool panelThumbnailCovers(const QSize &available, const QSize &bounds,
+                          bool preserveAspect);
+
 enum class DecodeSizeFamily {
     Thumbnail,
     ViewerFit,

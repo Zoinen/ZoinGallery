@@ -1,5 +1,6 @@
 #pragma once
 #include <QObject>
+#include <QPointer>
 #include <QThreadPool>
 #include <QVariantList>
 #include <QVariantMap>
@@ -7,6 +8,8 @@
 class DecodeManager;
 class QWindow;
 namespace ZoinGallery {
+class ThumbnailMemoryCache;
+
 class GalleryPreferences final : public QObject {
     Q_OBJECT
     Q_PROPERTY(QVariantMap values READ values NOTIFY changed)
@@ -18,7 +21,8 @@ class GalleryPreferences final : public QObject {
     Q_PROPERTY(bool showCheckerboard READ showCheckerboard WRITE setShowCheckerboard NOTIFY changed)
     Q_PROPERTY(bool animateResizing READ animateResizing NOTIFY changed)
 public:
-    explicit GalleryPreferences(DecodeManager *decoder, bool persistent, QObject *parent = nullptr);
+    GalleryPreferences(DecodeManager *decoder, bool persistent, QObject *parent = nullptr,
+                       ThumbnailMemoryCache *thumbnailCache = nullptr);
     QVariantMap values() const;
     QVariantList decoders() const;
     qint64 diskBytes() const { return _diskBytes; }
@@ -40,6 +44,7 @@ signals:
 private:
     void runCacheOperation(bool clear, bool maintenance);
     DecodeManager *_decoder;
+    QPointer<ThumbnailMemoryCache> _thumbnailCache;
     QVariantMap _values;
     QVariantList _decoders;
     qint64 _diskBytes = 0;

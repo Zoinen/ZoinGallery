@@ -1,11 +1,12 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery.PixelGrid 1.0
 import QtQuick.Window
 
 import ZoinGallery.Native 1.0
 
-Item {
+PixelGridScope {
     id: chromeRoot
 
     required property GalleryViewportItem layout
@@ -28,6 +29,7 @@ Item {
         id: verticalScroll
         objectName: "galleryPanelScrollBar"
         theme: chromeRoot.theme
+        pixelAlignmentSuspended: chromeRoot.layout.scrollAnimationRunning
         x: {
             // Tiles stop at the content padding plus half their inter-item
             // spacing. Center the thumb in that lane, not at a fixed inset.
@@ -36,14 +38,10 @@ Item {
             const localX = chromeRoot.presentationMode === "details"
                     ? parent.width - width
                     : parent.width - (gap + width) / 2
-            let dependency = 0
-            for (let item = chromeRoot; item; item = item.parent)
-                dependency += item.x + item.y
-            const origin = chromeRoot.mapToItem(null, dependency * 0, 0).x
             const dpr = chromeRoot.Window.window
                 ? chromeRoot.Window.window.devicePixelRatio
                 : chromeRoot.Screen.devicePixelRatio
-            return Math.round((origin + localX) * dpr) / dpr - origin
+            return Math.round(localX * dpr) / dpr
         }
         y: chromeRoot.layoutOrigin.y
         height: chromeRoot.layout.height
@@ -93,6 +91,7 @@ Item {
         id: horizontalScroll
         objectName: "galleryPanelColumnsScrollBar"
         theme: chromeRoot.theme
+        pixelAlignmentSuspended: chromeRoot.layout.scrollAnimationRunning
         x: chromeRoot.layoutOrigin.x
         y: parent.height - height
         width: chromeRoot.layout.width
@@ -105,7 +104,7 @@ Item {
         size: chromeRoot.layout.contentHeight > 0
               ? Math.min(1, chromeRoot.layout.width
                          / chromeRoot.layout.contentHeight) : 1
-        position: chromeRoot.layout.contentHeight > 0
+        position: visible && chromeRoot.layout.contentHeight > 0
                   ? chromeRoot.boundedScrollOffset
                     / chromeRoot.layout.contentHeight : 0
         onPositionChanged: {

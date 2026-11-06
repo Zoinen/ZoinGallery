@@ -8,6 +8,7 @@ QtObject {
     id: motion
 
     required property GalleryPanel panel
+    property bool retargetingScroll: false
 
     property alias scrollAnimation: panelScrollObject
     property alias cursorAnimation: cursorAnimationObject
@@ -22,6 +23,18 @@ QtObject {
     property alias cursorAfterScrollTimer: cursorAfterScrollObject
     property alias thumbnailResizeTimer: thumbnailResizeObject
     property alias densityTimer: densityTimerObject
+
+    function restartScroll() {
+        panelScrollObject.retarget(0)
+    }
+
+    function restartPageScroll() {
+        panelScrollObject.retargetPage()
+    }
+
+    function restartEdgeScroll(direction) {
+        panelScrollObject.retarget(direction)
+    }
 
     property Timer pathViewportPlacementTimer: Timer {
         id: pathPlacementObject
@@ -40,6 +53,10 @@ QtObject {
         repeat: false
         onTriggered: {
             const panel = motion.panel
+            if (panel.panelScrollAnimationRunning || panel.scrollingMode) {
+                panel.viewportUpdatePendingAfterScroll = true
+                return
+            }
             const ensureCursor = panel.viewportUpdateEnsuresCursor
             const suppressAnimation = panel.viewportUpdateSuppressAnimation
             panel.viewportUpdateEnsuresCursor = false
@@ -96,15 +113,19 @@ QtObject {
         onTriggered: motion.panel.noteDensityChanged(true)
     }
 
-    property NumberAnimation panelScrollAnimation: NumberAnimation {
+    property NumberAnimation panelScrollAnimation: GalleryScrollAnimation {
         id: panelScrollObject
         objectName: "galleryPanelScrollAnimation"
+        nativeEnabled: true
+        scrollBar: motion.panel.scrollBars ? motion.panel.scrollBars[0] : null
         target: motion.panel.galleryLayout
         property: "contentY"
         duration: 150
         easing.type: Easing.OutSine
         onRunningChanged: {
             const panel = motion.panel
+            if (motion.retargetingScroll)
+                return
             panel.traceBenchmarkStage("navigation.scroll.running-changed", {
                 "running": running,
                 "from": from,

@@ -556,6 +556,7 @@ void MasonryLayout::onModelAboutToBeReset() {
                 continue;
             }
             BrickItem *item = brick->item;
+            item->setRetainSceneWhenHidden(false);
             _resetSlotItems.insert(index, item);
             _resetSlotModels.insert(
                 index, item->property("model").value<ImageFile *>());
@@ -630,7 +631,11 @@ bool MasonryLayout::resetSlotLayoutMatches() const {
             && item && item->visualRow().value(
                 QStringLiteral("valid")).toBool()
             && item->viewIndex() == slot.key();
-        if (!item || item->parentItem() != _viewport
+        const auto *parent = item ? item->parentItem() : nullptr;
+        const bool ownedParent = parent == _viewport
+            || (_masonryVectorBranch && parent == _masonryVectorBranch)
+            || (_masonryRasterBranch && parent == _masonryRasterBranch);
+        if (!item || !ownedParent
             || (_visualSnapshotRole >= 0 && !validSnapshotSlot)
             || (_visualSnapshotRole < 0
                 && (expected.isNull()
@@ -642,19 +647,22 @@ bool MasonryLayout::resetSlotLayoutMatches() const {
     return true;
 }
 
-void MasonryLayout::releaseResetSlotItems(bool clearBindings) {
+void MasonryLayout::releaseResetSlotItems(bool keepVisualSnapshots) {
     for (BrickItem *item : std::as_const(_resetSlotItems)) {
         if (!item) {
             continue;
         }
         item->stopGeometryAnimation();
         item->setVisible(false);
-        if (clearBindings) {
+        if (!keepVisualSnapshots) {
             item->setVisualRow({});
-            item->setVisualFacadeReady(false);
-            item->setProperty("model", QVariant());
-            item->setViewSourceIndexes(-1, -1);
         }
+        // Hidden slots may outlive the catalog's ImageFile objects.
+        item->setVisualFacadeReady(false);
+        if (item->property("model").value<ImageFile *>()) {
+            item->setProperty("model", QVariant());
+        }
+        item->setViewSourceIndexes(-1, -1);
         _delegatePool.release(item);
     }
     _resetSlotItems.clear();
@@ -1071,6 +1079,8 @@ void MasonryLayout::rebuildBricksAfterModelReset() {
     _sparseCatalogRows =
         _model && _model->property("sparseCatalog").toBool();
     _sparseBricks.clear();
+    _sparseMasonryBlocks.clear();
+    _sparseMasonryRewrapPending = false;
     if (!_model) {
         return;
     }

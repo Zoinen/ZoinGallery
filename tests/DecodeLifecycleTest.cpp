@@ -20,6 +20,8 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QEventLoop>
+#include <QScopeGuard>
+#include <QSemaphore>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QThread>
@@ -166,6 +168,53 @@ private slots:
         QCOMPARE(VideoThumbnailRunner::posterSizeFor(
                      ZoinGallery::VideoFrameGeometry::displaySize(frame)),
                  QSize(576, 1024));
+    }
+
+    void videoPosterKeepsSurfaceOrientationAndCrop_data() {
+        QTest::addColumn<int>("surfaceRotation");
+        QTest::addColumn<int>("frameRotation");
+        QTest::addColumn<bool>("frameMirror");
+        for (int surface : {0, 90, 180, 270})
+            for (int frame : {0, 90, 180, 270})
+                for (bool frameMirror : {false, true}) {
+                    const QByteArray name = QByteArray::number(surface) + '-'
+                        + QByteArray::number(frame) + '-' + QByteArray::number(frameMirror);
+                    QTest::newRow(name.constData()) << surface << frame << frameMirror;
+                }
+    }
+
+    void videoPosterKeepsSurfaceOrientationAndCrop() {
+        QFETCH(int, surfaceRotation);
+        QFETCH(int, frameRotation);
+        QFETCH(bool, frameMirror);
+        const QSize size(48, 32);
+        const QRect viewport(4, 6, 36, 20);
+        QImage pattern(size, QImage::Format_ARGB32);
+        for (int y = 0; y < size.height(); ++y)
+            for (int x = 0; x < size.width(); ++x)
+                pattern.setPixel(x, y, qRgb(5 * x, 7 * y, (3 * x + 5 * y) % 256));
+        QVideoFrameFormat format(size, QVideoFrameFormat::Format_BGRA8888);
+        format.setViewport(viewport);
+        format.setRotation(static_cast<QtVideo::Rotation>(surfaceRotation));
+        QVideoFrame frame(format);
+        QVERIFY(frame.map(QVideoFrame::WriteOnly));
+        for (int y = 0; y < size.height(); ++y)
+            std::memcpy(frame.bits(0) + y * frame.bytesPerLine(0),
+                        pattern.constScanLine(y), size.width() * 4);
+        frame.unmap();
+        frame.setRotation(static_cast<QtVideo::Rotation>(frameRotation));
+        frame.setMirrored(frameMirror);
+
+        QImage expected = pattern.copy(viewport);
+        expected = expected.transformed(QTransform().rotate(surfaceRotation));
+        expected = expected.transformed(QTransform().rotate(frameRotation));
+        if (frameMirror)
+            expected = expected.mirrored(true, false);
+        QCOMPARE(ZoinGallery::VideoFrameGeometry::displaySize(frame), expected.size());
+        const QImage actual = ZoinGallery::VideoFrameGeometry::displayImage(frame);
+        QCOMPARE(actual.size(), expected.size());
+        QCOMPARE(actual.convertToFormat(QImage::Format_RGBA8888),
+                 expected.convertToFormat(QImage::Format_RGBA8888));
     }
 #endif
 
@@ -744,6 +793,88 @@ private slots:
         model.shutdown();
         manager.prepareToClose();
 #endif
+    }
+
+    void activeFitWindowDecodesInParallelBeyondThePanelLimit() {
+        const int decoderCount = qMin(16, QThread::idealThreadCount() - 1);
+        if (decoderCount <= 3) QSKIP("This test needs at least five logical CPUs");
+
+        struct DecodeBarrier {
+            std::atomic_int entered{0};
+            QSemaphore release;
+        };
+        class HeldDecoder final : public ImageDecoderInterface {
+        public:
+            explicit HeldDecoder(std::shared_ptr<DecodeBarrier> barrier)
+                : _barrier(std::move(barrier)) {}
+            QStringList supportedFormats() override { return {}; }
+            QString decoderName() const override { return "HeldDecoder"; }
+            bool readMetadata(ImageInfo &) override { return false; }
+            bool readPreviewAndMime(ImageData &) override { return false; }
+            QImage decode(const QString &, const QByteArray &data, QSize) override {
+                if (!_barrier || data != "zoingallery-fit-worker-test") return {};
+                ++_barrier->entered;
+                _barrier->release.acquire();
+                QImage image(48, 32, QImage::Format_RGB32);
+                image.fill(Qt::red);
+                return image;
+            }
+
+        private:
+            std::shared_ptr<DecodeBarrier> _barrier;
+        };
+
+        const auto barrier = std::make_shared<DecodeBarrier>();
+        const std::weak_ptr<DecodeBarrier> weakBarrier = barrier;
+        QVERIFY(ImageDecoderFactory::registerClass(
+            [weakBarrier] { return new HeldDecoder(weakBarrier.lock()); }, 1000));
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QList<ImageDecodeRequest> requests;
+        QStringList ordered;
+        for (int index = 0; index < decoderCount; ++index) {
+            const QString path = directory.filePath(QString("fit-%1.png").arg(index));
+            QFile file(path);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write("zoingallery-fit-worker-test"), qint64(27));
+            file.close();
+            auto request = decodeRequest(path, "fit-parallel", true);
+            request.fitToViewerRequest = true;
+            requests.append(request);
+            ordered.append(path);
+        }
+
+        DecodeManager manager(nullptr, 4, {}, true);
+        const auto unblockOnFailure = qScopeGuard([&] { barrier->release.release(16); });
+        manager.setImageCacheMode(CacheUsageMode::Off);
+        QSignalSpy ready(&manager, &DecodeManager::imageReady);
+        manager.setViewerDemand("fit-parallel", ordered);
+        manager.setInteractiveSource("fit-parallel", ordered.first());
+        manager.decodeImages(requests);
+        QTRY_COMPARE_WITH_TIMEOUT(barrier->entered.load(), qMin(decoderCount, 7), 5000);
+        QTest::qWait(100);
+        QCOMPARE(barrier->entered.load(), qMin(decoderCount, 7));
+        manager.setInteractiveSource("fit-parallel", {});
+        QTest::qWait(100);
+        QCOMPARE(barrier->entered.load(), qMin(decoderCount, 7));
+        barrier->release.release(qMin(decoderCount, 7));
+        QTRY_COMPARE_WITH_TIMEOUT(barrier->entered.load(), decoderCount, 5000);
+        barrier->release.release(qMax(0, decoderCount - 7));
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), decoderCount, 5000);
+
+        manager.setViewerDemand("fit-parallel", {});
+        barrier->entered.store(0);
+        for (auto &request : requests) {
+            request.viewerRequest = false;
+            request.fitToViewerRequest = false;
+            request.panelThumbnailRequest = true;
+        }
+        manager.decodeImages(requests);
+        QTRY_COMPARE_WITH_TIMEOUT(barrier->entered.load(), 3, 5000);
+        QTest::qWait(100);
+        QCOMPARE(barrier->entered.load(), 3);
+        barrier->release.release(decoderCount);
+        QTRY_COMPARE_WITH_TIMEOUT(ready.size(), decoderCount * 2, 5000);
     }
 };
 

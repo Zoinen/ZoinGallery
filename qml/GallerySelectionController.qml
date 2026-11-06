@@ -277,14 +277,16 @@ QtObject {
             if (!preserveHorizontalAnchor)
                 panel.resetCurrentItemCenterX(previousIndex)
             if (!preserveVerticalAnchor) {
-                panel.ensureCurrentVisible(undefined, keyboardRevealDirection)
+                panel.navigationController.ensureCurrentVisible(
+                            undefined, keyboardRevealDirection, includeSelectionTarget)
                 panel.resetCurrentItemCenterY(previousIndex)
             }
             return
         }
-        panel.moveCursor(bounded, togglePrevious, preserveHorizontalAnchor,
-                         deferCursorCommit, preserveVerticalAnchor,
-                         keyboardRevealDirection)
+        panel.navigationController.moveCursor(
+                    bounded, togglePrevious, preserveHorizontalAnchor,
+                    deferCursorCommit, preserveVerticalAnchor,
+                    keyboardRevealDirection, includeSelectionTarget)
         if (togglePrevious) {
             updateKeyboardShiftSelection(bounded, includeSelectionTarget)
             if (includeSelectionTarget) {

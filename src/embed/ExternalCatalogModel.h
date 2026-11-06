@@ -169,8 +169,10 @@ public:
             // A retained preview may have resized while reads were suspended.
             // Re-publish readiness so its current viewport requests every
             // newly exposed cell even when the refreshed catalog is identical.
+            // Dimensions did not change: use the thumbnail-request path so
+            // resuming authority does not refresh sizes or rewrap the layout.
             emit dataChanged(index(0), index(rowCount() - 1),
-                             {FileListModel::ImageFullSizeRole});
+                             {FileListModel::ImageIdUrlRole});
         }
     }
 
@@ -351,6 +353,7 @@ private:
     void setViewerRequestState(const QList<int> &rows,
                                const QString &state);
     void clearViewerRequestStates();
+    void restoreViewerThumbnail(int row);
     bool adoptCachedThumbnail(int row);
     void attachThumbnail(int row, const QString &providerId);
     void detachThumbnail(Entry &entry);
@@ -485,6 +488,7 @@ private:
     int _cursorRow = -1;
     quint64 _nextImageSerial = 0;
     QString _viewerEntryId;
+    QString _viewerThumbnailLookupKey;
     QSize _viewerViewportSize;
     QSize _lastViewerFitViewportSize = QSize(1920, 1080);
     QString _deferredNativeEntryId;

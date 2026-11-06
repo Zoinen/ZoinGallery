@@ -135,7 +135,9 @@ void ImageInfoReadRunner::run() {
         if (isVectorSource(result)) {
             QFile sourceFile(result.path);
             result.sourceAccessFailed = !sourceFile.open(QIODevice::ReadOnly);
-            result.vectorSource = result.sourceAccessFailed ? VectorSourcePtr{} : acquireVectorSource(result, lease);
+            const int priority = _highPriority ? (_panelThumbnailRequest ? 200 : 0) : 1000;
+            result.vectorSource = result.sourceAccessFailed ? VectorSourcePtr{}
+                : acquireVectorSource(result, lease, _cancellation, priority);
             result.imageSize = result.vectorSource ? result.vectorSource->size : QSize{};
             metadataRead = bool(result.vectorSource);
         } else metadataRead = ThumbnailLoader::readMetadata(result);

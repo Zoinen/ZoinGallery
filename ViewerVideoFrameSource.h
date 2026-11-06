@@ -22,6 +22,7 @@ class ViewerVideoFrameSource : public QObject
     Q_PROPERTY(bool hasFrame READ hasFrame NOTIFY frameChanged)
     Q_PROPERTY(QSize frameSize READ frameSize NOTIFY frameChanged)
     Q_PROPERTY(quint64 revision READ revision NOTIFY frameChanged)
+    Q_PROPERTY(bool hdr READ hdr NOTIFY hdrChanged)
 
 public:
     struct Snapshot {
@@ -31,16 +32,19 @@ public:
 
     explicit ViewerVideoFrameSource(QObject *parent = nullptr);
 
-    QObject *sink() const { return m_sink; }
+    QObject *sink();
     bool hasFrame() const;
     QSize frameSize() const;
     quint64 revision() const;
+    bool hdr() const;
     Snapshot snapshot() const;
 
 signals:
     void frameChanged();
+    void hdrChanged();
 
 private:
+    friend class VideoPlaybackController;
     void acceptFrame(const QVideoFrame &frame);
 
     QVideoSink *m_sink = nullptr;

@@ -1,8 +1,10 @@
 #include "ViewerResampler.h"
 
 #include <QColorSpace>
+#include <QThreadPool>
 #include <QtTest>
 
+#include <atomic>
 #include <cmath>
 #include <array>
 
@@ -38,6 +40,46 @@ class ViewerResamplerTest : public QObject {
     Q_OBJECT
 
 private slots:
+    void obsoleteResizeCanStopMidStage() {
+        int calls = 0;
+        const auto result = ZoinGallery::ViewerResampler::downsample(
+            stripes({128, 64}), {64, 32}, [&] { return ++calls >= 8; });
+        QVERIFY(result.isNull());
+        QCOMPARE(calls, 8);
+    }
+
+    void parallelStripesPreservePixelsAndMetadata() {
+        QImage source(2049, 1537, QImage::Format_ARGB32_Premultiplied);
+        for (int y = 0; y < source.height(); ++y) {
+            auto *row = reinterpret_cast<QRgb *>(source.scanLine(y));
+            for (int x = 0; x < source.width(); ++x) {
+                row[x] = qPremultiply(qRgba((3 * x + y) % 256, (x + 7 * y) % 256,
+                                            (11 * x + 13 * y) % 256, (x + y) % 256));
+            }
+        }
+        source.setColorSpace(QColorSpace::DisplayP3);
+        source.setText("fixture", "parallel stripes");
+        const QSize target(721, 541);
+        const QImage serial = ZoinGallery::ViewerResampler::downsample(source, target);
+        QThreadPool helpers;
+        helpers.setMaxThreadCount(3);
+        const QThread *caller = QThread::currentThread();
+        std::atomic_bool usedHelper{false};
+        const QImage parallel = ZoinGallery::ViewerResampler::downsample(
+            source, target, [&] {
+                if (QThread::currentThread() != caller) usedHelper.store(true);
+                return false;
+            }, &helpers);
+        QVERIFY(usedHelper.load());
+        QCOMPARE(parallel, serial);
+        QCOMPARE(parallel.colorSpace(), source.colorSpace());
+        QCOMPARE(parallel.text("fixture"), source.text("fixture"));
+
+        std::atomic_int checks{0};
+        QVERIFY(ZoinGallery::ViewerResampler::downsample(
+            source, target, [&] { return ++checks > 32; }, &helpers).isNull());
+    }
+
     void blackAndWhiteAreAveragedInLinearLight() {
         const QImage result = ZoinGallery::ViewerResampler::downsample(
             stripes({128, 16}), {64, 8});

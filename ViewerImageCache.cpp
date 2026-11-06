@@ -70,7 +70,8 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
     RequestPlan result;
     if (currentIndex < 0 || currentIndex >= items.size()
         || !items[currentIndex]
-        || !items[currentIndex]->isViewerImage()) {
+        || (!items[currentIndex]->isViewerImage()
+            && !items[currentIndex]->isVideoThumbnail())) {
         return result;
     }
 
@@ -82,7 +83,8 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
 
     QList<ImageFile *> plannedItems;
     plannedItems.reserve(qMax(0, prefetchCount));
-    if (prefetchCount > 0) plannedItems.append(items[currentIndex]);
+    const bool currentIsImage = items[currentIndex]->isViewerImage();
+    if (prefetchCount > 0 && currentIsImage) plannedItems.append(items[currentIndex]);
     int next = currentIndex + 1;
     int previous = currentIndex - 1;
     bool forward = true;
@@ -129,9 +131,11 @@ ViewerImageCache::RequestPlan ViewerImageCache::planRequest(
         }
     }
 
-    result.cachedImages = isVectorSource(currentRequest.info) && currentRequest.info.vectorSource
-        ? QList<QPair<QString, int>>{{currentRequest.info.vectorSource->url.toString(), 1}}
-        : cachedImagesForRequest(currentRequest);
+    if (currentIsImage) {
+        result.cachedImages = isVectorSource(currentRequest.info) && currentRequest.info.vectorSource
+            ? QList<QPair<QString, int>>{{currentRequest.info.vectorSource->url.toString(), 1}}
+            : cachedImagesForRequest(currentRequest);
+    }
     for (const ImageDecodeRequest &request :
          std::as_const(plannedRequests)) {
         if ((isVectorSource(request.info) && request.info.vectorSource) || !needsDecode(request)) {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "VideoColorSpace.h"
+
 #include <QImage>
 #include <QRect>
 #include <QTransform>
@@ -17,19 +19,28 @@ inline QRect visibleViewport(const QVideoFrame &frame)
 inline QSize displaySize(const QVideoFrame &frame)
 {
     QSize size = visibleViewport(frame).size();
-    const int rotation = int(frame.rotation());
-    if (rotation == 90 || rotation == 270)
+    const int rotation = int(frame.surfaceFormat().rotation()) + int(frame.rotation());
+    if (rotation % 180 != 0)
         size.transpose();
     return size;
 }
 
 inline QImage displayImage(const QVideoFrame &frame)
 {
-    QImage image = frame.toImage();
+    QImage image = VideoColorSpace::normalizeHdrImage(frame.toImage(), frame);
     if (image.isNull())
         return image;
 
-    const QRect viewport = visibleViewport(frame).intersected(image.rect());
+    // toImage() already applies the surface transform, but not the frame's
+    // presentation transform. Map the coded viewport into that image before
+    // cropping, otherwise a quarter turn crops a portrait into a square.
+    const auto format = frame.surfaceFormat();
+    const QTransform surface = QTransform().scale(1,
+        format.scanLineDirection() == QVideoFrameFormat::BottomToTop ? -1 : 1)
+        * QTransform().rotate(int(format.rotation()))
+        * QTransform().scale(format.isMirrored() ? -1 : 1, 1);
+    const QRect viewport = QImage::trueMatrix(surface, frame.width(), frame.height())
+        .mapRect(visibleViewport(frame)).intersected(image.rect());
     if (!viewport.isEmpty())
         image = image.copy(viewport);
 
@@ -37,7 +48,7 @@ inline QImage displayImage(const QVideoFrame &frame)
     if (rotation != 0)
         image = image.transformed(QTransform().rotate(rotation),
                                   Qt::SmoothTransformation);
-    if (frame.mirrored() || frame.surfaceFormat().isMirrored())
+    if (frame.mirrored())
         image = image.mirrored(true, false);
     return image;
 }

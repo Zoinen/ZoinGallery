@@ -10810,12 +10810,11 @@ private slots:
     void fallbackArtworkKeepsAspectAcrossCatalogChanges_data() {
         QTest::addColumn<QString>("mode");
         QTest::addColumn<bool>("tinted");
-        QTest::addColumn<bool>("markedDirectory");
+        QTest::addColumn<QString>("entryKind");
         for (const auto &mode : {"masonry", "grid", "icons", "details", "columns"}) {
-            for (bool directory : {false, true}) {
-                const QString suffix = directory ? "-marked-directory" : "";
-                QTest::newRow(qPrintable(QString(mode)+"-color"+suffix)) << QString(mode) << false << directory;
-                QTest::newRow(qPrintable(QString(mode)+"-tint"+suffix)) << QString(mode) << true << directory;
+            for (const QString &kind : {QString("file"), QString("marked-file"), QString("marked-directory")}) {
+                QTest::newRow(qPrintable(QString(mode)+"-color-"+kind)) << QString(mode) << false << kind;
+                QTest::newRow(qPrintable(QString(mode)+"-tint-"+kind)) << QString(mode) << true << kind;
             }
         }
     }
@@ -10823,7 +10822,7 @@ private slots:
     void fallbackArtworkKeepsAspectAcrossCatalogChanges() {
         QFETCH(QString, mode);
         QFETCH(bool, tinted);
-        QFETCH(bool, markedDirectory);
+        QFETCH(QString, entryKind);
         QTemporaryDir directory;
         QFile svg(directory.filePath("portrait.svg"));
         QVERIFY(svg.open(QIODevice::WriteOnly));
@@ -10837,7 +10836,7 @@ private slots:
         auto *session = runtime->createExternalSession("fallback-aspect");
         QVariantMap style{{"icon", QUrl::fromLocalFile(svg.fileName()).toString()},
                           {"tintIcon", tinted}, {"color", "#00ff00"}};
-        if (markedDirectory) style["marker"] = "*";
+        if (entryKind != "file") style["marker"] = "*";
         QVERIFY(session->applyExternalCatalog(plainCatalog(2), 1));
         auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "aspectSession", mode));
         QVERIFY(panel);
@@ -10850,7 +10849,7 @@ private slots:
             for (auto &value : entries) {
                 auto entry = value.toMap();
                 entry["isImage"] = false;
-                entry["isDir"] = markedDirectory;
+                entry["isDir"] = entryKind == "marked-directory";
                 entry["highlightStyle"] = style;
                 value = entry;
             }
@@ -10890,7 +10889,10 @@ private slots:
             QCOMPARE(leaf->mapToScene(QPointF(0,1))-origin, QPointF(0,1));
             if (revision == 3) {
                 const QString capture = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
-                if (!capture.isEmpty()) QVERIFY(image.save(QDir(capture).filePath("aspect-"+mode+(tinted ? "-tint.png" : "-color.png"))));
+                if (!capture.isEmpty()) {
+                    const QString name = "aspect-" + mode + (tinted ? "-tint-" : "-color-") + entryKind + ".png";
+                    QVERIFY(image.save(QDir(capture).filePath(name)));
+                }
             }
         }
     }

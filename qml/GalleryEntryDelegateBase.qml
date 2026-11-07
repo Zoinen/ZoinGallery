@@ -224,6 +224,12 @@ BrickItem {
                     source ? source.toString() : "")
     }
 
+    function isExactCompactIconSource(source) {
+        const value = source.toString()
+        return value.startsWith("image://")
+                && (value.indexOf("/zoin/") >= 0 || value.indexOf("/lucide/") >= 0)
+    }
+
     function systemFileFallbackSource(logicalSize) {
         return panelRoot.iconResolver.fallbackSource(
                     isFolder, isImage,
@@ -232,10 +238,14 @@ BrickItem {
 
     function sourceColorIconAtSize(source, logicalSize, tint) {
         const value = source ? source.toString() : ""
+        const provider = panelRoot.iconProvider
+        if (compactPreview && value.startsWith("qrc:/F4QtHost/icons/zoin/")
+                && provider && typeof provider.compactFileArtworkSource === "function") {
+            return provider.compactFileArtworkSource(value, Math.round(logicalSize), renderDpr)
+        }
         const lucide = isLucideIconSource(value)
         const iconName = iconKey !== ""
                 ? iconKey : panelRoot.iconResolver.keyFromSource(value)
-        const provider = panelRoot.iconProvider
         if (lucide && iconName !== "" && provider
                 && typeof provider.rasterizedLucideSource === "function"
                 && typeof provider.lucideStrokeWidth === "function") {

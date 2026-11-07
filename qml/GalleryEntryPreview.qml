@@ -103,8 +103,6 @@ GallerySceneItem {
                       && !failedThumbnailIcon.ready))
                  && !preview.thumbnailExpected
                  && fallbackIcon.hasModelIconSource
-                 && (preview.entry.isFolder || !preview.entry.highlightMarker
-                     || fallbackIcon.lucideSource)
                  && !(preview.entry.panelRoot.viewerTransitionActive
                       && preview.entry.panelRoot.viewerTransitionEntryId
                          === preview.entry.entryId)

@@ -122,9 +122,9 @@ QtObject {
             color: fallbackIcon.effectiveIconColor
             fillMode: Image.PreserveAspectFit
             verticalAlignment: preview.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
-            // A native-aspect SVG raster can be larger than its fitted slot.
-            // Keep filtered sampling at rest too, as for un-tinted artwork.
-            smooth: true
+            // A prepared compact icon already covers the final pixel slot.
+            // Filter only artwork that can still require scaling.
+            smooth: !fallbackIcon.exactCompactRaster
             readonly property var pixelGridOffset:
                 fallbackIcon.pixelGridOffset
         }
@@ -171,7 +171,8 @@ QtObject {
                 verticalAlignment: preview.entry.iconsMode ? Image.AlignBottom : Image.AlignVCenter
                 // Colored SVGs can have a rectangular canvas, so fitting the
                 // loaded raster to the slot requires filtered sampling.
-                smooth: true
+                smooth: !preview.entry.compactPreview
+                        || !preview.entry.isExactCompactIconSource(sizedSource)
                 asynchronous: true
                 cache: true
                 retainWhileLoading: preview.activePresentation

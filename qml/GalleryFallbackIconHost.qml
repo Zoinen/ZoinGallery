@@ -70,5 +70,7 @@ Loader {
         || preview.thumbnailExpected ? "" : tintedSource
         ? preview.entry.sourceColorIconAtSize(modelIconSourceText, rasterExtent, effectiveIconColor)
         : (systemFileSource ? preview.entry.systemFileFallbackSource(rasterExtent) : "")
+    readonly property bool exactCompactRaster: preview.entry.compactPreview
+        && preview.entry.isExactCompactIconSource(rasterSource)
     sourceComponent: retainedComponent
 }

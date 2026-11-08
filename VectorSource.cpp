@@ -1,6 +1,8 @@
 #include "VectorSource.h"
 #include "VectorSourceStorage_p.h"
 #include <QFileInfo>
+#include <QFile>
+#include <QRegularExpression>
 #include <QSvgRenderer>
 #include <QUrlQuery>
 #include <QMutex>
@@ -35,6 +37,50 @@ bool VectorSourcePin::sceneReady(QQuickItem *item) const {
 }
 
 namespace {
+// Qt's generated SVG filters request a texture for the entire transformed
+// source on every pass, including pixels far outside the viewer. Bound those
+// raster intermediates independently of the curve-rendered SVG geometry.
+// This deliberately trades filter detail at extreme zoom for bounded GPU work;
+// sourceRect and all filter coordinates remain authored, so kernels and offsets
+// keep their meaning. MultiEffect may own additional internal render targets.
+bool budgetFilterTextures(const QString &path) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadWrite)) return false;
+    QString qml = QString::fromUtf8(file.readAll());
+    const QRegularExpression binding(
+        QStringLiteral(R"((?m)^([ \t]*)textureSize: (\w+)\.requiredTextureSize[ \t]*$)"));
+    const int count = qml.count(binding);
+    // Fail preparation if a Qt generator update changes this contract rather
+    // than silently restoring unbounded allocations.
+    if (count != qml.count(QRegularExpression(
+            QStringLiteral(R"((?m)^[ \t]*ItemSpy \{[ \t]*$)")))) {
+        qWarning() << "Unsupported generated SVG filter texture binding";
+        return false;
+    }
+    if (!count) return true;
+    constexpr int scenePixels = 16 * 1024 * 1024;
+    const int passPixels = qMax(1, scenePixels / count);
+    QString bounded;
+    qsizetype offset = 0;
+    auto remaining = binding.globalMatch(qml);
+    while (remaining.hasNext()) {
+        const auto match = remaining.next();
+        bounded += QStringView(qml).mid(offset, match.capturedStart() - offset);
+        bounded += match.captured(1) + QStringLiteral(
+            "textureSize: { const requested = %1.requiredTextureSize; "
+            "const w = Math.max(1, requested.width); "
+            "const h = Math.max(1, requested.height); "
+            "const factor = Math.min(1, 2048 / w, 2048 / h, Math.sqrt(%2 / (w * h))); "
+            "return Qt.size(Math.max(1, Math.floor(w * factor + 0.000001)), "
+            "Math.max(1, Math.floor(h * factor + 0.000001))); }")
+            .arg(match.captured(2)).arg(passPixels);
+        offset = match.capturedEnd();
+    }
+    bounded += QStringView(qml).mid(offset);
+    const QByteArray bytes = bounded.toUtf8();
+    return file.seek(0) && file.write(bytes) == bytes.size() && file.resize(bytes.size());
+}
+
 struct DirectoryCleanupExecutor {
     DirectoryCleanupExecutor() { pool.setMaxThreadCount(1); }
     QThreadPool pool;
@@ -167,7 +213,7 @@ VectorSourcePtr acquireVectorSource(const ImageInfo &info,
     generator.setAssetFilePrefix(QStringLiteral("asset_"));
     generator.setUrlPrefix(QUrl::fromLocalFile(source->preparedFiles->path() + u'/')
                                .toString(QUrl::FullyEncoded));
-    if (!generator.generate() || !generator.save()) return {};
+    if (!generator.generate() || !generator.save() || !budgetFilterTextures(componentPath)) return {};
     source->componentUrl = QUrl::fromLocalFile(componentPath);
     {
         QMutexLocker lock(&sourceMutex);

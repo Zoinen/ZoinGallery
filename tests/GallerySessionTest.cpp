@@ -9886,6 +9886,86 @@ private slots:
         QVERIFY(rendered.save("vector-prepared-assets-175.png"));
     }
 
+    void vectorFilterTexturesStayBoundedAtHighZoom() {
+#ifndef Q_MOC_RUN
+        QTemporaryDir directory;
+        const QString path = directory.filePath("filtered.svg");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"256\" height=\"256\" viewBox=\"0 0 32 32\">\n            <defs><filter id=\"shadow\"><feFlood flood-opacity=\".5\"/>\n            <feComposite operator=\"in\" in2=\"SourceGraphic\"/>\n            <feGaussianBlur stdDeviation=\".25\"/><feOffset dx=\"1\" dy=\"1\"/>\n            <feComposite operator=\"over\" in2=\"SourceGraphic\"/></filter></defs>\n            <rect width=\"30\" height=\"30\" fill=\"black\" filter=\"url(#shadow)\"/>\n            <rect x=\"2\" y=\"2\" width=\"24\" height=\"24\" fill=\"cyan\"/>\n            </svg>");
+        file.close();
+        QQmlEngine engine;
+        engine.addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        VectorSourcePin pin;
+        QQmlEngine::setContextForObject(&pin, engine.rootContext());
+        pin.setPrepareComponent(true);
+        pin.setSource(QUrl::fromLocalFile(path));
+        QTRY_VERIFY_WITH_TIMEOUT(pin.component(), 10000);
+        QTRY_COMPARE(pin.component()->status(), QQmlComponent::Ready);
+        QScopedPointer<QObject> object(pin.component()->create());
+        QVERIFY2(object, qPrintable(pin.component()->errorString()));
+        auto *scene = qobject_cast<QQuickItem *>(object.data());
+        QVERIFY(scene);
+        QQuickWindow window;
+        window.resize(256, 256);
+        qInfo() << "SVG filter test DPR:" << window.devicePixelRatio();
+        window.setColor(Qt::white);
+        scene->setParentItem(window.contentItem());
+        scene->setWidth(256 * 128);
+        scene->setHeight(256 * 128);
+        // Inspect before showing: a broken implementation would allocate many
+        // gigabytes on the GPU just to execute this regression.
+        qint64 pixels = 0;
+        int textures = 0;
+        for (auto *child : scene->findChildren<QQuickItem *>()) {
+            if (!child->inherits("QQuickShaderEffectSource")) continue;
+            const auto *context = qmlContext(child);
+            if (!context || !context->nameForObject(child).startsWith("_qt_node")) continue;
+            const QSize size = child->property("textureSize").toSize();
+            QVERIFY2(size.width() > 0 && size.height() > 0, "missing explicit texture budget");
+            QVERIFY2(size.width() <= 2048 && size.height() <= 2048,
+                     qPrintable(QStringLiteral("unbounded texture: %1x%2")
+                                    .arg(size.width()).arg(size.height())));
+            pixels += qint64(size.width()) * size.height();
+            ++textures;
+        }
+        QVERIFY(textures >= 7);
+        QVERIFY(pixels <= 16 * 1024 * 1024);
+        scene->setWidth(256);
+        scene->setHeight(256);
+        window.show();
+        QTRY_VERIFY(window.isExposed());
+        const auto paintsCyan = [&window] {
+            const QImage image = window.grabWindow();
+            return !image.isNull() && image.pixelColor(image.width() / 2,
+                                                       image.height() / 2) == QColor(Qt::cyan);
+        };
+        QTRY_VERIFY(paintsCyan());
+        const QImage normal = window.grabWindow();
+        QVERIFY(normal.save("vector-filter-normal-175.png"));
+        for (const int zoom : {4, 16, 128}) {
+            scene->setWidth(256 * zoom);
+            scene->setHeight(256 * zoom);
+            // Keep the vector foreground in view while zooming and panning.
+            scene->setX(-128 * zoom + 128);
+            scene->setY(-128 * zoom + 128);
+            QTRY_VERIFY(paintsCyan());
+            scene->setX(128 - 8 * zoom);
+            scene->setY(128 - 8 * zoom);
+            QTRY_COMPARE(window.grabWindow().pixelColor(qRound(128 * window.devicePixelRatio()),
+                                                       qRound(128 * window.devicePixelRatio())),
+                         QColor(Qt::black));
+        }
+        scene->setWidth(256);
+        scene->setHeight(256);
+        scene->setPosition(QPointF());
+        QTRY_VERIFY(paintsCyan());
+        const QImage restored = window.grabWindow();
+        QCOMPARE(restored, normal);
+        QVERIFY(restored.save("vector-filter-return-175.png"));
+#endif
+    }
+
     void vectorAnimationHonorsVisibilityAndAuthoredLoops() {
         QTemporaryDir directory;
         const QString path = directory.filePath("animation.svg");

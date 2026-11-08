@@ -284,7 +284,13 @@ QtObject {
         if (viewport.zoomFitView)
             return Qt.point(deltaX, deltaY)
         motion.wheelPanFinishTimer.stop()
-        return viewport.panBy(deltaX, deltaY, recordVelocity)
+        if (!recordVelocity) {
+            // The first OS momentum event releases our single coast. Its tail
+            // cannot move the image again or start another return animation.
+            viewport.finishWheelPan()
+            return Qt.point(0, 0)
+        }
+        return viewport.panBy(deltaX, deltaY, true)
     }
 
     function scheduleWheelPanFallbackFinish() {
@@ -294,6 +300,11 @@ QtObject {
 
     function consumeMomentumState(nativeMomentum, effectivePhase,
                                   deltaX, deltaY) {
+        // macOS also marks the terminal event as momentum. Let the phase
+        // handler finish the pan; treating it as a zero delta cancels its
+        // finish timer and leaves direct manipulation active indefinitely.
+        if (effectivePhase === ViewerWheelArea.ScrollEnd)
+            return false
         if (nativeMomentum && !viewport.zoomFitView
                 && !viewer.viewerNavigationActive
                 && !viewer.viewerNavigationCommitAfterAnimation
@@ -345,8 +356,11 @@ QtObject {
             return true
         }
         if (effectivePhase === ViewerWheelArea.ScrollEnd) {
-            if (!viewer.viewerNavigationGestureActive)
+            if (!viewer.viewerNavigationGestureActive) {
+                if (!viewport.zoomFitView)
+                    scheduleWheelPanFallbackFinish()
                 return true
+            }
             const hadNavigation = viewer.viewerNavigationActive
             if (hadNavigation)
                 finishViewerNavigation()
@@ -383,25 +397,17 @@ QtObject {
     }
 
     function applyWheelIntent(deltaX, deltaY, phaseAware) {
-        const horizontalIntent = viewer.viewerNavigationActive
-                || Math.abs(deltaX) >= Math.abs(deltaY) * 0.6
-        if (!horizontalIntent) {
-            if (!viewport.zoomFitView) {
-                panZoomedImageFromWheel(0, deltaY, true)
-                if (!phaseAware)
-                    scheduleWheelPanFallbackFinish()
-            }
-            return
-        }
-        let remainingX = deltaX
-        if (!viewer.viewerNavigationActive && !viewport.zoomFitView)
-            remainingX = panZoomedImageFromWheel(
-                        remainingX, deltaY, true).x
-        if (Math.abs(remainingX) < 0.1) {
+        if (!viewport.zoomFitView) {
+            panZoomedImageFromWheel(deltaX, deltaY, true)
             if (!phaseAware)
                 scheduleWheelPanFallbackFinish()
             return
         }
+        const horizontalIntent = viewer.viewerNavigationActive
+                || Math.abs(deltaX) >= Math.abs(deltaY) * 0.6
+        if (!horizontalIntent || Math.abs(deltaX) < 0.1)
+            return
+        const remainingX = deltaX
         const now = Date.now()
         const elapsed = viewer.viewerNavigationLastTime
                 ? Math.max(1, now - viewer.viewerNavigationLastTime) : 16
@@ -418,13 +424,14 @@ QtObject {
                                deviceType, nativeMomentum, nativePhase,
                                nativeMomentumPhase) {
         const phaseAware = phase !== ViewerWheelArea.NoScrollPhase
-        const effectivePhase = nativeMomentum
+        const kinetic = nativeMomentum || phase === ViewerWheelArea.ScrollMomentum
+        const effectivePhase = kinetic
                 && phase === ViewerWheelArea.ScrollBegin
                 ? ViewerWheelArea.ScrollMomentum : phase
         const deltaX = wheelDeltaPixels(pixelDeltaX, angleDeltaX)
         const deltaY = wheelDeltaPixels(pixelDeltaY, angleDeltaY)
         if (consumeMomentumState(
-                    nativeMomentum, effectivePhase, deltaX, deltaY)
+                    kinetic, effectivePhase, deltaX, deltaY)
                 || consumeWheelPhase(effectivePhase)
                 || viewer.viewerNavigationCommitAfterAnimation)
             return

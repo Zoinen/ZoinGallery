@@ -61,6 +61,7 @@ Item {
     readonly property alias zoomAnimation: viewportMotion.zoomAnimation
     readonly property alias xAnimation: viewportMotion.xAnimation
     readonly property alias yAnimation: viewportMotion.yAnimation
+    property alias panInertiaProgress: gestures.inertiaProgress
     property var textureSource: sphericTextureMipmapsEnabled
                                 && viewerImage2.status === Image.Ready
                                 ? viewerImage2 : viewerImageShader.imageSource
@@ -279,6 +280,7 @@ Item {
         if (!active) {
             pinchZoomActive = false
             cancelWheelPan()
+            viewportAnimation.stop()
             stopZoomScrollingAnimation()
         }
     }
@@ -286,6 +288,7 @@ Item {
         if (!visible) {
             pinchZoomActive = false
             cancelWheelPan()
+            viewportAnimation.stop()
             stopZoomScrollingAnimation()
         }
     }
@@ -479,7 +482,7 @@ Item {
             targetY = pointerLayer.mouseY - (imagePressedY) * targetScale
         }
         else {
-            if (!viewportAnimation.running) {
+            if (!viewportAnimation.running || viewportAnimation.panRunning) {
                 imagePressedX = (flickableArea.width / 2 - viewerImage.x) / zoomScale
                 imagePressedY = (flickableArea.height / 2 - viewerImage.y) / zoomScale
             }
@@ -658,6 +661,10 @@ Item {
         return gestures.finishWheelPan()
     }
 
+    function resistantPanPosition(position, delta, horizontal, targetScale) {
+        return gestures.resistantPanPosition(position, delta, horizontal, targetScale)
+    }
+
     function panBy(deltaX, deltaY, recordVelocity) {
         return gestures.panBy(deltaX, deltaY, recordVelocity)
     }
@@ -675,6 +682,8 @@ Item {
     }
 
     function onControlReleased() {
+        if (pinchZoomActive || wheelPanActive || viewportAnimation.panRunning)
+            return
         // Keep a wheel/step zoom's destination when Ctrl is released before
         // the animation reaches it. Its position targets are already bounded.
         if (viewportAnimation.running && Math.abs(targetZoomScale - zoomScale) > 1e-9)

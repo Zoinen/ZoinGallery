@@ -94,6 +94,10 @@ Item {
                 velocityHistoryX = []
                 velocityHistoryY = []
                 root.viewportAnimation.stop()
+                if (root.zoomAnimation.to === root.viewport.zoomScale) {
+                    root.xAnimation.to = root.imageItem.x
+                    root.yAnimation.to = root.imageItem.y
+                }
             } else if (mouse.button === Qt.RightButton) {
                 root.viewport.toggleZoomToFit(true)
             } else if (mouse.button === Qt.MiddleButton) {
@@ -105,22 +109,26 @@ Item {
             if (!(mouse.buttons & Qt.LeftButton))
                 return
 
-            root.imageItem.x = mouseX - root.viewport.imagePressedX
-                    * root.viewport.zoomScale
-            root.imageItem.y = mouseY - root.viewport.imagePressedY
-                    * root.viewport.zoomScale
-            root.xAnimation.to = mouseX - root.viewport.imagePressedX
-                    * root.zoomAnimation.to
-            root.yAnimation.to = mouseY - root.viewport.imagePressedY
-                    * root.zoomAnimation.to
+            const deltaX = mouseX - lastPosition.x
+            const deltaY = mouseY - lastPosition.y
+            const oldX = root.imageItem.x
+            const oldY = root.imageItem.y
+            root.imageItem.x = root.viewport.resistantPanPosition(oldX, deltaX, true)
+            root.imageItem.y = root.viewport.resistantPanPosition(oldY, deltaY, false)
+            root.xAnimation.to = root.viewport.resistantPanPosition(
+                        root.xAnimation.to, deltaX, true, root.zoomAnimation.to)
+            root.yAnimation.to = root.viewport.resistantPanPosition(
+                        root.yAnimation.to, deltaY, false, root.zoomAnimation.to)
+            root.viewport.imagePressedX = (mouseX - root.imageItem.x) / root.viewport.zoomScale
+            root.viewport.imagePressedY = (mouseY - root.imageItem.y) / root.viewport.zoomScale
             root.viewportAnimation.restart()
 
             const currentTime = Date.now()
             const elapsed = currentTime - lastTime || 1
             updateVelocityHistory(velocityHistoryX,
-                                  (mouseX - lastPosition.x) / elapsed * 1000)
+                                  (root.imageItem.x - oldX) / elapsed * 1000)
             updateVelocityHistory(velocityHistoryY,
-                                  (mouseY - lastPosition.y) / elapsed * 1000)
+                                  (root.imageItem.y - oldY) / elapsed * 1000)
             lastPosition = Qt.point(mouseX, mouseY)
             lastTime = currentTime
         }

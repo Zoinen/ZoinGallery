@@ -79,9 +79,40 @@ Item {
         }
     }
 
-    ParallelAnimation {
+    // Keep one interruption/running contract for zoom, direct pan and coast.
+    QtObject {
         id: viewportAnimation
         property var easing: Easing.InOutQuad
+        readonly property bool running: standardAnimation.running || panAnimation.running
+        readonly property bool panRunning: panAnimation.running
+
+        function stop() {
+            standardAnimation.stop()
+            panAnimation.stop()
+        }
+        function restart() {
+            panAnimation.stop()
+            standardAnimation.restart()
+        }
+        function startPan(duration) {
+            stop()
+            root.viewport.panInertiaProgress = 0
+            panAnimation.duration = duration
+            panAnimation.start()
+        }
+    }
+
+    NumberAnimation {
+        id: panAnimation
+        target: root.viewport
+        property: "panInertiaProgress"
+        from: 0
+        to: 1
+        easing.type: Easing.Linear
+    }
+
+    ParallelAnimation {
+        id: standardAnimation
 
         NumberAnimation {
             id: zoomAnimation

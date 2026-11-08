@@ -4546,6 +4546,188 @@ private slots:
         runtime->shutdown();
     }
 
+    void trackpadMomentumEndReturnsZoomedImageToBounds_data() {
+        QTest::addColumn<bool>("momentum");
+        QTest::addColumn<int>("pinchOrder");
+        QTest::addColumn<bool>("deadline");
+        QTest::addColumn<QPointF>("start");
+        QTest::addColumn<bool>("returnToEdge");
+        QTest::newRow("release-without-momentum") << false << -1 << false << QPointF() << true;
+        QTest::newRow("momentum-end") << true << -1 << false << QPointF() << true;
+        QTest::newRow("pinch-ends-first") << true << 0 << false << QPointF() << true;
+        QTest::newRow("pinch-ends-last") << true << 1 << false << QPointF() << true;
+        QTest::newRow("flick-deadline-at-edge") << true << -1 << true << QPointF() << true;
+        QTest::newRow("flick-deadline-inside") << true << -1 << true << QPointF(-1000, -700) << false;
+        QTest::newRow("flick-deadline-crosses-edge") << true << -1 << true << QPointF(-200, -200) << true;
+    }
+
+    void trackpadMomentumEndReturnsZoomedImageToBounds() {
+        QFETCH(bool, momentum);
+        QFETCH(int, pinchOrder);
+        QFETCH(bool, deadline);
+        QFETCH(QPointF, start);
+        QFETCH(bool, returnToEdge);
+        QTemporaryDir directory;
+        const QString path = directory.filePath("trackpad.png");
+        QVERIFY(writeImage(path, QSize(1600, 1000), Qt::magenta));
+        QQuickView view;
+        view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine());
+        auto *session = runtime->createExternalSession("trackpad-end");
+        QVERIFY(session->applyExternalCatalog({imageEntry("image", 7, path)}, 1));
+        QVERIFY(session->applyExternalState("image", 7, {}, 1));
+        session->setViewerOpen(true);
+        view.engine()->rootContext()->setContextProperty("trackpadSession", session);
+#ifndef Q_MOC_RUN
+        QObject *root = createRoot(view, R"QML(
+            import QtQuick
+            import ZoinGallery
+            import ZoinGallery.Native
+            Item {
+                width: 640; height: 420
+                property alias viewport: viewer.flickableArea
+                function prepare(x, y) { viewer.flickableArea.setViewport(2, x, y) }
+                function wheel(dx, dy, phase, momentum) {
+                    // The native end marker still carries momentum=true on macOS.
+                    const nativeMomentumPhase = !momentum ? 0
+                        : phase === ViewerWheelArea.ScrollEnd ? 8 : 4
+                    viewer.handleViewerWheel(dx, dy, 0, 0, phase,
+                        Qt.NoModifier, Qt.NoButton, true, false, 0, 0,
+                        momentum, 0, nativeMomentumPhase)
+                }
+                function beginPinch() { viewer.flickableArea.beginPinchZoom(320, 210) }
+                function finishPinch() { viewer.flickableArea.finishPinchZoom() }
+                GalleryViewer {
+                    id: viewer
+                    objectName: "trackpadViewer"
+                    anchors.fill: parent
+                    session: trackpadSession
+                    animationDuration: 80
+                    devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+                }
+            }
+        )QML", QStringLiteral("TrackpadMomentumEnd.qml"));
+#else
+        QObject *root = nullptr;
+#endif
+        QVERIFY(root);
+        view.show();
+        QTRY_VERIFY(view.isExposed());
+        auto *viewer = root->findChild<QQuickItem *>("trackpadViewer");
+        auto *viewport = root->property("viewport").value<QQuickItem *>();
+        QVERIFY(viewport);
+        QTRY_COMPARE(viewer->property("transitionProgress").toReal(), 1.0);
+        QTRY_VERIFY(viewport->property("imageTextureReady").toBool());
+        QVERIFY(QMetaObject::invokeMethod(root, "prepare",
+            Q_ARG(QVariant, start.x()), Q_ARG(QVariant, start.y())));
+        auto *image = viewport->property("image").value<QQuickItem *>();
+        QVERIFY(image);
+        QColor referencePixel;
+        if (deadline) {
+            const QImage before = view.grabWindow();
+            QVERIFY(!before.isNull());
+            referencePixel = before.pixelColor(before.width() / 2, before.height() / 2);
+            // Compare window output with itself: the display profile converts
+            // source sRGB magenta before readback on wide-gamut macOS screens.
+            QVERIFY(referencePixel.red() > 200 && referencePixel.blue() > 200
+                    && referencePixel.green() < 100);
+        }
+        const auto wheel = [&](qreal dx, qreal dy, Qt::ScrollPhase phase, bool nativeMomentum) {
+            return QMetaObject::invokeMethod(root, "wheel", Q_ARG(QVariant, dx), Q_ARG(QVariant, dy),
+                Q_ARG(QVariant, int(phase)), Q_ARG(QVariant, nativeMomentum));
+        };
+        if (pinchOrder >= 0) QVERIFY(QMetaObject::invokeMethod(root, "beginPinch"));
+        QVERIFY(wheel(0, 0, Qt::ScrollBegin, false));
+        const int drag = deadline ? 30 : 300;
+        QVERIFY(wheel(drag, drag, Qt::ScrollUpdate, false));
+        if (start.isNull()) QVERIFY(image->x() > 0 && image->y() > 0);
+        if (deadline) {
+            for (int i = 0; i < 5; ++i) {
+                QTest::qWait(16);
+                QVERIFY(wheel(drag, drag, Qt::ScrollUpdate, false));
+            }
+        } else {
+            QTest::qWait(150);
+        }
+        QVERIFY(viewport->property("wheelPanActive").toBool());
+        QVERIFY(!viewport->property("viewportAnimationRunning").toBool());
+        QVERIFY(wheel(0, 0, Qt::ScrollEnd, false));
+        if (deadline) {
+            const QPointF released = image->position();
+            QElapsedTimer elapsed;
+            elapsed.start();
+            QVERIFY(wheel(3, 3, Qt::ScrollBegin, true));
+            qreal peakX = image->x();
+            qint64 finishedAt = -1;
+            // A native tail may outlive our animation. It must not extend the
+            // clock, push the image outside again, or add another return phase.
+            while (elapsed.elapsed() < 650) {
+                QTest::qWait(16);
+                QVERIFY(wheel(3, 3, Qt::ScrollMomentum, true));
+                peakX = qMax(peakX, image->x());
+                const bool running = viewport->property("viewportAnimationRunning").toBool();
+                if (!running && finishedAt < 0) finishedAt = elapsed.elapsed();
+                if (elapsed.elapsed() < 400) QVERIFY(running);
+                if (elapsed.elapsed() >= 580) {
+                    QVERIFY2(!viewport->property("wheelPanActive").toBool(),
+                             "native momentum extended the flick deadline");
+                    QVERIFY2(!viewport->property("viewportAnimationRunning").toBool(),
+                             "return animation exceeded the 500 ms flick budget");
+                }
+            }
+            QVERIFY2(finishedAt >= 440 && finishedAt <= 580,
+                     qPrintable(QStringLiteral("flick finished at %1 ms").arg(finishedAt)));
+            qInfo() << "flick finished at" << finishedAt << "ms";
+            if (returnToEdge) {
+                QVERIFY(peakX > qMax(qreal(0), released.x()) + 1);
+                QVERIFY(qAbs(image->x()) < .001 && qAbs(image->y()) < .001);
+            } else {
+                QVERIFY(image->x() > released.x());
+                QVERIFY(image->x() < 0 && image->y() < 0);
+            }
+            const QPointF settled = image->position();
+            QVERIFY(wheel(0, 0, Qt::ScrollEnd, true));
+            QTest::qWait(150);
+            QVERIFY(!viewport->property("viewportAnimationRunning").toBool());
+            QCOMPARE(image->position(), settled);
+            auto *leaf = viewport->findChild<QQuickItem *>("galleryViewerImageShader");
+            QVERIFY(leaf);
+            const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+            const qreal dpr = view.devicePixelRatio();
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .001);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .001);
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - origin, QPointF(0, 1));
+            const QImage capture = view.grabWindow();
+            QVERIFY(!capture.isNull());
+            const QColor actualPixel = capture.pixelColor(capture.width() / 2, capture.height() / 2);
+            QVERIFY(qAbs(actualPixel.red() - referencePixel.red()) <= 2
+                    && qAbs(actualPixel.green() - referencePixel.green()) <= 2
+                    && qAbs(actualPixel.blue() - referencePixel.blue()) <= 2);
+            runtime->shutdown();
+            return;
+        }
+        if (momentum) {
+            QVERIFY(wheel(20, 20, Qt::ScrollBegin, true));
+            QVERIFY(wheel(10, 10, Qt::ScrollMomentum, true));
+            if (pinchOrder == 0) QVERIFY(QMetaObject::invokeMethod(root, "finishPinch"));
+            QVERIFY(wheel(0, 0, Qt::ScrollEnd, true));
+        }
+        if (pinchOrder == 1) {
+            QTRY_VERIFY_WITH_TIMEOUT(!viewport->property("wheelPanActive").toBool(), 1000);
+            QVERIFY(viewport->property("pinchZoomActive").toBool());
+            QVERIFY(!viewport->property("viewportAnimationRunning").toBool());
+            QVERIFY(image->x() > 0 && image->y() > 0);
+            QVERIFY(QMetaObject::invokeMethod(root, "finishPinch"));
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(!viewport->property("wheelPanActive").toBool(), 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(!viewport->property("viewportAnimationRunning").toBool(), 1500);
+        QVERIFY2(qAbs(image->x()) < .001 && qAbs(image->y()) < .001,
+                 qPrintable(QStringLiteral("image remained outside: %1,%2")
+                                .arg(image->x()).arg(image->y())));
+        runtime->shutdown();
+    }
+
     void fitSwipeCommitSnapshotsOriginalSizeBeforeNavigationReset() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

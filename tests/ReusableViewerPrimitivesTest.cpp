@@ -1104,6 +1104,9 @@ private slots:
     void resamplerChoosesAndRetainsPyramidLevels();
     void nativeScaleShaderIsPixelExactThroughFractionalNavigation();
     void interactiveGeometryIsContinuousAndSettlesToPixelGrid();
+    void trackpadPanAndPinchShareGestureLifetime();
+    void panResistanceMatchesPointerTravel_data();
+    void panResistanceMatchesPointerTravel();
     void centeredMinificationKeepsItsPhysicalCenter_data();
     void centeredMinificationKeepsItsPhysicalCenter();
     void wheelMinificationKeepsItsCenterDuringAnimation();
@@ -1804,3 +1807,207 @@ void ReusableViewerPrimitivesTest::wheelMinificationKeepsItsCenterDuringAnimatio
 
 QTEST_MAIN(ReusableViewerPrimitivesTest)
 #include "ReusableViewerPrimitivesTest.moc"
+
+void ReusableViewerPrimitivesTest::trackpadPanAndPinchShareGestureLifetime() {
+    QQuickView view;
+    view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+    QObject *root = createRoot(view, R"QML(
+        import QtQuick
+        import ZoinGallery
+        Item {
+            width: 480; height: 320
+            property alias viewport: viewport
+            function prepare() {
+                viewport.originalSize = Qt.size(1000, 800)
+                viewport.setViewport(2, 0, 0)
+            }
+            function pan(dx, dy) { return viewport.panBy(dx, dy, true) }
+            function beginPinch() { viewport.beginPinchZoom(240, 160) }
+            function samePinch() { viewport.updatePinchZoom(1) }
+            FlickableZoomable {
+                id: viewport
+                anchors.fill: parent
+                active: true
+                animationDuration: 80
+                devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+            }
+        }
+    )QML", QStringLiteral("TrackpadLifetime.qml"));
+    QVERIFY(root);
+    view.show();
+    QTRY_VERIFY(view.isExposed());
+    auto *viewport = root->property("viewport").value<QQuickItem *>();
+    QVERIFY(viewport);
+    auto *image = viewport->property("image").value<QQuickItem *>();
+    QVERIFY(image);
+    QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+    QVERIFY(QMetaObject::invokeMethod(viewport, "beginWheelPan"));
+    const auto pan = [&](qreal dx, qreal dy) {
+        QVariant leftover;
+        const bool called = QMetaObject::invokeMethod(root, "pan", Q_RETURN_ARG(QVariant, leftover),
+            Q_ARG(QVariant, dx), Q_ARG(QVariant, dy));
+        return called && leftover.toPointF() == QPointF();
+    };
+    QVERIFY(pan(200, 200));
+    const QPointF first = image->position();
+    QVERIFY(first.x() > 0 && first.y() > 0);
+    QVERIFY(first.x() < 200 && first.y() < 200);
+    for (int i = 0; i < 20; ++i) QVERIFY(pan(200, 200));
+    QVERIFY(image->x() > first.x() + 100);
+    QVERIFY(image->y() > first.y() + 100);
+    for (int i = 0; i < 20; ++i) QVERIFY(pan(-200, -200));
+    QVERIFY(QLineF(first, image->position()).length() < .001);
+
+    QVERIFY(QMetaObject::invokeMethod(root, "beginPinch"));
+    QVERIFY(pan(30, 40));
+    const QPointF panned = image->position();
+    QVERIFY(QMetaObject::invokeMethod(root, "samePinch"));
+    QVERIFY(QLineF(panned, image->position()).length() < .001);
+    QVERIFY(QMetaObject::invokeMethod(viewport, "finishWheelPan"));
+    QVERIFY(!viewport->property("viewportAnimationRunning").toBool());
+    QVERIFY(QMetaObject::invokeMethod(viewport, "onControlReleased"));
+    QVERIFY(!viewport->property("viewportAnimationRunning").toBool());
+    QTest::qWait(100);
+    QVERIFY(QLineF(panned, image->position()).length() < .001);
+    QVERIFY(QMetaObject::invokeMethod(viewport, "finishPinchZoom"));
+    QTRY_VERIFY(!viewport->property("viewportAnimationRunning").toBool());
+    QVERIFY(qAbs(image->x()) < .001 && qAbs(image->y()) < .001);
+
+    // End notifications can also arrive in the opposite order.
+    QVERIFY(QMetaObject::invokeMethod(viewport, "beginWheelPan"));
+    QVERIFY(QMetaObject::invokeMethod(root, "beginPinch"));
+    QVERIFY(pan(100, 100));
+    QVERIFY(QMetaObject::invokeMethod(viewport, "finishPinchZoom"));
+    QVERIFY(!viewport->property("viewportAnimationRunning").toBool());
+    QVERIFY(QMetaObject::invokeMethod(viewport, "finishWheelPan"));
+    QTRY_VERIFY(!viewport->property("viewportAnimationRunning").toBool());
+    QVERIFY(qAbs(image->x()) < .001 && qAbs(image->y()) < .001);
+
+    // Both forms of direct manipulation must stop the shared coast in place.
+    for (const bool pinch : {true, false}) {
+        QVERIFY(QMetaObject::invokeMethod(root, "prepare"));
+        QVERIFY(QMetaObject::invokeMethod(viewport, "beginWheelPan"));
+        QVERIFY(pan(100, 100));
+        QVERIFY(QMetaObject::invokeMethod(viewport, "finishWheelPan"));
+        QTRY_VERIFY(viewport->property("viewportAnimationRunning").toBool());
+        QTest::qWait(100);
+        const QPointF interrupted = image->position();
+        if (pinch)
+            QVERIFY(QMetaObject::invokeMethod(root, "beginPinch"));
+        else
+            QVERIFY(QMetaObject::invokeMethod(viewport, "beginWheelPan"));
+        QVERIFY(!viewport->property("viewportAnimationRunning").toBool());
+        QCOMPARE(image->position(), interrupted);
+        QTest::qWait(550);
+        QCOMPARE(image->position(), interrupted);
+        if (pinch)
+            QVERIFY(QMetaObject::invokeMethod(viewport, "finishPinchZoom"));
+        else
+            QVERIFY(QMetaObject::invokeMethod(viewport, "finishWheelPan"));
+        QTRY_VERIFY(!viewport->property("viewportAnimationRunning").toBool());
+        QVERIFY(qAbs(image->x()) < .001 && qAbs(image->y()) < .001);
+    }
+}
+
+void ReusableViewerPrimitivesTest::panResistanceMatchesPointerTravel_data() {
+    QTest::addColumn<bool>("mouse");
+    QTest::addColumn<bool>("small");
+    QTest::addColumn<QPointF>("start");
+    QTest::addColumn<QPoint>("delta");
+    QTest::addColumn<QPointF>("expected");
+    for (const bool mouse : {true, false}) {
+        const QByteArray input = mouse ? "mouse-" : "trackpad-";
+        QTest::newRow(input + "top-left") << mouse << false
+            << QPointF() << QPoint(160, 160) << QPointF(80, 80);
+        QTest::newRow(input + "cross-top-left") << mouse << false
+            << QPointF(-100, -100) << QPoint(160, 160) << QPointF(30, 30);
+        QTest::newRow(input + "cross-bottom-right") << mouse << false
+            << QPointF(-1260, -1080) << QPoint(-160, -160) << QPointF(-1390, -1210);
+        QTest::newRow(input + "inside") << mouse << false
+            << QPointF(-400, -300) << QPoint(60, 40) << QPointF(-340, -260);
+        QTest::newRow(input + "small-centered") << mouse << true
+            << QPointF(220, 150) << QPoint(160, 160) << QPointF(300, 230);
+    }
+}
+
+void ReusableViewerPrimitivesTest::panResistanceMatchesPointerTravel() {
+    QFETCH(bool, mouse);
+    QFETCH(bool, small);
+    QFETCH(QPointF, start);
+    QFETCH(QPoint, delta);
+    QFETCH(QPointF, expected);
+    QQuickView view;
+    view.engine()->addImportPath(QStringLiteral(ZOIN_TEST_QML_IMPORT_PATH));
+    QObject *root = createRoot(view, R"QML(
+        import QtQuick
+        import ZoinGallery
+        Item {
+            width: 640; height: 420
+            property alias viewport: viewport
+            function prepare(x, y, small) {
+                viewport.originalSize = small ? Qt.size(200, 120) : Qt.size(1000, 800)
+                viewport.setViewport(small ? 1 : 2, x, y)
+            }
+            function pan(dx, dy) { viewport.panBy(dx, dy, true) }
+            function zoomAtPointer() {
+                viewport.handleZoomWheel(120, Qt.NoModifier, Qt.LeftButton)
+            }
+            FlickableZoomable {
+                id: viewport
+                anchors.fill: parent
+                active: true
+                animationDuration: 80
+                devicePixelRatio: Window.window ? Window.window.devicePixelRatio : 1
+            }
+        }
+    )QML", QStringLiteral("PanResistance.qml"));
+    QVERIFY(root);
+    view.show();
+    QTRY_VERIFY(view.isExposed());
+    QVERIFY(QMetaObject::invokeMethod(root, "prepare", Q_ARG(QVariant, start.x()),
+        Q_ARG(QVariant, start.y()), Q_ARG(QVariant, small)));
+    auto *viewport = root->property("viewport").value<QQuickItem *>();
+    QVERIFY(viewport);
+    auto *image = viewport->property("image").value<QQuickItem *>();
+    QVERIFY(image);
+    const QPoint press(320, 210);
+    if (mouse)
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, press);
+    else
+        QVERIFY(QMetaObject::invokeMethod(viewport, "beginWheelPan"));
+    const auto move = [&](bool reverse) {
+        if (mouse) {
+            QTest::mouseMove(&view, reverse ? press : press + delta);
+            return true;
+        }
+        return QMetaObject::invokeMethod(root, "pan",
+            Q_ARG(QVariant, reverse ? -delta.x() : delta.x()),
+            Q_ARG(QVariant, reverse ? -delta.y() : delta.y()));
+    };
+    QVERIFY(move(false));
+    QTRY_VERIFY2(QLineF(image->position(), expected).length() < .001,
+        qPrintable(QStringLiteral("actual %1,%2 expected %3,%4")
+            .arg(image->x()).arg(image->y()).arg(expected.x()).arg(expected.y())));
+    QVERIFY(move(true));
+    QTRY_VERIFY(QLineF(image->position(), start).length() < .001);
+    if (mouse)
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, press);
+    else
+        QVERIFY(QMetaObject::invokeMethod(viewport, "finishWheelPan"));
+    QTRY_VERIFY(!viewport->property("viewportAnimationRunning").toBool());
+    if (mouse && !small && start.isNull()) {
+        // Resistance changes the image point under the pointer. A wheel zoom
+        // while still dragging must use that current point as its anchor.
+        QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, press);
+        QTest::mouseMove(&view, press + delta);
+        const QPointF at = press + delta;
+        const qreal scale = viewport->property("zoomScale").toReal();
+        const QPointF anchor = (at - image->position()) / scale;
+        QVERIFY(QMetaObject::invokeMethod(root, "zoomAtPointer"));
+        QTRY_VERIFY(!viewport->property("viewportAnimationRunning").toBool());
+        const QPointF actual = (at - image->position()) / viewport->property("zoomScale").toReal();
+        QVERIFY(QLineF(actual, anchor).length() < .001);
+        QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, press + delta);
+        QTRY_VERIFY(!viewport->property("viewportAnimationRunning").toBool());
+    }
+}

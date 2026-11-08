@@ -39,7 +39,7 @@ qint64 ImageSourceRangeDevice::readData(char *data, qint64 maxlen) {
         return 0;
     }
     if (m_cancellation && m_cancellation->isCanceled()) {
-        setErrorString(QStringLiteral("video source read cancelled"));
+        setErrorString(QStringLiteral("video source read canceled"));
         return -1;
     }
 

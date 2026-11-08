@@ -65,9 +65,6 @@ bool panelThumbnailCovers(const QSize &available, const QSize &bounds,
     if (available.isEmpty() || bounds.isEmpty()) {
         return false;
     }
-    if (longEdge(available) >= MaximumPanelThumbnailEdge) {
-        return true;
-    }
     // A panel target is a bounding box for aspect-preserving frames.
     const QSize required = preserveAspect
         ? available.scaled(bounds, Qt::KeepAspectRatio).expandedTo(QSize(1, 1))

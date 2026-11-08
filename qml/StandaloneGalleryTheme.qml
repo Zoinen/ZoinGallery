@@ -11,7 +11,6 @@ GalleryThemePalette {
     cursorBorder: Style.brickSelectedBorder
     cardCursorBorder: Style.brickSelectedBorder
     selection: Style.persistentSelectionBorder
-    markedBackground: Style.brickSelected
     markedText: Style.textSelected
     directoryText: Style.text
     fileText: mutedText

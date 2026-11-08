@@ -21,6 +21,7 @@
 #include <ZoinGallery/GalleryRuntime.h>
 #include <ZoinGallery/GallerySession.h>
 
+#include "src/embed/DecodeSizePolicy.h"
 #include "src/embed/ExternalCatalogModel.h"
 
 #include <QCoreApplication>
@@ -2721,8 +2722,7 @@ private slots:
         QQuickItem *shader = nullptr;
         QTRY_VERIFY((shader = findVisualItem(panel, "galleryThumbnailShader-0")));
         if (mode == QStringLiteral("masonry")) {
-            QVERIFY(qRound(shader->width() * view.devicePixelRatio()) <= pixels.width());
-            QVERIFY(qRound(shader->height() * view.devicePixelRatio()) <= pixels.height());
+            QCOMPARE(shader->size(), shader->parentItem()->size());
         }
         QTest::qWait(50);
         const QPointF centre = shader->mapToScene(QPointF(shader->width() / 2, shader->height() / 2));
@@ -8259,6 +8259,72 @@ private slots:
                 layout->overscanIndexes().size());
     }
 
+    void cappedPanoramaFillsMasonryBrickAt175Percent() {
+        if (!qEnvironmentVariableIsSet("ZOIN_TEST_NATIVE_RENDERER"))
+            QSKIP("Requires the native renderer for ShaderEffect pixel validation");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QString path = qEnvironmentVariable("ZOIN_TEST_MASONRY_PANORAMA");
+        const bool synthetic = path.isEmpty();
+        if (synthetic) {
+            path = directory.filePath("panorama.png");
+            // Reproduce the dimensions of the texture restored from disk.
+            QImage pixels(ZoinGallery::MaximumPanelThumbnailEdge, 195, QImage::Format_RGB32);
+            pixels.fill(QColor(180, 110, 50));
+            QVERIFY(pixels.save(path));
+        }
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("capped-panorama");
+        QVERIFY(session->applyExternalCatalog({catalogEntry(0, path)}, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "cappedPanoramaSession"));
+        QVERIFY(panel);
+        const qreal dpr = view.devicePixelRatio();
+        QCOMPARE(dpr, 1.75);
+        panel->setProperty("devicePixelRatio", dpr);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+        layout->setDensity(240);
+
+        QQuickItem *image = nullptr;
+        QQuickItem *shader = nullptr;
+        QTRY_VERIFY((image = findVisualItem(panel, "galleryThumbnailImage-0"))
+                    && (shader = findVisualItem(panel, "galleryThumbnailShader-0")));
+        QTRY_COMPARE(image->property("status").toInt(), 1);
+        QTRY_COMPARE(qRound(image->implicitWidth()), ZoinGallery::MaximumPanelThumbnailEdge);
+        const auto *layer = shader->parentItem();
+        const int brickWidth = qRound(layer->width() * dpr);
+        QVERIFY(brickWidth > ZoinGallery::MaximumPanelThumbnailEdge);
+        QCOMPARE(qRound(shader->width() * dpr), brickWidth);
+        QCOMPARE(qRound(shader->height() * dpr), qRound(layer->height() * dpr));
+
+        auto *caption = findVisualItem(panel, "galleryMasonryLabel-0");
+        QVERIFY(caption);
+        const QImage frame = view.grabWindow();
+        QVERIFY(!frame.isNull());
+        for (auto *leaf : {shader, caption}) {
+            const QPointF origin = leaf->mapToScene(QPointF());
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+            QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        }
+        if (synthetic) {
+            for (qreal x : {8 / dpr, shader->width() - 8 / dpr}) {
+                const QPoint pos = (shader->mapToScene(QPointF(x, shader->height() / 2)) * dpr).toPoint();
+                QVERIFY(frame.rect().contains(pos));
+                const QColor color = frame.pixelColor(pos);
+                QVERIFY2(color.red() > 150 && color.blue() < 80, qPrintable(color.name()));
+            }
+        }
+        const QString captureDir = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+        if (!captureDir.isEmpty())
+            QVERIFY(frame.save(captureDir + "/masonry-capped-panorama-175.png"));
+        runtime->shutdown();
+    }
+
     void opaquePngThumbnailRendersPixels() {
         if (!qEnvironmentVariableIsSet("ZG_NATIVE_RENDER"))
             QSKIP("Requires the native renderer for ShaderEffect pixel validation");
@@ -10616,10 +10682,8 @@ private slots:
         QCOMPARE(plainFolderBase->property("color").value<QColor>(),
                  QColor(QStringLiteral("#ffffff")));
         QCOMPARE(markedSurface->property("color").value<QColor>(),
-                 QColor(Qt::transparent));
-        QCOMPARE(markedSurface->property("visualBorderWidth").toReal(), 1.0);
-        QCOMPARE(markedSurface->property("visualBorderColor").value<QColor>(),
-                 panel->property("selectionColor").value<QColor>());
+                 panel->property("markedBackgroundColor").value<QColor>());
+        QCOMPARE(markedSurface->property("visualBorderWidth").toReal(), 0.0);
 
         // Persistent selection outranks the transient cursor. Moving the
         // cursor onto an already-selected folder must keep both its name and
@@ -10649,9 +10713,84 @@ private slots:
         QCOMPARE(layout->width(), panelItem->width());
     }
 
-    void compactModesCanUseMarkedTextWithoutSelectionBorder() {
+    void masonryMarkedBricksReuseTheHighlightAt175Percent() {
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("masonry-marked-bricks");
+        QVERIFY(session->applyExternalCatalog(plainCatalog(3), 1));
+        QVERIFY(session->applyExternalState("layout-entry-0", 0,
+            QStringList{"layout-entry-0", "layout-entry-1"}, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "masonryMarkedSession"));
+        QVERIFY(panel);
+        const qreal dpr = view.devicePixelRatio();
+        if (dpr != 1.75)
+            QSKIP("Requires 175% display scale");
+        panel->setProperty("devicePixelRatio", dpr);
+        QVERIFY(setPanelObjectProperties(panel, "theme", {
+            {"cursor", QColor("#1d5888")},
+            {"selection", QColor("#ffd43b")},
+        }));
+
+        auto *surface0 = findVisualItem(panel, "gallerySelectionSurface-0");
+        auto *surface1 = findVisualItem(panel, "gallerySelectionSurface-1");
+        auto *surface2 = findVisualItem(panel, "gallerySelectionSurface-2");
+        auto *caption0 = findVisualItem(panel, "galleryMasonryLabelBackground-0");
+        auto *caption1 = findVisualItem(panel, "galleryMasonryLabelBackground-1");
+        auto *caption2 = findVisualItem(panel, "galleryMasonryLabelBackground-2");
+        QVERIFY(surface0 && surface1 && surface2 && caption0 && caption1 && caption2);
+        const QColor accent("#ffd43b");
+        const QColor fill = accent.darker(260);
+        QTRY_COMPARE(surface0->property("color").value<QColor>(), fill);
+        QCOMPARE(surface1->property("color").value<QColor>(), fill);
+        QCOMPARE(surface0->property("visualBorderColor").value<QColor>(), accent);
+        QCOMPARE(surface0->property("visualBorderWidth").toReal(), 1.0);
+        QCOMPARE(surface1->property("visualBorderWidth").toReal(), 0.0);
+        const QColor captionTint = caption0->property("color").value<QColor>();
+        QCOMPARE(caption1->property("color").value<QColor>(), captionTint);
+        QVERIFY(captionTint.red() > captionTint.green() && captionTint.green() > captionTint.blue());
+
+        session->setCurrentIndex(2);
+        QTRY_COMPARE(surface2->property("color").value<QColor>(), QColor("#1d5888"));
+        QCOMPARE(surface0->property("visualBorderWidth").toReal(), 0.0);
+        QCOMPARE(surface0->property("color").value<QColor>(), fill);
+        QVERIFY(caption2->property("color").value<QColor>().blue()
+                > caption2->property("color").value<QColor>().red());
+
+        const QImage frame = view.grabWindow();
+        QVERIFY(!frame.isNull());
+        for (int index = 0; index < 3; ++index) {
+            auto *label = findVisualItem(panel, QString("galleryMasonryLabel-%1").arg(index));
+            QVERIFY(label);
+            const QPointF origin = label->mapToScene(QPointF());
+            QVERIFY(qAbs(origin.x() * dpr - qRound(origin.x() * dpr)) < .01);
+            QVERIFY(qAbs(origin.y() * dpr - qRound(origin.y() * dpr)) < .01);
+            QCOMPARE(label->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+            QCOMPARE(label->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+        }
+        // The preview backdrop can darken the fill in the composited frame.
+        // Verify the rendered tint both in the brick and under its caption.
+        for (const auto *item : {surface1, caption1}) {
+            const QPoint point = (item->mapToScene(QPointF(10, item->height() / 2))
+                                  * dpr).toPoint();
+            QVERIFY(frame.rect().contains(point));
+            const QColor rendered = frame.pixelColor(point);
+            QVERIFY2(rendered.red() > rendered.green()
+                         && rendered.green() > rendered.blue() + 10,
+                     qPrintable(rendered.name()));
+        }
+        const QString captureDir = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+        if (!captureDir.isEmpty())
+            QVERIFY(frame.save(captureDir + "/masonry-marked-bricks-175.png"));
+        runtime->shutdown();
+    }
+
+    void panelModesTintMarkedItemsAndOutlineOnlyTheCurrentItem() {
         for (const QString &mode : {QStringLiteral("columns"),
-                                    QStringLiteral("details")}) {
+                                    QStringLiteral("details"),
+                                    QStringLiteral("grid"),
+                                    QStringLiteral("icons")}) {
             QQuickView view;
             ZoinGallery::RuntimeOptions options;
             options.persistentCache = false;
@@ -10670,8 +10809,16 @@ private slots:
                 view, session,
                 QStringLiteral("compactTextSelectionSession"), mode);
             QVERIFY(panel);
+            const QColor fill("#51451b");
+            const QColor accent("#ffd43b");
+            auto *panelItem = qobject_cast<QQuickItem *>(panel);
+            QVERIFY(panelItem);
+            const qreal dpr = view.devicePixelRatio();
+            panel->setProperty("devicePixelRatio", dpr);
+            panel->setProperty("separateFileExtensions", true);
             QVERIFY(setPanelObjectProperties(panel, "theme", QVariantMap{
-                {QStringLiteral("showSelectionBorders"), false},
+                {QStringLiteral("markedBackground"), fill},
+                {QStringLiteral("itemHover"), QColor("#400020ff")},
                 {QStringLiteral("markedText"),
                  QStringLiteral("#ffd43b")},
                 {QStringLiteral("selection"),
@@ -10684,20 +10831,70 @@ private slots:
 
             auto *surface = panel->findChild<QQuickItem *>(
                 QStringLiteral("gallerySelectionSurface-1"));
-            auto *label = panel->findChild<QQuickItem *>(
-                QStringLiteral("galleryBaseName-1"));
+            const bool compact = mode == QStringLiteral("details")
+                              || mode == QStringLiteral("columns");
+            const QString labelName = compact ? QStringLiteral("galleryBaseName-1")
+                : mode == QStringLiteral("grid") ? QStringLiteral("galleryGridLabel-1")
+                : QStringLiteral("galleryIconsLabel-1");
+            auto *label = panel->findChild<QQuickItem *>(labelName);
             QTRY_VERIFY_WITH_TIMEOUT(surface && label, 3000);
-            QCOMPARE(surface->property("color").value<QColor>(),
-                     QColor(Qt::transparent));
+            QTRY_COMPARE(surface->property("color").value<QColor>(), fill);
             QCOMPARE(surface->property("visualBorderWidth").toReal(), 0.0);
-            QCOMPARE(label->property("color").value<QColor>(),
-                     QColor(QStringLiteral("#ffd43b")));
+            QCOMPARE(label->property("color").value<QColor>(), accent);
+            QVERIFY(panel->setProperty("hoveredIndex", 1));
+            const QColor hoveredFill = surface->property("color").value<QColor>();
+            QVERIFY(hoveredFill.red() > fill.red());
+            QVERIFY(hoveredFill.green() > fill.green());
+            QVERIFY(hoveredFill.green() > hoveredFill.blue());
+            QCOMPARE(surface->property("visualBorderWidth").toReal(), 0.0);
 
             session->setCurrentIndex(1);
-            QTRY_COMPARE_WITH_TIMEOUT(
-                label->property("color").value<QColor>(),
-                QColor(QStringLiteral("#ffd43b")), 3000);
-            QCOMPARE(surface->property("visualBorderWidth").toReal(), 1.0);
+            QTRY_COMPARE(surface->property("visualBorderWidth").toReal(), 1.0);
+            QCOMPARE(surface->property("visualBorderColor").value<QColor>(), accent);
+            QCOMPARE(surface->property("color").value<QColor>(), hoveredFill);
+
+            if (dpr == 1.75) {
+                // Deferred row layout and alignment flush before scene sync.
+                QTest::qWait(50);
+                QTRY_VERIFY(!panel->property("cursorPixelAlignmentSuspended").toBool());
+                QSignalSpy swapped(&view, &QQuickWindow::frameSwapped);
+                view.update();
+                QVERIFY(swapped.wait(1000));
+                const QPoint rowCenter = surface->mapToScene(
+                    QPointF(surface->width() / 2, surface->height() / 2)).toPoint();
+                QTest::mouseMove(&view, rowCenter);
+                QTRY_COMPARE(surface->property("color").value<QColor>(), hoveredFill);
+                const QImage frame = view.grabWindow();
+                QVERIFY(!frame.isNull());
+                const QPoint pixel = (surface->mapToScene(
+                    QPointF(surface->width() - 8, 5)) * dpr).toPoint();
+                QVERIFY(frame.rect().contains(pixel));
+                QCOMPARE(frame.pixelColor(pixel).rgba(), hoveredFill.rgba());
+                QStringList leaves{labelName, QStringLiteral("galleryFallbackIcon-1")};
+                if (compact)
+                    leaves.append({QStringLiteral("galleryExtension-1"), QStringLiteral("gallerySize-1")});
+                for (const auto &name : leaves) {
+                    auto *leaf = findVisualItem(panelItem, name);
+                    QVERIFY2(leaf, qPrintable(name));
+                    if (!leaf->isVisible())
+                        continue;
+                    const QPointF origin = leaf->mapToScene(QPointF());
+                    const QPointF physical = origin * dpr;
+                    QVERIFY2(qAbs(physical.x() - qRound(physical.x())) < .01
+                                 && qAbs(physical.y() - qRound(physical.y())) < .01,
+                             qPrintable(QString("%1 %2 at %3,%4 physical pixels")
+                                 .arg(mode, leaf->objectName()).arg(physical.x()).arg(physical.y())));
+                    QCOMPARE(leaf->mapToScene(QPointF(1, 0)) - origin, QPointF(1, 0));
+                    QCOMPARE(leaf->mapToScene(QPointF(0, 1)) - origin, QPointF(0, 1));
+                }
+                const QString captureDir = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+                if (!captureDir.isEmpty())
+                    QVERIFY(frame.save(captureDir + "/panel-marked-hover-" + mode + "-175.png"));
+            }
+
+            QVERIFY(panel->setProperty("hoveredIndex", -1));
+            QVERIFY(setPanelObjectProperties(panel, "theme", {{"showSelectionBorders", false}}));
+            QCOMPARE(surface->property("color").value<QColor>(), fill);
             const QColor expectedCursorBorder = mode == QStringLiteral("details")
                 ? panel->property("cursorBorderColor").value<QColor>()
                 : panel->property("cursorColor").value<QColor>().lighter(135);

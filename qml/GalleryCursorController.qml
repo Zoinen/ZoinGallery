@@ -264,7 +264,7 @@ QtObject {
         const selectedBorder = selected && panel.showSelectionBorders
         if (presentationMode !== "details") {
             return {
-                fill: cursorColor,
+                fill: selected ? panel.markedBackgroundColor : cursorColor,
                 border: selectedBorder ? panel.selectionColor : cardCursorBorderColor,
                 borderWidth: 1,
                 radius: cursorChromeModeRadius()
@@ -274,7 +274,8 @@ QtObject {
                 ? controller.highlightStyleAt(index) : ({})
         const patch = style.cursor || ({})
         return {
-            fill: patch.background || cursorBackgroundColor,
+            fill: selected ? panel.markedBackgroundColor
+                           : (patch.background || cursorBackgroundColor),
             border: selectedBorder ? panel.selectionColor : cursorBorderColor,
             borderWidth: 1,
             radius: 4

@@ -63,21 +63,15 @@ GallerySceneItem {
         readonly property real textureAspect:
             sourceImage.implicitWidth > 0 && sourceImage.implicitHeight > 0
             ? sourceImage.implicitWidth / sourceImage.implicitHeight : 0
-        // A previous zoom tier can remain ready while the new one loads.
-        // Keep those pixels centered at their available resolution.
-        readonly property real masonryScale:
-            layer.entry.masonryMode && textureAspect > 0
-            && layer.width > 0 && layer.height > 0
-            ? Math.min(1, sourceImage.implicitWidth / (layer.width * layer.entry.renderDpr),
-                          sourceImage.implicitHeight / (layer.height * layer.entry.renderDpr))
-            : 1
+        // Masonry owns the preview rectangle. The source may be smaller
+        // than that rectangle when it comes from the capped disk cache.
         readonly property real fittedWidth:
             layer.entry.masonryMode || textureAspect <= 0
-            ? layer.width * masonryScale
+            ? layer.width
             : Math.min(layer.width, layer.height * textureAspect)
         readonly property real fittedHeight:
             layer.entry.masonryMode || textureAspect <= 0
-            ? layer.height * masonryScale
+            ? layer.height
             : Math.min(layer.height, layer.width / textureAspect)
         x: Math.round((layer.width - width) * layer.entry.renderDpr / 2)
            / layer.entry.renderDpr

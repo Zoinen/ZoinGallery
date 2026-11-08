@@ -19,14 +19,14 @@ Rectangle {
             ? Math.max(0, Math.min(parent.height - surfaceInset * 2,
                                    entry.paintedContentHeight - surfaceInset))
             : Math.max(0, parent.height - surfaceInset * 2))
+    readonly property bool cursorVisible:
+        entry.current && entry.panelRoot.showCursor && !entry.cursorChromeSuppressed
     readonly property bool pixelAlignedCursorGeometry:
         entry.current && entry.panelRoot.showCursor
         && !entry.panelRoot.cursorPixelAlignmentSuspended
         && !entry.geometryAnimationRunning
-    readonly property bool selectionBorderVisible:
-        entry.selected && entry.panelRoot.showSelectionBorders
     readonly property bool pixelAlignedSelectionGeometry:
-        selectionBorderVisible
+        entry.selected
         && !entry.panelRoot.cursorPixelAlignmentSuspended
         && !entry.geometryAnimationRunning
     readonly property rect visualSurfaceRect:
@@ -34,14 +34,8 @@ Rectangle {
         ? entry.panelRoot.alignViewportItemRectToDevicePixels(
               entry, nominalSurfaceRect)
         : nominalSurfaceRect
-    readonly property real nominalBorderWidth: {
-        if (entry.cursorChromeExposesUnderlay)
-            return 0
-        if (selectionBorderVisible)
-            return 1
-        return entry.current && entry.panelRoot.showCursor
-                && !entry.cursorChromeSuppressed ? 1 : 0
-    }
+    readonly property real nominalBorderWidth:
+        cursorVisible && !entry.cursorChromeExposesUnderlay ? 1 : 0
 
     x: visualSurfaceRect.x
     y: visualSurfaceRect.y
@@ -52,15 +46,15 @@ Rectangle {
     readonly property color baseColor: {
         if (entry.cursorChromeExposesUnderlay)
             return "transparent"
+        if (entry.selected)
+            return entry.panelRoot.markedBackgroundColor
         if (entry.detailsMode) {
-            if (entry.current && entry.panelRoot.showCursor
-                    && !entry.cursorChromeSuppressed)
+            if (cursorVisible)
                 return entry.visualModel.cursorBackground
                         || entry.panelRoot.cursorBackgroundColor
             return entry.visualModel.normalBackground || "transparent"
         }
-        if (entry.current && entry.panelRoot.showCursor
-                && !entry.cursorChromeSuppressed)
+        if (cursorVisible)
             return entry.panelRoot.cursorColor
         if (entry.masonryMode) {
             if (entry.folderPreviewActive)
@@ -77,7 +71,9 @@ Rectangle {
     color: {
         if (!entry.pointerHovered || entry.cursorChromeExposesUnderlay)
             return baseColor
-        const hover = entry.panelRoot.itemHoverColor
+        const hover = entry.selected
+            ? Qt.alpha(entry.panelRoot.selectionColor, entry.panelRoot.itemHoverColor.a)
+            : entry.panelRoot.itemHoverColor
         const alpha = hover.a + baseColor.a * (1 - hover.a)
         if (alpha <= 0)
             return baseColor
@@ -89,7 +85,8 @@ Rectangle {
     }
     border.width: nominalBorderWidth
     border.pixelAligned: true
-    border.color: selectionBorderVisible ? entry.panelRoot.selectionColor
+    border.color: entry.selected && entry.panelRoot.showSelectionBorders
+                  ? entry.panelRoot.selectionColor
                   : entry.detailsMode ? entry.panelRoot.cursorBorderColor
                   : entry.panelRoot.cardCursorBorderColor
 }

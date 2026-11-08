@@ -13,7 +13,7 @@ QtObject {
     property color cardCursorBorder: Qt.lighter(cursor, 1.35)
     property color selection: "#d8a31a"
     property bool showSelectionBorders: true
-    property color markedBackground: selection
+    property color markedBackground: Qt.darker(selection, 2.6)
     property color markedText: "#ffd43b"
     property color directoryText: text
     property bool neutralFileTextColors: true

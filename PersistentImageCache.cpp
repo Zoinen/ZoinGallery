@@ -3,6 +3,7 @@
 #include "DisplayColorSpace.h"
 #include "Decoders/WebpCodec.h"
 #include "StorageLocations.h"
+#include "src/embed/DecodeSizePolicy.h"
 
 #include <QImage>
 #include <QFile>
@@ -129,8 +130,22 @@ void PersistentImageCache::retrieveImagesInfo(const QStringList &imagePaths, QLi
 }
 
 QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request, bool validateRequestVersion) {
+    const bool panelThumbnail = !request.viewerRequest && !request.viewerThumbnailRequest
+        && !request.videoPosterRequest;
+    const QSize diskTarget = panelThumbnail
+        ? ZoinGallery::boundedPanelThumbnailSize(request.targetSize) : request.targetSize;
     if (PersistentDerivedImageCache::appliesTo(request)) {
+        // DecodeManager disables version validation for cache-only lookups,
+        // where the capped preview is the only available source of pixels.
+        if (!validateRequestVersion && diskTarget != request.targetSize) {
+            auto cacheRequest = request;
+            cacheRequest.targetSize = diskTarget;
+            return PersistentDerivedImageCache::retrieveImage(cacheRequest);
+        }
         return PersistentDerivedImageCache::retrieveImage(request);
+    }
+    if (validateRequestVersion && diskTarget != request.targetSize) {
+        return {};
     }
     loadDb();
 

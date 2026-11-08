@@ -520,7 +520,7 @@ QVariantMap FileListModel::moveActiveSelectionGroupToCurrentFolderImpl(
             return selectionGroupMoveError(
                 QStringLiteral("Could not move image"),
                 QStringLiteral("“%1” could not be moved. The operation was "
-                               "cancelled and previously moved images were "
+                               "canceled and previously moved images were "
                                "returned to their original locations. Retry or "
                                "skip this image.")
                     .arg(QDir::toNativeSeparators(selectedFile.path)),

@@ -1954,7 +1954,7 @@ private slots:
         QVERIFY(device.seek(0));
         QVERIFY(device.read(1).isEmpty());
         QCOMPARE(device.errorString(),
-                 QStringLiteral("video source read cancelled"));
+                 QStringLiteral("video source read canceled"));
         QVERIFY(!device.readFailed());
         auto unavailable = QSharedPointer<MaterializingTestProvider>::create(
             directory.filePath("unavailable.bin"));

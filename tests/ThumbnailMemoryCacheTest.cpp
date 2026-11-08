@@ -184,23 +184,30 @@ private slots:
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
     }
 
-    void cappedFrameSurvivesResizeInMemory() {
+    void cappedFrameCannotSatisfyLargerMemoryRequest() {
         const auto store = QSharedPointer<ProviderImageStore>::create();
         ZoinGallery::ThumbnailMemoryCache cache(store, 8 * 1024 * 1024);
         const QString source = QStringLiteral("network/portrait.jpg");
         const QString transform = QStringLiteral("thumbnail-aspect-v1");
-        const QSize firstTarget(2000, 1800);
+        const QSize firstTarget(768, 1024);
         QCOMPARE(cache.acquire("owner", source, "v1", 100, firstTarget, transform).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
         const auto decoded = cache.storeDecoded("owner", source, "v1", 100,
             firstTarget, transform, frame(QSize(768, 1024)));
         QVERIFY(decoded.isValid());
-        for (const QSize &bounds : {QSize(400, 400), QSize(2600, 2000)}) {
-            const auto hit = cache.acquire("owner", source, "v1", 100, bounds, transform);
-            QCOMPARE(hit.state, ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
-            QCOMPARE(hit.handle.providerId, decoded.providerId);
-        }
-        QCOMPARE(cache.frameCount(), qsizetype(1));
+        const auto smaller = cache.acquire("owner", source, "v1", 100, QSize(400, 400), transform);
+        QCOMPARE(smaller.state, ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
+        QCOMPARE(smaller.handle.providerId, decoded.providerId);
+
+        const QSize largerTarget(1200, 1600);
+        QCOMPARE(cache.acquire("owner", source, "v1", 100, largerTarget, transform).state,
+                 ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
+        const auto larger = cache.storeDecoded("owner", source, "v1", 100,
+            largerTarget, transform, frame(largerTarget));
+        QVERIFY(larger.isValid());
+        const auto repeat = cache.acquire("other", source, "v1", 100, largerTarget, transform);
+        QCOMPARE(repeat.state, ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
+        QCOMPARE(repeat.handle.providerId, larger.providerId);
     }
 
     void largerGridTierIsReusedByIconsAndMasonry() {

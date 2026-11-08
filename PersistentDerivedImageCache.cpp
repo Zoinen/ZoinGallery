@@ -907,12 +907,23 @@ bool PersistentDerivedImageCache::isEligible(
     return keyForRequest(request).isValid();
 }
 
+// A disk thumbnail cannot satisfy a panel decode above the storage cap,
+// even when its header records a previous request for that exact tier.
+static bool requiresLargerPanelThumbnail(const ImageDecodeRequest &request,
+                                         const DerivedKey &key) {
+    return key.artifact == Artifact::Thumbnail && !request.viewerThumbnailRequest
+        && boundedPanelThumbnailSize(key.targetTier) != key.targetTier;
+}
+
 bool PersistentDerivedImageCache::hasImage(
     const ImageDecodeRequest &request) {
     if (!isEligible(request)) {
         return false;
     }
     const auto key = keyForRequest(request);
+    if (requiresLargerPanelThumbnail(request, key)) {
+        return false;
+    }
     QMutexLocker locker(&cacheMutex);
     DerivedKey stored;
     QSize pixels;
@@ -931,6 +942,9 @@ QImage PersistentDerivedImageCache::retrieveImage(
         return {};
     }
     const auto key = keyForRequest(request);
+    if (requiresLargerPanelThumbnail(request, key)) {
+        return {};
+    }
     QImage image = readCachedImage(reusableThumbnailPath(key), key, true);
     if (!image.isNull()) return image;
     if (request.viewerThumbnailRequest && key.artifact == Artifact::Thumbnail) {

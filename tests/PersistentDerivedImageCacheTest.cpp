@@ -6,6 +6,7 @@
 #include "Runners/CacheImageRunners.h"
 #include "Runners/ImageInfoReadRunner.h"
 #include "Runners/ImageReadRunner.h"
+#include "Runners/ImageDecodeRunner.h"
 #if defined(ZOIN_ENABLE_VIDEO_THUMBNAILS)
 #include "Runners/VideoThumbnailRunner.h"
 #endif
@@ -26,6 +27,7 @@
 #include <atomic>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -564,7 +566,7 @@ private slots:
         QVERIFY(PersistentImageCache::retrieveImage(revised, true).isNull());
     }
 
-    void cappedThumbnailSurvivesLargerResizeRequests_data() {
+    void cappedThumbnailIsPreservedWhileLargerRequestsDecode_data() {
         QTest::addColumn<QString>("transform");
         QTest::addColumn<QSize>("generatedSize");
         QTest::addColumn<QSize>("cachedSize");
@@ -574,7 +576,7 @@ private slots:
                               << QSize(1600, 900) << QSize(1024, 576);
     }
 
-    void cappedThumbnailSurvivesLargerResizeRequests() {
+    void cappedThumbnailIsPreservedWhileLargerRequestsDecode() {
         QFETCH(QString, transform);
         QFETCH(QSize, generatedSize);
         QFETCH(QSize, cachedSize);
@@ -582,7 +584,10 @@ private slots:
         request.thumbnailTransformKey = transform;
         request.targetSize = QSize(1600, 1600);
         persist(request, testImage(generatedSize));
-        QCOMPARE(PersistentImageCache::retrieveImage(request, true).size(), cachedSize);
+        // The slot records this exact request tier even though it stores capped pixels.
+        QVERIFY(!PersistentImageCache::hasImage(request));
+        QVERIFY(PersistentImageCache::retrieveImage(request, true).isNull());
+        QCOMPARE(PersistentImageCache::retrieveImage(request, false).size(), cachedSize);
 
         const QDir cache(cacheRoot.filePath("zg_derived_v1"));
         const auto entries = cache.entryList({"*.zgd"}, QDir::Files);
@@ -593,20 +598,34 @@ private slots:
         stored.close();
 
         auto larger = request;
-        larger.targetSize = QSize(2400, 2200);
-        QVERIFY(PersistentImageCache::hasImage(larger));
-        auto provider = QSharedPointer<CountingSourceProvider>::create();
+        larger.targetSize = generatedSize;
+        QVERIFY(!PersistentImageCache::hasImage(larger));
+        const QString sourcePath = cacheRoot.filePath("large-preview.png");
+        const QImage source = testImage(generatedSize * 2, qRgb(180, 25, 90));
+        QVERIFY(source.save(sourcePath));
+        larger.info.source.displayName = QStringLiteral("large-preview.png");
+        larger.info.source.mimeType = QStringLiteral("image/png");
+        larger.info.imageSize = source.size();
+        auto provider = QSharedPointer<MetadataSourceProvider>::create(sourcePath);
         CachedImageRetrieveRunner cacheRunner(larger, true);
         ImageReadRunner sourceRunner(larger, provider);
         QSignalSpy readySpy(&cacheRunner, &CachedImageRetrieveRunner::cachedThumbnailRetrieved);
+        std::optional<ImageData> sourceRead;
+        connect(&sourceRunner, &ImageReadRunner::imageReadReady, this,
+                [&sourceRead](const ImageData &data) { sourceRead.emplace(data); });
         cacheRunner.run();
         sourceRunner.run();
-        QCOMPARE(readySpy.count(), 1);
-        QCOMPARE(provider->materializations.load(), 0);
-        QCOMPARE(provider->rangeReads.load(), 0);
+        QCOMPARE(readySpy.count(), 0);
+        QCOMPARE(provider->materializations.load(), 1);
+        QVERIFY(sourceRead.has_value());
 
-        QVERIFY(PersistentImageCache::createImageForCache(
-            larger, testImage(generatedSize, qRgb(180, 25, 90))).isEmpty());
+        ImageDecodeRunner decoder(*sourceRead);
+        QSignalSpy decoded(&decoder, &ImageDecodeRunner::imageReady);
+        QSignalSpy writes(&decoder, &ImageDecodeRunner::storeInCache);
+        decoder.run();
+        QCOMPARE(decoded.count(), 1);
+        QCOMPARE(decoded.first().at(1).value<QImage>().size(), generatedSize);
+        QCOMPARE(writes.count(), 0);
         auto smaller = request;
         smaller.targetSize = QSize(400, 400);
         QCOMPARE(PersistentImageCache::retrieveImage(smaller, true).size(), cachedSize);

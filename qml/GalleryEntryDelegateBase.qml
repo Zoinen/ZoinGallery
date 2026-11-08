@@ -156,10 +156,12 @@ BrickItem {
            ? visualModel.normalForeground
            : (isFolder ? panelRoot.folderIconColor : panelRoot.mutedColor))
     readonly property color highlightLabelBackground:
-        (current && panelRoot.showCursor
-         ? (masonryMode ? ZG.Style.brickInfoPanelSelected : visualModel.cursorBackground)
-         : visualModel.normalBackground)
-        || panelRoot.labelBackgroundColor
+        masonryMode && selected
+        ? Qt.alpha(panelRoot.markedBackgroundColor, ZG.Style.brickInfoPanelSelected.a)
+        : ((current && panelRoot.showCursor
+            ? (masonryMode ? ZG.Style.brickInfoPanelSelected : visualModel.cursorBackground)
+            : visualModel.normalBackground)
+           || panelRoot.labelBackgroundColor)
     // Keep component reads scalar: a rect read from QML creates a GC wrapper,
     // including a notify connection for referenced value types.
     readonly property bool compactPreview: detailsMode || columnsMode

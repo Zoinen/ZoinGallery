@@ -159,7 +159,7 @@ public slots:
                     : QSharedPointer<ImageSourceLease>();
                 if (!m_lease) {
                     fail(m_cancellation && m_cancellation->isCanceled()
-                        ? tr("Video loading was cancelled.")
+                        ? tr("Video loading was canceled.")
                         : tr("Could not access the video source."));
                     return;
                 }
@@ -171,7 +171,7 @@ public slots:
         }
 
         if (m_cancellation && m_cancellation->isCanceled()) {
-            fail(tr("Video loading was cancelled."));
+            fail(tr("Video loading was canceled."));
             return;
         }
         if (!m_sourceDevice) {

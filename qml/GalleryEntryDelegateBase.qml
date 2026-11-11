@@ -135,8 +135,17 @@ BrickItem {
     readonly property color semanticTextColor:
         highlightForegroundValue !== ""
         ? highlightForegroundValue : panelRoot.foregroundColor
+    readonly property string fileNameForeground: {
+        const cursor = current && panelRoot.showCursor
+        if (cursor)
+            return (selected ? visualModel.selectedCursorFileNameForeground
+                             : visualModel.cursorFileNameForeground) || ""
+        return (selected ? visualModel.selectedFileNameForeground
+                         : visualModel.normalFileNameForeground) || ""
+    }
     readonly property color itemTextColor:
-        selected
+        fileNameForeground !== "" ? fileNameForeground
+        : selected
         ? panelRoot.markedTextColor
         : (panelRoot.neutralFileTextColors
            ? (isFolder

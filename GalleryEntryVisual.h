@@ -39,18 +39,22 @@ class GalleryEntryVisual final : public QObject {
     Q_PROPERTY(QVariant tintIcon READ tintIcon NOTIFY styleChanged)
     Q_PROPERTY(QString normalForeground READ normalForeground
                NOTIFY styleChanged)
+    Q_PROPERTY(QString normalFileNameForeground READ normalFileNameForeground NOTIFY styleChanged)
     Q_PROPERTY(QString normalBackground READ normalBackground
                NOTIFY styleChanged)
     Q_PROPERTY(QString selectedForeground READ selectedForeground
                NOTIFY styleChanged)
+    Q_PROPERTY(QString selectedFileNameForeground READ selectedFileNameForeground NOTIFY styleChanged)
     Q_PROPERTY(QString selectedBackground READ selectedBackground
                NOTIFY styleChanged)
     Q_PROPERTY(QString cursorForeground READ cursorForeground
                NOTIFY styleChanged)
+    Q_PROPERTY(QString cursorFileNameForeground READ cursorFileNameForeground NOTIFY styleChanged)
     Q_PROPERTY(QString cursorBackground READ cursorBackground
                NOTIFY styleChanged)
     Q_PROPERTY(QString selectedCursorForeground READ selectedCursorForeground
                NOTIFY styleChanged)
+    Q_PROPERTY(QString selectedCursorFileNameForeground READ selectedCursorFileNameForeground NOTIFY styleChanged)
     Q_PROPERTY(QString selectedCursorBackground READ selectedCursorBackground
                NOTIFY styleChanged)
     Q_PROPERTY(QString imageIdUrl READ imageIdUrl NOTIFY mediaChanged)
@@ -92,12 +96,16 @@ public:
     QString highlightMarker() const;
     QVariant tintIcon() const { return _tintIcon; }
     QString normalForeground() const;
+    QString normalFileNameForeground() const { return _normalFileNameForeground; }
     QString normalBackground() const;
     QString selectedForeground() const;
+    QString selectedFileNameForeground() const { return _selectedFileNameForeground; }
     QString selectedBackground() const;
     QString cursorForeground() const;
+    QString cursorFileNameForeground() const { return _cursorFileNameForeground; }
     QString cursorBackground() const;
     QString selectedCursorForeground() const;
+    QString selectedCursorFileNameForeground() const { return _selectedCursorFileNameForeground; }
     QString selectedCursorBackground() const;
     QString imageIdUrl() const;
 
@@ -143,12 +151,16 @@ private:
     QString _highlightMarker;
     QVariant _tintIcon;
     QString _normalForeground;
+    QString _normalFileNameForeground;
     QString _normalBackground;
     QString _selectedForeground;
+    QString _selectedFileNameForeground;
     QString _selectedBackground;
     QString _cursorForeground;
+    QString _cursorFileNameForeground;
     QString _cursorBackground;
     QString _selectedCursorForeground;
+    QString _selectedCursorFileNameForeground;
     QString _selectedCursorBackground;
     QString _imageIdUrl;
 };

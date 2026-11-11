@@ -48,12 +48,16 @@ struct GalleryEntryVisual::SnapshotValues {
     QString highlightMarker;
     QVariant tintIcon;
     QString normalForeground;
+    QString normalFileNameForeground;
     QString normalBackground;
     QString selectedForeground;
+    QString selectedFileNameForeground;
     QString selectedBackground;
     QString cursorForeground;
+    QString cursorFileNameForeground;
     QString cursorBackground;
     QString selectedCursorForeground;
+    QString selectedCursorFileNameForeground;
     QString selectedCursorBackground;
     QString imageIdUrl;
 };
@@ -101,18 +105,26 @@ GalleryEntryVisual::SnapshotValues GalleryEntryVisual::parseSnapshot(
         .tintIcon = style.value(QStringLiteral("tintIcon")),
         .normalForeground = styleColor(
             style, "normal", "foreground"),
+        .normalFileNameForeground = styleColor(
+            style, "normal", "fileNameForeground"),
         .normalBackground = styleColor(
             style, "normal", "background"),
         .selectedForeground = styleColor(
             style, "selected", "foreground"),
+        .selectedFileNameForeground = styleColor(
+            style, "selected", "fileNameForeground"),
         .selectedBackground = styleColor(
             style, "selected", "background"),
         .cursorForeground = styleColor(
             style, "cursor", "foreground"),
+        .cursorFileNameForeground = styleColor(
+            style, "cursor", "fileNameForeground"),
         .cursorBackground = styleColor(
             style, "cursor", "background"),
         .selectedCursorForeground = styleColor(
             style, "selectedCursor", "foreground"),
+        .selectedCursorFileNameForeground = styleColor(
+            style, "selectedCursor", "fileNameForeground"),
         .selectedCursorBackground = styleColor(
             style, "selectedCursor", "background"),
         .imageIdUrl = snapshot.value(
@@ -163,15 +175,19 @@ bool GalleryEntryVisual::applyStyle(const SnapshotValues &values) {
     changed |= assignChanged(_highlightMarker, values.highlightMarker);
     changed |= assignChanged(_tintIcon, values.tintIcon);
     changed |= assignChanged(_normalForeground, values.normalForeground);
+    changed |= assignChanged(_normalFileNameForeground, values.normalFileNameForeground);
     changed |= assignChanged(_normalBackground, values.normalBackground);
     changed |= assignChanged(
         _selectedForeground, values.selectedForeground);
+    changed |= assignChanged(_selectedFileNameForeground, values.selectedFileNameForeground);
     changed |= assignChanged(
         _selectedBackground, values.selectedBackground);
     changed |= assignChanged(_cursorForeground, values.cursorForeground);
+    changed |= assignChanged(_cursorFileNameForeground, values.cursorFileNameForeground);
     changed |= assignChanged(_cursorBackground, values.cursorBackground);
     changed |= assignChanged(
         _selectedCursorForeground, values.selectedCursorForeground);
+    changed |= assignChanged(_selectedCursorFileNameForeground, values.selectedCursorFileNameForeground);
     changed |= assignChanged(
         _selectedCursorBackground, values.selectedCursorBackground);
     return changed;

@@ -3604,6 +3604,25 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(rootObject, "restoreFirst"));
         QTRY_VERIFY(viewport->property("zoomFitView").toBool());
 
+        QVERIFY(QMetaObject::invokeMethod(viewport, "zoomToScale",
+                                         Q_ARG(QVariant, 0.25),
+                                         Q_ARG(QVariant, false)));
+        QTRY_COMPARE(viewport->property("zoomScale").toReal(), 0.25);
+        QVERIFY(!viewport->property("zoomFitView").toBool());
+        for (const auto key : {Qt::Key_Right, Qt::Key_Left,
+                               Qt::Key_Down, Qt::Key_Up}) {
+            const int requestsBefore = navigationSpy.size();
+            QTest::keyClick(&view, key);
+            QCOMPARE(navigationSpy.size(), requestsBefore + 1);
+            const bool forward = key == Qt::Key_Right || key == Qt::Key_Down;
+            QCOMPARE(navigationSpy.last().at(0).toString(),
+                     forward ? QStringLiteral("image-2") : QStringLiteral("image"));
+            QVERIFY(!viewport->property("zoomFitView").toBool());
+            QVERIFY(!viewport->property("zoomScrollingAnimationRunning").toBool());
+        }
+        QVERIFY(QMetaObject::invokeMethod(rootObject, "restoreFirst"));
+        QTRY_VERIFY(viewport->property("zoomFitView").toBool());
+
         // ViewerMode starts one FrameAnimation on key-down and ignores native
         // key repeat.  Zoom therefore continues for the entire hold.
         QTest::keyPress(&view, Qt::Key_Plus, Qt::ShiftModifier);

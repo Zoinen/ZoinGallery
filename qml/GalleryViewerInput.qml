@@ -31,7 +31,9 @@ QtObject {
                 || event.key === Qt.Key_Right
                 || event.key === Qt.Key_Up
                 || event.key === Qt.Key_Down
-        return (!viewport.zoomFitView && arrow)
+        return (arrow && !viewport.zoomFitView
+                && (viewer.currentIsVideo || viewer.sphericViewerMode
+                    || viewport.canPanHorizontally() || viewport.canPanVertically()))
                 || event.key === Qt.Key_Plus
                 || event.key === Qt.Key_Equal
                 || event.key === Qt.Key_Minus

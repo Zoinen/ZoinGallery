@@ -299,6 +299,7 @@ set(ZOIN_CORE_SOURCES
     Decoders/TiffDecoder.h
     Decoders/JpegDecoder.cpp
     Decoders/JpegDecoder.h
+    Decoders/ThumbnailPixelFormat.h
     Decoders/QtDecoder.cpp
     Decoders/QtDecoder.h
     Decoders/RawDecoder.cpp
@@ -569,6 +570,7 @@ if(BUILD_TESTING)
     target_link_libraries(ViewerDecodeSourceTests PRIVATE
         ZoinGallery::Core
         libjpeg-turbo::libjpeg-turbo
+        Qt${QT_VERSION_MAJOR}::GuiPrivate
         Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME ViewerDecodeSourceTest COMMAND ViewerDecodeSourceTests)
 

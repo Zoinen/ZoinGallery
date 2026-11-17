@@ -3,6 +3,7 @@
 #include "DisplayColorSpace.h"
 #include "Decoders/WebpCodec.h"
 #include "StorageLocations.h"
+#include "ThumbnailLoader.h"
 #include "src/embed/DecodeSizePolicy.h"
 
 #include <QImage>
@@ -182,17 +183,15 @@ QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request, bool val
         return {};
     }
 
-    QImage result = WebpCodec::decode(thumbnailData);
+    const QSize bounds = request.viewerThumbnailRequest ? QSize{} : request.targetSize;
+    QImage result = WebpCodec::decodeForThumbnailResize(thumbnailData, bounds);
     if (result.isNull()) {
         return {};
     }
-    result.setColorSpace(DisplayColorSpace::cacheColorSpace());
-    if (!request.viewerThumbnailRequest && request.targetSize.isValid()
-        && (request.targetSize.width() < result.width() ||
-                                         request.targetSize.height() < result.height())) { // Never upscale
-        result = result.scaled(request.targetSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-        result.setColorSpace(DisplayColorSpace::cacheColorSpace());
+    if (bounds.isValid()) {
+        result = ThumbnailLoader::createThumbnail(result, bounds, Qt::IgnoreAspectRatio);
     }
+    result.setColorSpace(DisplayColorSpace::cacheColorSpace());
     return DisplayColorSpace::convertImage(result);
 }
 
@@ -273,12 +272,8 @@ QByteArray PersistentImageCache::createImageForCache(const QImage &image) {
         return {};
     }
 
-    QImage scaled = DisplayColorSpace::convertImageToColorSpace(image, DisplayColorSpace::cacheColorSpace());
-    if (CACHE_IMAGE_RESOLUTION.width() < image.width() ||
-        CACHE_IMAGE_RESOLUTION.height() < image.height()) { // Never upscale
-        scaled = image.scaled(CACHE_IMAGE_RESOLUTION, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        scaled = DisplayColorSpace::convertImageToColorSpace(scaled, DisplayColorSpace::cacheColorSpace());
-    }
+    QImage scaled = ThumbnailLoader::createThumbnail(image, CACHE_IMAGE_RESOLUTION);
+    scaled = DisplayColorSpace::convertImageToColorSpace(scaled, DisplayColorSpace::cacheColorSpace());
     if (scaled.isNull()) {
         return {};
     }

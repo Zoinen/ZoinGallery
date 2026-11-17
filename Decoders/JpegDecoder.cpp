@@ -1,4 +1,6 @@
 #include "JpegDecoder.h"
+#include "DisplayColorSpace.h"
+#include "ThumbnailPixelFormat.h"
 
 #include <QFile>
 #include <QDebug>
@@ -8,6 +10,7 @@
 #include "TinyEXIF.h"
 #include <csetjmp>
 #include <cstdio>
+#include <limits>
 #include <jpeglib.h>
 #include <turbojpeg.h>
 
@@ -145,6 +148,16 @@ QStringList JpegDecoder::supportedFormats() {
 }
 
 QImage JpegDecoder::decode(const QString& mimeType, const QByteArray &data, QSize targetSize) {
+    return decodePixels(mimeType, data, targetSize, {});
+}
+
+QImage JpegDecoder::decodeThumbnail(const QString &mimeType, const QByteArray &data,
+                                    QSize decodeTarget, QSize thumbnailBounds) {
+    return decodePixels(mimeType, data, decodeTarget, thumbnailBounds);
+}
+
+QImage JpegDecoder::decodePixels(const QString &mimeType, const QByteArray &data,
+                                 QSize targetSize, QSize thumbnailBounds) {
     if (mimeType != "image/jpeg") {
         return QImage();
     }
@@ -193,7 +206,22 @@ QImage JpegDecoder::decode(const QString& mimeType, const QByteArray &data, QSiz
     height = TJSCALED(height, factors[denomIndex]);
     //    qDebug() << "Chosen" << denomIndex << "of" << num << width << "x" << height << ", req" << targetSize;
 
-    int pitch = TJPAD(width * tjPixelSize[TJPF_RGB]);
+    const QColorSpace colorSpace = jpegColorSpace(data);
+    const qint64 pixelCount = qint64(width) * height;
+    const bool decodeRgb32 = ZoinGallery::canDecodeThumbnailAsRgb32(
+            QSize(width, height), thumbnailBounds)
+        && pixelCount <= std::numeric_limits<int>::max() / 4
+        && colorSpace == DisplayColorSpace::current();
+    // QImage's RGB32 is the native-endian word 0xffRRGGBB. TurboJPEG's
+    // alpha-bearing output formats fill the fourth byte with 0xff.
+#if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
+    const int rgb32PixelFormat = TJPF_BGRA;
+#else
+    const int rgb32PixelFormat = TJPF_ARGB;
+#endif
+    const int pixelFormat = decodeRgb32 ? rgb32PixelFormat : TJPF_RGB;
+    const auto imageFormat = decodeRgb32 ? QImage::Format_RGB32 : QImage::Format_RGB888;
+    int pitch = TJPAD(width * tjPixelSize[pixelFormat]);
     unsigned char *buffer = new unsigned char[pitch * height];
 
     // The approximate IDCT was mostly hidden while the viewer
@@ -203,7 +231,7 @@ QImage JpegDecoder::decode(const QString& mimeType, const QByteArray &data, QSiz
     const int decodeFlags = QSize(width, height) == encodedSize
         ? TJFLAG_ACCURATEDCT : TJFLAG_FASTDCT;
     res = tjDecompress2(_jpegDecompressor, _compressedImage, _jpegSize, buffer,
-                        width, pitch, height, TJPF_RGB,
+                        width, pitch, height, pixelFormat,
                         decodeFlags);
     if (res == -1) {
         if (tjGetErrorCode(_jpegDecompressor) == TJERR_FATAL) {
@@ -215,8 +243,9 @@ QImage JpegDecoder::decode(const QString& mimeType, const QByteArray &data, QSiz
     }
     tjDestroy(_jpegDecompressor);
 
-    QImage img(buffer, width, height, QImage::Format_RGB888, [] (void *ptr) {delete[] (uint8_t *)ptr;}, buffer);
-    img.setColorSpace(jpegColorSpace(data));
+    QImage img(buffer, width, height, pitch, imageFormat,
+               [](void *ptr) { delete[] static_cast<unsigned char *>(ptr); }, buffer);
+    img.setColorSpace(colorSpace);
     /*int taken3 = t.restart();
     qDebug() << "time:" << path << taken << taken2 << taken3;*/
     // static int index = 0;

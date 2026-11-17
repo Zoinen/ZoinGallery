@@ -1,4 +1,6 @@
 #include "WebpCodec.h"
+#include "ThumbnailPixelFormat.h"
+#include "ThumbnailLoader.h"
 
 #include <QColorSpace>
 #include <QtGlobal>
@@ -19,7 +21,8 @@ QSize scaledSize(const QSize &sourceSize, const QSize &targetSize) {
     return sourceSize.scaled(targetSize, Qt::KeepAspectRatio);
 }
 
-QImage decodeStaticWebp(const QByteArray &data, const QSize &targetSize) {
+QImage decodeStaticWebp(const QByteArray &data, const QSize &targetSize,
+                        QSize thumbnailBounds) {
     WebPDecoderConfig config;
     if (!WebPInitDecoderConfig(&config)) {
         return {};
@@ -30,20 +33,32 @@ QImage decodeStaticWebp(const QByteArray &data, const QSize &targetSize) {
         return {};
     }
 
-    const QSize outputSize = scaledSize(QSize(config.input.width, config.input.height), targetSize);
+    const QSize sourceSize(config.input.width, config.input.height);
+    const QSize outputSize = scaledSize(sourceSize, targetSize);
     const bool hasAlpha = config.input.has_alpha != 0;
-    QImage image(outputSize, hasAlpha ? QImage::Format_RGBA8888 : QImage::Format_RGB888);
+    const bool decodeRgb32 = !hasAlpha && ZoinGallery::canDecodeThumbnailAsRgb32(
+        sourceSize, thumbnailBounds);
+    const auto format = decodeRgb32 ? QImage::Format_RGB32
+        : hasAlpha ? QImage::Format_RGBA8888 : QImage::Format_RGB888;
+    QImage image(outputSize, format);
     if (image.isNull()) {
         return {};
     }
 
     config.options.use_threads = 1;
-    if (outputSize != QSize(config.input.width, config.input.height)) {
+    if (outputSize != sourceSize) {
         config.options.use_scaling = 1;
         config.options.scaled_width = outputSize.width();
         config.options.scaled_height = outputSize.height();
     }
     config.output.colorspace = hasAlpha ? MODE_RGBA : MODE_RGB;
+    if (decodeRgb32) {
+#if Q_BYTE_ORDER == Q_LITTLE_ENDIAN
+        config.output.colorspace = MODE_BGRA;
+#else
+        config.output.colorspace = MODE_ARGB;
+#endif
+    }
     config.output.is_external_memory = 1;
     config.output.u.RGBA.rgba = image.bits();
     config.output.u.RGBA.stride = image.bytesPerLine();
@@ -95,11 +110,8 @@ QImage decodeAnimatedWebp(const QByteArray &data, const QSize &targetSize) {
     }
     WebPAnimDecoderDelete(decoder);
 
-    const QSize outputSize = scaledSize(image.size(), targetSize);
-    if (!image.isNull() && outputSize != image.size()) {
-        image = image.scaled(outputSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-    }
-    return image;
+    return ThumbnailLoader::createThumbnail(
+        image, scaledSize(image.size(), targetSize), Qt::IgnoreAspectRatio);
 }
 
 int writeWebp(const uint8_t *data, size_t dataSize, const WebPPicture *picture) {
@@ -126,7 +138,8 @@ Features readFeatures(const QByteArray &data) {
     };
 }
 
-QImage decode(const QByteArray &data, const QSize &targetSize) {
+static QImage decodeImage(const QByteArray &data, const QSize &targetSize,
+                          QSize thumbnailBounds) {
     const Features features = readFeatures(data);
     if (!features.isValid()) {
         return {};
@@ -134,11 +147,19 @@ QImage decode(const QByteArray &data, const QSize &targetSize) {
 
     QImage image = features.hasAnimation
         ? decodeAnimatedWebp(data, targetSize)
-        : decodeStaticWebp(data, targetSize);
+        : decodeStaticWebp(data, targetSize, thumbnailBounds);
     if (!image.isNull()) {
         image.setColorSpace(QColorSpace(QColorSpace::SRgb));
     }
     return image;
+}
+
+QImage decode(const QByteArray &data, const QSize &targetSize) {
+    return decodeImage(data, targetSize, {});
+}
+
+QImage decodeForThumbnailResize(const QByteArray &data, QSize bounds) {
+    return decodeImage(data, {}, bounds);
 }
 
 QByteArray encode(const QImage &image, float quality, bool lossless) {

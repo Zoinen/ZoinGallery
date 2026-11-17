@@ -17,8 +17,12 @@ public:
     bool readMetadata(ImageInfo& result) override;
     bool readPreviewAndMime(ImageData &result) override { return false; }
     QImage decode(const QString &mimeType, const QByteArray& data, QSize targetSize) override;
+    QImage decodeThumbnail(const QString &mimeType, const QByteArray &data,
+                           QSize decodeTarget, QSize thumbnailBounds) override;
 
 private:
+    static QImage decodePixels(const QString &mimeType, const QByteArray &data,
+                               QSize targetSize, QSize thumbnailBounds);
     static ExifOrientation readOrientationFromExif(const TinyEXIF::EXIFInfo &exifInfo);
     static QSize readResolutionFromExif(const TinyEXIF::EXIFInfo &exifInfo);
 };

@@ -18,7 +18,8 @@ public:
     static bool readMetadata(ImageInfo &result);
     static bool readImage(ImageData &result);
     static QImage decode(const ImageData &imageData, DecodedImageInfo &decodedInfo);
-    static QImage createThumbnail(const QImage &image, QSize dimensions);
+    static QImage createThumbnail(const QImage &image, QSize dimensions,
+                                  Qt::AspectRatioMode aspectMode = Qt::KeepAspectRatio);
     static QImage createViewerImage(const QImage &image, QSize dimensions);
     // Embedded first-pass probes decode their tiny payload independently of
     // the full-file decoder but must apply the parent image's Exif transform
@@ -30,7 +31,9 @@ public:
     static bool isFormatSupported(const QString &fileName);
 
 private:
-    static QImage decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize, DecodedImageInfo &decodedInfo);
+    static QImage decodeImage(const QByteArray &data, const QString &mimeType,
+                              QSize decodeTarget, QSize thumbnailBounds,
+                              DecodedImageInfo &decodedInfo);
     static QImage normalizeToDisplayColorSpace(QImage image);
 };
 

@@ -1,4 +1,5 @@
 #include "HeicDecoder.h"
+#include "ThumbnailLoader.h"
 #include "TinyEXIF.h"
 
 #include <libheif/heif.h>
@@ -340,9 +341,6 @@ QImage HeicDecoder::decode(const QString &mimeType, const QByteArray &data, QSiz
         return {};
     }
 
-    if (!targetSize.isEmpty() &&
-        (result.width() > targetSize.width() || result.height() > targetSize.height())) {
-        result = result.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    }
-    return result;
+    return targetSize.isEmpty() ? result
+        : ThumbnailLoader::createThumbnail(result, targetSize);
 }

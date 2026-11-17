@@ -1,11 +1,15 @@
 #include "ThumbnailLoader.h"
 #include "Decoders/JpegDecoder.h"
 #include "Decoders/RawDecoder.h"
+#include "Decoders/WebpCodec.h"
+#include "PersistentImageCache.h"
 #include "Runners/ImageDecodeRunner.h"
 
 #include <QBuffer>
+#include <QColorSpace>
 #include <QTemporaryDir>
 #include <QtTest>
+#include <QtGui/private/qtguiglobal_p.h>
 #include <turbojpeg.h>
 
 #include <cstring>
@@ -242,6 +246,7 @@ private slots:
         DecodedImageInfo info;
         const QImage native = ThumbnailLoader::decode(data, info);
         QCOMPARE(native.size(), QSize(256, 128));
+        QCOMPARE(native.format(), QImage::Format_RGB888);
         QCOMPARE(data.request.targetSize, request.targetSize);
         QVERIFY(info.previewUsed.isEmpty());
         QVERIFY(qBlue(native.pixel(0, 0)) > qRed(native.pixel(0, 0)));
@@ -253,8 +258,120 @@ private slots:
         thumbnail.data = data.data;
         thumbnail.mimeType = data.mimeType;
         const QImage scaled = ThumbnailLoader::decode(thumbnail, info);
+        QCOMPARE(scaled.format(), QImage::Format_RGB888);
         QVERIFY(scaled.width() < native.width());
         QVERIFY(scaled.height() < native.height());
+    }
+
+    void thumbnailJpegDecodesToRgb32AndPreservesPixels() {
+        if (!QT_CONFIG(qtgui_threadpool))
+            QSKIP("This Qt build uses the painter for moderate RGB888 reductions");
+
+        const QByteArray bytes = detailedJpeg({2601, 1735});
+        QVERIFY(!bytes.isEmpty());
+        ImageDecodeRequest request;
+        request.targetSize = QSize(1024, 684);
+        request.checkCache = true;
+        request.storeInPersistentCache = false;
+
+        JpegDecoder decoder;
+        const QImage rgb888 = decoder.decode(
+            QStringLiteral("image/jpeg"), bytes, request.targetSize);
+        QCOMPARE(rgb888.format(), QImage::Format_RGB888);
+        QVERIFY(rgb888.width() > request.targetSize.width());
+        QVERIFY(rgb888.width() * rgb888.height() >= (1 << 20));
+        const QImage expected = ThumbnailLoader::createThumbnail(
+            ThumbnailLoader::rotateAndFlip(rgb888, ExifOrientation::Rotate90CW),
+            request.targetSize.transposed());
+
+        // Exercise the embedded JPEG route with orientation applied before
+        // resizing, as it is for RAW previews.
+        request.info.orientation = ExifOrientation::Rotate90CW;
+        request.targetSize.transpose();
+        ImageData data(request);
+        attachPreview(data, bytes);
+        DecodedImageInfo info;
+        const QImage decoded = ThumbnailLoader::decode(data, info);
+        QCOMPARE(info.decoderUsed, QStringLiteral("JpegDecoder"));
+        QCOMPARE(decoded.format(), QImage::Format_RGB32);
+        QCOMPARE(decoded.colorSpace(), rgb888.colorSpace());
+        QVERIFY(samePixels(decoded, ThumbnailLoader::rotateAndFlip(
+            rgb888, ExifOrientation::Rotate90CW)));
+
+        ImageDecodeRunner runner(data);
+        QImage actual;
+        connect(&runner, &ImageDecodeRunner::imageReady, this,
+                [&](const ImageDecodeRequest &, const QImage &image,
+                    const DecodedImageInfo &) { actual = image; });
+        runner.run();
+        QCOMPARE(actual.size(), expected.size());
+        QVERIFY(samePixels(actual, expected));
+    }
+
+    void jpegUsesRgb32WhenOnlyTheCacheNeedsResize() {
+        if (!QT_CONFIG(qtgui_threadpool))
+            QSKIP("This Qt build uses the painter for moderate RGB888 reductions");
+
+        const QSize size(1301, 869);
+        const QByteArray bytes = detailedJpeg(size);
+        QVERIFY(!bytes.isEmpty());
+        ImageDecodeRequest request;
+        request.targetSize = size;
+        request.expandToCacheResolution = false;
+        request.storeInPersistentCache = true;
+        ImageData data(request);
+        data.data = bytes;
+        data.mimeType = QStringLiteral("image/jpeg");
+        DecodedImageInfo info;
+        const QImage decoded = ThumbnailLoader::decode(data, info);
+        QCOMPARE(decoded.size(), size);
+        QCOMPARE(decoded.format(), QImage::Format_RGB32);
+
+        request.storeInPersistentCache = false;
+        ImageData uncached(request);
+        uncached.data = bytes;
+        uncached.mimeType = data.mimeType;
+        const QImage baseline = ThumbnailLoader::decode(uncached, info);
+        QCOMPARE(baseline.format(), QImage::Format_RGB888);
+        const QByteArray prepared = PersistentImageCache::createImageForCache(decoded);
+        QVERIFY(!prepared.isEmpty());
+        QCOMPARE(prepared, PersistentImageCache::createImageForCache(baseline));
+
+        request.storeInPersistentCache = true;
+        request.info.source.resourceId = QStringLiteral("jpeg-resource");
+        request.info.source.sourceKey = QStringLiteral("jpeg-source");
+        ImageData external(request);
+        external.data = bytes;
+        external.mimeType = data.mimeType;
+        const QImage derived = ThumbnailLoader::decode(external, info);
+        QCOMPARE(derived.format(), QImage::Format_RGB32);
+        QVERIFY(samePixels(derived, baseline));
+    }
+
+    void cachedWebpCanDecodeDirectlyToRgb32BeforeResizing() {
+        if (!QT_CONFIG(qtgui_threadpool))
+            QSKIP("This Qt build uses the painter for moderate RGB888 reductions");
+
+        const QByteArray jpegBytes = detailedJpeg({1401, 921});
+        JpegDecoder decoder;
+        const QImage source = decoder.decode(QStringLiteral("image/jpeg"), jpegBytes, {});
+        QVERIFY(!source.isNull());
+        for (bool lossless : {false, true}) {
+            const QByteArray encoded = WebpCodec::encode(source, 75, lossless);
+            QVERIFY(!encoded.isEmpty());
+            const QImage baseline = WebpCodec::decode(encoded);
+            QCOMPARE(baseline.format(), QImage::Format_RGB888);
+            const QSize bounds(777, 500);
+            const QImage native = WebpCodec::decodeForThumbnailResize(encoded, bounds);
+            QCOMPARE(native.format(), QImage::Format_RGB32);
+            QCOMPARE(native.size(), source.size());
+            QVERIFY(samePixels(native, baseline));
+            QVERIFY(samePixels(
+                ThumbnailLoader::createThumbnail(native, bounds, Qt::IgnoreAspectRatio),
+                baseline.scaled(bounds, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)));
+            QCOMPARE(WebpCodec::decodeForThumbnailResize(encoded, source.size()).format(),
+                     QImage::Format_RGB888);
+        }
     }
 
     void previewFallbackDecodesNativelyAndRotates() {

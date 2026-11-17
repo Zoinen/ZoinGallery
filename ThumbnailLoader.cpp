@@ -4,6 +4,7 @@
 #include "Decoders/ImageDecoderInterface.h"
 #include "DisplayColorSpace.h"
 #include "ViewerResampler.h"
+#include "src/embed/DecodeSizePolicy.h"
 
 #include <QDebug>
 #include <QImage>
@@ -119,28 +120,45 @@ QImage ThumbnailLoader::decode(const ImageData &imageData, DecodedImageInfo &dec
         targetSize = {};
     }
 
+    const auto orientation = imageData.request.info.orientation;
+    const QSize decodeTarget = rotateToOrientation(targetSize, orientation);
+    QSize thumbnailBounds;
+    if (!imageData.request.viewerRequest) {
+        thumbnailBounds = imageData.request.targetSize;
+        // A cache write can resize the decoded frame even when it already
+        // fits the visible thumbnail.
+        if (imageData.request.storeInPersistentCache && !thumbnailBounds.isEmpty()) {
+            constexpr int edge = ZoinGallery::MaximumPanelThumbnailEdge;
+            const QSize cacheBounds = imageData.request.info.source.isValid()
+                ? QSize(edge, edge) : CACHE_IMAGE_RESOLUTION;
+            thumbnailBounds = thumbnailBounds.boundedTo(cacheBounds);
+        }
+        thumbnailBounds = rotateToOrientation(thumbnailBounds, orientation);
+    }
     QImage image;
     if (!imageData.data.isNull()) {
         // qDebug() << "ZZ DECODE" << imageData.request.info.path << imageData.mimeType;
         image = decodeImage(imageData.data, imageData.mimeType,
-                            rotateToOrientation(targetSize, imageData.request.info.orientation), decodedInfo);
+                            decodeTarget, thumbnailBounds, decodedInfo);
     }
     if (image.isNull() && imageData.previewData) {
         // qDebug() << "ZZ DECODE PREVIEW" << imageData.request.info.path << imageData.previewMimeType;
         QByteArray previewData = QByteArray::fromRawData(imageData.previewData.get(), imageData.previewDataSize);
         image = decodeImage(previewData, imageData.previewMimeType,
-                            rotateToOrientation(targetSize, imageData.request.info.orientation), decodedInfo);
+                            decodeTarget, thumbnailBounds, decodedInfo);
         decodedInfo.previewUsed = "Used preview " + imageData.previewUsed;
         decodedInfo.isAuthoritativePreview = !image.isNull()
             && !imageData.nativeDecodeSupported;
     }
     if (!image.isNull()) {
-        image = rotateAndFlip(image, imageData.request.info.orientation);
+        image = rotateAndFlip(image, orientation);
     }
     return image;
 }
 
-QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeType, QSize targetSize, DecodedImageInfo &decodedInfo) {
+QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeType,
+                                   QSize decodeTarget, QSize thumbnailBounds,
+                                   DecodedImageInfo &decodedInfo) {
     QImage result;
     QElapsedTimer t;
     t.start();
@@ -150,7 +168,8 @@ QImage ThumbnailLoader::decodeImage(const QByteArray &data, const QString &mimeT
         if (!decoder) {
             continue;
         }
-        result = decoder->decode(mimeType, data, targetSize);
+        result = thumbnailBounds.isEmpty() ? decoder->decode(mimeType, data, decodeTarget)
+            : decoder->decodeThumbnail(mimeType, data, decodeTarget, thumbnailBounds);
         if (!result.isNull()) {
             decodedInfo.decoderUsed = decoder->decoderName();
             break;
@@ -164,10 +183,11 @@ QImage ThumbnailLoader::normalizeToDisplayColorSpace(QImage image) {
     return DisplayColorSpace::convertImage(image);
 }
 
-QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions) {
+QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions,
+                                        Qt::AspectRatioMode aspectMode) {
     if (dimensions.width() < image.width() ||
         dimensions.height() < image.height()) {
-        return image.scaled(dimensions, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        return image.scaled(dimensions, aspectMode, Qt::SmoothTransformation);
     }
     return image;
 }

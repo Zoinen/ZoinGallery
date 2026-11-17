@@ -3,6 +3,7 @@
 #include "Decoders/WebpCodec.h"
 #include "DisplayColorSpace.h"
 #include "StorageLocations.h"
+#include "ThumbnailLoader.h"
 #include "FolderPreviewSelection.h"
 #include "src/embed/DecodeSizePolicy.h"
 
@@ -745,23 +746,22 @@ QImage readCachedImage(const QString &path, const DerivedKey &requested,
     if (reusable && !servesThumbnailRequest(stored, pixels, requested)) {
         return {};
     }
-    QImage image = WebpCodec::decode(encoded);
+    const bool isThumbnail = stored.artifact == Artifact::Thumbnail;
+    const QSize bounded = isThumbnail ? boundedPanelThumbnailSize(pixels) : pixels;
+    QImage image = WebpCodec::decodeForThumbnailResize(encoded, bounded);
     if (image.isNull() || image.size() != pixels) {
         removeIfUnchanged(path, entry, requested, reusable);
         return {};
     }
     image.setColorSpace(DisplayColorSpace::cacheColorSpace());
-    if (stored.artifact == Artifact::Thumbnail) {
-        const QSize bounded = boundedPanelThumbnailSize(pixels);
-        if (bounded != pixels) {
-            image = image.scaled(bounded, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-            // Normalize the old reusable slot only when it is used. Legacy
-            // exact keys stay read-only and expire under the normal budget.
-            if (reusable && !image.isNull()) {
-                const QByteArray normalized = encodePreparedImage(stored, image);
-                if (!normalized.isEmpty()) {
-                    writePreparedEntry(stored, bounded, normalized);
-                }
+    if (bounded != pixels) {
+        image = ThumbnailLoader::createThumbnail(image, bounded, Qt::IgnoreAspectRatio);
+        // Normalize the old reusable slot only when it is used. Legacy
+        // exact keys stay read-only and expire under the normal budget.
+        if (reusable && !image.isNull()) {
+            const QByteArray normalized = encodePreparedImage(stored, image);
+            if (!normalized.isEmpty()) {
+                writePreparedEntry(stored, bounded, normalized);
             }
         }
     }
@@ -1009,8 +1009,7 @@ QByteArray PersistentDerivedImageCache::createImageForCache(
             return {};
         }
     }
-    const QImage bounded = pixels == image.size() ? image
-        : image.scaled(pixels, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    const QImage bounded = ThumbnailLoader::createThumbnail(image, pixels, Qt::IgnoreAspectRatio);
     const QImage converted = DisplayColorSpace::convertImageToColorSpace(
         bounded, DisplayColorSpace::cacheColorSpace());
     if (converted.isNull()) {

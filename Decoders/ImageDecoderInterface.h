@@ -25,6 +25,11 @@ public:
     // the original preview-only I/O behavior for viewer requests.
     virtual bool supportsNativeDecode() const { return true; }
     virtual QImage decode(const QString& mimeType, const QByteArray& data, QSize targetSize) = 0;
+    virtual QImage decodeThumbnail(const QString &mimeType, const QByteArray &data,
+                                   QSize decodeTarget, QSize thumbnailBounds) {
+        Q_UNUSED(thumbnailBounds);
+        return decode(mimeType, data, decodeTarget);
+    }
 
 protected:
     bool isFormatSupported(const QString &path);

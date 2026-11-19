@@ -65,51 +65,57 @@ void MasonryLayout::zoom(bool in) {
         }
         return;
     }
-    const int smallestHeight = 30;
-    const int largestHeight = 500;
-
-    QList<MasonryBrick> bricks;
-    QSize minSize = QSize(_targetHeight * GridView_Folder.width() / GridView_Folder.height(), _targetHeight);
-    for (int i = 0; i <= ((width() - _paddingLeft - _paddingRight) / minSize.width()) * 2; i++) {
-        bricks.append(MasonryBrick {
-            .originalSize = GridView_Folder.toSize(),
-        });
+    if (layoutMode() != CalcLayoutMasonry || width() <= _paddingLeft + _paddingRight) {
+        return;
     }
-    int columns = -1;
-    int newTargetHeight = -1;
-    int increment = in ? 1 : -1;
-
-    int targetHeightRangeStart = -1;
-    int targetHeightRangeEnd = -1;
-
-    for (int targetHeight = _targetHeight - _paddingBottom; targetHeight >= smallestHeight && targetHeight <= largestHeight; targetHeight += increment) {
-        calcLayout(bricks, width() - _paddingLeft - _paddingRight, targetHeight, _spacing, !_listView, _paddingTop, layoutMode());
-        for (int i = 0; i < bricks.size(); i++) {
-            if (bricks[i].row && i) {
-                if (columns == -1) {
-                    columns = bricks[i - 1].column;
-                }
-                else if (bricks[i - 1].column != columns) {
-                    columns = bricks[i - 1].column;
-                    if (targetHeightRangeStart == -1) {
-                        targetHeightRangeStart = targetHeight;
-                    }
-                    else {
-                        targetHeightRangeEnd = targetHeight;
-                        newTargetHeight = (targetHeightRangeStart + targetHeightRangeEnd) / 2;
-                    }
-                }
-                break;
+    constexpr int minimumHeight = 30;
+    constexpr int maximumHeight = 500;
+    const int limit = in ? maximumHeight : minimumHeight;
+    if (_targetHeight == limit) {
+        return;
+    }
+    const int increment = in ? 1 : -1;
+    auto request = layoutRequest();
+    request.density = _targetHeight;
+    QSizeF referenceSize = GridView_Folder;
+    // Follow the current thumbnail's aspect ratio so a step adds one
+    // portrait or landscape tile to a row at the corresponding density.
+    if (thumbnailsEnabled()) {
+        if (const auto *brick = brickAt(_currentIndex);
+            brick && !brick->originalSize.isEmpty()) {
+            referenceSize = brick->originalSize;
+        } else if (sparseMasonryLayout() && _model && _knownImageSizeRole >= 0) {
+            const QSize size = _model->index(_currentIndex, 0)
+                .data(_knownImageSizeRole).toSize();
+            if (!size.isEmpty()) {
+                referenceSize = size;
             }
         }
-        if (newTargetHeight != -1) {
+    }
+    const auto rowCapacity = [&] {
+        return ZoinGallery::JustifiedMasonryStrategy::uniformRowCapacity(
+            request, referenceSize);
+    };
+    const int currentCapacity = rowCapacity();
+    int nextCapacity = currentCapacity;
+    int rangeStart = _targetHeight;
+    int targetHeight = limit;
+    for (int height = _targetHeight; height != limit;) {
+        height += increment;
+        request.density = height;
+        const int capacity = rowCapacity();
+        if (capacity == nextCapacity) {
+            continue;
+        }
+        if (nextCapacity != currentCapacity) {
+            targetHeight = (rangeStart + height - increment) / 2;
             break;
         }
+        nextCapacity = capacity;
+        rangeStart = height;
     }
-    if (newTargetHeight != -1 || (_targetHeight != largestHeight && in) || (_targetHeight != smallestHeight && !in)) {
-        setTargetHeight((newTargetHeight != -1 ? newTargetHeight : (in ? largestHeight : smallestHeight)) + _paddingBottom);
-        reReadAndDecodeThumbnails();
-    }
+    setTargetHeight(targetHeight);
+    reReadAndDecodeThumbnails();
 }
 
 void MasonryLayout::updateNeedScroll() {

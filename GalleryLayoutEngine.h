@@ -180,6 +180,8 @@ public:
         qreal previousRowHeight = -1;
     };
 
+    [[nodiscard]] static int uniformRowCapacity(
+        const GalleryLayoutRequest &request, const QSizeF &entrySize);
     [[nodiscard]] static GalleryLayoutResult layout(
         const GalleryLayoutRequest &request,
         const QVector<GalleryLayoutEntry> &entries);

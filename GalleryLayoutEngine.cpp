@@ -262,6 +262,20 @@ QSizeF masonryEntrySize(const GalleryLayoutEntry &entry,
         entry.originalSize, targetHeight, spacing, horizontalSpacing);
 }
 
+struct MasonrySpacing {
+    qreal vertical;
+    qreal horizontal;
+};
+
+MasonrySpacing masonrySpacing(const GalleryLayoutRequest &request,
+                              qreal width, qreal targetHeight) {
+    const qreal vertical = request.cellVerticalPadding < 0 ? request.spacing
+        : 2 * PixelGrid::cellVerticalInset(targetHeight, request.cellVerticalPadding, request.devicePixelRatio);
+    const qreal horizontal = request.cellHorizontalPadding < 0 ? vertical
+        : 2 * PixelGrid::cellHorizontalInset(width, request.cellHorizontalPadding, request.devicePixelRatio);
+    return {vertical, horizontal};
+}
+
 void matchFinalMasonryRow(
     QVector<GalleryLayoutCell> &cells,
     const QVector<GalleryLayoutEntry> &entries,
@@ -685,6 +699,17 @@ GalleryLayoutResult UniformGridStrategy::layout(
     return result;
 }
 
+int JustifiedMasonryStrategy::uniformRowCapacity(
+    const GalleryLayoutRequest &request, const QSizeF &entrySize) {
+    const qreal width = canvasWidth(request);
+    const qreal targetHeight = qMax<qreal>(1, request.density);
+    const auto [spacing, horizontalSpacing] = masonrySpacing(request, width, targetHeight);
+    const qreal cellWidth = masonryEntrySize(
+        {.originalSize = entrySize}, width, targetHeight, spacing, horizontalSpacing).width();
+    // A cell that exactly reaches the right edge wraps to the next row.
+    return cellWidth > 0 ? qMax(1, qCeil(width / cellWidth) - 1) : 1;
+}
+
 GalleryLayoutResult JustifiedMasonryStrategy::layout(
     const GalleryLayoutRequest &request,
     const QVector<GalleryLayoutEntry> &entries) {
@@ -703,10 +728,7 @@ GalleryLayoutResult JustifiedMasonryStrategy::layoutChunk(
 
     const qreal width = canvasWidth(request);
     const qreal targetHeight = qMax<qreal>(1, request.density);
-    const qreal spacing = request.cellVerticalPadding < 0 ? request.spacing
-        : 2 * PixelGrid::cellVerticalInset(targetHeight, request.cellVerticalPadding, request.devicePixelRatio);
-    const qreal horizontalSpacing = request.cellHorizontalPadding < 0 ? spacing
-        : 2 * PixelGrid::cellHorizontalInset(width, request.cellHorizontalPadding, request.devicePixelRatio);
+    const auto [spacing, horizontalSpacing] = masonrySpacing(request, width, targetHeight);
     int currentRow = 0;
     int currentColumn = 0;
     qreal lastX = 0;

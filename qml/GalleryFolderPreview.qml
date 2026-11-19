@@ -18,8 +18,7 @@ Item {
     readonly property real outerSpacing: panelRoot.itemSpacing
     readonly property real contentMargin: entry.cellVerticalInset
     readonly property real folderTopOffset: snap(Math.round(width / 20))
-    readonly property bool darkTheme: Qt.styleHints.colorScheme !== Qt.Light
-    readonly property color folderColor: darkTheme ? "#397db1" : "#397db2"
+    readonly property color folderColor: panelRoot.folderPreviewColor
     property int readyImages: 0
     readonly property bool hasUsablePreview: entry.visualModel.folderPreviewState === 2 || readyImages > 0
         || Boolean(childModel && childModel.hasPublishedThumbnails)
@@ -45,7 +44,8 @@ Item {
             width: preview.snap(Math.min(110, content.width * 0.44))
             height: preview.folderTopOffset + preview.snap(20)
             radius: 4
-            color: frame.color
+            color: Qt.rgba(preview.folderColor.r, preview.folderColor.g,
+                           preview.folderColor.b, 0.5)
         }
         Rectangle {
             id: frame
@@ -61,16 +61,8 @@ Item {
                     ? Math.max(0, preview.snap(preview.entry.effectivePreviewHeight - y))
                     : Math.max(0, content.height - y - title.height - preview.entry.cellCaptionSpacing)
             radius: 4
-            color: preview.folderColor
-            Rectangle {
-                objectName: "folderPreviewFill"
-                x: 1 / preview.dpr
-                y: 1 / preview.dpr
-                width: Math.max(0, parent.width - 2 / preview.dpr)
-                height: Math.max(0, parent.height - 2 / preview.dpr)
-                radius: 4
-                color: preview.darkTheme ? "#304051" : "#60b0eb"
-            }
+            color: Qt.rgba(preview.folderColor.r, preview.folderColor.g,
+                           preview.folderColor.b, 1)
         }
         GalleryMotionText {
             motionActive: preview.entry.motionActive

@@ -460,6 +460,7 @@ GalleryPanelFacade {
     readonly property color fileTextColor: theme.fileText
     readonly property color folderTextColor: theme.folderText
     readonly property color folderIconColor: theme.folderIcon
+    property color folderPreviewColor: folderIconColor
     readonly property color itemBackgroundColor: theme.itemBackground
     readonly property color directoryBackgroundColor: theme.directoryBackground
     readonly property color itemHoverColor: theme.itemHover

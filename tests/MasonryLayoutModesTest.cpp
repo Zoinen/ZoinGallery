@@ -860,6 +860,43 @@ private slots:
         }
     }
 
+    void masonryZoomOutFromMaximumMovesToNextRowCapacity() {
+        MasonryLayout layout;
+        layout.setWidth(360);
+        layout.setHeight(600);
+        layout.setPaddingBottom(14);
+        layout.setTargetHeight(500);
+
+        QSignalSpy densityChanged(&layout, &MasonryLayout::densityChanged);
+        layout.zoomIn();
+        QCOMPARE(densityChanged.size(), 0);
+        QCOMPARE(layout.targetHeight(), 500);
+
+        // Square reference cells fit strictly inside the canvas. Two fit at
+        // heights 120..179 and three at 90..119.
+        layout.zoomOut();
+        QCOMPARE(layout.targetHeight(), 149);
+        layout.zoomOut();
+        QCOMPARE(layout.targetHeight(), 104);
+        layout.zoomIn();
+        QCOMPARE(layout.targetHeight(), 149);
+    }
+
+    void masonryZoomUsesCurrentThumbnailAspect() {
+        MasonryLayout layout;
+        layout.setWidth(360);
+        layout.setHeight(600);
+        layout.setSpacing(0);
+        layout.setTargetHeight(500);
+        layout._bricks.resize(1);
+        layout._bricks[0].originalSize = QSizeF(300, 400);
+        layout._currentIndex = 0;
+
+        layout.zoomOut();
+        // Two portrait tiles fit at heights 160..239.
+        QCOMPARE(layout.targetHeight(), 199);
+    }
+
     void destroyedPreviewModelDetachesLayout() {
         MasonryLayout layout;
         layout.setContainedPreview(true);
@@ -1707,6 +1744,7 @@ private slots:
 
     void folderPreviewGridAndPixels() {
         QFETCH(QString, mode);
+        const QColor folderColor("#f79f57");
         QTemporaryDir dir;
         if (QFileInfo::exists("C:/Windows/Fonts/segoeui.ttf"))
             QVERIFY(QFontDatabase::addApplicationFont("C:/Windows/Fonts/segoeui.ttf") >= 0);
@@ -1731,6 +1769,7 @@ private slots:
         QVERIFY(session->applyExternalCatalog({previewFolder(0)}, 1));
         auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "folderPixelSession"));
         QVERIFY(panel);
+        QVERIFY(setPanelObjectProperties(panel, "theme", {{"folderIcon", folderColor}}));
         panel->setProperty("presentationMode", mode);
         panel->setProperty("listView", false);
         panel->setProperty("devicePixelRatio", view.devicePixelRatio());
@@ -1833,20 +1872,20 @@ private slots:
         QCOMPARE(title->property("maximumLineCount").toInt(), mode == "icons" ? 4 : 2);
         QCOMPARE(title->property("elide").toInt(), mode == "icons" ? int(Qt::ElideNone) : int(Qt::ElideRight));
         QCOMPARE(title->property("wrapMode").toInt(), mode == "icons" ? 3 : 4); // WrapAnywhere / Wrap
-        auto *folderFill = findVisualItem(preview, "folderPreviewFill");
-        QVERIFY(folderFill);
-        QCOMPARE(folderFill->property("color").value<QColor>(), QColor("#304051"));
-        checkPoint(folderFill);
         checkPoint(title);
-        for (const QString name : {"folderPreviewFrame", "folderPreviewTab"}) {
-            auto *frame = findVisualItem(preview, name);
-            QVERIFY(frame);
-            checkPoint(frame);
-            const qreal dpr = view.devicePixelRatio();
-            QVERIFY(qAbs(frame->width()*dpr - qRound(frame->width()*dpr)) < 0.01);
-            QVERIFY(qAbs(frame->height()*dpr - qRound(frame->height()*dpr)) < 0.01);
-            QCOMPARE(frame->property("color").value<QColor>(), QColor("#397db1"));
+        auto *frame = findVisualItem(preview, "folderPreviewFrame");
+        auto *tab = findVisualItem(preview, "folderPreviewTab");
+        QVERIFY(frame && tab);
+        const qreal dpr = view.devicePixelRatio();
+        for (auto *part : {frame, tab}) {
+            checkPoint(part);
+            QVERIFY(qAbs(part->width()*dpr - qRound(part->width()*dpr)) < 0.01);
+            QVERIFY(qAbs(part->height()*dpr - qRound(part->height()*dpr)) < 0.01);
         }
+        QColor tabColor = folderColor;
+        tabColor.setAlphaF(0.5);
+        QCOMPARE(frame->property("color").value<QColor>(), folderColor);
+        QCOMPARE(tab->property("color").value<QColor>().rgba(), tabColor.rgba());
         grid->parentItem()->setSize(normalGridSize);
         grid->setTargetHeight(qRound(normalGridSize.height()));
         QTest::qWait(300);
@@ -1855,6 +1894,21 @@ private slots:
         QCOMPARE(outerLayout->itemForIndex(0)->boundingRect(), outer);
         const auto capture = view.grabWindow();
         QVERIFY(!capture.isNull());
+        const QPoint framePixel = (frame->mapToItem(view.contentItem(),
+            QPointF(frame->width() / 2, 1 / dpr)) * dpr).toPoint();
+        const QPoint tabPixel = (tab->mapToItem(view.contentItem(),
+            QPointF(tab->width() / 2, frame->y() / 2)) * dpr).toPoint();
+        QVERIFY(capture.rect().contains(framePixel));
+        QVERIFY(capture.rect().contains(tabPixel));
+        QCOMPARE(capture.pixelColor(framePixel), folderColor);
+        tab->setVisible(false);
+        const QColor behindTab = view.grabWindow().pixelColor(tabPixel);
+        tab->setVisible(true);
+        const QColor renderedTab = capture.pixelColor(tabPixel);
+        QVERIFY(behindTab != folderColor);
+        QVERIFY(qAbs(renderedTab.red() - (folderColor.red() + behindTab.red()) / 2) <= 1);
+        QVERIFY(qAbs(renderedTab.green() - (folderColor.green() + behindTab.green()) / 2) <= 1);
+        QVERIFY(qAbs(renderedTab.blue() - (folderColor.blue() + behindTab.blue()) / 2) <= 1);
         if (mode == "masonry") {
             grid->setClip(true);
             QTest::qWait(50);
@@ -1864,6 +1918,10 @@ private slots:
         QVERIFY(capture.save(dir.filePath("folder-preview.png")));
         if (!qEnvironmentVariable("F4_FOLDER_PREVIEW_CAPTURE").isEmpty())
             QVERIFY(capture.save(qEnvironmentVariable("F4_FOLDER_PREVIEW_CAPTURE") + "-" + mode + ".png"));
+        const QColor nextFolderColor("#397db1");
+        QVERIFY(setPanelObjectProperties(panel, "theme", {{"folderIcon", nextFolderColor}}));
+        QTRY_COMPARE(frame->property("color").value<QColor>(), nextFolderColor);
+        QCOMPARE(view.grabWindow().pixelColor(framePixel), nextFolderColor);
         for (const auto &nextMode : {"details", "grid", "icons", "masonry"}) {
             panel->setProperty("presentationMode", nextMode);
             if (QString::fromLatin1(nextMode) == "details") {

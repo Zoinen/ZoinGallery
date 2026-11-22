@@ -10,6 +10,8 @@ const QStringList &QtDecoder::formats() {
     static const QStringList supported = [] {
         QStringList result;
         for (QByteArray arr : QImageReader::supportedImageFormats()) {
+            if (arr == "pdf")
+                continue; // The PDF adapter supplies the catalog and page renderer.
             result.append(QString::fromLatin1(arr));
         }
         qDebug() << "Qt plugin formats:" << result;

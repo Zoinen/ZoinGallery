@@ -242,6 +242,35 @@ QtObject {
         viewer.currentIsVideoValue = typeof viewer.session.isVideoAt === "function"
                 && viewer.session.videoPlaybackAvailable === true
                 && viewer.session.isVideoAt(viewer.presentedIndex)
+        const pageView = viewer.pagePresentation
+        if (pageView.active) {
+            viewer.currentIsVectorValue = false
+            viewer.sphericViewerMode = false
+            viewer.synchronizeVideoPlayback()
+            const size = pageView.pageSize
+            const url = pageView.pageSource
+            const signature = "page:" + url
+            if (viewer.appliedTierSignature !== signature
+                    || viewer.appliedPresentedIndex !== viewer.presentedIndex) {
+                const wasFit = imageViewport.zoomFitView
+                if (url.toString() === "") {
+                    imageViewport.resetViewerImages()
+                } else {
+                    imageViewport.setPageImage(url, size, viewer.presentedIndex)
+                    if (wasFit)
+                        imageViewport.zoomToFit(true)
+                    else
+                        imageViewport.fitViewerImageInViewportBounds()
+                }
+                viewer.appliedTierSignature = signature
+                viewer.appliedPresentedIndex = viewer.presentedIndex
+            }
+            viewer.currentOriginalSizeValue = size
+            viewer.currentSourcesValue = []
+            viewer.currentSourceValue = url
+            viewer.currentSourceLevelValue = url.toString() === "" ? -1 : 1
+            return
+        }
         if (viewer.currentIsVideoValue) {
             viewer.currentSourcesValue = []
             viewer.currentOriginalSizeValue = Qt.size(0, 0)
@@ -422,6 +451,8 @@ QtObject {
 
     function requestImage() {
         if (viewer.customContent || !viewer.session || viewer.presentedIndex < 0)
+            return
+        if (viewer.pagePresentation.active)
             return
         if (typeof viewer.session.isImageAt === "function"
                 && !viewer.session.isImageAt(viewer.presentedIndex)

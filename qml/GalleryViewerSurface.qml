@@ -45,7 +45,8 @@ PixelGridScope {
         objectName: "galleryViewerTransitionFrame"
         visible: !root.viewer.customContent
                  && root.viewer.viewerContentVisible
-                 && !(root.viewer.currentViewerRequestState === "failed"
+                 && !(!root.viewer.pagePresentation.active
+                      && root.viewer.currentViewerRequestState === "failed"
                       && root.viewer.currentSourceValue.toString() === "")
         clip: true
         anchors.fill: parent
@@ -377,7 +378,9 @@ PixelGridScope {
                  && root.viewer.session
                  && root.viewer.presentedIndex >= 0
                  && (root.viewer.currentIsVideo ? waitingForVideo
-                     : (root.viewer.currentViewerRequestState === "pending"
+                     : root.viewer.pagePresentation.active
+                       ? (!root.viewer.pagePresentation.hasFrame && root.viewer.pagePresentation.error === "")
+                       : (root.viewer.currentViewerRequestState === "pending"
                         && root.viewer.currentSourceValue.toString() === ""))
                  ? root.viewer.presentedEntryId : ""
         property bool showAfterGrace: false
@@ -403,6 +406,7 @@ PixelGridScope {
         x: alignedPosition.x
         y: alignedPosition.y
         visible: !root.viewer.customContent && !root.viewer.currentIsVideo
+                 && !root.viewer.pagePresentation.active
                  && root.viewer.session
                  && (root.viewer.presentedIndex < 0
                      || (root.viewer.currentViewerRequestState === "failed"

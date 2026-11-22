@@ -3,12 +3,14 @@
 
 #include "ExternalCatalogModel.h"
 #include "FileListModel.h"
+#include "GalleryPageController.h"
 #include "GalleryViewModel.h"
 #include "ImageFile.h"
 #include "ImageModel.h"
 #include "LocalFilesystemSource.h"
 #include "SelectedImagesModel.h"
 #include "ThumbnailMemoryCache.h"
+#include "ThumbnailLoader.h"
 #if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
 #include "VideoPlaybackController.h"
 #endif
@@ -20,6 +22,14 @@
 #include <algorithm>
 
 namespace ZoinGallery {
+
+QStringList GallerySession::supportedImageExtensions() {
+    auto formats = ThumbnailLoader::supportedFormats();
+    for (auto &format : formats)
+        format = format.sliced(2);
+    formats.sort();
+    return formats;
+}
 
 class GallerySession::Private {
 public:
@@ -53,6 +63,7 @@ public:
     bool applyingPanelViewportState = false;
     int currentIndex = -1;
     bool viewerOpen = false;
+    GalleryPageController *pageController = nullptr;
 #if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
     VideoPlaybackController *videoPlaybackController = nullptr;
 #endif
@@ -95,6 +106,8 @@ GallerySession::GallerySession(
     d->sessionId = sessionId;
     d->sourceKind = sourceKind;
     d->thumbnailProviderName = thumbnailProviderName;
+    d->pageController = new GalleryPageController(
+        sessionId, thumbnailProviderName, store, imageSourceProvider, viewerFitCacheByteBudget, this);
 #if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
     if (enableVideoPlayback) {
         d->videoPlaybackController = new VideoPlaybackController(
@@ -415,11 +428,32 @@ void GallerySession::setViewerOpen(bool open) {
     }
     d->viewerOpen = open;
     if (!open) {
+        closePagedImage();
         clearViewerPreviousState(false);
         d->clearViewer();
         emit viewerSourceChanged();
     }
     emit viewerOpenChanged();
+}
+
+QObject *GallerySession::pageController() const {
+    return d->pageController;
+}
+
+void GallerySession::presentPagedImageAt(int index, int width, int height, bool visible) {
+    if (d->shutdown || !isImageAt(index)) {
+        closePagedImage();
+        return;
+    }
+    const QString name = entryNameAt(index);
+    const auto descriptor = d->external ? d->external->imageSourceAt(index) : ImageSourceDescriptor{};
+    const QString revision = d->local ? d->local->sourceVersionAt(index) : QString{};
+    d->pageController->present(localPathAt(index), name, revision, descriptor,
+                               QSize(width, height), visible);
+}
+
+void GallerySession::closePagedImage() {
+    d->pageController->clear();
 }
 
 QUrl GallerySession::viewerSource() const {

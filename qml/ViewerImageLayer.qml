@@ -214,7 +214,8 @@ Item {
             cache: false
             mipmap: false
             asynchronous: false
-            visible: false
+            visible: root.viewport.pagedImage && !root.viewport.vectorMode
+            smooth: !root.viewport.nearestNeighbor
 
             onStatusChanged: {
                 if (status !== Image.Ready
@@ -247,7 +248,7 @@ Item {
 
         ViewerResample {
             id: imageShader
-            visible: !root.viewport.vectorMode
+            visible: !root.viewport.vectorMode && !root.viewport.pagedImage
             objectName: "galleryViewerImageShader"
             anchors.fill: parent
             // A completed native request is retained for later zooming. Fit

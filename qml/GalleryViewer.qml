@@ -68,6 +68,7 @@ FocusScope {
     property string videoPlaybackMode: "autoplay-muted"
     property bool videoPlaybackInitializationAllowed: false
     property var videoIconSources: ({})
+    property var pageLabels: ({})
     property bool playbackPresentationVisible: visible
     property bool currentIsVectorValue: false
     readonly property bool currentIsVector: currentIsVectorValue
@@ -672,14 +673,37 @@ FocusScope {
         viewer: root
     }
 
+    readonly property alias pagePresentation: pageView
+    GalleryPagePresentation {
+        id: pageView
+        labels: root.pageLabels
+        z: 4
+        anchors.fill: parent
+        session: root.customContent ? null : root.session
+        index: root.presentedIndex
+        viewport: root.flickableArea
+        devicePixelRatio: root.devicePixelRatio
+        presenting: !root.customContent && root.playbackPresentationVisible
+                    && root.viewerContentVisible && !root.completingClose
+        textColor: root.foregroundColor
+        barColor: root.theme ? root.theme.panelBackground : "#24262a"
+        onFrameChanged: root.refreshCurrentSource()
+    }
+
     GalleryViewerInput {
         id: inputState
         viewer: root
         viewport: root.flickableArea
     }
 
-    Keys.onPressed: event => { if (!hostKeyHandler || !hostKeyHandler(event, true)) inputState.handlePressed(event) }
-    Keys.onReleased: event => { if (!hostKeyHandler || !hostKeyHandler(event, false)) inputState.handleReleased(event) }
+    Keys.onPressed: event => {
+        if (!pageView.handleKey(event, true) && (!hostKeyHandler || !hostKeyHandler(event, true)))
+            inputState.handlePressed(event)
+    }
+    Keys.onReleased: event => {
+        if (!pageView.handleKey(event, false) && (!hostKeyHandler || !hostKeyHandler(event, false)))
+            inputState.handleReleased(event)
+    }
 
     GalleryViewerMotion {
         id: motionState
@@ -694,6 +718,9 @@ FocusScope {
     }
 
     onSessionChanged: {
+        if (playbackSession && playbackSession !== session
+                && typeof playbackSession.closePagedImage === "function")
+            playbackSession.closePagedImage()
         if (playbackSession && playbackSession !== session
                 && playbackSession.videoPlaybackController)
             playbackSession.videoPlaybackController.stop()
@@ -726,5 +753,7 @@ FocusScope {
         setPanelTransition(false)
         if (playbackSession && playbackSession.videoPlaybackController)
             playbackSession.videoPlaybackController.stop()
+        if (playbackSession && !customContent && typeof playbackSession.closePagedImage === "function")
+            playbackSession.closePagedImage()
     }
 }

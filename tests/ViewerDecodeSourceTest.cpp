@@ -1,5 +1,6 @@
 #include "ThumbnailLoader.h"
 #include "Decoders/JpegDecoder.h"
+#include "Decoders/PagedImageDocument.h"
 #include "Decoders/RawDecoder.h"
 #include "Decoders/WebpCodec.h"
 #include "PersistentImageCache.h"
@@ -7,6 +8,9 @@
 
 #include <QBuffer>
 #include <QColorSpace>
+#include <QFile>
+#include <QPainter>
+#include <QPdfWriter>
 #include <QTemporaryDir>
 #include <QtTest>
 #include <QtGui/private/qtguiglobal_p.h>
@@ -182,12 +186,159 @@ private slots:
         }
     }
 
+    void pagedTiffAndWebpDecodeEachFrame() {
+        using namespace ZoinGallery;
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QByteArray tiff = QByteArray::fromBase64(
+            "SUkqABgAAAB4nHukrPH/0TDGAGy7eaEACwAAAQMAAQAAAAgAAAABAQMAAQAAAAcAAAACAQMABAAAAKIA"
+            "AAADAQMAAQAAAAgAAAAGAQMAAQAAAAIAAAARAQQAAQAAAAgAAAAVAQMAAQAAAAQAAAAWAQMAAQAAAAcA"
+            "AAAXAQQAAQAAAA8AAAAcAQMAAQAAAAEAAABSAQMAAQAAAAIAAADIAAAACAAIAAgACAAAAAAAAABJSSoA"
+            "GAAAAHic0zhr/F9jiGEAFPZg3AALAAABAwABAAAABQAAAAEBAwABAAAACQAAAAIBAwAEAAAAUgEAAAMB"
+            "AwABAAAACAAAAAYBAwABAAAAAgAAABEBBAABAAAAuAAAABUBAwABAAAABAAAABYBAwABAAAACQAAABcB"
+            "BAABAAAADwAAABwBAwABAAAAAQAAAFIBAwABAAAAAgAAAAAAAAAIAAgACAAIAAAAAAAAAA==");
+        const QByteArray webp = QByteArray::fromBase64(
+            "UklGRogAAABXRUJQVlA4WAoAAAACAAAABwAABgAAQU5JTQYAAAAAAAAAAQBBTk1GKgAAAAAAAAAAAAcA"
+            "AAYAACwBAAJWUDhMEQAAAC8HgAEAB9CRihel/4GI6H8AAEFOTUYqAAAAAAAAAAAABwAABgAA9AEAAFZQ"
+            "OEwRAAAALweAAQAHUJA+FLr/gYjofwAA");
+        for (const auto &fixture : {
+                 std::make_pair(QStringLiteral("pages.TIFF"), tiff),
+                 std::make_pair(QStringLiteral("frames.WebP"), webp)}) {
+            QFile file(directory.filePath(fixture.first));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write(fixture.second), fixture.second.size());
+            file.close();
+            PageError error;
+            auto document = PagedImageDocument::open(file.fileName(), fixture.first, error);
+            QVERIFY(document);
+            QCOMPARE(error, PageError::None);
+            QCOMPARE(document->pageCount(), 2);
+            const auto canceled = [] { return false; };
+            const ImagePage second = document->render(1, {}, {}, canceled);
+            const ImagePage first = document->render(0, {}, {}, canceled);
+            QCOMPARE(first.pixels.pixelColor(0, 0), QColor(226, 35, 40));
+            if (fixture.second == tiff) {
+                QCOMPARE(second.size, QSizeF(5, 9));
+                QCOMPARE(second.pixels.pixelColor(0, 0), QColor(40, 205, 51));
+                QVERIFY(!document->animated());
+            } else {
+                QCOMPARE(second.size, QSizeF(8, 7));
+                QCOMPARE(second.pixels.pixelColor(0, 0), QColor(15, 32, 208));
+                QCOMPARE(first.delayMs, 300);
+                QCOMPARE(second.delayMs, 500);
+                QCOMPARE(document->repeats(), 0);
+            }
+        }
+    }
+
+    void pdfThumbnailRendersOnlyTheFirstPageAtRequestedSize() {
+        using namespace ZoinGallery;
+        if (!PagedImageDocument::isPdf(QStringLiteral("document.pdf")))
+            QSKIP("Qt PDF is disabled in this build");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("document.pdf"));
+        {
+            QPdfWriter writer(path);
+            writer.setResolution(72);
+            QPainter painter(&writer);
+            QVERIFY(painter.isActive());
+            painter.fillRect(painter.window(), Qt::red);
+            QVERIFY(writer.newPage());
+            painter.fillRect(painter.window(), Qt::blue);
+        }
+        ImageDecodeRequest request;
+        request.info.path = path;
+        request.targetSize = QSize(96, 64);
+        QVERIFY(ThumbnailLoader::readMetadata(request.info));
+        QCOMPARE(request.info.imageSize, QSize(595, 842));
+        ImageData data(request);
+        QVERIFY(ThumbnailLoader::readImage(data));
+        QVERIFY(data.data.isEmpty());
+        DecodedImageInfo info;
+        const QImage raster = ThumbnailLoader::decode(data, info);
+        QCOMPARE(raster.size(), QSize(45, 64));
+        QCOMPARE(raster.pixelColor(22, 32), QColor(Qt::red));
+    }
+
     void emptyJpegTargetMeansNativeResolution() {
         const QByteArray bytes = jpeg({257, 131}, qRgb(20, 80, 190));
         QVERIFY(!bytes.isEmpty());
         JpegDecoder decoder;
         QCOMPARE(decoder.decode(QStringLiteral("image/jpeg"), bytes, {}).size(),
                  QSize(257, 131));
+    }
+
+    void pagedIconReturnsEachSize() {
+        using namespace ZoinGallery;
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile file(directory.filePath(QStringLiteral("sizes.ico")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        const QByteArray icon = QByteArray::fromBase64(
+            "AAABAAIAEBAAAAAAIABeAAAAJgAAACAgAAAAACAAcAAAAIQAAACJUE5HDQoaCgAAAA1JSERSAAAA"
+            "EAAAABAIBgAAAB/z/2EAAAAlSURBVHicY5RvvvufgQLARInmUQMggImBQsA0agDDaBgwUB4GAF3O"
+            "Ap5JFKETAAAAAElFTkSuQmCCiVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAN0lE"
+            "QVR4nO3QQREAMAgDQYoRxKKzWspUBZ+Ngcvsqb4vFpebcQcIECBAgAABAgQIECBAgACBTzA+ngK+"
+            "BE9jVgAAAABJRU5ErkJggg==");
+        QCOMPARE(file.write(icon), icon.size());
+        file.close();
+        PageError error;
+        auto document = PagedImageDocument::open(file.fileName(), file.fileName(), error);
+        QVERIFY(document);
+        QCOMPARE(error, PageError::None);
+        QCOMPARE(document->pageCount(), 2);
+        QVERIFY(!document->animated());
+        QCOMPARE(document->pageSize(1), QSizeF(32, 32));
+        QCOMPARE(document->pageSize(0), QSizeF(16, 16));
+        QCOMPARE(document->render(1, {}, {}, [] { return false; }).pixels.size(), QSize(32, 32));
+        QCOMPARE(document->render(0, {}, {}, [] { return false; }).pixels.size(), QSize(16, 16));
+    }
+
+    void timedAvifSequenceRewinds() {
+        using namespace ZoinGallery;
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QFile file(directory.filePath(QStringLiteral("frames.avifs")));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        const QByteArray avif = QByteArray::fromBase64(
+            "AAAALGZ0eXBhdmlzAAAAAGF2aWZhdmlzbXNmMWlzbzhtaWYxbWlhZk1BMUEAAADrbWV0YQAAAAAA"
+            "AAAhaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAAAAAAAAAAOcGl0bQAAAAAAAQAAAB5pbG9jAAAA"
+            "AEQAAAEAAQAAAAEAAAPtAAAAJAAAAChpaW5mAAAAAAABAAAAGmluZmUCAAAAAAEAAGF2MDFDb2xv"
+            "cgAAAABqaXBycAAAAEtpcGNvAAAAFGlzcGUAAAAAAAAAEAAAABAAAAAQcGl4aQAAAAADCAgIAAAA"
+            "DGF2MUOBIAAAAAAAE2NvbHJuY2x4AAEADQAGgAAAABdpcG1hAAAAAAAAAAEAAQQBAoMEAAACzm1v"
+            "b3YAAAB4bXZoZAEAAAAAAAAA5ykeEQAAAADnKR4RAAAD6P//////////AAEAAAEAAAAAAAAAAAAA"
+            "AAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "AAAAAAAAAAEAAAJOdHJhawAAAGh0a2hkAQAAAQAAAADnKR4RAAAAAOcpHhEAAAABAAAAAP//////"
+            "////AAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAQAAAAAAQ"
+            "AAAAEAAAAAAALGVkdHMAAAAkZWxzdAEAAAEAAAABAAAAAAAAAhIAAAAAAAAAAAABAAAAAAGybWRp"
+            "YQAAACxtZGhkAQAAAAAAAADnKR4RAAAAAOcpHhEAAAPoAAAAAAAAAhJVxAAAAAAAIWhkbHIAAAAA"
+            "AAAAAHBpY3QAAAAAAAAAAAAAAAAAAAABXW1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5m"
+            "AAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAR1zdGJsAAAAlXN0c2QAAAAAAAAAAQAAAIVh"
+            "djAxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABCkFPTSBDb2RpbmcA"
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAGP//AAAADGF2MUOBIAAAAAAAE2NvbHJuY2x4AAEADQAGgAAA"
+            "ABBjY3N0AAAAAHwAAAAAAAAgc3R0cwAAAAAAAAACAAAAAQAAALQAAAABAAABXgAAABxzdHNjAAAA"
+            "AAAAAAEAAAABAAAAAgAAAAEAAAAcc3RzegAAAAAAAAAAAAAAAgAAACQAAAAgAAAAFHN0Y28AAAAA"
+            "AAAAAQAAA+0AAAAUc3RzcwAAAAAAAAABAAAAAQAAAExtZGF0EgAKCSAAAAGf+bXyJDIVEACAAAAU"
+            "uboKM00UXyTHSo5Ou3YwEgAyHDADwIAAAHoABAAAAKzNHn7zZTHwN2Wqmuq1RYA=");
+        QCOMPARE(file.write(avif), avif.size());
+        file.close();
+        PageError error;
+        auto document = PagedImageDocument::open(file.fileName(), file.fileName(), error);
+        QVERIFY(document);
+        QCOMPARE(error, PageError::None);
+        QVERIFY(document->animated());
+        const auto canceled = [] { return false; };
+        const auto blue = document->render(1, {}, {}, canceled);
+        QCOMPARE(blue.error, PageError::None);
+        QCOMPARE(blue.delayMs, 350);
+        QVERIFY(blue.pixels.pixelColor(0, 0).blue() > 240);
+        QCOMPARE(document->render(2, {}, {}, canceled).error, PageError::EndOfSequence);
+        QCOMPARE(document->pageCount(), 2);
+        const auto red = document->render(0, {}, {}, canceled);
+        QCOMPARE(red.error, PageError::None);
+        QCOMPARE(red.delayMs, 180);
+        QVERIFY(red.pixels.pixelColor(0, 0).red() > 240);
     }
 
     void jpegDecodeUsesAccurateInverseDct() {

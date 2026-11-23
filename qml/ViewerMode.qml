@@ -552,17 +552,10 @@ Item {
             if (!active)
                 return
             viewerMode.sphericViewerMode = false
-            const keepFit = viewport.zoomFitView
-            if (!hasFrame) {
-                viewport.resetViewerImages()
-            } else if (String(viewport.image.source) !== pageSource.toString()
-                       || !viewportMatchesPageSize()) {
-                viewport.setPageImage(pageSource, pageSize, viewerMode.sourceMasonry.view.currentIndex)
-                if (keepFit)
-                    viewport.zoomToFit(true)
-                else
-                    viewport.fitViewerImageInViewportBounds()
-            }
+            const source = viewportSource()
+            if (String(viewport.image.source) !== source.toString()
+                    || (hasFrame && !viewportMatchesPageSize()))
+                applyViewportSource(source, viewerMode.sourceMasonry.view.currentIndex)
         }
     }
 }

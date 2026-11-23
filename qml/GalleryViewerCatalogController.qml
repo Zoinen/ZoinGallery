@@ -247,29 +247,19 @@ QtObject {
             viewer.currentIsVectorValue = false
             viewer.sphericViewerMode = false
             viewer.synchronizeVideoPlayback()
-            const size = pageView.pageSize
-            const url = pageView.pageSource
-            const signature = "page:" + url
+            const url = pageView.viewportSource()
+            const signature = "page:" + pageView.error + ":" + url
             if (viewer.appliedTierSignature !== signature
                     || viewer.appliedPresentedIndex !== viewer.presentedIndex
                     || (pageView.hasFrame && !pageView.viewportMatchesPageSize())) {
-                const wasFit = imageViewport.zoomFitView
-                if (url.toString() === "") {
-                    imageViewport.resetViewerImages()
-                } else {
-                    imageViewport.setPageImage(url, size, viewer.presentedIndex)
-                    if (wasFit)
-                        imageViewport.zoomToFit(true)
-                    else
-                        imageViewport.fitViewerImageInViewportBounds()
-                }
+                pageView.applyViewportSource(url, viewer.presentedIndex)
                 viewer.appliedTierSignature = signature
                 viewer.appliedPresentedIndex = viewer.presentedIndex
             }
-            viewer.currentOriginalSizeValue = size
+            viewer.currentOriginalSizeValue = pageView.hasFrame ? pageView.pageSize : Qt.size(0, 0)
             viewer.currentSourcesValue = []
             viewer.currentSourceValue = url
-            viewer.currentSourceLevelValue = url.toString() === "" ? -1 : 1
+            viewer.currentSourceLevelValue = url.toString() === "" ? -1 : (pageView.hasFrame ? 1 : 0)
             return
         }
         if (viewer.currentIsVideoValue) {

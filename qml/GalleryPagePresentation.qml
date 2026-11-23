@@ -45,6 +45,7 @@ Item {
                                                : (labels.render || qsTr("Cannot render this page"))
     }
     readonly property bool hasFrame: pageSource.toString() !== ""
+    readonly property bool waitingForPdf: active && controller.scalable && !hasFrame && error === ""
     property bool ready: false
 
     signal frameChanged()
@@ -80,6 +81,33 @@ Item {
         const dpr = viewport.devicePixelRatio
         return viewport.originalSize.width === pageSize.width / dpr
             && viewport.originalSize.height === pageSize.height / dpr
+    }
+
+    function viewportSource() {
+        if (hasFrame)
+            return pageSource
+        // A thumbnail supplies the fit aspect ratio. Its pixel dimensions
+        // cannot stand in for the PDF page size at manual zoom.
+        if (waitingForPdf && viewport.zoomFitView && typeof session.viewerSourceAt === "function")
+            return session.viewerSourceAt(index)
+        return ""
+    }
+
+    function applyViewportSource(source, imageIndex) {
+        const hasSource = source.toString() !== ""
+        if (waitingForPdf && Qt.application.arguments.includes("--debug-viewer-transition"))
+            console.debug("[FIX:pdf-switch] index", index, hasSource ? "cached preview" : "previous frame")
+        if (!hasSource) {
+            if (!waitingForPdf)
+                viewport.resetViewerImages()
+            return
+        }
+        const wasFit = viewport.zoomFitView
+        viewport.setPageImage(source, hasFrame ? pageSize : Qt.size(0, 0), imageIndex)
+        if (wasFit)
+            viewport.zoomToFit(true)
+        else
+            viewport.fitViewerImageInViewportBounds()
     }
 
     function scheduleDetail() {
@@ -144,8 +172,11 @@ Item {
 
         function onCatalogRevisionChanged() { root.syncSource() }
         function onViewerSourceAtChanged(index) {
-            if (index === root.index)
+            if (index === root.index) {
                 root.syncSource()
+                if (root.waitingForPdf)
+                    Qt.callLater(root.refreshFrame)
+            }
         }
     }
 

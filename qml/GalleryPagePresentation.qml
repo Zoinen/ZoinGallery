@@ -24,7 +24,20 @@ Item {
     readonly property bool active: controller ? controller.active : false
     readonly property bool multipage: active && (controller.count > 1 || controller.count < 0)
     readonly property url pageSource: active ? controller.source : ""
-    readonly property size pageSize: active ? controller.size : Qt.size(0, 0)
+    readonly property real logicalDpi: {
+        const dotsPerMillimeter = Screen.logicalPixelDensity
+        return dotsPerMillimeter > 0 ? dotsPerMillimeter * 25.4 : 96
+    }
+    readonly property size pageSize: {
+        if (!active)
+            return Qt.size(0, 0)
+        const size = controller.size
+        if (!controller.scalable)
+            return size
+        // Qt PDF returns points. The viewport expects the 100% size in device pixels.
+        const pixelsPerPoint = logicalDpi * devicePixelRatio / 72
+        return Qt.size(size.width * pixelsPerPoint, size.height * pixelsPerPoint)
+    }
     readonly property string error: {
         if (!active || controller.error === "")
             return ""
@@ -61,6 +74,12 @@ Item {
 
     function snap(value) {
         return Math.round(value * devicePixelRatio) / devicePixelRatio
+    }
+
+    function viewportMatchesPageSize() {
+        const dpr = viewport.devicePixelRatio
+        return viewport.originalSize.width === pageSize.width / dpr
+            && viewport.originalSize.height === pageSize.height / dpr
     }
 
     function scheduleDetail() {
@@ -101,7 +120,19 @@ Item {
 
     onWidthChanged: syncSource()
     onHeightChanged: syncSource()
-    onDevicePixelRatioChanged: { syncSource(); scheduleDetail() }
+    onDevicePixelRatioChanged: {
+        syncSource()
+        if (hasFrame)
+            Qt.callLater(root.refreshFrame)
+    }
+    onPageSizeChanged: {
+        if (!hasFrame)
+            return
+        if (controller.scalable && Qt.application.arguments.includes("--debug-viewer-transition"))
+            console.debug("[FIX:pdf-dpi]", controller.size, "points at", logicalDpi,
+                          "logical DPI and DPR", devicePixelRatio, "=>", pageSize, "pixels")
+        Qt.callLater(root.refreshFrame)
+    }
     onIndexChanged: syncSource()
     onSessionChanged: syncSource()
     onPresentingChanged: syncSource()

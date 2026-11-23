@@ -251,7 +251,8 @@ QtObject {
             const url = pageView.pageSource
             const signature = "page:" + url
             if (viewer.appliedTierSignature !== signature
-                    || viewer.appliedPresentedIndex !== viewer.presentedIndex) {
+                    || viewer.appliedPresentedIndex !== viewer.presentedIndex
+                    || (pageView.hasFrame && !pageView.viewportMatchesPageSize())) {
                 const wasFit = imageViewport.zoomFitView
                 if (url.toString() === "") {
                     imageViewport.resetViewerImages()

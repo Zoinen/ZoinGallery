@@ -555,7 +555,8 @@ Item {
             const keepFit = viewport.zoomFitView
             if (!hasFrame) {
                 viewport.resetViewerImages()
-            } else if (String(viewport.image.source) !== pageSource.toString()) {
+            } else if (String(viewport.image.source) !== pageSource.toString()
+                       || !viewportMatchesPageSize()) {
                 viewport.setPageImage(pageSource, pageSize, viewerMode.sourceMasonry.view.currentIndex)
                 if (keepFit)
                     viewport.zoomToFit(true)

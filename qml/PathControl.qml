@@ -15,6 +15,7 @@ Item {
     // path control. The standalone application keeps its historical
     // viewerController/masonryLayout transaction when no callback is set.
     property var navigationHandler: null
+    property var pathInputHandler: null
     // Embedded hosts may display a friendly path title (for example an iOS
     // device name) while navigation still needs the filesystem's canonical
     // path. When set, this property supplies that canonical path without
@@ -596,7 +597,10 @@ Item {
         Keys.onEscapePressed: editMode = false
 
         function accept() {
-            if (windowsPathSeparators) {
+            if (pathRoot.pathInputHandler) {
+                pathRoot.pathInputHandler(pathField.text)
+            }
+            else if (windowsPathSeparators) {
                 pathRoot.navigateTo(pathField.text.replace(/\\/g, "/"))
             }
             else {

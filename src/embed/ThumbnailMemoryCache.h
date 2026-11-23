@@ -1,6 +1,8 @@
 #ifndef ZOINGALLERY_THUMBNAILMEMORYCACHE_H
 #define ZOINGALLERY_THUMBNAILMEMORYCACHE_H
 
+#include "DecodeSizePolicy.h"
+
 #include <QHash>
 #include <QMutex>
 #include <QObject>
@@ -25,7 +27,7 @@ class ThumbnailMemoryCache final : public QObject {
 public:
     static constexpr qint64 DefaultByteBudget =
         256LL * 1024LL * 1024LL;
-    static constexpr auto DefaultTransformKey = "thumbnail-aspect-v1";
+    static constexpr auto DefaultTransformKey = PanelThumbnailTransformKey;
 
     enum class AcquireState {
         Hit,

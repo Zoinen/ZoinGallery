@@ -1,8 +1,77 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import ZoinGallery as ZG
 
 QtObject {
+    function entryNameColor(directory, selected, foreground, nameForeground) {
+        if (nameForeground)
+            return nameForeground
+        if (selected)
+            return markedText
+        if (neutralFileTextColors)
+            return directory ? folderText : fileText
+        return foreground || text
+    }
+
+    function entryIconColor(directory, selected, normalForeground) {
+        return selected ? markedText : (normalForeground || (directory ? folderIcon : mutedText))
+    }
+
+    function entrySurfaceColor(details, masonry, directory, folderPreview, selected, current, normalBg, cursorBg) {
+        if (selected)
+            return markedBackground
+        if (details)
+            return current ? (cursorBg || cursorBackground) : (normalBg || "transparent")
+        if (current)
+            return cursor
+        if (masonry && !folderPreview)
+            return directory ? directoryBackground : itemBackground
+        return "transparent"
+    }
+
+    function entryCursorBorder(details, selected) {
+        return selected && showSelectionBorders ? selection : (details ? cursorBorder : cardCursorBorder)
+    }
+
+    function entryMasonryLabelColor(selected, current, normalBg) {
+        if (selected)
+            return Qt.alpha(markedBackground, ZG.Style.brickInfoPanelSelected.a)
+        return current ? ZG.Style.brickInfoPanelSelected : (normalBg || labelBackground)
+    }
+
+    function entryIconTinted(tint, systemSource, monochrome) {
+        return !systemSource && (tint === true || (tint === undefined && monochrome))
+    }
+
+    function entryIconSource(provider, resolver, iconKey, source, logicalSize, dpr, tint, compact, alignBottom) {
+        const value = source ? source.toString() : ""
+        if (!value)
+            return ""
+        if (compact && value.startsWith("qrc:/F4QtHost/icons/zoin/")
+                && provider && typeof provider.compactFileArtworkSource === "function")
+            return provider.compactFileArtworkSource(value, Math.round(logicalSize), dpr)
+        const monochrome = resolver.isMonochrome(iconKey, value)
+        const name = iconKey || resolver.keyFromSource(value)
+        const size = Math.max(1, Math.round(Number(logicalSize) || 1))
+        const scale = Math.max(0.5, Number(dpr) || 1)
+        const color = tint === undefined || tint === null ? "" : String(tint)
+        const sized = monochrome && name && provider
+                && typeof provider.rasterizedLucideSource === "function"
+                && typeof provider.lucideStrokeWidth === "function"
+            ? provider.rasterizedLucideSource(name, size, scale, color,
+                provider.lucideStrokeWidth(Math.max(1, Number(logicalSize) || 1))).toString()
+            : resolver.retargetProviderSource(value, size, scale, color, monochrome)
+        return sized.startsWith("image://") && sized.indexOf("/lucide/") >= 0
+            ? sized + (sized.indexOf("?") >= 0 ? "&" : "?") + "fileArt=1"
+                + (alignBottom ? "&alignBottom=1" : "")
+            : sized
+    }
+
+    function entryFallbackMarker(directory, parentEntry, marker) {
+        return marker || (directory ? (parentEntry ? "↰" : "▸") : " ")
+    }
+
     property color panelBackground: "#17191d"
     property color viewerBackground: "#090a0c"
     property color text: "#e8eaed"

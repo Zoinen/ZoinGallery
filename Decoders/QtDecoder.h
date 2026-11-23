@@ -13,6 +13,10 @@ public:
     bool readMetadata(ImageInfo& result) override;
     bool readPreviewAndMime(ImageData &result) override { return false; }
     QImage decode(const QString& mimeType, const QByteArray& data, QSize targetSize) override;
+    QImage decodeThumbnail(const QString &mimeType, const QByteArray &data,
+                           QSize, QSize) override {
+        return decode(mimeType, data, {});
+    }
 
 private:
     static const QStringList &formats();

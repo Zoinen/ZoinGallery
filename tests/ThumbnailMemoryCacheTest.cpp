@@ -66,7 +66,8 @@ private slots:
                 request.targetSize = QSize(80, 60);
                 providerId = cache->storeDecoded("other-panel", request.info.path,
                     request.info.sourceVersionToken, 6, request.targetSize,
-                    "thumbnail-aspect-v1", frame(request.targetSize)).providerId;
+                    QString::fromLatin1(ZoinGallery::PanelThumbnailTransformKey),
+                    frame(request.targetSize)).providerId;
                 model.decodeImages({request});
                 QVERIFY(!item->imageIdUrl().isEmpty());
             });
@@ -120,7 +121,7 @@ private slots:
         QCOMPARE(availableSpy.size(), 1);
         QCOMPARE(availableSpy.constFirst().at(3).toSize(), QSize(96, 64));
         QCOMPARE(availableSpy.constFirst().at(4).toString(),
-                 QStringLiteral("thumbnail-aspect-v1"));
+                 QString::fromLatin1(ZoinGallery::PanelThumbnailTransformKey));
         QCOMPARE(availableSpy.constFirst().at(5).toString(),
                  published.providerId);
         QVERIFY(store->contains(published.providerId));
@@ -148,14 +149,14 @@ private slots:
         const auto aspectReuse = cache.acquire(
             QStringLiteral("right"), source, QStringLiteral("101"), 6,
             QSize(48, 32),
-            QStringLiteral("thumbnail-aspect-v1"));
+            QString::fromLatin1(ZoinGallery::PanelThumbnailTransformKey));
         QCOMPARE(aspectReuse.state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Hit);
         QCOMPARE(aspectReuse.handle.providerId, published.providerId);
         QCOMPARE(cache.acquire(QStringLiteral("right"), source,
                                QStringLiteral("101"), 6,
                                QSize(48, 32),
-                               QStringLiteral("thumbnail-filtered-v2")).state,
+                               QStringLiteral("thumbnail-aspect-v1")).state,
                  ZoinGallery::ThumbnailMemoryCache::AcquireState::Owner);
     }
 
@@ -389,7 +390,7 @@ private slots:
         QCOMPARE(releasedSpy.size(), 1);
         QCOMPARE(releasedSpy.constFirst().at(3).toSize(), QSize(12, 12));
         QCOMPARE(releasedSpy.constFirst().at(4).toString(),
-                 QStringLiteral("thumbnail-aspect-v1"));
+                 QString::fromLatin1(ZoinGallery::PanelThumbnailTransformKey));
         QVERIFY(releasedSpy.constFirst().at(5).toBool());
 
         QCOMPARE(cache.acquire(QStringLiteral("right"), source,

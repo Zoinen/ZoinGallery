@@ -203,11 +203,8 @@ QtObject {
             objectName: preview.activePresentation
                         ? "galleryFallbackMarker-"
                           + preview.entry.viewIndex : ""
-            text: preview.entry.highlightMarker
-                  || (preview.entry.isFolder
-                      ? (preview.entry.effectiveDisplayName === ".."
-                         ? "↰" : "▸")
-                      : " ")
+            text: preview.entry.panelRoot.theme.entryFallbackMarker(preview.entry.isFolder,
+                preview.entry.effectiveDisplayName === "..", preview.entry.highlightMarker)
             color: preview.entry.fallbackIconColor
             font.pixelSize: preview.entry.panelRoot.detailsNameFontPixelSize
             horizontalAlignment: Text.AlignHCenter

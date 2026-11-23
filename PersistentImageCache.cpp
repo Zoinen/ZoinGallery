@@ -138,10 +138,16 @@ QImage PersistentImageCache::retrieveImage(ImageDecodeRequest &request, bool val
     if (PersistentDerivedImageCache::appliesTo(request)) {
         // DecodeManager disables version validation for cache-only lookups,
         // where the capped preview is the only available source of pixels.
-        if (!validateRequestVersion && diskTarget != request.targetSize) {
+        if (!validateRequestVersion) {
             auto cacheRequest = request;
             cacheRequest.targetSize = diskTarget;
-            return PersistentDerivedImageCache::retrieveImage(cacheRequest);
+            QImage cached = PersistentDerivedImageCache::retrieveImage(cacheRequest);
+            if (cached.isNull() && panelThumbnail &&
+                cacheRequest.thumbnailTransformKey == QLatin1StringView(ZoinGallery::PanelThumbnailTransformKey)) {
+                cacheRequest.thumbnailTransformKey = QStringLiteral("thumbnail-aspect-v1");
+                cached = PersistentDerivedImageCache::retrieveImage(cacheRequest);
+            }
+            return cached;
         }
         return PersistentDerivedImageCache::retrieveImage(request);
     }

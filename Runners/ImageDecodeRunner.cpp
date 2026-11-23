@@ -66,12 +66,13 @@ void ImageDecodeRunner::run() {
             resizeSpan.set(QStringLiteral("foregroundParallel"), helperPool != nullptr);
         } else {
             thumbnail = ThumbnailLoader::createThumbnail(
-                image, _imageData.request.targetSize);
+                image, _imageData.request.targetSize, Qt::KeepAspectRatio,
+                [this] { return isCanceled(); });
         }
         resizeSpan.set(QStringLiteral("resampler"),
                        _imageData.request.viewerRequest
                            ? QStringLiteral("viewer-bc-pyramid-v1")
-                           : QStringLiteral("qt-smooth"));
+                           : QStringLiteral("panel-bc-pyramid-v1"));
         resizeSpan.set(QStringLiteral("ok"), !thumbnail.isNull());
         resizeSpan.set(QStringLiteral("outputWidth"), thumbnail.width());
         resizeSpan.set(QStringLiteral("outputHeight"), thumbnail.height());

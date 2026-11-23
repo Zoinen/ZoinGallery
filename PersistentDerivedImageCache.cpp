@@ -404,6 +404,7 @@ bool servesThumbnailRequest(const DerivedKey &stored, const QSize &storedPixels,
     // An exact-size request can finish with fewer pixels, for example when
     // the source only contains a small embedded preview.
     const bool aspectPreserved =
+        request.transformSchema == QLatin1StringView(ZoinGallery::PanelThumbnailTransformKey) ||
         request.transformSchema == QStringLiteral("thumbnail-aspect-v1") ||
         request.transformSchema == QStringLiteral("video-contact-sheet-2x2-display-v6");
     return sameArtifactRevision(stored, request) &&

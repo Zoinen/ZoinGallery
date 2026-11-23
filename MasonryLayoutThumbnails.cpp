@@ -1,6 +1,7 @@
 #include "MasonryLayout.h"
 #include "GalleryViewportMotion.h"
 #include "VectorSource.h"
+#include "src/embed/DecodeSizePolicy.h"
 
 #include <ZoinGallery/GalleryCatalogSource.h>
 #include <ZoinGallery/MediaTimingTrace.h>
@@ -344,7 +345,7 @@ QSize MasonryLayout::previewDecodeTargetSize(
 QString MasonryLayout::previewTransformKey() const {
     // Pixel processing is identical for every presentation: decode one
     // oriented, source-aspect frame and let the QML surface fit it.
-    return QStringLiteral("thumbnail-aspect-v1");
+    return QString::fromLatin1(ZoinGallery::PanelThumbnailTransformKey);
 }
 
 QList<int> MasonryLayout::edgeThumbnailIndexes() const {

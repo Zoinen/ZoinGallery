@@ -6,6 +6,7 @@
 namespace ZoinGallery {
 
 inline constexpr int MaximumPanelThumbnailEdge = 1024;
+inline constexpr char PanelThumbnailTransformKey[] = "thumbnail-aspect-bc-pyramid-v2";
 
 // Bound actual frame pixels while preserving aspect and a nonzero short edge.
 QSize boundedPanelThumbnailSize(const QSize &size);

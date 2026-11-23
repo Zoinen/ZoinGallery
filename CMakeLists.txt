@@ -813,6 +813,19 @@ if(BUILD_TESTING)
     set_tests_properties(MasonryLayoutModesTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic")
 
+    add_test(NAME FolderThumbnailCornersDpr175Test
+        COMMAND ZoinGalleryMasonryLayoutModesTests folderThumbnailCornersAndScroll)
+    add_test(NAME CompactThumbnailCornersDpr175Test
+        COMMAND ZoinGalleryMasonryLayoutModesTests compactThumbnailCorners)
+    set_tests_properties(FolderThumbnailCornersDpr175Test CompactThumbnailCornersDpr175Test PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.75;QT_QUICK_CONTROLS_STYLE=Basic"
+        LABELS "visual;dpr"
+        TIMEOUT 30)
+    if(WIN32)
+        set_property(TEST FolderThumbnailCornersDpr175Test CompactThumbnailCornersDpr175Test APPEND PROPERTY
+            ENVIRONMENT "QT_QPA_FONTDIR=$ENV{WINDIR}/Fonts")
+    endif()
+
     foreach(_zoin_visual_dpr IN ITEMS 1.0 1.25 1.5 1.75 2.0)
         string(REPLACE "." "" _zoin_visual_dpr_suffix
             "${_zoin_visual_dpr}")

@@ -104,14 +104,22 @@ Pixel channels(QRgba64 sample, const TransferTables &tables) {
             transfer(tables.decode, sample.blue() * inverseAlpha) * a, a};
 }
 
-template<typename Sample>
+template<bool Opaque, typename Sample>
 void linearizeRow(const Sample *input, std::vector<Pixel> &row,
                   const TransferTables &tables) {
     for (size_t x = 0; x < row.size(); ++x) {
-        row[x] = channels(input[x], tables);
+        if constexpr (Opaque) {
+            const QRgb sample = input[x];
+            const float *colors = tables.premultiplied8.data() + 255 * 256;
+            row[x] = {colors[qRed(sample)], colors[qGreen(sample)],
+                      colors[qBlue(sample)], 1.0F};
+        } else {
+            row[x] = channels(input[x], tables);
+        }
     }
 }
 
+template<bool Opaque>
 void filterRow(const std::vector<Pixel> &input, const std::vector<AxisWeights> &weights,
                std::vector<Pixel> &row) {
     for (size_t x = 0; x < row.size(); ++x) {
@@ -123,7 +131,9 @@ void filterRow(const std::vector<Pixel> &input, const std::vector<AxisWeights> &
             pixel.r += sample.r * weight;
             pixel.g += sample.g * weight;
             pixel.b += sample.b * weight;
-            pixel.a += sample.a * weight;
+            if constexpr (!Opaque) {
+                pixel.a += sample.a * weight;
+            }
         }
         row[x] = pixel;
     }
@@ -197,9 +207,18 @@ struct ReductionStage {
     QSemaphore helpersFinished;
 
     bool reduceRows(int firstRow, int pastLastRow) const;
+    template<bool Opaque>
+    bool filterRows(int firstRow, int pastLastRow) const;
 };
 
 bool ReductionStage::reduceRows(int firstRow, int pastLastRow) const {
+    return source.format() == QImage::Format_RGB32
+        ? filterRows<true>(firstRow, pastLastRow)
+        : filterRows<false>(firstRow, pastLastRow);
+}
+
+template<bool Opaque>
+bool ReductionStage::filterRows(int firstRow, int pastLastRow) const {
     const auto &tables = transferTables();
     const int width = int(horizontal.size());
 
@@ -225,14 +244,17 @@ bool ReductionStage::reduceRows(int firstRow, int pastLastRow) const {
             }
             rowIndices[slot] = inputY;
             auto &row = rows[slot];
-            if (source.format() == QImage::Format_RGBA64_Premultiplied) {
-                linearizeRow(reinterpret_cast<const QRgba64 *>(source.constScanLine(inputY)),
+            if constexpr (Opaque) {
+                linearizeRow<true>(reinterpret_cast<const QRgb *>(source.constScanLine(inputY)),
+                                    linearInput, tables);
+            } else if (source.format() == QImage::Format_RGBA64_Premultiplied) {
+                linearizeRow<false>(reinterpret_cast<const QRgba64 *>(source.constScanLine(inputY)),
                              linearInput, tables);
             } else {
-                linearizeRow(reinterpret_cast<const QRgb *>(source.constScanLine(inputY)),
+                linearizeRow<false>(reinterpret_cast<const QRgb *>(source.constScanLine(inputY)),
                              linearInput, tables);
             }
-            filterRow(linearInput, horizontal, row);
+            filterRow<Opaque>(linearInput, horizontal, row);
         }
         auto *output = reinterpret_cast<QRgb *>(pixels + y * stride);
         for (int x = 0; x < width; ++x) {
@@ -243,12 +265,14 @@ bool ReductionStage::reduceRows(int firstRow, int pastLastRow) const {
                 pixel.r += sample.r * weight;
                 pixel.g += sample.g * weight;
                 pixel.b += sample.b * weight;
-                pixel.a += sample.a * weight;
+                if constexpr (!Opaque) {
+                    pixel.a += sample.a * weight;
+                }
             }
             // Negative lobes may overshoot. Clamp only after both axes have
             // been filtered, preserving valid premultiplied alpha for Qt.
-            const float a = std::clamp(pixel.a, 0.0F, 1.0F);
-            const int alpha = qRound(a * 255);
+            const float a = Opaque ? 1.0F : std::clamp(pixel.a, 0.0F, 1.0F);
+            const int alpha = Opaque ? 255 : qRound(a * 255);
             if (alpha == 0) {
                 output[x] = 0;
                 continue;
@@ -270,7 +294,8 @@ QImage reduceStage(const QImage &source, QSize target, bool halfX, bool halfY,
                    QThreadPool *helperPool) {
     auto stage = std::make_shared<ReductionStage>();
     stage->source = source;
-    stage->result = QImage(target, QImage::Format_ARGB32_Premultiplied);
+    stage->result = QImage(target, source.format() == QImage::Format_RGB32
+        ? QImage::Format_RGB32 : QImage::Format_ARGB32_Premultiplied);
     if (stage->result.isNull()) return {};
     stage->horizontal = axisWeights(source.width(), target.width(), halfX);
     stage->vertical = axisWeights(source.height(), target.height(), halfY);
@@ -323,7 +348,8 @@ QImage downsample(const QImage &image, QSize targetSize,
         result = result.convertToFormat(QImage::Format_RGBA64_Premultiplied);
     } else if (result.format() != QImage::Format_RGB32
         && result.format() != QImage::Format_ARGB32_Premultiplied) {
-        result = result.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        result = result.convertToFormat(result.hasAlphaChannel()
+            ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32);
     }
     // For thin or anisotropic requests, each axis stops halving separately;
     // the remaining reduction never needs more than eight source taps.

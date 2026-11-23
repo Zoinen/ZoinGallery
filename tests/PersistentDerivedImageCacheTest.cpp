@@ -11,6 +11,7 @@
 #include "Runners/VideoThumbnailRunner.h"
 #endif
 #include "StorageLocations.h"
+#include "src/embed/DecodeSizePolicy.h"
 #include "TinyEXIF/TinyEXIF.h"
 
 #include <QFileInfo>
@@ -508,9 +509,18 @@ private slots:
         QCOMPARE(provider->rangeReads.load(), 0);
     }
 
+    void newThumbnailFilterDoesNotReusePreviousPixelsExceptInCacheOnlyMode() {
+        auto request = requestFor(QStringLiteral("localStat"));
+        request.thumbnailTransformKey = QStringLiteral("thumbnail-aspect-v1");
+        persist(request, testImage(request.targetSize));
+        request.thumbnailTransformKey = QString::fromLatin1(ZoinGallery::PanelThumbnailTransformKey);
+        QVERIFY(PersistentImageCache::retrieveImage(request, true).isNull());
+        QCOMPARE(PersistentImageCache::retrieveImage(request, false).size(), request.targetSize);
+    }
+
     void largerThumbnailReplacesSmallerAndServesOtherSizes_data() {
         QTest::addColumn<QString>("transform");
-        QTest::newRow("image") << QStringLiteral("thumbnail-aspect-v1");
+        QTest::newRow("image") << QString::fromLatin1(ZoinGallery::PanelThumbnailTransformKey);
         QTest::newRow("video") << QStringLiteral("video-contact-sheet-2x2-display-v6");
     }
 

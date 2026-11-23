@@ -18,7 +18,8 @@ Item {
     readonly property real outerSpacing: panelRoot.itemSpacing
     readonly property real contentMargin: entry.cellVerticalInset
     readonly property real folderTopOffset: snap(Math.round(width / 20))
-    readonly property color folderColor: panelRoot.folderPreviewColor
+    readonly property color folderColor: entry.visualModel.tintIcon === true
+        ? entry.fallbackIconColor : panelRoot.folderPreviewColor
     property int readyImages: 0
     readonly property bool hasUsablePreview: entry.visualModel.folderPreviewState === 2 || readyImages > 0
         || Boolean(childModel && childModel.hasPublishedThumbnails)
@@ -156,7 +157,17 @@ Item {
                                 onVisibleChanged: updateReady()
                                 Component.onDestruction: { if (countedReady) --preview.readyImages }
                                 anchors.fill: parent
-                                source: cell.masonryGeometryReady && cell.model ? cell.model.imageIdUrl : ""
+                                source: {
+                                    if (!cell.masonryGeometryReady || !cell.model || width <= 0 || height <= 0)
+                                        return ""
+                                    const url = String(cell.model.imageIdUrl || "")
+                                    if (!url.startsWith("image://") || !url.includes("/zg-thumb-"))
+                                        return url
+                                    const physicalWidth = Math.round(width * preview.dpr)
+                                    const physicalHeight = Math.round(height * preview.dpr)
+                                    return url + "?folder-rounded=" + physicalWidth + "x" + physicalHeight
+                                        + "x" + preview.dpr
+                                }
                                 fillMode: Image.Stretch
                                 cache: preview.entry.masonryMode
                                     && source.toString().startsWith("image://")

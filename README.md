@@ -126,8 +126,9 @@ automatic unsharp mask.
 
 Viewer requests ask decoders for native pixels before preparing a fit frame,
 avoiding scaled-decode shortcuts with a different kernel. Embedded previews
-remain a fallback when the full image cannot be decoded. Gallery
-thumbnails retain their existing decode and rendering paths. Fit-derived cache
+remain a fallback when the full image cannot be decoded. Gallery thumbnails
+use the CPU reduction filter on the raster supplied by their scaled decode.
+Fit-derived cache
 keys include the filter version and use lossless WebP to preserve filtered
 pixels and dither. Thumbnail cache compression is unchanged. Returning from
 native zoom to fit selects a

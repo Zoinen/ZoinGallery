@@ -132,9 +132,6 @@ BrickItem {
         ? panelRoot.markedTextColor
         : (highlightForegroundValue !== ""
            ? highlightForegroundValue : panelRoot.foregroundColor)
-    readonly property color semanticTextColor:
-        highlightForegroundValue !== ""
-        ? highlightForegroundValue : panelRoot.foregroundColor
     readonly property string fileNameForeground: {
         const cursor = current && panelRoot.showCursor
         if (cursor)
@@ -144,13 +141,7 @@ BrickItem {
                          : visualModel.normalFileNameForeground) || ""
     }
     readonly property color itemTextColor:
-        fileNameForeground !== "" ? fileNameForeground
-        : selected
-        ? panelRoot.markedTextColor
-        : (panelRoot.neutralFileTextColors
-           ? (isFolder
-              ? panelRoot.folderTextColor : panelRoot.fileTextColor)
-           : semanticTextColor)
+        panelRoot.theme.entryNameColor(isFolder, selected, highlightForegroundValue, fileNameForeground)
     readonly property color itemMetadataColor:
         selected
         ? panelRoot.markedTextColor
@@ -159,16 +150,12 @@ BrickItem {
            : (highlightForegroundValue !== ""
               ? highlightForeground : panelRoot.mutedColor))
     readonly property color fallbackIconColor:
-        selected
-        ? panelRoot.markedTextColor
-        : (visualModel.normalForeground !== ""
-           ? visualModel.normalForeground
-           : (isFolder ? panelRoot.folderIconColor : panelRoot.mutedColor))
+        panelRoot.theme.entryIconColor(isFolder, selected, visualModel.normalForeground)
     readonly property color highlightLabelBackground:
-        masonryMode && selected
-        ? Qt.alpha(panelRoot.markedBackgroundColor, ZG.Style.brickInfoPanelSelected.a)
+        masonryMode
+        ? panelRoot.theme.entryMasonryLabelColor(selected, current && panelRoot.showCursor, visualModel.normalBackground)
         : ((current && panelRoot.showCursor
-            ? (masonryMode ? ZG.Style.brickInfoPanelSelected : visualModel.cursorBackground)
+            ? visualModel.cursorBackground
             : visualModel.normalBackground)
            || panelRoot.labelBackgroundColor)
     // Keep component reads scalar: a rect read from QML creates a GC wrapper,
@@ -248,41 +235,8 @@ BrickItem {
     }
 
     function sourceColorIconAtSize(source, logicalSize, tint) {
-        const value = source ? source.toString() : ""
-        const provider = panelRoot.iconProvider
-        if (compactPreview && value.startsWith("qrc:/F4QtHost/icons/zoin/")
-                && provider && typeof provider.compactFileArtworkSource === "function") {
-            return provider.compactFileArtworkSource(value, Math.round(logicalSize), renderDpr)
-        }
-        const lucide = isLucideIconSource(value)
-        const iconName = iconKey !== ""
-                ? iconKey : panelRoot.iconResolver.keyFromSource(value)
-        if (lucide && iconName !== "" && provider
-                && typeof provider.rasterizedLucideSource === "function"
-                && typeof provider.lucideStrokeWidth === "function") {
-            const requestedSize = Math.max(1, Math.round(Number(logicalSize) || 1))
-            const strokeWidth = provider.lucideStrokeWidth(
-                        Math.max(1, Number(logicalSize) || 1))
-            return fittedIconSource(provider.rasterizedLucideSource(
-                        iconName, requestedSize,
-                        Math.max(0.5, Number(renderDpr) || 1),
-                        tint === undefined || tint === null ? "" : String(tint),
-                        strokeWidth))
-        }
-        return fittedIconSource(panelRoot.iconResolver.retargetProviderSource(
-                    value,
-                    Math.max(1, Math.round(Number(logicalSize) || 1)),
-                    Math.max(0.5, Number(renderDpr) || 1),
-                    tint === undefined || tint === null ? "" : String(tint),
-                    lucide))
-    }
-
-    function fittedIconSource(source) {
-        const value = source ? source.toString() : ""
-        return value.startsWith("image://") && value.indexOf("/lucide/") >= 0
-                ? value + (value.indexOf("?") >= 0 ? "&" : "?") + "fileArt=1"
-                  + (iconsMode ? "&alignBottom=1" : "")
-                : value
+        return panelRoot.theme.entryIconSource(panelRoot.iconProvider, panelRoot.iconResolver,
+            iconKey, source, logicalSize, renderDpr, tint, compactPreview, iconsMode)
     }
 
     GalleryEntrySelectionSurface {

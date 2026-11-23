@@ -98,6 +98,8 @@ ThumbnailMemoryCache::Handle ThumbnailMemoryCache::compatibleFrameLocked(
         const bool aspectPreserved = sourceKeyValue.endsWith(
             QChar(0x1f) + QString::fromLatin1(DefaultTransformKey)) ||
             sourceKeyValue.endsWith(
+                QChar(0x1f) + QStringLiteral("thumbnail-aspect-v1")) ||
+            sourceKeyValue.endsWith(
                 QChar(0x1f) + QStringLiteral("video-contact-sheet-2x2-display-v6"));
         if (!panelThumbnailCovers(it->decodedSize, targetSize, aspectPreserved)
             && !it->completedRequests.contains(targetSize)) {

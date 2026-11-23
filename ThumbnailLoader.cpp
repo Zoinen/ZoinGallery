@@ -184,12 +184,16 @@ QImage ThumbnailLoader::normalizeToDisplayColorSpace(QImage image) {
 }
 
 QImage ThumbnailLoader::createThumbnail(const QImage &image, QSize dimensions,
-                                        Qt::AspectRatioMode aspectMode) {
-    if (dimensions.width() < image.width() ||
-        dimensions.height() < image.height()) {
-        return image.scaled(dimensions, aspectMode, Qt::SmoothTransformation);
+                                        Qt::AspectRatioMode aspectMode,
+                                        const std::function<bool()> &isCanceled) {
+    if (dimensions.width() >= image.width() && dimensions.height() >= image.height()) {
+        return image;
     }
-    return image;
+    if (image.isNull() || dimensions.isEmpty()) {
+        return {};
+    }
+    const QSize fitted = image.size().scaled(dimensions, aspectMode).expandedTo(QSize(1, 1));
+    return ZoinGallery::ViewerResampler::downsample(image, fitted, isCanceled);
 }
 
 QImage ThumbnailLoader::createViewerImage(const QImage &image, QSize dimensions) {

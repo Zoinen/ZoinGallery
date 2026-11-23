@@ -38,8 +38,8 @@ Loader {
     readonly property bool systemFileSource:
         preview.entry.isSystemFileIconSource(modelIconSourceText)
     readonly property bool tintedSource:
-        !systemFileSource && (preview.entry.visualModel.tintIcon === true
-            || (preview.entry.visualModel.tintIcon === undefined && lucideSource))
+        preview.entry.panelRoot.theme.entryIconTinted(preview.entry.visualModel.tintIcon,
+            systemFileSource, lucideSource)
     anchors.centerIn: parent
     readonly property real nominalIconSize:
         preview.entry.detailsMode || preview.entry.columnsMode

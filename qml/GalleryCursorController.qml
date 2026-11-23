@@ -261,24 +261,14 @@ QtObject {
 
     function cursorChromeStyleForIndex(index) {
         const selected = controllerReady && controller.isSelectedAt(index)
-        const selectedBorder = selected && panel.showSelectionBorders
-        if (presentationMode !== "details") {
-            return {
-                fill: selected ? panel.markedBackgroundColor : cursorColor,
-                border: selectedBorder ? panel.selectionColor : cardCursorBorderColor,
-                borderWidth: 1,
-                radius: cursorChromeModeRadius()
-            }
-        }
-        const style = controllerReady
-                ? controller.highlightStyleAt(index) : ({})
-        const patch = style.cursor || ({})
+        const details = presentationMode === "details"
+        const style = details && controllerReady ? controller.highlightStyleAt(index) : ({})
         return {
-            fill: selected ? panel.markedBackgroundColor
-                           : (patch.background || cursorBackgroundColor),
-            border: selectedBorder ? panel.selectionColor : cursorBorderColor,
+            fill: panel.theme.entrySurfaceColor(details, false, false, false, selected, true,
+                "", (style.cursor || {}).background),
+            border: panel.theme.entryCursorBorder(details, selected),
             borderWidth: 1,
-            radius: 4
+            radius: details ? 4 : cursorChromeModeRadius()
         }
     }
 

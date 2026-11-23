@@ -5,6 +5,8 @@
 #include <QString>
 #include <QSize>
 
+#include <functional>
+
 #include "ImageFile.h"
 
 namespace Exiv2 {
@@ -19,7 +21,8 @@ public:
     static bool readImage(ImageData &result);
     static QImage decode(const ImageData &imageData, DecodedImageInfo &decodedInfo);
     static QImage createThumbnail(const QImage &image, QSize dimensions,
-                                  Qt::AspectRatioMode aspectMode = Qt::KeepAspectRatio);
+                                  Qt::AspectRatioMode aspectMode = Qt::KeepAspectRatio,
+                                  const std::function<bool()> &isCanceled = {});
     static QImage createViewerImage(const QImage &image, QSize dimensions);
     // Embedded first-pass probes decode their tiny payload independently of
     // the full-file decoder but must apply the parent image's Exif transform

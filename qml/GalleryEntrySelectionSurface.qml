@@ -43,28 +43,10 @@ Rectangle {
     height: visualSurfaceRect.height
     radius: entry.columnsMode || entry.detailsMode ? 4 : 6
     antialiasing: true
-    readonly property color baseColor: {
-        if (entry.cursorChromeExposesUnderlay)
-            return "transparent"
-        if (entry.selected)
-            return entry.panelRoot.markedBackgroundColor
-        if (entry.detailsMode) {
-            if (cursorVisible)
-                return entry.visualModel.cursorBackground
-                        || entry.panelRoot.cursorBackgroundColor
-            return entry.visualModel.normalBackground || "transparent"
-        }
-        if (cursorVisible)
-            return entry.panelRoot.cursorColor
-        if (entry.masonryMode) {
-            if (entry.folderPreviewActive)
-                return "transparent"
-            return entry.isFolder
-                    ? entry.panelRoot.directoryBackgroundColor
-                    : entry.panelRoot.itemBackgroundColor
-        }
-        return "transparent"
-    }
+    readonly property color baseColor: entry.cursorChromeExposesUnderlay ? "transparent"
+        : entry.panelRoot.theme.entrySurfaceColor(entry.detailsMode, entry.masonryMode, entry.isFolder,
+            entry.folderPreviewActive, entry.selected, cursorVisible,
+            entry.visualModel.normalBackground, entry.visualModel.cursorBackground)
     // Hover is a visual overlay, not an alternative to cursor/selection state.
     // Compose the live palette tint with the resolved background so marked
     // rows and the current row respond too, without losing their text/border.
@@ -85,8 +67,5 @@ Rectangle {
     }
     border.width: nominalBorderWidth
     border.pixelAligned: true
-    border.color: entry.selected && entry.panelRoot.showSelectionBorders
-                  ? entry.panelRoot.selectionColor
-                  : entry.detailsMode ? entry.panelRoot.cursorBorderColor
-                  : entry.panelRoot.cardCursorBorderColor
+    border.color: entry.panelRoot.theme.entryCursorBorder(entry.detailsMode, entry.selected)
 }

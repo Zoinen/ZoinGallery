@@ -7,6 +7,8 @@
 
 #include <QBuffer>
 #include <QColorSpace>
+#include <QDir>
+#include <QElapsedTimer>
 #include <QTemporaryDir>
 #include <QtTest>
 #include <QtGui/private/qtguiglobal_p.h>
@@ -368,7 +370,7 @@ private slots:
             QVERIFY(samePixels(native, baseline));
             QVERIFY(samePixels(
                 ThumbnailLoader::createThumbnail(native, bounds, Qt::IgnoreAspectRatio),
-                baseline.scaled(bounds, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)));
+                ThumbnailLoader::createThumbnail(baseline, bounds, Qt::IgnoreAspectRatio)));
             QCOMPARE(WebpCodec::decodeForThumbnailResize(encoded, source.size()).format(),
                      QImage::Format_RGB888);
         }
@@ -405,13 +407,55 @@ private slots:
             data.mimeType = QStringLiteral("image/png");
             DecodedImageInfo info;
             const QImage decoded = ThumbnailLoader::decode(data, info);
-            QCOMPARE(decoded.size(), sourceSize.scaled(request.targetSize, Qt::KeepAspectRatio));
+            QCOMPARE(decoded.size(), sourceSize);
             const QImage derived = ThumbnailLoader::createThumbnail(source, request.targetSize);
-            QCOMPARE(derived.size(), decoded.size());
+            QCOMPARE(derived.size(), sourceSize.scaled(request.targetSize, Qt::KeepAspectRatio));
         }
     }
 
-    void runnerRoutesOnlyViewerThroughScaleAwareFilter() {
+    void benchmarkThumbnailResampling() {
+        const QString fixturePath = qEnvironmentVariable("ZOIN_THUMBNAIL_BENCHMARK_FIXTURES");
+        if (fixturePath.isEmpty())
+            QSKIP("Set ZOIN_THUMBNAIL_BENCHMARK_FIXTURES to a directory of JPEGs");
+
+        const auto files = QDir(fixturePath).entryInfoList(
+            {"*.jpg"}, QDir::Files, QDir::Name);
+        QVERIFY(!files.isEmpty());
+        for (const QSize bounds : {QSize(256, 292), QSize(512, 635)}) {
+            for (const auto &file : files) {
+                QFile input(file.absoluteFilePath());
+                QVERIFY(input.open(QIODevice::ReadOnly));
+                ImageDecodeRequest request;
+                request.targetSize = bounds;
+                request.expandToCacheResolution = false;
+                ImageData data(request);
+                data.data = input.readAll();
+                data.mimeType = QStringLiteral("image/jpeg");
+                DecodedImageInfo info;
+                const QImage raster = ThumbnailLoader::decode(data, info);
+                QVERIFY(!raster.isNull());
+                QList<qint64> qtTimes, cubicTimes;
+                for (int repeat = 0; repeat < 8; ++repeat) {
+                    for (int pass = 0; pass < 2; ++pass) {
+                        const bool cubic = (repeat + pass) % 2 != 0;
+                        QElapsedTimer timer;
+                        timer.start();
+                        const QImage resized = cubic
+                            ? ThumbnailLoader::createThumbnail(raster, bounds)
+                            : raster.scaled(bounds, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+                        const qint64 elapsed = timer.nsecsElapsed();
+                        QVERIFY(!resized.isNull());
+                        if (repeat > 0)
+                            (cubic ? cubicTimes : qtTimes).append(elapsed);
+                    }
+                }
+                qInfo() << "THUMBNAIL_RESIZE" << file.fileName() << raster.size() << bounds
+                        << qtTimes << cubicTimes;
+            }
+        }
+    }
+
+    void runnerRoutesViewerAndThumbnailsThroughScaleAwareFilter() {
         QImage source(256, 128, QImage::Format_RGB32);
         for (int y = 0; y < source.height(); ++y) {
             for (int x = 0; x < source.width(); ++x) {
@@ -425,7 +469,9 @@ private slots:
         const QSize target(192, 96);
         const QImage viewer = ThumbnailLoader::createViewerImage(source, target);
         const QImage thumbnail = ThumbnailLoader::createThumbnail(source, target);
-        QVERIFY(viewer != thumbnail);
+        QVERIFY(samePixels(viewer, thumbnail));
+        QVERIFY(!samePixels(thumbnail, source.scaled(
+            target, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
         for (bool viewerRequest : {false, true}) {
             ImageDecodeRequest request;
             request.viewerRequest = viewerRequest;

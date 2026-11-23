@@ -1744,6 +1744,191 @@ private slots:
             QTest::newRow(mode) << QString::fromLatin1(mode);
     }
 
+    void folderThumbnailCornersAndScroll_data() {
+        QTest::addColumn<QString>("mode");
+        for (const auto *mode : {"masonry", "grid", "icons"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void folderThumbnailCornersAndScroll() {
+        QFETCH(QString, mode);
+        const bool benchmark = qEnvironmentVariableIsSet("ZOIN_FOLDER_THUMBNAIL_BENCHMARK");
+        if (benchmark && mode != QStringLiteral("masonry"))
+            QSKIP("The folder scroll benchmark uses Masonry");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        auto provider = QSharedPointer<DirectoryPreviewFixture>::create();
+        provider->imagePath = directory.path();
+        const QColor imageColor("#17a654");
+        const QColor folderColor("#f79f57");
+        for (int index = 0; index < 9; ++index) {
+            const QString name = QStringLiteral("tile-%1.png").arg(index);
+            provider->names.append(name);
+            QImage image(QSize(192 + 8 * index, 152), QImage::Format_RGB32);
+            image.fill(imageColor);
+            QVERIFY(image.save(directory.filePath(name)));
+        }
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.directoryPreviewProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("folder-thumbnail-corners");
+        QVariantList folders;
+        for (int index = 0; index < (benchmark ? 64 : 1); ++index)
+            folders.append(previewFolder(index));
+        QVERIFY(session->applyExternalCatalog(folders, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "folderCornersSession", mode));
+        QVERIFY(panel);
+        view.setResizeMode(QQuickView::SizeRootObjectToView);
+        view.resize(900, 570);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        const qreal dpr = view.devicePixelRatio();
+        panel->setProperty("devicePixelRatio", dpr);
+        panel->setProperty("folderPreviewColor", folderColor);
+        auto *layout = panel->findChild<MasonryLayout *>("galleryViewportItem");
+        QVERIFY(layout);
+
+        const auto folderPreview = [panel] {
+            return findVisualItem(panel, "galleryFolderPreview-0");
+        };
+        const auto imageAt = [&](int index) -> QQuickItem * {
+            auto *folder = folderPreview();
+            return folder ? findVisualItem(folder, QStringLiteral("folderPreviewImage-%1").arg(index)) : nullptr;
+        };
+        const auto visibleIndexes = [&]() -> QVariantList {
+            auto *folder = folderPreview();
+            auto *grid = folder ? folder->findChild<MasonryLayout *>("folderPreviewGrid") : nullptr;
+            return grid ? grid->visibleIndexes() : QVariantList{};
+        };
+        const auto ready = [&] {
+            const auto indexes = visibleIndexes();
+            if (indexes.isEmpty())
+                return false;
+            for (const auto &index : indexes) {
+                auto *leaf = imageAt(index.toInt());
+                if (!leaf || !leaf->isVisible() || leaf->width() <= 0 || leaf->height() <= 0
+                    || leaf->property("status").toInt() != 1)
+                    return false;
+            }
+            return true;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(ready(), 5000);
+        if (benchmark) {
+            QSignalSpy presented(&view, &QQuickWindow::frameSwapped);
+            constexpr int leg = 72;
+            const qreal range = qMin(1260.0, layout->contentHeight() - layout->height());
+            QVERIFY(range > 500);
+            QList<qint64> frames;
+            QElapsedTimer timer;
+            for (int sample = 0; sample < 6 * leg; ++sample) {
+                const int phase = sample % (2 * leg);
+                const qreal y = range * (phase <= leg ? phase : 2 * leg - phase) / leg;
+                const auto previousFrameCount = presented.size();
+                timer.start();
+                layout->setContentY(y);
+                view.update();
+                QVERIFY(presented.size() > previousFrameCount || presented.wait(2000));
+                if (sample >= 2 * leg)
+                    frames.append(timer.nsecsElapsed());
+            }
+            qInfo().nospace() << "FOLDER_SCROLL api=" << int(view.rendererInterface()->graphicsApi())
+                              << " dpr=" << dpr << " refresh=" << view.screen()->refreshRate()
+                              << " range=" << range << " frames_ns=" << frames;
+            layout->setContentY(0);
+            QTRY_VERIFY_WITH_TIMEOUT(ready(), 5000);
+        }
+        const auto onPixelGrid = [](qreal coordinate) {
+            return qAbs(coordinate - qRound(coordinate)) < .01;
+        };
+        const auto checkAlignment = [&](QQuickItem *leaf) {
+            QVERIFY(leaf);
+            QVERIFY(leaf->isVisible());
+            const auto origin = leaf->mapToItem(view.contentItem(), QPointF{});
+            const auto physical = origin * dpr;
+            const auto detail = QStringLiteral("%1 origin (%2, %3) physical px")
+                .arg(leaf->objectName()).arg(physical.x()).arg(physical.y());
+            QVERIFY2(onPixelGrid(physical.x()) && onPixelGrid(physical.y()), qPrintable(detail));
+            QVERIFY(onPixelGrid(leaf->width() * dpr) && onPixelGrid(leaf->height() * dpr));
+            const auto xUnit = leaf->mapToItem(view.contentItem(), QPointF(1, 0)) - origin;
+            const auto yUnit = leaf->mapToItem(view.contentItem(), QPointF(0, 1)) - origin;
+            QVERIFY(qAbs(xUnit.x() - 1) < .0001 && qAbs(xUnit.y()) < .0001);
+            QVERIFY(qAbs(yUnit.x()) < .0001 && qAbs(yUnit.y() - 1) < .0001);
+        };
+        for (const auto &index : visibleIndexes())
+            checkAlignment(imageAt(index.toInt()));
+        auto *leaf = imageAt(0);
+        QVERIFY(leaf);
+        const auto origin = leaf->mapToItem(view.contentItem(), QPointF{});
+        const auto physical = origin * dpr;
+        const auto capture = view.grabWindow();
+        QVERIFY(!capture.isNull());
+        const auto pixel = physical.toPoint();
+        const auto center = ((origin + QPointF(leaf->width() / 2, leaf->height() / 2)) * dpr).toPoint();
+        QVERIFY(capture.rect().contains(pixel) && capture.rect().contains(center));
+        QCOMPARE(capture.pixelColor(center), imageColor);
+        if (qEnvironmentVariableIsSet("ZOIN_FOLDER_THUMBNAIL_CAPTURE"))
+            QVERIFY(capture.save(qEnvironmentVariable("ZOIN_FOLDER_THUMBNAIL_CAPTURE")));
+        QCOMPARE(capture.pixelColor(pixel), folderColor);
+    }
+
+    void compactThumbnailCorners_data() {
+        QTest::addColumn<QString>("mode");
+        for (const auto *mode : {"icons", "details", "columns"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void compactThumbnailCorners() {
+        QFETCH(QString, mode);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QColor imageColor("#17a654");
+        QImage pixels(180, 120, QImage::Format_RGB32);
+        pixels.fill(imageColor);
+        const QString path = directory.filePath("thumbnail.png");
+        QVERIFY(pixels.save(path));
+
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("compact-thumbnail-corners");
+        QVERIFY(session->applyExternalCatalog({catalogEntry(0, path)}, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "compactCornersSession", mode));
+        QVERIFY(panel);
+        panel->setProperty("showCursor", false);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        view.setResizeMode(QQuickView::SizeRootObjectToView);
+        view.resize(900, 570);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        const qreal dpr = view.devicePixelRatio();
+
+        QQuickItem *leaf = nullptr;
+        QTRY_VERIFY((leaf = findVisualItem(panel, "galleryThumbnailImage-0")));
+        QTRY_COMPARE(leaf->property("status").toInt(), 1);
+        const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+        const QPointF physical = origin * dpr;
+        QVERIFY2(qAbs(physical.x() - qRound(physical.x())) < .01
+                 && qAbs(physical.y() - qRound(physical.y())) < .01,
+                 qPrintable(QString("Thumbnail origin %1,%2 physical px").arg(physical.x()).arg(physical.y())));
+        QCOMPARE(leaf->mapToItem(view.contentItem(), {1, 0}) - origin, QPointF(1, 0));
+        QCOMPARE(leaf->mapToItem(view.contentItem(), {0, 1}) - origin, QPointF(0, 1));
+        const QSizeF painted(leaf->property("paintedWidth").toReal(),
+                             leaf->property("paintedHeight").toReal());
+        const QPointF topLeft = origin + QPointF((leaf->width() - painted.width()) / 2,
+            (leaf->height() - painted.height()) / (mode == "icons" ? 1 : 2));
+        const QPoint corner(qCeil(topLeft.x() * dpr), qCeil(topLeft.y() * dpr));
+        const QPoint center = ((topLeft + QPointF(painted.width(), painted.height()) / 2) * dpr).toPoint();
+        const QImage capture = view.grabWindow();
+        QVERIFY(capture.rect().contains(corner) && capture.rect().contains(center));
+        const QString captureDir = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+        if (!captureDir.isEmpty())
+            QVERIFY(capture.save(captureDir + "/rounded-thumbnail-" + mode + ".png"));
+        QCOMPARE(capture.pixelColor(center), imageColor);
+        QVERIFY2(capture.pixelColor(corner) != imageColor,
+                 qPrintable(QString("Square corner at %1,%2 physical px").arg(corner.x()).arg(corner.y())));
+    }
+
     void folderPreviewGridAndPixels() {
         QFETCH(QString, mode);
         const QColor folderColor("#f79f57");
@@ -1924,6 +2109,37 @@ private slots:
         QVERIFY(setPanelObjectProperties(panel, "theme", {{"folderIcon", nextFolderColor}}));
         QTRY_COMPARE(frame->property("color").value<QColor>(), nextFolderColor);
         QCOMPARE(view.grabWindow().pixelColor(framePixel), nextFolderColor);
+        const auto applyFolderTint = [&](const QColor &color, bool tint, qulonglong revision) {
+            return session->applyExternalAppearance({QVariantMap{
+                {"entryId", session->entryIdAt(0)},
+                {"highlightStyle", QVariantMap{{"tintIcon", tint},
+                    {"normal", QVariantMap{{"foreground", color.name()}}}}}
+            }}, revision);
+        };
+        const QColor firstTint("#46a67b");
+        const QColor secondTint("#d58149");
+        for (const auto &[color, revision] : {std::pair{firstTint, 2ULL}, std::pair{secondTint, 3ULL}}) {
+            QVERIFY(applyFolderTint(color, true, revision));
+            QCOMPARE(frame->property("color").value<QColor>(), color);
+            auto transparent = color;
+            transparent.setAlphaF(0.5);
+            QCOMPARE(tab->property("color").value<QColor>().rgba(), transparent.rgba());
+            QCOMPARE(view.grabWindow().pixelColor(framePixel), color);
+            QCOMPARE(outerLayout->itemForIndex(0)->boundingRect(), outer);
+            QVERIFY(findVisualItem(preview, "folderPreviewGrid") == grid);
+        }
+        // The native host supplies the artwork hue independently of the panel
+        // palette. A tint-enabled theme with no explicit foreground inherits
+        // the ordinary folder icon's color.
+        QVERIFY(panel->setProperty("folderPreviewColor", folderColor));
+        QVERIFY(session->applyExternalAppearance({QVariantMap{
+            {"entryId", session->entryIdAt(0)},
+            {"highlightStyle", QVariantMap{{"tintIcon", true}}}
+        }}, 4));
+        QCOMPARE(frame->property("color").value<QColor>(), nextFolderColor);
+        QCOMPARE(view.grabWindow().pixelColor(framePixel), nextFolderColor);
+        QVERIFY(applyFolderTint(secondTint, false, 5));
+        QCOMPARE(frame->property("color").value<QColor>(), folderColor);
         for (const auto &nextMode : {"details", "grid", "icons", "masonry"}) {
             panel->setProperty("presentationMode", nextMode);
             if (QString::fromLatin1(nextMode) == "details") {

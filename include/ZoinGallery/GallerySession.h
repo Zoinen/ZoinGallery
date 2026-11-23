@@ -2,6 +2,7 @@
 #define ZOINGALLERY_GALLERYSESSION_H
 
 #include <QObject>
+#include <QPoint>
 #include <QSharedPointer>
 #include <QSize>
 #include <QStringList>
@@ -70,7 +71,10 @@ class GallerySession final : public QObject {
 public:
     static QStringList supportedImageExtensions();
     QObject *pageController() const;
-    Q_INVOKABLE void presentPagedImageAt(int index, int width, int height, bool visible);
+    Q_INVOKABLE void presentPagedImageAt(int index, int width, int height, bool visible,
+                                       int rotation = 0, qreal pixelsPerPoint = 0,
+                                       const QPoint &origin = QPoint());
+    Q_INVOKABLE bool isPdfAt(int index) const;
     Q_INVOKABLE void closePagedImage();
     enum SourceKind {
         LocalFilesystemSource,

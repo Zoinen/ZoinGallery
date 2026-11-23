@@ -47,14 +47,26 @@ Item {
     readonly property bool hasFrame: pageSource.toString() !== ""
     readonly property bool waitingForPdf: active && controller.scalable && !hasFrame && error === ""
     property bool ready: false
+    property url displayedDetailSource: ""
+    property rect displayedDetailRect: Qt.rect(0, 0, 0, 0)
 
     signal frameChanged()
 
     function syncSource() {
         if (controller && ready) {
-            session.presentPagedImageAt(index, Math.ceil(width * devicePixelRatio),
-                                        Math.ceil(height * devicePixelRatio), presenting)
+            const dpr = devicePixelRatio
+            const scale = viewport.zoomFitView ? 0 : viewport.zoomScale * logicalDpi * dpr / 72
+            const origin = scale > 0 ? Qt.point(Math.round(viewport.image.x * dpr),
+                                                Math.round(viewport.image.y * dpr)) : Qt.point(0, 0)
+            session.presentPagedImageAt(index, Math.ceil(viewport.width * dpr),
+                                        Math.ceil(viewport.height * dpr), presenting,
+                                        viewport.rotationMode, scale, origin)
         }
+    }
+
+    function stepPage(direction) {
+        syncSource()
+        controller.step(direction)
     }
 
     function handleKey(event, down) {
@@ -68,7 +80,7 @@ Item {
         if (!direction)
             return false
         if (down)
-            controller.step(direction)
+            stepPage(direction)
         event.accepted = true
         return true
     }
@@ -83,31 +95,32 @@ Item {
             && viewport.originalSize.height === pageSize.height / dpr
     }
 
-    function viewportSource() {
-        if (hasFrame)
-            return pageSource
-        // A thumbnail supplies the fit aspect ratio. Its pixel dimensions
-        // cannot stand in for the PDF page size at manual zoom.
-        if (waitingForPdf && viewport.zoomFitView && typeof session.viewerSourceAt === "function")
-            return session.viewerSourceAt(index)
-        return ""
+    function commitDetail() {
+        if (waitingForPdf)
+            return
+        displayedDetailRect = hasFrame ? controller.detailRect : Qt.rect(0, 0, 0, 0)
+        displayedDetailSource = hasFrame ? controller.detailSource : ""
     }
 
     function applyViewportSource(source, imageIndex) {
         const hasSource = source.toString() !== ""
-        if (waitingForPdf && Qt.application.arguments.includes("--debug-viewer-transition"))
-            console.debug("[FIX:pdf-switch] index", index, hasSource ? "cached preview" : "previous frame")
         if (!hasSource) {
-            if (!waitingForPdf)
+            if (waitingForPdf) {
+                if (Qt.application.arguments.includes("--debug-viewer-transition"))
+                    console.debug("[FIX:pdf-switch] holding the displayed frame for index", index)
+            } else {
                 viewport.resetViewerImages()
+                commitDetail()
+            }
             return
         }
         const wasFit = viewport.zoomFitView
-        viewport.setPageImage(source, hasFrame ? pageSize : Qt.size(0, 0), imageIndex)
+        viewport.setPageImage(source, pageSize, imageIndex)
         if (wasFit)
             viewport.zoomToFit(true)
         else
             viewport.fitViewerImageInViewportBounds()
+        commitDetail()
     }
 
     function scheduleDetail() {
@@ -117,19 +130,27 @@ Item {
 
     function refreshFrame() {
         frameChanged()
+        commitDetail()
+        scheduleDetail()
+    }
+
+    function updateViewportRequest() {
+        if (waitingForPdf)
+            Qt.callLater(root.syncSource)
         scheduleDetail()
     }
 
     function requestDetail() {
         if (!presenting || !active || !controller.scalable || !hasFrame)
             return
-        if (viewport.zoomFitView) {
-            controller.requestDetail(Qt.size(0, 0), Qt.rect(0, 0, 0, 0))
-            return
-        }
         if (viewport.viewportAnimationRunning || viewport.zoomScrollingAnimationRunning
                 || viewport.directManipulationActive || viewport.isRotating) {
             detailTimer.restart()
+            return
+        }
+        if (viewport.zoomFitView) {
+            controller.requestDetail(Qt.size(0, 0), Qt.rect(0, 0, 0, 0))
+            syncSource()
             return
         }
         const image = viewport.unrotatedContent
@@ -144,6 +165,7 @@ Item {
         const bottom = Math.min(fullHeight, Math.ceil(Math.max(first.y, last.y) * dpr))
         controller.requestDetail(Qt.size(fullWidth, fullHeight),
                                  Qt.rect(left, top, Math.max(0, right - left), Math.max(0, bottom - top)))
+        syncSource()
     }
 
     onWidthChanged: syncSource()
@@ -172,11 +194,8 @@ Item {
 
         function onCatalogRevisionChanged() { root.syncSource() }
         function onViewerSourceAtChanged(index) {
-            if (index === root.index) {
+            if (index === root.index)
                 root.syncSource()
-                if (root.waitingForPdf)
-                    Qt.callLater(root.refreshFrame)
-            }
         }
     }
 
@@ -189,15 +208,18 @@ Item {
 
     Connections {
         target: root.viewport
-        function onZoomScaleChanged() { root.scheduleDetail() }
-        function onZoomFitViewChanged() { root.scheduleDetail() }
-        function onRotationModeChanged() { root.scheduleDetail() }
+        function onZoomScaleChanged() { root.updateViewportRequest() }
+        function onZoomFitViewChanged() { root.updateViewportRequest() }
+        function onRotationModeChanged() {
+            root.syncSource()
+            root.scheduleDetail()
+        }
     }
 
     Connections {
         target: root.viewport.image
-        function onXChanged() { root.scheduleDetail() }
-        function onYChanged() { root.scheduleDetail() }
+        function onXChanged() { root.updateViewportRequest() }
+        function onYChanged() { root.updateViewportRequest() }
     }
 
     Timer {
@@ -209,14 +231,14 @@ Item {
     Image {
         parent: root.viewport.unrotatedContent
         objectName: "galleryPageDetailImage"
-        readonly property rect region: root.active ? root.controller.detailRect : Qt.rect(0, 0, 0, 0)
+        readonly property rect region: root.displayedDetailRect
         x: root.snap(region.x * parent.width)
         y: root.snap(region.y * parent.height)
         width: root.snap((region.x + region.width) * parent.width) - x
         height: root.snap((region.y + region.height) * parent.height) - y
-        source: root.active ? root.controller.detailSource : ""
+        source: root.displayedDetailSource
         cache: false
-        visible: !root.viewport.zoomFitView && status === Image.Ready
+        visible: root.active && root.viewport.pagedImage && !root.viewport.zoomFitView && status === Image.Ready
         smooth: false
     }
 
@@ -291,7 +313,7 @@ Item {
             description: root.labels.previous || qsTr("Previous page or frame")
             icon.source: root.iconPrefix + "/chevron-left.svg"
             enabled: root.multipage && root.controller.index > 0
-            onClicked: root.controller.step(-1)
+            onClicked: root.stepPage(-1)
         }
 
         GalleryPageLabel {
@@ -315,7 +337,7 @@ Item {
             icon.source: root.iconPrefix + "/chevron-right.svg"
             enabled: root.multipage && (root.controller.count < 0
                       || root.controller.index + 1 < root.controller.count)
-            onClicked: root.controller.step(1)
+            onClicked: root.stepPage(1)
         }
 
         PageButton {

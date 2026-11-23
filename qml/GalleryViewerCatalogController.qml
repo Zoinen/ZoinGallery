@@ -247,7 +247,7 @@ QtObject {
             viewer.currentIsVectorValue = false
             viewer.sphericViewerMode = false
             viewer.synchronizeVideoPlayback()
-            const url = pageView.viewportSource()
+            const url = pageView.pageSource
             const signature = "page:" + pageView.error + ":" + url
             if (viewer.appliedTierSignature !== signature
                     || viewer.appliedPresentedIndex !== viewer.presentedIndex
@@ -259,7 +259,7 @@ QtObject {
             viewer.currentOriginalSizeValue = pageView.hasFrame ? pageView.pageSize : Qt.size(0, 0)
             viewer.currentSourcesValue = []
             viewer.currentSourceValue = url
-            viewer.currentSourceLevelValue = url.toString() === "" ? -1 : (pageView.hasFrame ? 1 : 0)
+            viewer.currentSourceLevelValue = pageView.hasFrame ? 1 : -1
             return
         }
         if (viewer.currentIsVideoValue) {
@@ -390,7 +390,8 @@ QtObject {
     }
 
     function refreshNeighborSource() {
-        if (!viewer.session || viewer.viewerNavigationTargetIndex < 0) {
+        if (!viewer.session || viewer.viewerNavigationTargetIndex < 0
+                || isPdfAt(viewer.viewerNavigationTargetIndex)) {
             viewer.viewerNavigationTargetSource = ""
             viewer.viewerNavigationTargetSourceLevel = -1
             viewer.viewerNavigationTargetOriginalSize = Qt.size(0, 0)
@@ -421,13 +422,18 @@ QtObject {
                 originalSizeAt(viewer.viewerNavigationTargetIndex)
     }
 
+    function isPdfAt(index) {
+        return viewer.session && typeof viewer.session.isPdfAt === "function"
+                && viewer.session.isPdfAt(index)
+    }
+
     function requestIndex(index, scaleRatio, presented) {
         if (viewer.customContent || !viewer.session || index < 0
                 || viewer.width <= 0 || viewer.height <= 0)
             return
-        if (typeof viewer.session.isImageAt === "function"
+        if (isPdfAt(index) || (typeof viewer.session.isImageAt === "function"
                 && !viewer.session.isImageAt(index)
-                && !(viewer.currentIsVideo && index === viewer.presentedIndex))
+                && !(viewer.currentIsVideo && index === viewer.presentedIndex)))
             return
         const ratio = Math.max(1, scaleRatio === undefined ? 1 : scaleRatio)
         const requestedWidth = Math.ceil(viewer.width * viewer.devicePixelRatio * ratio)

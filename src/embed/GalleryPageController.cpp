@@ -6,34 +6,85 @@
 #include <ZoinGallery/MediaTimingTrace.h>
 #include <QCache>
 #include <QMetaObject>
+#include <QMutex>
+
+#include <limits>
+#include <optional>
 
 namespace ZoinGallery {
 namespace {
 
 constexpr qint64 MaximumCacheBytes = 64 * 1024 * 1024;
 
-QString cacheKey(int page, QSize size, QRect clip)
+QString cacheKey(const GalleryPageController::Source &source, int page,
+                 const GalleryPageController::Viewport &view, QSize fullSize = {}, QRect clip = {})
 {
-    return QString::number(page) + u':' + QString::number(size.width()) + u':'
-        + QString::number(size.height()) + u':' + QString::number(clip.x()) + u':'
-        + QString::number(clip.y()) + u':' + QString::number(clip.width()) + u':'
-        + QString::number(clip.height());
+    QString key = QString::number(source.key.size()) + u':' + source.key + u':' + QString::number(page);
+    const auto append = [&key](int value) { key += u':' + QString::number(value); };
+    if (!clip.isEmpty()) {
+        key += u'c';
+        append(fullSize.width());
+        append(fullSize.height());
+        append(clip.x());
+        append(clip.y());
+        append(clip.width());
+        append(clip.height());
+    } else {
+        append(view.bounds.width());
+        append(view.bounds.height());
+        append(view.rotation);
+        if (view.pixelsPerPoint > 0) {
+            key += u':' + QString::number(view.pixelsPerPoint, 'g', 17);
+            append(view.origin.x());
+            append(view.origin.y());
+        }
+    }
+    return key;
+}
+
+QRect visiblePageRegion(QSize fullSize, const GalleryPageController::Viewport &view)
+{
+    const QSize displayed = view.rotation % 2 ? fullSize.transposed() : fullSize;
+    const auto place = [](int margin, int offset) {
+        return margin >= 0 ? margin / 2 : qBound(margin, offset, 0);
+    };
+    const QPoint position(place(view.bounds.width() - displayed.width(), view.origin.x()),
+                          place(view.bounds.height() - displayed.height(), view.origin.y()));
+    const QRect area = QRect(QPoint{}, view.bounds)
+        .intersected(QRect(position, displayed)).translated(-position);
+    QRect clip = area;
+    switch (view.rotation) {
+    case 1:
+        clip = {area.y(), fullSize.height() - area.x() - area.width(), area.height(), area.width()};
+        break;
+    case 2:
+        clip.moveTo(fullSize.width() - area.x() - area.width(),
+                    fullSize.height() - area.y() - area.height());
+        break;
+    case 3:
+        clip = {fullSize.width() - area.y() - area.height(), area.x(), area.height(), area.width()};
+        break;
+    }
+    // Cover the viewport's final integer-pixel snap as well as the logical clip.
+    return clip.adjusted(-2, -2, 2, 2).intersected(QRect(QPoint{}, fullSize));
 }
 
 } // namespace
 
 struct GalleryPageController::Result {
     ImagePage page;
-    QSize bounds;
+    Viewport viewport;
     QSize fullSize;
     QRect clip;
+    QImage detail;
+    QSize detailSize;
+    QRect detailClip;
     int count = 0;
     int index = 0;
     int repeats = 0;
     bool active = false;
     bool animated = false;
     bool scalable = false;
-    bool prefetch = false;
 };
 
 class GalleryPageController::Worker final : public QObject {
@@ -43,60 +94,103 @@ public:
           _frames(budget < 0 ? MaximumCacheBytes : qMin(budget, MaximumCacheBytes))
     {}
 
-    Result render(const QString &key, const QString &path, const QString &name,
-                  const ImageSourceDescriptor &descriptor, int index, QSize bounds,
-                  QSize fullSize, QRect clip, bool prefetch,
+    std::optional<Result> cached(const QString &key)
+    {
+        QMutexLocker lock(&_cacheMutex);
+        if (const auto *frame = _frames.object(key))
+            return *frame;
+        return std::nullopt;
+    }
+
+    bool canPrefetch() const { return _frames.maxCost() > 0; }
+
+    Result render(const Source &source, int index, Viewport viewport,
+                  QSize fullSize, QRect clip, bool prefetch, bool neighbor,
                   const QSharedPointer<ImageSourceCancellation> &cancel)
     {
         const auto canceled = [&cancel] { return cancel->isCanceled(); };
-        const bool pdf = PagedImageDocument::isPdf(name);
+        const bool pdf = PagedImageDocument::isPdf(source.name);
         Result result;
         result.index = index;
-        result.bounds = bounds;
+        result.viewport = viewport;
         result.fullSize = fullSize;
         result.clip = clip;
         result.active = pdf;
-        result.prefetch = prefetch;
         MediaTimingTrace::Span timing(QStringLiteral("qt.gallery.paged_render"),
-            {{QStringLiteral("name"), name}, {QStringLiteral("page"), index},
+            {{QStringLiteral("name"), source.name}, {QStringLiteral("page"), index},
              {QStringLiteral("prefetch"), prefetch}, {QStringLiteral("detail"), !clip.isEmpty()}});
-        if (_key != key)
-            reset();
-        if (key.isEmpty() || canceled())
+        if (source.key.isEmpty() || canceled()) {
+            if (!neighbor)
+                reset();
             return result;
-        if (!_document) {
-            if (descriptor.isValid() && path.isEmpty() && _provider && !_lease)
-                _lease = _provider->materialize(descriptor, cancel);
-            const auto local = _lease ? _lease->localPath() : path;
+        }
+        const QString frameKey = cacheKey(source, index, viewport, fullSize, clip);
+        if (pdf) {
+            if (auto frame = cached(frameKey)) {
+                timing.set(QStringLiteral("cacheHit"), true);
+                return *frame;
+            }
+        }
+
+        // Warming another file must not discard the active decoder and stream.
+        QSharedPointer<ImageSourceLease> neighborLease;
+        std::unique_ptr<PagedImageDocument> neighborDocument;
+        if (!neighbor && _key != source.key)
+            reset();
+        auto &document = neighbor ? neighborDocument : _document;
+        auto &lease = neighbor ? neighborLease : _lease;
+        if (!document) {
+            if (source.descriptor.isValid() && source.path.isEmpty() && _provider && !lease)
+                lease = _provider->materialize(source.descriptor, cancel);
+            const auto local = lease ? lease->localPath() : source.path;
             if (!local.isEmpty() && !canceled())
-                _document = PagedImageDocument::open(local, name, result.page.error, true);
+                document = PagedImageDocument::open(local, source.name, result.page.error, !neighbor);
             else
                 result.page.error = PageError::CannotRead;
-            _key = key;
+            if (!neighbor)
+                _key = source.key;
         }
-        if (!_document || canceled())
+        if (!document || canceled())
             return result;
-        result.count = _document->pageCount();
-        result.animated = _document->animated();
-        result.repeats = _document->repeats();
-        result.scalable = _document->scalable();
+        result.count = document->pageCount();
+        result.animated = document->animated();
+        result.repeats = document->repeats();
+        result.scalable = document->scalable();
         result.active = pdf || result.count != 1;
         if (!result.active)
             return result;
-        const QSize target = clip.isEmpty()
-            ? boundedPageRaster(_document->pageSize(index), bounds, result.scalable) : fullSize;
-        const QString frameKey = cacheKey(index, target, clip);
-        if (const auto *frame = _frames.object(frameKey)) {
-            result.page = *frame;
+        if (auto frame = !pdf ? cached(frameKey) : std::nullopt) {
+            result.page = frame->page;
             timing.set(QStringLiteral("cacheHit"), true);
         } else {
-            result.page = _document->render(index, target, clip, canceled);
+            const QSize bounds = pdf && viewport.rotation % 2
+                ? viewport.bounds.transposed() : viewport.bounds;
+            const QSize target = clip.isEmpty()
+                ? boundedPageRaster(document->pageSize(index), bounds, result.scalable) : fullSize;
+            result.page = document->render(index, target, clip, canceled);
             if (result.page.error == PageError::None && !result.page.pixels.isNull() && !canceled()) {
                 result.page.pixels = DisplayColorSpace::convertImage(result.page.pixels);
-                _frames.insert(frameKey, new ImagePage(result.page), result.page.pixels.sizeInBytes());
+                if (pdf && clip.isEmpty() && viewport.pixelsPerPoint > 0) {
+                    const QSizeF pixels = result.page.size * viewport.pixelsPerPoint;
+                    const qreal limit = std::numeric_limits<int>::max() - 4;
+                    if (pixels.isValid() && pixels.width() < limit && pixels.height() < limit) {
+                        result.detailSize = pixels.toSize().expandedTo(QSize(1, 1));
+                        result.detailClip = visiblePageRegion(result.detailSize, viewport);
+                        if (!result.detailClip.isEmpty() && !canceled()) {
+                            const auto detail = document->render(index, result.detailSize,
+                                                                 result.detailClip, canceled);
+                            result.detail = DisplayColorSpace::convertImage(detail.pixels);
+                        }
+                    }
+                }
+                if (viewport.pixelsPerPoint <= 0 || !result.detail.isNull()) {
+                    QMutexLocker lock(&_cacheMutex);
+                    _frames.insert(frameKey, new Result(result),
+                                   result.page.pixels.sizeInBytes() + result.detail.sizeInBytes());
+                }
             }
         }
-        result.count = _document->pageCount();
+        result.count = document->pageCount();
         timing.set(QStringLiteral("renderWidth"), result.page.pixels.width());
         timing.set(QStringLiteral("renderHeight"), result.page.pixels.height());
         return result;
@@ -107,12 +201,12 @@ private:
     {
         _document.reset();
         _lease.reset();
-        _frames.clear();
         _key.clear();
     }
     QSharedPointer<ImageSourceProvider> _provider;
     QSharedPointer<ImageSourceLease> _lease;
-    QCache<QString, ImagePage> _frames;
+    QMutex _cacheMutex;
+    QCache<QString, Result> _frames;
     std::unique_ptr<PagedImageDocument> _document;
     QString _key;
 };
@@ -144,10 +238,10 @@ GalleryPageController::~GalleryPageController()
     }
 }
 
-void GalleryPageController::cancel()
+void GalleryPageController::cancel(bool keepRender)
 {
     ++_generation;
-    if (_cancellation)
+    if (_cancellation && !keepRender)
         _cancellation->cancel();
 }
 
@@ -161,39 +255,47 @@ void GalleryPageController::clearImages()
     _detailRect = {};
 }
 
-void GalleryPageController::present(
-    const QString &path, const QString &name, const QString &revision,
-    const ImageSourceDescriptor &descriptor, QSize bounds, bool visible)
+void GalleryPageController::present(Source source, Viewport viewport, bool visible,
+                                    QList<Source> neighbors)
 {
-    const QString key = PagedImageDocument::canOpen(name) && (!path.isEmpty() || descriptor.isValid())
-        ? (descriptor.isValid() ? descriptor.accessKey() : path + u'\x1f' + revision) : QString{};
-    const bool changedSource = _key != key;
-    const bool changedBounds = _bounds != bounds;
+    const bool changedSource = _file != source;
+    const bool changedBounds = _viewport.bounds != viewport.bounds
+        || _viewport.rotation % 2 != viewport.rotation % 2;
+    const bool changedViewport = _viewport != viewport;
     const bool becameVisible = !_visible && visible;
     _visible = visible;
-    _bounds = bounds;
+    _viewport = viewport;
+    if (changedSource || changedViewport || _neighbors != neighbors) {
+        _neighbors = std::move(neighbors);
+        _nextNeighbor = 0;
+    }
     if (changedSource) {
-        cancel();
-        clearImages();
+        const bool pdf = !source.key.isEmpty() && PagedImageDocument::isPdf(source.name);
+        cancel(pdf && cacheKey(source, 0, viewport) == _runningFrameKey);
+        if (pdf) {
+            // The viewport still owns the outgoing base and its sharp detail.
+            _store->remove(_imageId);
+            _imageId.clear();
+            _source.clear();
+        } else {
+            clearImages();
+        }
         _timer.stop();
-        _key = key;
-        _path = path;
-        _name = name;
-        _descriptor = descriptor;
-        _active = !key.isEmpty() && PagedImageDocument::isPdf(name);
+        _file = std::move(source);
+        _active = pdf;
         _scalable = _active;
         _animated = _playing = _manual = _atEnd = false;
         _requestedIndex = _displayedIndex = _count = _completedLoops = 0;
         _error.clear();
         _size = {};
-        _lastBounds = {};
+        _detailSize = {};
         _clip = {};
         _detailPending = false;
         _prefetchPending = false;
-        _pending = !_key.isEmpty() || _thread.isRunning();
+        _pending = !_file.key.isEmpty() || _thread.isRunning();
         emit changed();
-    } else if (changedBounds && !_key.isEmpty()
-               && (_active || _count == 0) && bounds != _lastBounds) {
+    } else if (!_file.key.isEmpty() && (_active || _count == 0)
+               && (changedBounds || (changedViewport && _scalable && _source.isEmpty()))) {
         _pending = true;
     }
     if (!visible)
@@ -205,7 +307,9 @@ void GalleryPageController::present(
 
 void GalleryPageController::clear()
 {
-    present({}, {}, {}, {}, {}, false);
+    if (_file.key.isEmpty() && _busy)
+        cancel();
+    present({}, {}, false, {});
 }
 
 bool GalleryPageController::step(int direction)
@@ -222,7 +326,7 @@ bool GalleryPageController::step(int direction)
         _requestedIndex = next;
         _detailPending = false;
         _pending = true;
-        cancel();
+        cancel(cacheKey(_file, next, _viewport) == _runningFrameKey);
         dispatch();
     }
     emit changed();
@@ -258,7 +362,8 @@ void GalleryPageController::requestDetail(const QSize &fullSize, const QRect &cl
 {
     if (!_scalable || _source.isEmpty() || _requestedIndex != _displayedIndex)
         return;
-    if (_detailSize == fullSize && _clip == clip)
+    if (_detailSize == fullSize && (_clip == clip
+        || (!_detailPending && !_detailSource.isEmpty() && !clip.isEmpty() && _clip.contains(clip))))
         return;
     _detailSize = fullSize;
     _clip = clip;
@@ -275,65 +380,111 @@ void GalleryPageController::requestDetail(const QSize &fullSize, const QRect &cl
 
 void GalleryPageController::dispatch()
 {
-    if (_busy || (!_pending && !_detailPending && !_prefetchPending)
-        || (!_key.isEmpty() && (_bounds.isEmpty() || !_visible)))
+    if (_pending && _scalable && !_viewport.bounds.isEmpty()) {
+        if (const auto ready = _worker->cached(cacheKey(_file, _requestedIndex, _viewport))) {
+            _pending = false;
+            if (MediaTimingTrace::enabled())
+                MediaTimingTrace::event(QStringLiteral("qt.gallery.prepared_page_presented"),
+                    {{QStringLiteral("name"), _file.name}, {QStringLiteral("page"), ready->index},
+                     {QStringLiteral("renderWidth"), ready->page.pixels.width()},
+                     {QStringLiteral("renderHeight"), ready->page.pixels.height()}});
+            applyFrame(*ready);
+        }
+    }
+    if (_busy || (!_file.key.isEmpty() && (_viewport.bounds.isEmpty() || !_visible)))
         return;
+    const bool detail = !_pending && _detailPending;
+    const bool warming = !_pending && !detail;
+    if (warming && (!_visible || _viewport.bounds.isEmpty() || !_worker->canPrefetch()))
+        return;
+    bool neighbor = false;
+    Source source = _file;
+    if (warming && !(_animated && _prefetchPending)) {
+        while (_nextNeighbor < _neighbors.size()) {
+            const auto &candidate = _neighbors.at(_nextNeighbor++);
+            if (!_worker->cached(cacheKey(candidate, 0, _viewport))) {
+                source = candidate;
+                neighbor = true;
+                break;
+            }
+        }
+    }
+    const bool pagePrefetch = warming && !neighbor && _prefetchPending;
+    if (warming && !neighbor && !pagePrefetch)
+        return;
+    const int page = neighbor ? 0 : pagePrefetch ? _displayedIndex + 1 : _requestedIndex;
     if (!_thread.isRunning()) {
         _worker->moveToThread(&_thread);
         _thread.start();
     }
-    const bool detail = !_pending && _detailPending;
-    const bool prefetch = !_pending && !detail && _prefetchPending;
     const QSize fullSize = detail ? _detailSize : QSize{};
     const QRect clip = detail ? _clip : QRect{};
-    const int page = prefetch ? _displayedIndex + 1 : _requestedIndex;
     _pending = false;
-    _detailPending = false;
-    _prefetchPending = false;
+    if (detail)
+        _detailPending = false;
+    if (pagePrefetch)
+        _prefetchPending = false;
     _busy = true;
+    _runningFrameKey = cacheKey(source, page, _viewport, fullSize, clip);
     const quint64 generation = _generation;
     const auto cancellation = QSharedPointer<ImageSourceCancellation>::create();
     _cancellation = cancellation;
+    const bool prefetch = pagePrefetch || neighbor;
     QMetaObject::invokeMethod(_worker, [this, worker = _worker, generation, cancellation,
-        key = _key, path = _path, name = _name, descriptor = _descriptor, bounds = _bounds,
-        page, fullSize, clip, prefetch] {
-        auto result = worker->render(key, path, name, descriptor, page, bounds, fullSize, clip,
-                                     prefetch, cancellation);
-        QMetaObject::invokeMethod(this, [this, generation, result = std::move(result)]() mutable {
-            complete(generation, std::move(result));
+        source = std::move(source), viewport = _viewport, page, fullSize, clip, prefetch, neighbor] {
+        auto result = worker->render(source, page, viewport, fullSize, clip, prefetch, neighbor,
+                                     cancellation);
+        QMetaObject::invokeMethod(this, [this, generation, result = std::move(result), prefetch]() mutable {
+            complete(generation, std::move(result), prefetch);
         });
     });
 }
 
-void GalleryPageController::complete(quint64 generation, Result result)
+void GalleryPageController::complete(quint64 generation, Result result, bool prefetch)
 {
     _busy = false;
-    if (generation != _generation || _key.isEmpty() || result.prefetch) {
+    _runningFrameKey.clear();
+    if (generation != _generation || _file.key.isEmpty() || prefetch) {
         dispatch();
         return;
     }
     if (!result.clip.isEmpty()) {
         if (_clip == result.clip && _detailSize == result.fullSize && _displayedIndex == result.index
             && !result.page.pixels.isNull()) {
-            _detailRect = QRectF(qreal(result.clip.x()) / result.fullSize.width(),
-                qreal(result.clip.y()) / result.fullSize.height(),
-                qreal(result.clip.width()) / result.fullSize.width(),
-                qreal(result.clip.height()) / result.fullSize.height());
-            _detailSource = publish(result.page.pixels, _detailId);
+            applyDetail(result.page.pixels, result.fullSize, result.clip);
             emit changed();
         }
         dispatch();
         return;
     }
-    if (result.bounds != _bounds) {
+    if (result.viewport.bounds != _viewport.bounds
+        || (result.scalable && result.viewport != _viewport)) {
         _pending = true;
         dispatch();
         return;
     }
+    applyFrame(result);
+    dispatch();
+}
 
+void GalleryPageController::applyDetail(const QImage &image, QSize fullSize, QRect clip)
+{
+    if (image.isNull()) {
+        _store->remove(_detailId);
+        _detailId.clear();
+        _detailSource.clear();
+        _detailRect = {};
+        return;
+    }
+    _detailRect = QRectF(qreal(clip.x()) / fullSize.width(), qreal(clip.y()) / fullSize.height(),
+                        qreal(clip.width()) / fullSize.width(), qreal(clip.height()) / fullSize.height());
+    _detailSource = publish(image, _detailId);
+}
+
+void GalleryPageController::applyFrame(const Result &result)
+{
     const bool firstFrame = _source.isEmpty();
     const bool pageChanged = result.index != _displayedIndex;
-    _lastBounds = result.bounds;
     _active = result.active;
     _count = result.count;
     _animated = result.animated;
@@ -350,12 +501,11 @@ void GalleryPageController::complete(quint64 generation, Result result)
         clearImages();
     } else if (_active) {
         _error.clear();
-        if (pageChanged) {
-            _store->remove(_detailId);
-            _detailId.clear();
-            _detailSource.clear();
-            _detailRect = {};
-            _clip = {};
+        if (firstFrame || pageChanged || !result.detail.isNull()) {
+            _detailPending = false;
+            _clip = result.detailClip;
+            _detailSize = result.detailSize;
+            applyDetail(result.detail, result.detailSize, result.detailClip);
         }
         _source = publish(result.page.pixels, _imageId);
         _size = result.page.size;
@@ -368,7 +518,6 @@ void GalleryPageController::complete(quint64 generation, Result result)
         _prefetchPending = (_playing || _scalable) && _count > _displayedIndex + 1;
     }
     emit changed();
-    dispatch();
 }
 
 void GalleryPageController::advance()

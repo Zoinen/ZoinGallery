@@ -552,7 +552,7 @@ Item {
             if (!active)
                 return
             viewerMode.sphericViewerMode = false
-            const source = viewportSource()
+            const source = pageSource
             if (String(viewport.image.source) !== source.toString()
                     || (hasFrame && !viewportMatchesPageSize()))
                 applyViewportSource(source, viewerMode.sourceMasonry.view.currentIndex)

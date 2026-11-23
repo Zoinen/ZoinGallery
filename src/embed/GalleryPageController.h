@@ -5,6 +5,7 @@
 #include <ZoinGallery/ImageSourceProvider.h>
 
 #include <QObject>
+#include <QList>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -35,8 +36,23 @@ public:
                           qint64 cacheBudget, QObject *parent);
     ~GalleryPageController() override;
 
-    void present(const QString &path, const QString &name, const QString &revision,
-                 const ImageSourceDescriptor &descriptor, QSize bounds, bool visible);
+    struct Source {
+        QString path;
+        QString name;
+        QString key;
+        ImageSourceDescriptor descriptor;
+        bool operator==(const Source &other) const { return key == other.key; }
+    };
+
+    struct Viewport {
+        QSize bounds;
+        qreal pixelsPerPoint = 0;
+        int rotation = 0;
+        QPoint origin;
+        bool operator==(const Viewport &) const = default;
+    };
+
+    void present(Source source, Viewport viewport, bool visible, QList<Source> neighbors);
     void clear();
     bool active() const { return _active; }
     int count() const { return _count; }
@@ -62,10 +78,12 @@ private:
     struct Result;
     class Worker;
     void dispatch();
-    void complete(quint64 generation, Result result);
+    void complete(quint64 generation, Result result, bool prefetch);
+    void applyFrame(const Result &result);
+    void applyDetail(const QImage &image, QSize fullSize, QRect clip);
     void advance();
     void armTimer();
-    void cancel();
+    void cancel(bool keepRender = false);
     void clearImages();
     QUrl publish(const QImage &image, QString &id);
 
@@ -76,13 +94,12 @@ private:
     QThread _thread;
     Worker *_worker;
     QTimer _timer;
-    ImageSourceDescriptor _descriptor;
-    QString _path;
-    QString _name;
-    QString _key;
+    Source _file;
+    QList<Source> _neighbors;
+    qsizetype _nextNeighbor = 0;
+    QString _runningFrameKey;
     QString _error;
-    QSize _bounds;
-    QSize _lastBounds;
+    Viewport _viewport;
     QSize _detailSize;
     QRect _clip;
     QRectF _detailRect;

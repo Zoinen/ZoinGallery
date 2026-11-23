@@ -884,6 +884,14 @@ if(BUILD_TESTING)
         LABELS "visual;dpr;thumbnails"
         TIMEOUT 45)
 
+    add_test(NAME CompactThumbnailCornersDpr175Test
+        COMMAND ZoinGalleryMasonryLayoutModesTests compactThumbnailCorners)
+    set_tests_properties(CompactThumbnailCornersDpr175Test PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QSG_RHI_BACKEND=software;QT_QUICK_CONTROLS_STYLE=Basic;QT_SCALE_FACTOR=1.75"
+        LABELS "visual;dpr;thumbnails"
+        TIMEOUT 45)
+
     add_executable(ZoinGalleryLayoutEngineTests
         tests/GalleryLayoutEngineTest.cpp)
     target_include_directories(ZoinGalleryLayoutEngineTests PRIVATE

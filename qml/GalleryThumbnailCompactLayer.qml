@@ -24,7 +24,15 @@ Item {
         y: 0
         width: layer.entry.compactImageContentWidth
         height: parent.height
-        source: layer.imageSource
+        source: {
+            const url = layer.imageSource.toString()
+            if (!url.startsWith("image://") || !url.includes("/zg-thumb-")
+                    || width <= 0 || height <= 0)
+                return layer.imageSource
+            const dpr = layer.entry.renderDpr
+            return url + "?thumbnail-rounded=" + Math.round(width * dpr)
+                + "x" + Math.round(height * dpr) + "x" + dpr
+        }
         sourceSize: Qt.size(
             Math.max(1, Math.round(width * layer.entry.renderDpr)),
             Math.max(1, Math.round(height * layer.entry.renderDpr)))

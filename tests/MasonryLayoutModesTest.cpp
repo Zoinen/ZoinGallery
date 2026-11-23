@@ -1742,6 +1742,65 @@ private slots:
             QTest::newRow(mode) << QString::fromLatin1(mode);
     }
 
+    void compactThumbnailCorners_data() {
+        QTest::addColumn<QString>("mode");
+        for (const auto *mode : {"icons", "details", "columns"})
+            QTest::newRow(mode) << QString::fromLatin1(mode);
+    }
+
+    void compactThumbnailCorners() {
+        QFETCH(QString, mode);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QColor imageColor("#17a654");
+        QImage pixels(180, 120, QImage::Format_RGB32);
+        pixels.fill(imageColor);
+        const QString path = directory.filePath("thumbnail.png");
+        QVERIFY(pixels.save(path));
+
+        QQuickView view;
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(view.engine(), options);
+        auto *session = runtime->createExternalSession("compact-thumbnail-corners");
+        QVERIFY(session->applyExternalCatalog({catalogEntry(0, path)}, 1));
+        auto *panel = qobject_cast<QQuickItem *>(createPanel(view, session, "compactCornersSession", mode));
+        QVERIFY(panel);
+        panel->setProperty("showCursor", false);
+        panel->setProperty("devicePixelRatio", view.devicePixelRatio());
+        view.setResizeMode(QQuickView::SizeRootObjectToView);
+        view.resize(900, 570);
+        QVERIFY(QTest::qWaitForWindowExposed(&view));
+        const qreal dpr = view.devicePixelRatio();
+
+        QQuickItem *leaf = nullptr;
+        QTRY_VERIFY((leaf = findVisualItem(panel, "galleryThumbnailImage-0")));
+        QTRY_COMPARE(leaf->property("status").toInt(), 1);
+        const QPointF origin = leaf->mapToItem(view.contentItem(), QPointF());
+        const QPointF physical = origin * dpr;
+        QVERIFY2(qAbs(physical.x() - qRound(physical.x())) < .01
+                 && qAbs(physical.y() - qRound(physical.y())) < .01,
+                 qPrintable(QString("Thumbnail origin %1,%2 physical px").arg(physical.x()).arg(physical.y())));
+        for (const qreal extent : {leaf->width() * dpr, leaf->height() * dpr})
+            QVERIFY(qAbs(extent - qRound(extent)) < .01);
+        QCOMPARE(leaf->mapToItem(view.contentItem(), {1, 0}) - origin, QPointF(1, 0));
+        QCOMPARE(leaf->mapToItem(view.contentItem(), {0, 1}) - origin, QPointF(0, 1));
+        const QSizeF painted(leaf->property("paintedWidth").toReal(),
+                             leaf->property("paintedHeight").toReal());
+        const QPointF topLeft = origin + QPointF((leaf->width() - painted.width()) / 2,
+            (leaf->height() - painted.height()) / (mode == "icons" ? 1 : 2));
+        const QPoint corner(qCeil(topLeft.x() * dpr), qCeil(topLeft.y() * dpr));
+        const QPoint center = ((topLeft + QPointF(painted.width(), painted.height()) / 2) * dpr).toPoint();
+        const QImage capture = view.grabWindow();
+        QVERIFY(capture.rect().contains(corner) && capture.rect().contains(center));
+        const QString captureDir = qEnvironmentVariable("ZOIN_PIXEL_CAPTURE_DIR");
+        if (!captureDir.isEmpty())
+            QVERIFY(capture.save(captureDir + "/rounded-thumbnail-" + mode + ".png"));
+        QCOMPARE(capture.pixelColor(center), imageColor);
+        QVERIFY2(capture.pixelColor(corner) != imageColor,
+                 qPrintable(QString("Square corner at %1,%2 physical px").arg(corner.x()).arg(corner.y())));
+    }
+
     void folderPreviewGridAndPixels() {
         QFETCH(QString, mode);
         const QColor folderColor("#f79f57");

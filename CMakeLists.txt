@@ -1097,7 +1097,13 @@ set(ZOIN_QML_FILES
     ZGStyle/Menu.qml
     ZGStyle/MenuItem.qml
     ZGStyle/MenuSeparator.qml)
-set(ZOIN_QML_RESOURCES)
+# Lucide 1.27.0 icons used by the page controls.
+set(ZOIN_QML_RESOURCES
+    resources/lucide/chevron-left.svg
+    resources/lucide/chevron-right.svg
+    resources/lucide/play.svg
+    resources/lucide/pause.svg
+    resources/lucide/LICENSE)
 
 set_source_files_properties(ZGStyle/Style.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE)
@@ -1496,7 +1502,8 @@ install(DIRECTORY resources/
         PATTERN "*.frag"
         PATTERN "*.svg"
         PATTERN "*.png"
-        PATTERN "*.ico")
+        PATTERN "*.ico"
+        PATTERN "lucide/LICENSE")
 
 # Conan editable consumers resolve this build-tree package directly. Keeping
 # it beside an exported targets file makes the editable and installed package

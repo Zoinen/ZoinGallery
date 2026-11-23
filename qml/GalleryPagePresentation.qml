@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Controls.impl
 import ZoinGallery.PixelGrid 1.0
 
 Item {
@@ -14,6 +15,7 @@ Item {
     required property bool presenting
     required property color textColor
     required property color barColor
+    property string iconPrefix: "qrc:/ZoinGallery/resources/lucide"
     property var labels: ({})
     readonly property color buttonTextColor: barColor.r * 0.213 + barColor.g * 0.715
                                              + barColor.b * 0.072 > 0.55 ? "#141518" : "#f3f4f6"
@@ -190,14 +192,28 @@ Item {
             focusPolicy: Qt.TabFocus
             Accessible.name: description
             required property string description
-            required property string labelName
+            required property string iconObjectName
             padding: 0
-            contentItem: GalleryPageLabel {
-                objectName: button.labelName
-                text: button.text
-                font.pixelSize: 14
-                color: root.buttonTextColor
-                opacity: button.enabled ? 1 : 0.45
+            contentItem: Item {
+                IconImage {
+                    id: glyph
+                    objectName: button.iconObjectName
+                    Accessible.ignored: true
+                    x: root.snap((parent.width - width) / 2)
+                    y: root.snap((parent.height - height) / 2)
+                    width: root.snap(16)
+                    height: width
+                    sourceSize: Qt.size(16, 16)
+                    source: button.icon.source
+                    color: root.buttonTextColor
+                    fillMode: Image.PreserveAspectFit
+                    smooth: false
+                    opacity: button.enabled ? 1 : 0.45
+                    transform: Translate {
+                        x: glyph.PixelGridAlignment.offsetX
+                        y: glyph.PixelGridAlignment.offsetY
+                    }
+                }
             }
             background: Rectangle {
                 color: button.down || button.hovered || button.activeFocus
@@ -209,9 +225,9 @@ Item {
 
         PageButton {
             objectName: "galleryPreviousPage"
-            labelName: "galleryPreviousPageText"
+            iconObjectName: "galleryPreviousPageIcon"
             description: root.labels.previous || qsTr("Previous page or frame")
-            text: "\u2039"
+            icon.source: root.iconPrefix + "/chevron-left.svg"
             enabled: root.multipage && root.controller.index > 0
             onClicked: root.controller.step(-1)
         }
@@ -231,10 +247,10 @@ Item {
 
         PageButton {
             objectName: "galleryNextPage"
-            labelName: "galleryNextPageText"
+            iconObjectName: "galleryNextPageIcon"
             description: root.labels.next || qsTr("Next page or frame")
             x: pageBar.buttonWidth + pageBar.countWidth
-            text: "\u203a"
+            icon.source: root.iconPrefix + "/chevron-right.svg"
             enabled: root.multipage && (root.controller.count < 0
                       || root.controller.index + 1 < root.controller.count)
             onClicked: root.controller.step(1)
@@ -242,12 +258,13 @@ Item {
 
         PageButton {
             objectName: "galleryPagePlayback"
-            labelName: "galleryPagePlaybackText"
+            iconObjectName: "galleryPagePlaybackIcon"
             x: 2 * pageBar.buttonWidth + pageBar.countWidth
             visible: root.multipage && root.controller.animated
-            description: root.multipage && root.controller.playing
-                ? (root.labels.pause || qsTr("Pause")) : (root.labels.play || qsTr("Play"))
-            text: root.multipage && root.controller.playing ? "\u2016" : "\u25b6\ufe0e"
+            readonly property bool playing: root.multipage && root.controller.playing
+            description: playing ? (root.labels.pause || qsTr("Pause"))
+                                 : (root.labels.play || qsTr("Play"))
+            icon.source: root.iconPrefix + (playing ? "/pause.svg" : "/play.svg")
             onClicked: root.controller.togglePlayback()
         }
     }

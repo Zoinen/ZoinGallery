@@ -68,6 +68,7 @@ FocusScope {
     property string videoPlaybackMode: "autoplay-muted"
     property bool videoPlaybackInitializationAllowed: false
     property var videoIconSources: ({})
+    property alias pageIconPrefix: pageView.iconPrefix
     property var pageLabels: ({})
     property bool playbackPresentationVisible: visible
     property bool currentIsVectorValue: false

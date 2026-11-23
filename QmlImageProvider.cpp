@@ -36,8 +36,7 @@ QImage roundThumbnail(QImage image, QStringView geometry, bool preserveAspect) {
     if (image.isNull())
         return image;
 
-    // ImageView's radius and antialiasing band in physical pixels. The mask
-    // is cached with the raster, so scrolling still draws one ordinary Image.
+    // Use the thumbnail shader's radius and antialiasing band in physical pixels.
     constexpr qreal edgeWidth = 0.8;
     const qreal radius = qMin(4.1 * dpr, qMin(bounds.width(), bounds.height()) * 0.5);
     const qreal stepX = bounds.width() / image.width();
@@ -95,15 +94,17 @@ QImage QmlImageProvider::requestImage(const QString &id, QSize *size, const QSiz
         });
     auto maskSuffix = FolderMaskSuffix;
     qsizetype maskPos = id.indexOf(maskSuffix);
-    if (maskPos < 0) {
+    if (maskPos < 0 && id.startsWith(QLatin1StringView("zg-thumb-"))) {
         maskSuffix = FitMaskSuffix;
         maskPos = id.indexOf(maskSuffix);
     }
     QImage image = _providerImageStore->snapshot(maskPos < 0 ? id : id.left(maskPos));
     if (!image.isNull()) {
-        if (maskPos >= 0)
+        if (maskPos >= 0) {
             image = roundThumbnail(std::move(image),
                 QStringView(id).sliced(maskPos + maskSuffix.size()), maskSuffix == FitMaskSuffix);
+            span.set(QStringLiteral("mask"), QStringLiteral("roundedThumbnail"));
+        }
         span.set(QStringLiteral("outcome"), QStringLiteral("hit"));
         span.set(QStringLiteral("imageWidth"), image.width());
         span.set(QStringLiteral("imageHeight"), image.height());

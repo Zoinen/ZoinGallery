@@ -15,6 +15,7 @@ Item {
     visible: false
 
     property var sourceContext
+    property var gallerySession: null
     readonly property var sourceMasonry:
         sourceContext ? sourceContext.masonry : null
     readonly property var sourceMapper:
@@ -188,6 +189,8 @@ Item {
     }
 
     function setImage(imageIdUrl, originalSize, fromIndex, level) {
+        if (pageView.active)
+            return
         if (String(imageIdUrl).indexOf("vector=1") >= 0) sphericViewerMode = false
         flickableArea.setImage(imageIdUrl, originalSize, fromIndex, level)
     }
@@ -500,8 +503,8 @@ Item {
         imageViewport: flickableArea
     }
 
-    Keys.onPressed: event => inputState.handlePressed(event)
-    Keys.onReleased: event => inputState.handleReleased(event)
+    Keys.onPressed: event => { if (!pageView.handleKey(event, true)) inputState.handlePressed(event) }
+    Keys.onReleased: event => { if (!pageView.handleKey(event, false)) inputState.handleReleased(event) }
 
     StandaloneViewerSurface {
         id: viewerSurface
@@ -529,5 +532,30 @@ Item {
         closeButton: viewerMode.closeButton
         quickWindowKitEnabled: viewerMode.quickWindowKitEnabled
         devicePixelRatio: viewerMode.devicePixelRatio
+    }
+
+    GalleryPagePresentation {
+        id: pageView
+        z: 4
+        anchors.fill: parent
+        session: viewerMode.gallerySession
+        index: presenting && session && viewerMode.sourceMasonry && viewerMode.sourceMasonry.view
+               ? session.indexForEntryId(viewerMode.pathForIndex(viewerMode.sourceMasonry.view.currentIndex))
+               : -1
+        viewport: viewerMode.imageContainer
+        devicePixelRatio: viewerMode.devicePixelRatio
+        presenting: viewerMode.visible && viewerMode.shell.state === "viewer"
+                    && viewerMode.hostWindow.visibility !== Window.Minimized
+        textColor: Style.text
+        barColor: Style.darker
+        onFrameChanged: {
+            if (!active)
+                return
+            viewerMode.sphericViewerMode = false
+            const source = pageSource
+            if (String(viewport.image.source) !== source.toString()
+                    || (hasFrame && !viewportMatchesPageSize()))
+                applyViewportSource(source, viewerMode.sourceMasonry.view.currentIndex)
+        }
     }
 }

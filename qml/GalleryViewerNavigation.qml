@@ -10,6 +10,10 @@ QtObject {
     required property GalleryViewerMotion motion
     required property Item neighborImage
 
+    readonly property bool pdfTarget: viewer.session && viewer.viewerNavigationTargetIndex >= 0
+            && typeof viewer.session.isPdfAt === "function"
+            && viewer.session.isPdfAt(viewer.viewerNavigationTargetIndex)
+
     function resetViewerNavigation() {
         motion.navigationFinishTimer.stop()
         motion.navigationOffsetAnimation.stop()
@@ -89,7 +93,7 @@ QtObject {
         viewer.viewerNavigationTargetSource = ""
         viewer.viewerNavigationTargetSourceLevel = -1
         viewport.cancelWheelPan()
-        if (viewer.viewerNavigationTargetIndex >= 0) {
+        if (viewer.viewerNavigationTargetIndex >= 0 && !pdfTarget) {
             if (!viewport.zoomFitView) {
                 if (viewer.viewerNavigationTargetIndex === viewer.session.currentIndex)
                     viewer.session.requestViewer(0, 0)
@@ -120,6 +124,12 @@ QtObject {
                     0, viewer.viewerNavigationOverdrag + signedDelta)
         if (viewer.viewerNavigationOverdrag <= 0.1) {
             resetViewerNavigation()
+            return
+        }
+        if (pdfTarget) {
+            // The page controller commits the prepared frame as one change.
+            viewer.viewerNavigationRevealed = viewer.viewerNavigationOverdrag
+                    >= viewer.viewerNavigationOverdragThreshold
             return
         }
         if (viewer.viewerNavigationTargetIndex === -1) {
@@ -164,6 +174,13 @@ QtObject {
                     || signedVelocity > 900)
         if (shouldCommit)
             viewer.viewerNavigationGestureCommitted = true
+        if (pdfTarget) {
+            if (shouldCommit)
+                commitViewerNavigation()
+            else
+                resetViewerNavigation()
+            return
+        }
         const targetOffset = shouldCommit
                 ? (viewer.viewerNavigationDirection < 0
                    ? viewer.viewerNavigationTargetTravelDistance

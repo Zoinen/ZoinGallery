@@ -2,6 +2,7 @@
 #include "VectorSource.h"
 #include <QSvgRenderer>
 #include "Decoders/ImageDecoderInterface.h"
+#include "Decoders/PagedImageDocument.h"
 #include "DisplayColorSpace.h"
 #include "ViewerResampler.h"
 #include "src/embed/DecodeSizePolicy.h"
@@ -59,10 +60,22 @@ bool ThumbnailLoader::readMetadata(ImageInfo &result) {
     if (!result.exif.contains("DateTime")) {
         result.exif["DateTimeCreated"] = fileInfo.birthTime();
     }
+    if (ZoinGallery::PagedImageDocument::usesPageThumbnail(result.formatHint())) {
+        ZoinGallery::PageError error;
+        auto document = ZoinGallery::PagedImageDocument::open(
+            result.path, result.formatHint(), error);
+        if (!document)
+            return false;
+        result.imageSize = document->pageSize(0).toSize();
+        result.orientation = ExifOrientation::Horizontal;
+        return !result.imageSize.isEmpty();
+    }
     return metadataRead;
 }
 
 bool ThumbnailLoader::readImage(ImageData &result) {
+    if (ZoinGallery::PagedImageDocument::usesPageThumbnail(result.request.info.formatHint()))
+        return true; // The decoder reads the leased local file on demand.
     bool previewLoaded = false;
     for (int i = 0; i < ImageDecoderFactory::decoderCount(); i++) {
         const auto decoder = ImageDecoderFactory::createDecoder(i);
@@ -108,6 +121,17 @@ bool ThumbnailLoader::readImage(ImageData &result) {
 }
 
 QImage ThumbnailLoader::decode(const ImageData &imageData, DecodedImageInfo &decodedInfo) {
+    const auto &info = imageData.request.info;
+    if (ZoinGallery::PagedImageDocument::usesPageThumbnail(info.formatHint())) {
+        ZoinGallery::PageError error;
+        auto document = ZoinGallery::PagedImageDocument::open(info.path, info.formatHint(), error);
+        if (!document)
+            return {};
+        const QSize size = ZoinGallery::boundedPageRaster(
+            document->pageSize(0), imageData.request.targetSize, document->scalable());
+        decodedInfo.decoderUsed = QFileInfo(info.formatHint()).suffix().toUpper();
+        return normalizeToDisplayColorSpace(document->render(0, size, {}, [] { return false; }).pixels);
+    }
     QSize targetSize = imageData.request.targetSize;
     if (!imageData.request.checkCache &&
         imageData.request.expandToCacheResolution) {
@@ -247,6 +271,8 @@ QStringList ThumbnailLoader::supportedFormats() {
                 formatsSet.insert(QString("*.%1").arg(extension));
             }
         }
+        if (ZoinGallery::PagedImageDocument::isPdf(QStringLiteral("file.pdf")))
+            formatsSet.insert(QStringLiteral("*.pdf"));
         const QStringList result(formatsSet.begin(), formatsSet.end());
         qDebug() << "All supported formats:" << result;
         return result;

@@ -37,6 +37,7 @@ endif()
 
 option(USE_QWK "Use QWindowKit" ON)
 option(USE_EXIV2 "Use Exiv2 for metadata extraction" OFF)
+option(ZOIN_ENABLE_PDF "Render PDF pages with Qt PDF" OFF)
 option(ZOIN_ENABLE_VIDEO_THUMBNAILS
     "Enable video thumbnails through Qt Multimedia" ON)
 option(ZOIN_ENABLE_FFMPEG_BACKEND
@@ -77,6 +78,9 @@ if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     list(APPEND ZOIN_QT_COMPONENTS Multimedia)
 endif()
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS ${ZOIN_QT_COMPONENTS} REQUIRED)
+if(ZOIN_ENABLE_PDF AND NOT TARGET Qt6::Pdf)
+    find_package(Qt6Pdf ${Qt6_VERSION} EXACT CONFIG REQUIRED)
+endif()
 if(ZOIN_ENABLE_VIDEO_PLAYBACK)
     find_package(Qt${QT_VERSION_MAJOR} COMPONENTS MultimediaPrivate REQUIRED)
 endif()
@@ -127,6 +131,7 @@ find_package(PNG REQUIRED)
 find_package(JPEG REQUIRED)
 find_package(libjpeg-turbo REQUIRED)
 find_package(libheif REQUIRED)
+find_package(libavif REQUIRED)
 find_package(WebP REQUIRED)
 
 if (NOT DEFINED WEBP_INCLUDE_DIR)
@@ -314,6 +319,12 @@ set(ZOIN_CORE_SOURCES
     Decoders/DdsDecoder.h
     Decoders/HeicDecoder.cpp
     Decoders/HeicDecoder.h
+    Decoders/PagedImageDocument.cpp
+    Decoders/PagedImageDocument.h
+    Decoders/PagedRasterSources.cpp
+    Decoders/AvifPageSource.cpp
+    src/embed/GalleryPageController.cpp
+    src/embed/GalleryPageController.h
     TinyEXIF/TinyEXIF.h
     TinyEXIF/TinyEXIF.cpp
     TinyEXIF/tinyxml2.cpp
@@ -1075,6 +1086,8 @@ set(ZOIN_QML_FILES
       qml/GalleryViewerOsd.qml
       qml/GalleryViewerCatalogController.qml
       qml/GalleryViewerInput.qml
+      qml/GalleryPagePresentation.qml
+      qml/GalleryPageLabel.qml
       qml/GalleryViewerMotion.qml
       qml/GalleryViewerNavigation.qml
       qml/GalleryViewerSessionReconciler.qml
@@ -1097,7 +1110,13 @@ set(ZOIN_QML_FILES
     ZGStyle/Menu.qml
     ZGStyle/MenuItem.qml
     ZGStyle/MenuSeparator.qml)
-set(ZOIN_QML_RESOURCES)
+# Lucide 1.27.0 icons used by the page controls.
+set(ZOIN_QML_RESOURCES
+    resources/lucide/chevron-left.svg
+    resources/lucide/chevron-right.svg
+    resources/lucide/play.svg
+    resources/lucide/pause.svg
+    resources/lucide/LICENSE)
 
 set_source_files_properties(ZGStyle/Style.qml PROPERTIES
     QT_QML_SINGLETON_TYPE TRUE)
@@ -1372,10 +1391,15 @@ target_link_libraries(ZoinGalleryCore PRIVATE
     Qt${QT_VERSION_MAJOR}::QuickShapesPrivate
     Qt${QT_VERSION_MAJOR}::QuickControls2Impl
     Qt${QT_VERSION_MAJOR}::QuickControls2ImplPrivate
-    Qt${QT_VERSION_MAJOR}::QuickVectorImageGeneratorPrivate)
+    Qt${QT_VERSION_MAJOR}::QuickVectorImageGeneratorPrivate
+    avif)
 if(ZOIN_ENABLE_VIDEO_THUMBNAILS)
     target_link_libraries(ZoinGalleryCore PUBLIC
         Qt${QT_VERSION_MAJOR}::Multimedia)
+endif()
+if(ZOIN_ENABLE_PDF)
+    target_compile_definitions(ZoinGalleryCore PRIVATE ZOIN_ENABLE_PDF)
+    target_link_libraries(ZoinGalleryCore PRIVATE Qt6::Pdf)
 endif()
 if(ZOIN_FFMPEG_TARGETS)
     target_link_libraries(ZoinGalleryCore PUBLIC ${ZOIN_FFMPEG_TARGETS})
@@ -1491,7 +1515,8 @@ install(DIRECTORY resources/
         PATTERN "*.frag"
         PATTERN "*.svg"
         PATTERN "*.png"
-        PATTERN "*.ico")
+        PATTERN "*.ico"
+        PATTERN "lucide/LICENSE")
 
 # Conan editable consumers resolve this build-tree package directly. Keeping
 # it beside an exported targets file makes the editable and installed package

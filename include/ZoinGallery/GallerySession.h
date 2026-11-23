@@ -2,6 +2,7 @@
 #define ZOINGALLERY_GALLERYSESSION_H
 
 #include <QObject>
+#include <QPoint>
 #include <QSharedPointer>
 #include <QSize>
 #include <QStringList>
@@ -53,6 +54,7 @@ class GallerySession final : public QObject {
                NOTIFY videoPlaybackAvailableChanged)
     Q_PROPERTY(QObject *videoPlaybackController READ videoPlaybackController CONSTANT)
     Q_PROPERTY(bool viewerOpen READ viewerOpen WRITE setViewerOpen NOTIFY viewerOpenChanged)
+    Q_PROPERTY(QObject *pageController READ pageController CONSTANT)
     Q_PROPERTY(QUrl viewerSource READ viewerSource NOTIFY viewerSourceChanged)
     Q_PROPERTY(int viewerSourceLevel READ viewerSourceLevel NOTIFY viewerSourceChanged)
     Q_PROPERTY(QString viewerPreviousEntryId READ viewerPreviousEntryId
@@ -67,6 +69,13 @@ class GallerySession final : public QObject {
     Q_PROPERTY(bool shutdownComplete READ shutdownComplete NOTIFY shutdownCompleteChanged)
 
 public:
+    static QStringList supportedImageExtensions();
+    QObject *pageController() const;
+    Q_INVOKABLE void presentPagedImageAt(int index, int width, int height, bool visible,
+                                       int rotation = 0, qreal pixelsPerPoint = 0,
+                                       const QPoint &origin = QPoint());
+    Q_INVOKABLE bool isPdfAt(int index) const;
+    Q_INVOKABLE void closePagedImage();
     enum SourceKind {
         LocalFilesystemSource,
         ExternalCatalogSource,

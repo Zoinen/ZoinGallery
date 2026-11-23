@@ -33,6 +33,7 @@ class ZoinGalleryConan(ConanFile):
     )
     options = {
         "with_qt": [True, False],
+        "with_pdf": [True, False],
         "with_exiv2": [True, False],
         "build_standalone": [True, False],
         "with_video_thumbnails": [True, False],
@@ -42,9 +43,11 @@ class ZoinGalleryConan(ConanFile):
     generators = "CMakeToolchain", "CMakeDeps"
 
     default_options = {
+        "libyuv/*:with_jpeg": False,
         "with_video_thumbnails": False,
         "with_ffmpeg_backend": False,
         "with_qt": True,
+        "with_pdf": False,
         "with_exiv2": False,
         # Preserve the repository's historical/default product: consuming or
         # creating the package directly also builds the standalone app. Hosts
@@ -65,6 +68,8 @@ class ZoinGalleryConan(ConanFile):
     }
 
     def configure(self):
+        if self.options.with_pdf:
+            self.options["qt/*"].with_pdf = True
         if self.options.with_video_thumbnails and not self.options.with_qt:
             raise ConanInvalidConfiguration(
                 "with_video_thumbnails requires with_qt=True")
@@ -82,6 +87,7 @@ class ZoinGalleryConan(ConanFile):
         self.requires("libpng/1.6.45", transitive_libs=True)
         self.requires("libwebp/1.6.0", transitive_libs=True)
         self.requires("libheif/1.20.1", transitive_libs=True)
+        self.requires("libavif/1.4.1", transitive_libs=True)
         if self.options.with_qt:
             self.requires("qt/6.11.1", transitive_libs=True)
         if (self.options.with_video_thumbnails and
@@ -135,6 +141,7 @@ class ZoinGalleryConan(ConanFile):
             "BUILD_TESTING": False,
             "USE_QWK": False,
             "USE_EXIV2": bool(self.options.with_exiv2),
+            "ZOIN_ENABLE_PDF": bool(self.options.with_pdf),
             "ZOIN_ENABLE_VIDEO_THUMBNAILS": bool(
                 self.options.with_video_thumbnails),
             "ZOIN_ENABLE_FFMPEG_BACKEND": bool(
@@ -178,11 +185,14 @@ class ZoinGalleryConan(ConanFile):
             "libjpeg-turbo::jpeg",
             "libjpeg-turbo::turbojpeg",
             "libheif::libheif",
+            "libavif::libavif",
             "libwebp::webp",
             "libwebp::webpdemux",
         ]
         if self.options.with_video_thumbnails:
             core.requires.append("qt::qtMultimedia")
+        if self.options.with_pdf:
+            core.requires.append("qt::qtPdf")
         if (self.options.with_video_thumbnails and
                 self.options.with_ffmpeg_backend):
             core.requires.extend([

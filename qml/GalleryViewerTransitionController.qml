@@ -70,7 +70,8 @@ QtObject {
             return
         }
         captureTransitionTarget(true)
-        if (viewer.currentSourceValue.toString() === ""
+        if (!viewer.pagePresentation.waitingForPdf
+                && viewer.currentSourceValue.toString() === ""
                 && viewer.transitionThumbnailSource.toString() !== "") {
             imageViewport.setImage(viewer.transitionThumbnailSource,
                                    viewer.currentOriginalSizeValue,

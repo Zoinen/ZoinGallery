@@ -33,7 +33,13 @@ Item {
         viewport.viewerImageCrop.fromIndex = -1
     }
 
+    function setPageImage(url, size, index) {
+        clearNativeTier()
+        setImage(url, size, index, 1, true)
+    }
+
     function resetViewerImages() {
+        viewport.pagedImage = false
         pendingVectorSource = ""
         delayedIdSetter.stop()
         viewport.sourceSizeFallbackPending = false
@@ -170,6 +176,7 @@ Item {
     }
 
     function setVectorImage(url, originalSize, fromIndex) {
+        viewport.pagedImage = false
         const retainGeometry = viewport.vectorMode && viewport.image.vectorHasPresentation
         delayedIdSetter.stop()
         clearNativeTier()
@@ -186,7 +193,8 @@ Item {
         if (alreadyPresented) commitVectorSource(url)
     }
 
-    function setImage(imageIdUrl, originalSize, fromIndex, level) {
+    function setImage(imageIdUrl, originalSize, fromIndex, level, paged) {
+        viewport.pagedImage = paged === true
         if (String(imageIdUrl).indexOf("vector=1") >= 0) {
             setVectorImage(imageIdUrl, originalSize, fromIndex)
             return

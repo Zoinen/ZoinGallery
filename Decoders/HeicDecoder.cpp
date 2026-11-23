@@ -15,7 +15,7 @@
 
 REGISTER_DECODER_DEFINITION(HeicDecoder)
 
-static const QStringList HeicExtensions = {"heic", "heif", "avif"};
+static const QStringList HeicExtensions = {"heic", "heif", "avif", "heics", "heifs", "avifs"};
 
 // --- RAII helpers -----------------------------------------------------------
 
@@ -183,20 +183,7 @@ static QColorSpace colorSpaceFromHeicHandle(heif_image_handle *handle) {
     return QColorSpace(QColorSpace::SRgb);
 }
 
-// Decode a heif_image_handle to a self-owned QImage, respecting alpha.
-// Pixels are copied out of the libheif buffer before it is released.
-static QImage decodeHandleToQImage(heif_image_handle* handle) {
-    const bool hasAlpha = heif_image_handle_has_alpha_channel(handle);
-    const auto chroma = hasAlpha ? heif_chroma_interleaved_RGBA : heif_chroma_interleaved_RGB;
-
-    HeicImage img;
-    heif_decoding_options* opts = heif_decoding_options_alloc();
-    opts->ignore_transformations = 0; // apply rotation/mirror
-    heif_error err = heif_decode_image(handle, &img, heif_colorspace_RGB, chroma, opts);
-    heif_decoding_options_free(opts);
-    if (err.code != heif_error_Ok)
-        return {};
-
+QImage copyHeifPixels(const heif_image *img, bool hasAlpha) {
     int stride = 0;
     const uint8_t* pixels = heif_image_get_plane_readonly(img, heif_channel_interleaved, &stride);
     int w = heif_image_get_width(img, heif_channel_interleaved);
@@ -207,11 +194,22 @@ static QImage decodeHandleToQImage(heif_image_handle* handle) {
     const auto qtFormat = hasAlpha ? QImage::Format_RGBA8888 : QImage::Format_RGB888;
     const size_t bytesPerPixel = hasAlpha ? 4 : 3;
 
-    // Copy pixels: HeicImage RAII will release libheif's buffer on return,
-    // so the QImage must own its data before that happens.
     QImage result(w, h, qtFormat);
+    if (result.isNull() || stride < qint64(w) * qint64(bytesPerPixel))
+        return {};
     for (int y = 0; y < h; ++y)
         std::memcpy(result.scanLine(y), pixels + static_cast<ptrdiff_t>(y) * stride, static_cast<size_t>(w) * bytesPerPixel);
+    return result;
+}
+
+QImage decodeHeifHandle(heif_image_handle *handle) {
+    const bool hasAlpha = heif_image_handle_has_alpha_channel(handle);
+    const auto chroma = hasAlpha ? heif_chroma_interleaved_RGBA : heif_chroma_interleaved_RGB;
+    HeicImage img;
+    const auto err = heif_decode_image(handle, &img, heif_colorspace_RGB, chroma, nullptr);
+    if (err.code != heif_error_Ok)
+        return {};
+    QImage result = copyHeifPixels(img, hasAlpha);
     result.setColorSpace(colorSpaceFromHeicHandle(handle));
     return result;
 }
@@ -224,7 +222,7 @@ static QImage decodeHandleToQImage(heif_image_handle* handle) {
 // Returns an empty array on failure.
 static QByteArray decodeHandleToPng(heif_image_handle* handle,
                                     QSize* decodedSize = nullptr) {
-    QImage qimg = decodeHandleToQImage(handle);
+    QImage qimg = decodeHeifHandle(handle);
     if (qimg.isNull())
         return {};
 
@@ -335,7 +333,7 @@ QImage HeicDecoder::decode(const QString &mimeType, const QByteArray &data, QSiz
     if (err.code != heif_error_Ok)
         return {};
 
-    QImage result = decodeHandleToQImage(handle);
+    QImage result = decodeHeifHandle(handle);
     if (result.isNull()) {
         qDebug() << "HeicDecoder::decode: pixel decode failed";
         return {};

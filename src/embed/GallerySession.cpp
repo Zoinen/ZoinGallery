@@ -3,12 +3,14 @@
 
 #include "ExternalCatalogModel.h"
 #include "FileListModel.h"
+#include "GalleryPageController.h"
 #include "GalleryViewModel.h"
 #include "ImageFile.h"
 #include "ImageModel.h"
 #include "LocalFilesystemSource.h"
 #include "SelectedImagesModel.h"
 #include "ThumbnailMemoryCache.h"
+#include "ThumbnailLoader.h"
 #if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
 #include "VideoPlaybackController.h"
 #endif
@@ -20,6 +22,14 @@
 #include <algorithm>
 
 namespace ZoinGallery {
+
+QStringList GallerySession::supportedImageExtensions() {
+    auto formats = ThumbnailLoader::supportedFormats();
+    for (auto &format : formats)
+        format = format.sliced(2);
+    formats.sort();
+    return formats;
+}
 
 class GallerySession::Private {
 public:
@@ -53,6 +63,7 @@ public:
     bool applyingPanelViewportState = false;
     int currentIndex = -1;
     bool viewerOpen = false;
+    GalleryPageController *pageController = nullptr;
 #if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
     VideoPlaybackController *videoPlaybackController = nullptr;
 #endif
@@ -95,6 +106,8 @@ GallerySession::GallerySession(
     d->sessionId = sessionId;
     d->sourceKind = sourceKind;
     d->thumbnailProviderName = thumbnailProviderName;
+    d->pageController = new GalleryPageController(
+        sessionId, thumbnailProviderName, store, imageSourceProvider, viewerFitCacheByteBudget, this);
 #if defined(ZOIN_ENABLE_VIDEO_PLAYBACK)
     if (enableVideoPlayback) {
         d->videoPlaybackController = new VideoPlaybackController(
@@ -415,11 +428,65 @@ void GallerySession::setViewerOpen(bool open) {
     }
     d->viewerOpen = open;
     if (!open) {
+        closePagedImage();
         clearViewerPreviousState(false);
         d->clearViewer();
         emit viewerSourceChanged();
     }
     emit viewerOpenChanged();
+}
+
+QObject *GallerySession::pageController() const {
+    return d->pageController;
+}
+
+bool GallerySession::isPdfAt(int index) const {
+    return isImageAt(index) && PagedImageDocument::isPdf(entryNameAt(index));
+}
+
+void GallerySession::presentPagedImageAt(int index, int width, int height, bool visible,
+                                        int rotation, qreal pixelsPerPoint, const QPoint &origin) {
+    if (d->shutdown || index < 0) {
+        closePagedImage();
+        return;
+    }
+    const auto sourceAt = [this](int row) {
+        GalleryPageController::Source source;
+        source.name = entryNameAt(row);
+        if (!PagedImageDocument::canOpen(source.name))
+            return source;
+        source.path = localPathAt(row);
+        if (d->external)
+            source.descriptor = d->external->imageSourceAt(row);
+        const QString revision = d->local ? d->local->sourceVersionAt(row)
+                                           : QString::number(d->catalogRevision);
+        if (source.descriptor.isValid()) {
+            source.key = source.descriptor.accessKey();
+            if (source.descriptor.contentVersion.isEmpty())
+                source.key += u'\x1f' + revision;
+        } else if (!source.path.isEmpty()) {
+            source.key = source.path + u'\x1f' + revision;
+        }
+        return source;
+    };
+    QList<GalleryPageController::Source> neighbors;
+    if (visible) {
+        for (const int direction : {-1, 1}) {
+            const int row = adjacentViewableIndex(index, direction);
+            if (row < 0 || row == index || !isPdfAt(row))
+                continue;
+            auto source = sourceAt(row);
+            if (!source.path.isEmpty())
+                neighbors.append(std::move(source));
+        }
+    }
+    d->pageController->present(isImageAt(index) ? sourceAt(index) : GalleryPageController::Source{},
+        {QSize(width, height), pixelsPerPoint, (rotation % 4 + 4) % 4, origin},
+        visible, std::move(neighbors));
+}
+
+void GallerySession::closePagedImage() {
+    d->pageController->clear();
 }
 
 QUrl GallerySession::viewerSource() const {

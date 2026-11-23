@@ -45,6 +45,7 @@ Item {
     // poster Image; input, zoom, pan, rotation, and resampling stay here.
     property bool nearestNeighbor: false
     property bool videoMode: false
+    property bool pagedImage: false
     property var videoFrameSource: null
     property var videoPosterImage: null
     property bool videoDisplayFailed: false
@@ -719,6 +720,10 @@ Item {
 
     function setImage(imageIdUrl, originalSize_, fromIndex, level) {
         sourceController.setImage(imageIdUrl, originalSize_, fromIndex, level)
+    }
+
+    function setPageImage(url, size, index) {
+        sourceController.setPageImage(url, size, index)
     }
 
     function applySimpleSource() {

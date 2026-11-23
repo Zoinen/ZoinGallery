@@ -342,6 +342,7 @@ MainWindow {
                 shell: shellController
                 hostWindow: topLevelWindow
                 standaloneController: viewerController
+                gallerySession: standaloneGalleryViewer.session
                 titleBarItem: titleBar
                 viewerBackgroundItem: viewerBackground
                 minimizeButton: titleBar.minimizeControl

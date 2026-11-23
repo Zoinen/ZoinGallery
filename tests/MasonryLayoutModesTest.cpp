@@ -1911,6 +1911,8 @@ private slots:
         QVERIFY2(qAbs(physical.x() - qRound(physical.x())) < .01
                  && qAbs(physical.y() - qRound(physical.y())) < .01,
                  qPrintable(QString("Thumbnail origin %1,%2 physical px").arg(physical.x()).arg(physical.y())));
+        for (const qreal extent : {leaf->width() * dpr, leaf->height() * dpr})
+            QVERIFY(qAbs(extent - qRound(extent)) < .01);
         QCOMPARE(leaf->mapToItem(view.contentItem(), {1, 0}) - origin, QPointF(1, 0));
         QCOMPARE(leaf->mapToItem(view.contentItem(), {0, 1}) - origin, QPointF(0, 1));
         const QSizeF painted(leaf->property("paintedWidth").toReal(),

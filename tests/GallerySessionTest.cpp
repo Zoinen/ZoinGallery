@@ -3482,6 +3482,42 @@ private slots:
         QTRY_VERIFY(model->directoryPreviewAvailable(0));
     }
 
+    void embeddedProbePublishesCatalogGeometryBeforeFullMetadata() {
+        QQmlEngine engine;
+        auto provider = QSharedPointer<PriorityTestProvider>::create(QString(), true);
+        ZoinGallery::RuntimeOptions options;
+        options.persistentCache = false;
+        options.imageSourceProvider = provider;
+        auto *runtime = ZoinGallery::GalleryRuntime::install(&engine, options);
+        auto *session = runtime->createExternalSession("probe-geometry");
+        QVERIFY(session->applyExternalCatalog(priorityCatalog(QString(), 1), 1));
+        auto *model = qobject_cast<ZoinGallery::ExternalCatalogModel *>(session->model());
+        QVERIFY(model);
+        session->ensurePreviews();
+        QTRY_COMPARE(provider->blocked.load(), 1);
+        auto *manager = runtime->findChild<DecodeManager *>();
+        QVERIFY(manager);
+        ZoinGallery::ImageProbeResult result;
+        result.request.source = model->imageSourceAt(0);
+        result.request.requestNamespace = session->sessionId();
+        result.status = ZoinGallery::ImageSourceProbeStatus::Found;
+        result.preview = QImage(16, 12, QImage::Format_RGB32);
+        result.preview.fill(Qt::red);
+        result.sourceSize = QSize(800, 600);
+        result.orientation = 6;
+        manager->imageProbeReady(result);
+        // Layout reads catalog geometry, not the temporary ImageFile facade.
+        const auto index = model->index(0, 0);
+        const QSize knownSize = index.data(ZoinGallery::ExternalCatalogModel::KnownImageSizeRole).toSize();
+        const QVariantMap snapshot = index.data(ZoinGallery::ExternalCatalogModel::VisualSnapshotRole).toMap();
+        provider->releaseMask.store(3);
+        QCOMPARE(knownSize, QSize(600, 800));
+        QVERIFY(snapshot.value("imageDimensionsKnown").toBool());
+        QCOMPARE(snapshot.value("imageWidth").toInt(), 600);
+        QCOMPARE(snapshot.value("imageHeight").toInt(), 800);
+        runtime->shutdown();
+    }
+
     void viewerFitPrefetchBypassesCatalogProbeBarrier() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());

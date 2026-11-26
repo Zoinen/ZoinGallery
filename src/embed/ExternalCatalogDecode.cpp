@@ -1332,11 +1332,25 @@ void ExternalCatalogModel::publishProbeRows(
                 info.orientation =
                     static_cast<ExifOrientation>(result.orientation);
             }
-            item->setInfo(info);
-            item->setFullSize(rotateToOrientation(
-                info.imageSize, info.orientation));
+            // A bounded probe can establish geometry before the full metadata
+            // read. Publish it to the authoritative catalog too: layout and
+            // visual snapshots intentionally do not consult the lazy facade.
+            entry.imageInfo = info;
+            entry.originalSize = rotateToOrientation(
+                info.imageSize, info.orientation);
+            item->setInfo(entry.imageInfo);
+            item->setFullSize(entry.originalSize);
+            MediaTimingTrace::event(
+                QStringLiteral("qt.gallery.probe.geometry_published"), {
+                    {QStringLiteral("fix"), QStringLiteral("[FIX:probe-catalog-geometry]")},
+                    {QStringLiteral("sessionId"), _sessionId},
+                    {QStringLiteral("row"), row},
+                    {QStringLiteral("imageWidth"), entry.originalSize.width()},
+                    {QStringLiteral("imageHeight"), entry.originalSize.height()},
+                });
             emit dataChanged(index(row), index(row),
-                             {FileListModel::ImageFullSizeRole});
+                             {FileListModel::ImageFullSizeRole,
+                              KnownImageSizeRole, VisualSnapshotRole});
         }
         if (!providerId.isEmpty() && entry.thumbnailProviderId.isEmpty()) {
             attachThumbnail(row, providerId);

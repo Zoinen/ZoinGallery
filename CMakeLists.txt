@@ -717,6 +717,10 @@ if(BUILD_TESTING)
         target_link_libraries(ViewerResampleGpuTests PRIVATE
             Qt${QT_VERSION_MAJOR}::Multimedia Qt${QT_VERSION_MAJOR}::QuickPrivate)
     endif()
+    if(ZOIN_ENABLE_VIDEO_PLAYBACK AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        target_sources(ViewerResampleGpuTests PRIVATE tests/MacVideoPresentationChecks.mm)
+        target_link_libraries(ViewerResampleGpuTests PRIVATE "-framework ScreenCaptureKit")
+    endif()
     add_test(NAME ViewerResampleGpuTest COMMAND ViewerResampleGpuTests)
     set_tests_properties(ViewerResampleGpuTest PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;QT_QUICK_CONTROLS_STYLE=Basic"
@@ -1051,6 +1055,9 @@ set(ZOIN_QML_FILES
     qml/GalleryPanelDiagnostics.qml
     qml/GalleryDetailsSchema.qml
     qml/GalleryViewerTransitionSource.qml
+    qml/GalleryDropdownWheelHandler.qml
+    qml/GalleryDropdownScrollView.qml
+    qml/GalleryDropdownPopup.qml
     qml/GalleryThemePalette.qml
     qml/GalleryPresentationMetrics.qml
     qml/GalleryExtensionMetrics.qml
@@ -1263,6 +1270,7 @@ set(QT_QML_GENERATE_QMLLS_INI ${ZOIN_GENERATE_QMLLS_INI})
 
 if(ZOIN_ENABLE_VIDEO_PLAYBACK)
     list(APPEND ZOIN_QML_FILES
+        qml/VideoSubtitle.mjs
         qml/GalleryVideoPlaybackSurface.qml
         qml/GalleryHdrVideoWindow.qml)
 endif()
@@ -1275,7 +1283,11 @@ if(Qt6_VERSION VERSION_GREATER_EQUAL "6.11")
     list(APPEND _zoin_qml_install_args
         INSTALLED_QMLDIR_PATH "lib/qml/ZoinGallery/qmldir")
 endif()
-set(ZOIN_QML_CPP_SOURCES ViewerResampleEffect.h ViewerResampleEffect.cpp)
+set(ZOIN_QML_CPP_SOURCES ViewerResampleEffect.h ViewerResampleEffect.cpp
+    MacVideoEdr.h MacVideoEdr.cpp)
+if(ZOIN_ENABLE_VIDEO_PLAYBACK AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    list(APPEND ZOIN_QML_CPP_SOURCES MacVideoEdr_mac.mm MacVideoSample.mm MacVideoSample.h)
+endif()
 if(ZOIN_ENABLE_VIDEO_PLAYBACK)
     list(APPEND ZOIN_QML_CPP_SOURCES
         ViewerLinearVideoTexture.h
@@ -1409,6 +1421,10 @@ target_link_libraries(ZoinGalleryQml PRIVATE
     Qt${QT_VERSION_MAJOR}::Quick
     Qt${QT_VERSION_MAJOR}::GuiPrivate
     Qt${QT_VERSION_MAJOR}::QuickControls2)
+if(ZOIN_ENABLE_VIDEO_PLAYBACK AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    target_link_libraries(ZoinGalleryQml PRIVATE ${ZOIN_FFMPEG_TARGETS}
+        "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo" "-framework QuartzCore")
+endif()
 if(ZOIN_ENABLE_VIDEO_PLAYBACK)
     target_link_libraries(ZoinGalleryQml PRIVATE
         Qt${QT_VERSION_MAJOR}::QuickPrivate

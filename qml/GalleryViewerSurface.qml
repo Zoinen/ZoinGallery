@@ -203,6 +203,13 @@ PixelGridScope {
 
             Binding {
                 target: videoPlaybackLoader.item
+                property: "viewerHasFocus"
+                value: root.viewer.activeFocus
+                when: videoPlaybackLoader.item !== null
+            }
+
+            Binding {
+                target: videoPlaybackLoader.item
                 property: "pixelAlignmentRevision"
                 value: navigationTranslation.x
                 when: videoPlaybackLoader.item !== null

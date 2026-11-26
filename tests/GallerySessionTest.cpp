@@ -28,6 +28,7 @@
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QDir>
+#include <QProcess>
 #include <QFileInfo>
 #include <QFile>
 #include <QImage>
@@ -44,6 +45,7 @@
 #include "GallerySceneItem.h"
 #include <QSGFlatColorMaterial>
 #include <QtQuick/private/qquickitem_p.h>
+#include <QtQuick/private/qquicktext_p_p.h>
 #include <QtQuick/private/qquickwindow_p.h>
 #define private public
 #include <QtQuick/private/qsgbatchrenderer_p.h>
@@ -1542,6 +1544,193 @@ private slots:
         first->openSource(source(firstFile), QStringLiteral("autoplay-sound"));
         QTRY_VERIFY_WITH_TIMEOUT(first->playing(), 5000);
         QVERIFY(first->muted());
+    }
+
+    void videoSubtitleFormatsDialogue_data() {
+        QTest::addColumn<QString>("dialogue");
+        QTest::addColumn<QString>("reference");
+        QTest::addColumn<int>("alignment");
+        QTest::addColumn<bool>("explicitWeight");
+
+        QTest::newRow("two speakers") << QStringLiteral("- It's nine o'clock.\n- {\\i1}And?{\\i0}")
+            << QStringLiteral("- It's nine o'clock.<br>- <i>And?</i>") << 2 << false;
+        QTest::newRow("overlapping emphasis") << QStringLiteral(R"({\b1\i1}A{\i0\u1}B{\b0\s1}C{\r}D)")
+            << QStringLiteral("<b><i>A</i><u>B</u></b><u><s>C</s></u>D") << 2 << true;
+        QTest::newRow("weight and reset") << QStringLiteral(R"({\b700}A{\b400}B{\i1}C{\rDefault}D)")
+            << QStringLiteral("<b>A</b>B<i>C</i>D") << 2 << true;
+        QTest::newRow("primary color and alignment") << QStringLiteral(R"({\an8\1c&H0080FF&}A{\c\an2}B)")
+            << QStringLiteral("<font color='#ff8000'>A</font>B") << 8 << false;
+        QTest::newRow("breaks and literal text") << QStringLiteral("  <i>&</i>\\Nשלום\\h🙂\r\n\\{x\\} {aside}")
+            << QStringLiteral("&#32;&#32;&lt;i&gt;&amp;&lt;/i&gt;<br>שלום&nbsp;🙂<br>{x} {aside}") << 2 << false;
+        QTest::newRow("literal image markup") << QStringLiteral("<img src='still.png'>  2 < 3")
+            << QStringLiteral("&lt;img src='still.png'&gt;&#32;&#32;2 &lt; 3") << 2 << false;
+        QTest::newRow("effects and drawing") << QStringLiteral(R"({\an3\bord2\shad1\t(0,250,\clip(1,2,3,4)\i1)}A{\p1}m 0 0 l 2 2{\p0}B)")
+            << QStringLiteral("AB") << 3 << false;
+        QTest::newRow("empty cue") << QStringLiteral(R"({\i1\an8})") << QString() << 8 << false;
+    }
+
+    void videoSubtitleFormatsDialogue() {
+        QFETCH(QString, dialogue);
+        QFETCH(QString, reference);
+        QFETCH(int, alignment);
+        QFETCH(bool, explicitWeight);
+        QQmlEngine engine;
+        auto module = engine.importModule(QStringLiteral(":/ZoinGallery/qml/VideoSubtitle.mjs"));
+        QVERIFY2(!module.isError(), qPrintable(module.toString()));
+        auto cue = module.property("format").call({dialogue, engine.evaluate("(color) => color")});
+        QVERIFY2(!cue.isError(), qPrintable(cue.toString()));
+        QCOMPARE(cue.property("alignment").toInt(), alignment);
+        QCOMPARE(cue.property("explicitWeight").toBool(), explicitWeight);
+
+        QQmlComponent component(&engine);
+        component.setData("import QtQuick\nText { textFormat: Text.StyledText }", {});
+        QScopedPointer<QQuickText> label(qobject_cast<QQuickText *>(component.create()));
+        QVERIFY2(label, qPrintable(component.errorString()));
+        const auto layoutOf = [&](const QString &markup) {
+            label->setText(markup);
+            const auto &layout = QQuickTextPrivate::get(label.data())->layout;
+            QList<QTextCharFormat> characters(layout.text().size());
+            for (const auto &range : layout.formats())
+                std::fill_n(characters.begin() + range.start, range.length, range.format);
+            return std::pair{layout.text(), characters};
+        };
+        const auto actual = layoutOf(cue.property("text").toString());
+        const auto expected = layoutOf(reference);
+        QCOMPARE(actual.first, expected.first);
+        for (qsizetype i = 0; i < actual.first.size(); ++i)
+            QCOMPARE(actual.second[i].properties(), expected.second[i].properties());
+    }
+
+    void videoTracksSwitchOnTheCurrentSource() {
+        const auto externalSample = qEnvironmentVariable("ZOIN_VIDEO_TRACK_TEST_FILE");
+        const auto fixture = externalSample.isEmpty()
+            ? QFINDTESTDATA("data/gallery-video-tracks.mkv") : externalSample;
+        QVERIFY(QFileInfo::exists(fixture));
+        const auto source = [](const QString &path) {
+            return QVariantMap{{QStringLiteral("identity"), path},
+                               {QStringLiteral("path"), path}};
+        };
+        ZoinGallery::VideoPlaybackController playback({});
+        QTRY_VERIFY_WITH_TIMEOUT(playback.available(), 5000);
+        playback.openSource(source(fixture), QStringLiteral("autoplay-muted"));
+        QTRY_VERIFY_WITH_TIMEOUT(playback.playing(), 10000);
+        QTRY_COMPARE(playback.audioTracks().size(), externalSample.isEmpty() ? 2 : 10);
+        QTRY_COMPARE(playback.subtitleTracks().size(), externalSample.isEmpty() ? 2 : 7);
+        const QString firstTitle = externalSample.isEmpty()
+            ? QStringLiteral("Original") : QStringLiteral("HDrezka Studio");
+        QVERIFY2(playback.audioTracks().first().toString().contains(firstTitle),
+                 qPrintable(playback.audioTracks().first().toString()));
+        const QString subtitleTitle = externalSample.isEmpty()
+            ? QStringLiteral("SDH") : QStringLiteral("Forced");
+        const auto subtitles = playback.subtitleTracks();
+        QVERIFY(std::any_of(subtitles.cbegin(), subtitles.cend(),
+            [&subtitleTitle](const QVariant &label) { return label.toString().contains(subtitleTitle); }));
+        QTRY_VERIFY(playback.position() >= 250);
+        playback.playPause();
+        QTRY_VERIFY(!playback.playing());
+        const auto position = playback.position();
+        const int audio = playback.activeAudioTrack() == 0 ? 1 : 0;
+        playback.selectAudioTrack(audio);
+        playback.selectSubtitleTrack(1);
+        QTRY_COMPARE(playback.activeAudioTrack(), audio);
+        QTRY_COMPARE(playback.activeSubtitleTrack(), 1);
+        if (externalSample.isEmpty()) {
+            QCOMPARE(playback.property("audioLanguage").toString(), audio == 1 ? "FR" : "EN");
+            QCOMPARE(playback.property("subtitleLanguage").toString(), "EN");
+        }
+        QVERIFY(!playback.playing());
+        QVERIFY(playback.muted());
+        QVERIFY(qAbs(playback.position() - position) <= 100);
+        playback.playPause();
+        QTRY_VERIFY(playback.playing());
+        if (externalSample.isEmpty())
+            QTRY_COMPARE(playback.subtitleText(), QStringLiteral("Second cue"));
+        playback.selectSubtitleTrack(-1);
+        QTRY_COMPARE(playback.activeSubtitleTrack(), -1);
+        QVERIFY(playback.property("subtitleLanguage").toString().isEmpty());
+        QVERIFY(playback.subtitleText().isEmpty());
+        playback.openSource(source(QStringLiteral(ZOIN_TEST_VIDEO_PATH)), QStringLiteral("manual"));
+        QVERIFY(playback.audioTracks().isEmpty());
+        QVERIFY(playback.subtitleTracks().isEmpty());
+        QTRY_COMPARE(playback.state(), QStringLiteral("ready"));
+        QVERIFY(playback.audioTracks().size() <= 1);
+        QVERIFY(playback.subtitleTracks().isEmpty());
+        QVERIFY(playback.subtitleText().isEmpty());
+    }
+
+    void videoTracksPersistPerFileAcrossProcesses() {
+        const QString directory = qEnvironmentVariable("ZOIN_TRACK_RESTORE_TEST_DIR");
+        if (directory.isEmpty()) {
+            QTemporaryDir temp;
+            QVERIFY(temp.isValid());
+            const auto fixture = QFINDTESTDATA("data/gallery-video-tracks.mkv");
+            for (const auto &folder : {"a", "b"}) {
+                QVERIFY(QDir(temp.path()).mkdir(folder));
+                QVERIFY(QFile::copy(fixture, temp.filePath(QString(folder) + "/video.mkv")));
+            }
+            for (const auto &stage : {"save", "restore", "off"}) {
+                QProcess child;
+                auto environment = QProcessEnvironment::systemEnvironment();
+                environment.insert("ZOIN_TRACK_RESTORE_TEST_DIR", temp.path());
+                environment.insert("ZOIN_TRACK_RESTORE_TEST_STAGE", stage);
+                child.setProcessEnvironment(environment);
+                child.setProcessChannelMode(QProcess::MergedChannels);
+                child.start(QCoreApplication::applicationFilePath(),
+                            {"videoTracksPersistPerFileAcrossProcesses"});
+                QVERIFY(child.waitForFinished(30000));
+                QVERIFY2(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
+                         child.readAll().constData());
+            }
+            return;
+        }
+
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory);
+        QCoreApplication::setOrganizationName("TrackRestoreTests");
+        const auto stage = qEnvironmentVariable("ZOIN_TRACK_RESTORE_TEST_STAGE");
+        ZoinGallery::VideoPlaybackController playback({});
+        QTRY_VERIFY(playback.available());
+        const auto open = [&](const QString &folder) {
+            const QString path = QDir(directory).filePath(folder + "/video.mkv");
+            playback.openSource({{"identity", path + stage}, {"path", path}}, "manual");
+            QTRY_COMPARE(playback.state(), "ready");
+            QTRY_COMPARE(playback.audioTracks().size(), 2);
+            QTRY_COMPARE(playback.subtitleTracks().size(), 2);
+        };
+        open("a");
+        if (stage == "save") {
+            QCOMPARE(playback.resumePosition(), 0);
+            QCOMPARE(playback.subtitleOffsetPercent(), 0);
+            playback.setSubtitleOffsetPercent(-7);
+            playback.seekTo(700);
+            QTRY_COMPARE(playback.position(), 700);
+            playback.selectAudioTrack(1);
+            playback.selectSubtitleTrack(1);
+            open("b");
+            QCOMPARE(playback.resumePosition(), 0);
+            QCOMPARE(playback.subtitleOffsetPercent(), 0);
+            playback.setSubtitleOffsetPercent(4);
+            QCOMPARE(playback.activeAudioTrack(), 0);
+            playback.selectSubtitleTrack(0);
+            open("a");
+        }
+        QTRY_COMPARE(playback.activeAudioTrack(), 1);
+        QTRY_COMPARE(playback.activeSubtitleTrack(), stage == "off" ? -1 : 1);
+        QCOMPARE(playback.subtitleOffsetPercent(), -7);
+        QCOMPARE(playback.resumePosition(), stage == "off" ? 0 : 700);
+        if (stage == "restore") {
+            QCOMPARE(playback.position(), 0);
+            playback.resume();
+            QCOMPARE(playback.resumePosition(), 0);
+            QTRY_VERIFY_WITH_TIMEOUT(playback.playing() && playback.position() >= 700, 500);
+            playback.selectSubtitleTrack(-1);
+            playback.seekTo(playback.duration() - 500);
+            QTRY_COMPARE_WITH_TIMEOUT(playback.state(), "ended", 10000);
+        }
+        open("b");
+        QCOMPARE(playback.subtitleOffsetPercent(), 4);
+        QTRY_COMPARE(playback.activeAudioTrack(), 0);
+        QTRY_COMPARE(playback.activeSubtitleTrack(), 0);
     }
 
     void videoLoopKeepsPlaybackAndFramesContinuous_data() {

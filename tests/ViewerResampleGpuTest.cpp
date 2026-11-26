@@ -31,6 +31,14 @@ private slots:
     void hdrVideoMatchesQtSdrConversion();
     void hdrOutputPreservesAbsoluteLuminance_data();
     void hdrOutputPreservesAbsoluteLuminance();
+    void macEdrOutputSwitchesInPlace_data();
+    void macEdrOutputSwitchesInPlace();
+    void macFileMatchesAVPlayer();
+    void macVideoSampleMetadata();
+    void macVideoPresentationDeadlines();
+    void macDecodedDynamicMetadata_data();
+    void macDecodedDynamicMetadata();
+    void macHlgAmbientViewingEnvironment();
     void videoSurfaceOrientationMatchesPixels_data();
     void videoSurfaceOrientationMatchesPixels();
     void videoResampleMatchesReference_data();
@@ -81,17 +89,20 @@ private slots:
 #include <QQuickImageProvider>
 #include <QQuickItem>
 #include <QQuickRenderControl>
+#include <ZoinGallery/GalleryRuntime.h>
 #include <QQuickRenderTarget>
 #include <QQuickWindow>
 #include <QSGTexture>
 #include <QSGTextureProvider>
 #include <QSet>
+#include <QScopeGuard>
 #include <QSurfaceFormat>
 #include <QSignalSpy>
 #include <QTest>
 #include <QTransform>
 #include <rhi/qrhi.h>
 #include <rhi/qshader.h>
+
 
 #include <algorithm>
 #include <array>
@@ -1511,6 +1522,102 @@ void ViewerResampleGpuTest::hdrOutputPreservesAbsoluteLuminance() {
     }
 }
 
+void ViewerResampleGpuTest::macEdrOutputSwitchesInPlace_data()
+{
+    QTest::addColumn<int>("transfer");
+    QTest::newRow("PQ") << int(QVideoFrameFormat::ColorTransfer_ST2084);
+    QTest::newRow("HLG") << int(QVideoFrameFormat::ColorTransfer_STD_B67);
+}
+
+void ViewerResampleGpuTest::macEdrOutputSwitchesInPlace()
+{
+#ifdef Q_OS_MACOS
+    if (!qEnvironmentVariableIntValue("ZOIN_TEST_NATIVE_RENDERER"))
+        QSKIP("Requires a Cocoa window");
+    QFETCH(int, transfer);
+    extern void checkMacVideoPresentation(QVideoFrameFormat::ColorTransfer);
+    checkMacVideoPresentation(static_cast<QVideoFrameFormat::ColorTransfer>(transfer));
+#else
+    QSKIP("Requires macOS");
+#endif
+}
+
+void ViewerResampleGpuTest::macVideoSampleMetadata()
+{
+#ifdef Q_OS_MACOS
+    extern void checkMacVideoSamples(const QString &);
+    checkMacVideoSamples(QFINDTESTDATA("data/hdr10-metadata.mkv"));
+#else
+    QSKIP("Requires macOS");
+#endif
+}
+
+void ViewerResampleGpuTest::macVideoPresentationDeadlines()
+{
+#ifdef Q_OS_MACOS
+    extern void checkMacVideoDeadlines(const QString &);
+    checkMacVideoDeadlines(QFINDTESTDATA("data/hdr10plus-pq.mp4"));
+#else
+    QSKIP("Requires macOS");
+#endif
+}
+
+void ViewerResampleGpuTest::macFileMatchesAVPlayer()
+{
+#ifdef Q_OS_MACOS
+    if (!qEnvironmentVariableIntValue("ZOIN_TEST_NATIVE_RENDERER") ||
+        qEnvironmentVariableIsEmpty("ZOIN_VIDEO_APPLE_REFERENCE"))
+        QSKIP("Requires a Cocoa window and matching source and AVPlayer reference files");
+    extern void compareMacFileWithAVPlayer();
+    compareMacFileWithAVPlayer();
+#else
+    QSKIP("Requires macOS");
+#endif
+}
+
+void ViewerResampleGpuTest::macDecodedDynamicMetadata_data()
+{
+    QTest::addColumn<QString>("fixture");
+    QTest::addColumn<QString>("baseFixture");
+    QTest::addColumn<int>("transfer");
+    QTest::addColumn<int>("minimumDynamicMacOS");
+    QTest::addColumn<bool>("hasUntaggedLeadIn");
+    const auto pqBase = QStringLiteral("data/hdr10-base-pq.mp4");
+    const auto pq = int(QVideoFrameFormat::ColorTransfer_ST2084);
+    QTest::newRow("Dolby Vision profile 8.1") << QStringLiteral("data/dolby-vision-8-pq.mp4")
+                                              << pqBase << pq << 27 << false;
+    QTest::newRow("Dolby Vision profile 8.4") << QStringLiteral("data/dolby-vision-8-hlg.mp4")
+                                              << QStringLiteral("data/hlg-ambient.mp4")
+                                              << int(QVideoFrameFormat::ColorTransfer_STD_B67) << 13 << false;
+    QTest::newRow("HDR10+") << QStringLiteral("data/hdr10plus-pq.mp4") << pqBase << pq << 13 << true;
+}
+
+void ViewerResampleGpuTest::macDecodedDynamicMetadata()
+{
+#ifdef Q_OS_MACOS
+    QFETCH(QString, fixture);
+    QFETCH(QString, baseFixture);
+    QFETCH(int, transfer);
+    QFETCH(int, minimumDynamicMacOS);
+    QFETCH(bool, hasUntaggedLeadIn);
+    extern void checkMacDecodedDynamicMetadata(const QString &, const QString &, QVideoFrameFormat::ColorTransfer, int, bool);
+    checkMacDecodedDynamicMetadata(QFINDTESTDATA(qPrintable(fixture)), QFINDTESTDATA(qPrintable(baseFixture)),
+                                   QVideoFrameFormat::ColorTransfer(transfer), minimumDynamicMacOS, hasUntaggedLeadIn);
+#else
+    QSKIP("Requires the macOS video decoder");
+#endif
+}
+
+void ViewerResampleGpuTest::macHlgAmbientViewingEnvironment()
+{
+#ifdef Q_OS_MACOS
+    extern void checkMacHlgAmbientViewingEnvironment(const QString &);
+    checkMacHlgAmbientViewingEnvironment(QFINDTESTDATA("data/hlg-ambient.mp4"));
+#else
+    QSKIP("Requires the macOS video decoder");
+#endif
+}
+
 void ViewerResampleGpuTest::hdrVideoMatchesQtSdrConversion_data() {
     QTest::addColumn<int>("transfer");
     QTest::addColumn<int>("peakNits");
@@ -1563,7 +1670,8 @@ void ViewerResampleGpuTest::hdrVideoMatchesQtSdrConversion() {
         for (int y = 0; y < size.height(); ++y)
             for (int x = 0; x < size.width(); ++x) {
                 const QRgb a = cpu.pixel(x, y), b = expected.pixel(x, y);
-                QCOMPARE(qAlpha(a), 255);
+                QVERIFY2(qAlpha(a) == 255, qPrintable(QStringLiteral(
+                "Expected opaque video at physical (%1,%2), alpha=%3").arg(x).arg(y).arg(qAlpha(a))));
                 error += std::abs(qRed(a) - qRed(b)) + std::abs(qGreen(a) - qGreen(b))
                     + std::abs(qBlue(a) - qBlue(b));
             }
@@ -2903,10 +3011,14 @@ void ViewerResampleGpuTest::decodedVideoFileRenders() {
     QVERIFY2(fixture.initialize(fallback, targetSize, 1.75), qPrintable(fixture.error));
     QVERIFY(fixture.filtered()->setProperty("videoFrameSource",
                                            QVariant::fromValue(static_cast<QObject *>(&source))));
+    // Match the settled viewer's actual framebuffer projection. An odd
+    // 672x281 target at 175% otherwise leaves physical row 280 transparent.
+    QVERIFY(fixture.filtered()->setProperty("pixelAligned", true));
     const QImage actual = fixture.render();
     QVERIFY(!actual.isNull());
     qInfo() << "Decoded frame" << reference.size() << "pixel format"
             << snapshot.frame.pixelFormat() << "coded size" << snapshot.frame.size()
+            << "mastering peak (nits)" << snapshot.frame.surfaceFormat().maxLuminance()
             << "viewport" << snapshot.frame.surfaceFormat().viewport()
             << "surface rotation" << snapshot.frame.surfaceFormat().rotation()
             << "frame rotation" << snapshot.frame.rotation()
@@ -3259,6 +3371,7 @@ int main(int argc, char **argv) {
     qputenv("QSG_RHI_PREFER_SOFTWARE_RENDERER", "1");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
 #elif defined(Q_OS_MACOS)
+    QQuickWindow::setDefaultAlphaBuffer(true);
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
 #else
     QSurfaceFormat format;
@@ -3268,6 +3381,7 @@ int main(int argc, char **argv) {
     QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
 #endif
     QGuiApplication application(argc, argv);
+    ZoinGallery::GalleryRuntime::registerTypes();
     ViewerResampleGpuTest test;
     return QTest::qExec(&test, argc, argv);
 }

@@ -8,12 +8,16 @@
 
 #include <QAudioOutput>
 #include <QAudioDevice>
+#include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
+#include <QLocale>
 #include <QMediaMetaData>
 #include <QMediaPlayer>
 #include <QMetaObject>
 #include <QMutexLocker>
+#include <QSettings>
 #include <QUrl>
 
 #include <algorithm>
@@ -22,6 +26,24 @@
 
 namespace ZoinGallery {
 
+// Catalog IDs and materialized temporary paths can change on every open.
+static QString fileSettingsGroup(const QVariantMap &source) {
+    QString identity;
+    if (source.value(QStringLiteral("sourceKind")) == QStringLiteral("external")) {
+        const auto key = source.value(QStringLiteral("sourceKey")).toString();
+        if (!key.isEmpty())
+            identity = QStringLiteral("provider:") + key;
+    } else {
+        const auto path = source.value(QStringLiteral("path")).toString();
+        if (!path.isEmpty())
+            identity = QUrl::fromLocalFile(QFileInfo(path).absoluteFilePath()).toString(QUrl::FullyEncoded);
+    }
+    if (identity.isEmpty())
+        return {};
+    const auto digest = QCryptographicHash::hash(identity.toUtf8(), QCryptographicHash::Sha256);
+    return QStringLiteral("Video/Files/") + QString::fromLatin1(digest.toHex());
+}
+
 class VideoPlaybackWorker final : public QObject {
     Q_OBJECT
 
@@ -29,6 +51,8 @@ public:
     VideoPlaybackWorker(QSharedPointer<ImageSourceProvider> provider,
                         QSharedPointer<VideoPlaybackController::FrameMailbox> mailbox)
         : m_provider(std::move(provider)), m_mailbox(std::move(mailbox)) {}
+
+    void acknowledgeClock(quint64 revision) { m_clockRevision = revision; }
 
 public slots:
     void initialize() {
@@ -48,7 +72,7 @@ public slots:
         m_audio = new QAudioOutput(this);
         m_player = new QMediaPlayer(this);
         m_player->setLoops(m_looping ? QMediaPlayer::Infinite : QMediaPlayer::Once);
-        m_sink = new QVideoSink(this);
+        m_sink = ViewerVideoFrameSource::createPlaybackSink(this);
         m_player->setAudioOutput(m_audio);
         m_player->setVideoSink(m_sink);
         if (started) {
@@ -63,6 +87,8 @@ public slots:
         connect(m_player, &QMediaPlayer::playbackStateChanged, this,
                 [this](QMediaPlayer::PlaybackState state) {
             m_playing = state == QMediaPlayer::PlayingState;
+            if (m_playing && m_state == QStringLiteral("ended"))
+                m_state = QStringLiteral("ready");
             if (m_audio) {
                 MediaTimingTrace::event(
                     QStringLiteral("qt.gallery.video.audio_playback_state"),
@@ -86,6 +112,7 @@ public slots:
                 publishSnapshot();
             } else if (status == QMediaPlayer::LoadedMedia
                        && m_state == QStringLiteral("loading")) {
+                restoreTrackSelections();
                 m_state = QStringLiteral("ready");
                 publishSnapshot();
             } else if (status == QMediaPlayer::InvalidMedia
@@ -103,7 +130,10 @@ public slots:
                   m_player->audioTracks().size()},
                  {QStringLiteral("activeAudioTrack"),
                   m_player->activeAudioTrack()}});
+            publishTracks();
         });
+        connect(m_player, &QMediaPlayer::activeTracksChanged, this,
+                &VideoPlaybackWorker::publishTracks);
         connect(m_player, &QMediaPlayer::errorOccurred, this,
                 [this](QMediaPlayer::Error, const QString &message) {
             fail(message.isEmpty() ? tr("The video could not be decoded.")
@@ -111,6 +141,10 @@ public slots:
         });
         connect(m_sink, &QVideoSink::videoFrameChanged, this,
                 [this](const QVideoFrame &frame) { publishFrame(frame); });
+        connect(m_sink, &QVideoSink::subtitleTextChanged, this, [this](const QString &text) {
+            if (m_player && m_player->activeSubtitleTrack() >= 0)
+                emit subtitleReady(m_generation, text);
+        });
     }
 
     void openSource(qulonglong generation, const QVariantMap &source,
@@ -128,6 +162,7 @@ public slots:
             return;
         }
         m_generation = generation;
+        m_fileSettingsGroup = fileSettingsGroup(source);
         m_cancellation = cancellation;
         m_state = QStringLiteral("loading");
         m_error.clear();
@@ -210,10 +245,10 @@ public slots:
     }
 
     void stopSource(qulonglong generation) {
-        m_generation = generation;
         if (m_sourceDevice || m_lease) {
             releaseCurrentSource();
         }
+        m_generation = generation;
         m_state = QStringLiteral("idle");
         m_error.clear();
         m_position = 0;
@@ -243,19 +278,50 @@ public slots:
         }
     }
 
+    void resume(qulonglong generation, qint64 position) {
+        if (!m_player || generation != m_generation)
+            return;
+        seekTo(position);
+        m_player->play();
+    }
+
     void seekBy(qint64 deltaMs) {
         if (!m_player || m_duration <= 0) {
             return;
         }
-        m_player->setPosition(std::clamp(
-            m_player->position() + deltaMs, qint64(0), m_duration));
+        seekTo(m_player->position() + deltaMs);
     }
 
     void seekTo(qint64 positionMs) {
         if (!m_player || m_duration <= 0) {
             return;
         }
-        m_player->setPosition(std::clamp(positionMs, qint64(0), m_duration));
+        const qint64 position = std::clamp(positionMs, qint64(0), m_duration);
+        if (position != m_player->position())
+            m_sink->setSubtitleText({});
+        m_player->setPosition(position);
+    }
+
+    void selectAudioTrack(qulonglong generation, int index) {
+        if (generation == m_generation && m_player
+            && index >= 0 && index < m_player->audioTracks().size()) {
+            m_player->setActiveAudioTrack(index);
+            // The FFmpeg backend updates the active index synchronously
+            // without forwarding activeTracksChanged for a manual selection.
+            publishTracks();
+        }
+    }
+
+    void selectSubtitleTrack(qulonglong generation, int index) {
+        if (generation != m_generation || !m_player || index < -1
+            || index >= m_player->subtitleTracks().size()
+            || index == m_player->activeSubtitleTrack())
+            return;
+        m_sink->setSubtitleText({});
+        m_player->setActiveSubtitleTrack(index);
+        publishTracks();
+        if (m_player->activeSubtitleTrack() >= 0)
+            emit subtitleReady(m_generation, m_sink->subtitleText());
     }
 
     void setLooping(bool looping) {
@@ -336,9 +402,70 @@ signals:
                        const QString &error, qint64 position,
                        qint64 duration, bool playing);
     void frameAvailable();
+    void tracksReady(qulonglong generation, const QVariantList &audio,
+                     const QVariantList &subtitles, int activeAudio, int activeSubtitle,
+                     const QString &audioLanguage, const QString &subtitleLanguage);
+    void subtitleReady(qulonglong generation, const QString &text);
     void shutdownFinished();
 
 private:
+    void restoreTrackSelections() {
+        if (m_fileSettingsGroup.isEmpty())
+            return;
+        QSettings settings;
+        settings.beginGroup(m_fileSettingsGroup);
+        bool valid = false;
+        const int audio = settings.value(QStringLiteral("audio")).toInt(&valid);
+        if (valid && audio >= 0 && audio < m_player->audioTracks().size())
+            m_player->setActiveAudioTrack(audio);
+        const int subtitle = settings.value(QStringLiteral("subtitle")).toInt(&valid);
+        if (valid && subtitle >= -1 && subtitle < m_player->subtitleTracks().size())
+            m_player->setActiveSubtitleTrack(subtitle);
+        publishTracks();
+    }
+
+    QVariantList trackLabels(const QList<QMediaMetaData> &tracks) const {
+        QVariantList labels;
+        labels.reserve(tracks.size());
+        for (const auto &track : tracks) {
+            const QString title = track.value(QMediaMetaData::Title).toString().trimmed();
+            const auto languageCode = track.value(QMediaMetaData::Language).value<QLocale::Language>();
+            const QString language = languageCode > QLocale::C
+                ? QLocale::languageToString(languageCode) : QString();
+            if (!title.isEmpty() && !language.isEmpty() && title.compare(language, Qt::CaseInsensitive) != 0)
+                labels.append(tr("%1 (%2)").arg(title, language));
+            else if (!title.isEmpty() || !language.isEmpty())
+                labels.append(title.isEmpty() ? language : title);
+            else
+                labels.append(tr("Track %1").arg(labels.size() + 1));
+        }
+        // Some files have several completely unlabelled or identically named
+        // tracks. Keep their individual stream indices visible in the menu.
+        const QVariantList names = labels;
+        for (qsizetype i = 0; i < names.size(); ++i) {
+            if (names.count(names[i]) > 1)
+                labels[i] = tr("%1 · Track %2").arg(names[i].toString()).arg(i + 1);
+        }
+        return labels;
+    }
+
+    void publishTracks() {
+        if (!m_player)
+            return;
+        const auto audio = m_player->audioTracks();
+        const auto subtitles = m_player->subtitleTracks();
+        const int activeAudio = m_player->activeAudioTrack();
+        const int activeSubtitle = m_player->activeSubtitleTrack();
+        const auto languageCode = [](const QList<QMediaMetaData> &tracks, int index) -> QString {
+            if (index < 0 || index >= tracks.size())
+                return {};
+            const auto lang = tracks[index].value(QMediaMetaData::Language).value<QLocale::Language>();
+            return lang > QLocale::C ? QLocale::languageToCode(lang, QLocale::ISO639Part1).toUpper() : QString();
+        };
+        emit tracksReady(m_generation, trackLabels(audio), trackLabels(subtitles), activeAudio,
+                         activeSubtitle, languageCode(audio, activeAudio), languageCode(subtitles, activeSubtitle));
+    }
+
     static ImageSourceDescriptor descriptorFromMap(const QVariantMap &map) {
         ImageSourceDescriptor descriptor;
         descriptor.resourceId = map.value(QStringLiteral("resourceId")).toString();
@@ -442,6 +569,10 @@ private:
                 return;
             }
             m_mailbox->frame = frame;
+#ifdef Q_OS_MACOS
+            m_mailbox->clockRevision = m_clockRevision;
+            m_mailbox->clockRunning = m_playing && m_visible;
+#endif
             if (!m_mailbox->deliveryQueued) {
                 m_mailbox->deliveryQueued = true;
                 needsDelivery = true;
@@ -472,7 +603,9 @@ private:
     QSharedPointer<ImageSourceLease> m_lease;
     QSharedPointer<ImageSourceCancellation> m_cancellation;
     QUrl m_sourceUrl;
+    QString m_fileSettingsGroup;
     qulonglong m_generation = 0;
+    quint64 m_clockRevision = 0;
     QString m_state = QStringLiteral("idle");
     QString m_error;
     qint64 m_position = 0;
@@ -510,10 +643,37 @@ VideoPlaybackController::VideoPlaybackController(
             Qt::QueuedConnection);
     connect(worker, &VideoPlaybackWorker::frameAvailable, this,
             &VideoPlaybackController::drainLatestFrame, Qt::QueuedConnection);
+    connect(worker, &VideoPlaybackWorker::tracksReady, this,
+            [this](qulonglong generation, const QVariantList &audio, const QVariantList &subtitles,
+                   int activeAudio, int activeSubtitle, const QString &audioLanguage, const QString &subtitleLanguage) {
+        if (generation != m_generation.load(std::memory_order_acquire)
+            || m_state == QStringLiteral("failed")
+            || (m_audioTracks == audio && m_subtitleTracks == subtitles
+                && m_audioLanguage == audioLanguage && m_subtitleLanguage == subtitleLanguage
+                && m_activeAudioTrack == activeAudio && m_activeSubtitleTrack == activeSubtitle))
+            return;
+        if (m_activeSubtitleTrack != activeSubtitle)
+            updateSubtitleText({});
+        m_audioLanguage = audioLanguage;
+        m_subtitleLanguage = subtitleLanguage;
+        m_audioTracks = audio;
+        m_subtitleTracks = subtitles;
+        m_activeAudioTrack = activeAudio;
+        m_activeSubtitleTrack = activeSubtitle;
+        emit tracksChanged();
+    }, Qt::QueuedConnection);
+    connect(worker, &VideoPlaybackWorker::subtitleReady, this,
+            [this](qulonglong generation, const QString &text) {
+        if (generation == m_generation.load(std::memory_order_acquire)
+            && m_activeSubtitleTrack >= 0)
+            updateSubtitleText(text);
+    }, Qt::QueuedConnection);
     connect(worker, &VideoPlaybackWorker::shutdownFinished,
             thread, &QThread::quit, Qt::DirectConnection);
     connect(thread, &QThread::finished, worker, &QObject::deleteLater);
     connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
+            this, &VideoPlaybackController::saveProgress);
     thread->start();
 }
 
@@ -538,6 +698,13 @@ void VideoPlaybackController::openSource(const QVariantMap &source,
     }
     invalidateSource(true);
     m_sourceIdentity = identity;
+    m_fileSettingsGroup = fileSettingsGroup(source);
+    if (!m_fileSettingsGroup.isEmpty()) {
+        QSettings settings;
+        m_resumePosition = settings.value(m_fileSettingsGroup + QStringLiteral("/positionMs")).toLongLong();
+        updateSubtitleOffsetPercent(settings.value(m_fileSettingsGroup + QStringLiteral("/subtitleOffsetPercent")).toInt(), false);
+    }
+    m_progressTimer.start();
     m_cancellation = QSharedPointer<ImageSourceCancellation>::create();
     const qulonglong generation = m_generation.load(std::memory_order_acquire);
     m_frameMailbox->generation.store(generation, std::memory_order_release);
@@ -575,13 +742,25 @@ void VideoPlaybackController::stop() {
 void VideoPlaybackController::playPause() {
     if (m_worker) {
         QMetaObject::invokeMethod(m_worker, "playPause", Qt::QueuedConnection);
+        resetPresentationClock();
     }
+}
+
+void VideoPlaybackController::resume() {
+    if (!m_worker || m_resumePosition <= 0 || m_resumePosition >= m_duration)
+        return;
+    QMetaObject::invokeMethod(m_worker, "resume", Qt::QueuedConnection,
+        Q_ARG(qulonglong, m_generation.load(std::memory_order_acquire)), Q_ARG(qint64, m_resumePosition));
+    resetPresentationClock();
+    m_resumePosition = 0;
+    emit changed();
 }
 
 void VideoPlaybackController::seekBy(qint64 deltaMs) {
     if (m_worker) {
         QMetaObject::invokeMethod(m_worker, "seekBy", Qt::QueuedConnection,
                                   Q_ARG(qint64, deltaMs));
+        resetPresentationClock();
     }
 }
 
@@ -589,6 +768,7 @@ void VideoPlaybackController::seekTo(qint64 positionMs) {
     if (m_worker) {
         QMetaObject::invokeMethod(m_worker, "seekTo", Qt::QueuedConnection,
                                   Q_ARG(qint64, positionMs));
+        resetPresentationClock();
     }
 }
 
@@ -597,6 +777,7 @@ void VideoPlaybackController::toggleLoop() {
     if (m_worker) {
         QMetaObject::invokeMethod(m_worker, "setLooping", Qt::QueuedConnection,
                                   Q_ARG(bool, m_looping));
+        resetPresentationClock();
     }
     emit changed();
 }
@@ -604,6 +785,31 @@ void VideoPlaybackController::toggleLoop() {
 void VideoPlaybackController::toggleMute() {
     if (m_mutePreference) {
         m_mutePreference->setOverride(!m_muted);
+    }
+}
+
+void VideoPlaybackController::selectAudioTrack(int index) {
+    if (m_worker && index >= 0 && index < m_audioTracks.size()) {
+        QMetaObject::invokeMethod(m_worker, "selectAudioTrack", Qt::QueuedConnection,
+            Q_ARG(qulonglong, m_generation.load(std::memory_order_acquire)), Q_ARG(int, index));
+        resetPresentationClock();
+        if (!m_fileSettingsGroup.isEmpty()) {
+            QSettings settings;
+            settings.setValue(m_fileSettingsGroup + QStringLiteral("/audio"), index);
+            settings.sync();
+        }
+    }
+}
+
+void VideoPlaybackController::selectSubtitleTrack(int index) {
+    if (m_worker && index >= -1 && index < m_subtitleTracks.size()) {
+        QMetaObject::invokeMethod(m_worker, "selectSubtitleTrack", Qt::QueuedConnection,
+            Q_ARG(qulonglong, m_generation.load(std::memory_order_acquire)), Q_ARG(int, index));
+        if (!m_fileSettingsGroup.isEmpty()) {
+            QSettings settings;
+            settings.setValue(m_fileSettingsGroup + QStringLiteral("/subtitle"), index);
+            settings.sync();
+        }
     }
 }
 
@@ -635,6 +841,7 @@ void VideoPlaybackController::setPresentationVisible(bool visible) {
         QMetaObject::invokeMethod(m_worker, "setPresentationVisible",
                                   Qt::QueuedConnection,
                                   Q_ARG(bool, visible));
+        resetPresentationClock();
     }
 }
 
@@ -666,16 +873,30 @@ void VideoPlaybackController::drainLatestFrame() {
     }
     QVideoFrame frame;
     qulonglong generation = 0;
+    bool allowUpcoming = false;
     {
         QMutexLocker lock(&m_frameMailbox->mutex);
         frame = m_frameMailbox->frame;
         generation = m_frameMailbox->generation.load(std::memory_order_relaxed);
+        allowUpcoming = m_frameMailbox->clockRunning && m_frameMailbox->clockRevision == m_clockRevision;
         m_frameMailbox->deliveryQueued = false;
     }
     if (generation == m_generation.load(std::memory_order_acquire)) {
         if (m_videoSink) m_videoSink->setVideoFrame(frame);
-        if (m_frameSource) m_frameSource->acceptFrame(frame);
+        if (m_frameSource) m_frameSource->acceptFrame(frame, allowUpcoming && m_presentationVisible && m_playing);
     }
+}
+
+void VideoPlaybackController::resetPresentationClock() {
+#ifdef Q_OS_MACOS
+    // Called immediately after posting a transport command. Only frames from
+    // the worker's new clock can schedule a future image on the native layer.
+    const quint64 revision = ++m_clockRevision;
+    if (m_frameSource) m_frameSource->cancelUpcoming();
+    QMetaObject::invokeMethod(m_worker, [worker = m_worker.data(), revision] {
+        worker->acknowledgeClock(revision);
+    }, Qt::QueuedConnection);
+#endif
 }
 
 void VideoPlaybackController::acceptAvailability(bool available) {
@@ -703,19 +924,53 @@ void VideoPlaybackController::acceptSnapshot(
     if (generation != m_generation.load(std::memory_order_acquire)) {
         return;
     }
+    if (state == QStringLiteral("ended")) {
+        m_resumePosition = 0;
+        m_pendingProgress = 0;
+        saveProgress();
+    } else if (state == QStringLiteral("ready") && duration > 0) {
+        if (m_resumePosition >= duration)
+            m_resumePosition = 0;
+        if (position != m_position && position < duration)
+            m_pendingProgress = position;
+        if (!playing || m_progressTimer.elapsed() >= 5000)
+            saveProgress();
+    }
     m_state = state;
     m_error = error;
     m_position = position;
     m_duration = duration;
+    if (m_playing && !playing && m_frameSource) m_frameSource->cancelUpcoming();
     m_playing = playing;
+    if (state == QStringLiteral("failed"))
+        resetTracks();
     emit changed();
 }
 
+void VideoPlaybackController::saveProgress() {
+    if (!m_pendingProgress || m_fileSettingsGroup.isEmpty())
+        return;
+    QSettings settings;
+    const QString key = m_fileSettingsGroup + QStringLiteral("/positionMs");
+    if (*m_pendingProgress > 0)
+        settings.setValue(key, *m_pendingProgress);
+    else
+        settings.remove(key);
+    m_pendingProgress.reset();
+    m_progressTimer.restart();
+}
+
 void VideoPlaybackController::invalidateSource(bool clearFrame) {
+    saveProgress();
+    m_pendingProgress.reset();
+    m_resumePosition = 0;
+    m_fileSettingsGroup.clear();
+    updateSubtitleOffsetPercent(0, false);
     const qulonglong previousGeneration =
         m_generation.load(std::memory_order_acquire);
     const qulonglong generation =
         m_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+    resetTracks();
     if (m_cancellation) {
         MediaTimingTrace::event(QStringLiteral("qt.gallery.video.cancel"),
             {{QStringLiteral("generation"), previousGeneration},
@@ -732,6 +987,41 @@ void VideoPlaybackController::invalidateSource(bool clearFrame) {
         if (m_videoSink) m_videoSink->setVideoFrame(QVideoFrame());
         if (m_frameSource) m_frameSource->acceptFrame(QVideoFrame());
     }
+}
+
+void VideoPlaybackController::updateSubtitleText(const QString &text) {
+    if (m_subtitleText == text)
+        return;
+    m_subtitleText = text;
+    emit subtitleTextChanged();
+}
+
+void VideoPlaybackController::setSubtitleOffsetPercent(int percent) {
+    updateSubtitleOffsetPercent(percent, true);
+}
+
+void VideoPlaybackController::updateSubtitleOffsetPercent(int percent, bool save) {
+    percent = std::clamp(percent, -100, 100);
+    if (m_subtitleOffsetPercent == percent)
+        return;
+    m_subtitleOffsetPercent = percent;
+    if (save && !m_fileSettingsGroup.isEmpty())
+        QSettings().setValue(m_fileSettingsGroup + QStringLiteral("/subtitleOffsetPercent"), percent);
+    emit subtitleOffsetPercentChanged();
+}
+
+void VideoPlaybackController::resetTracks() {
+    updateSubtitleText({});
+    if (m_audioTracks.isEmpty() && m_subtitleTracks.isEmpty()
+        && m_activeAudioTrack == -1 && m_activeSubtitleTrack == -1)
+        return;
+    m_audioLanguage.clear();
+    m_subtitleLanguage.clear();
+    m_audioTracks.clear();
+    m_subtitleTracks.clear();
+    m_activeAudioTrack = -1;
+    m_activeSubtitleTrack = -1;
+    emit tracksChanged();
 }
 
 void VideoPlaybackController::postWorkerStop() {

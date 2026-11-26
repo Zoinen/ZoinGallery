@@ -413,7 +413,8 @@ int main(int argc, char *argv[])
     applyMacApplicationDockIconPolicy(true);
 
     QQuickStyle::setStyle("ZGStyle");
-#if defined(__USE_QWK) && (defined(Q_OS_WIN) || defined(Q_OS_MACOS))
+#if (defined(__USE_QWK) && (defined(Q_OS_WIN) || defined(Q_OS_MACOS))) \
+    || (defined(Q_OS_MACOS) && defined(ZOIN_ENABLE_VIDEO_PLAYBACK))
     QQuickWindow::setDefaultAlphaBuffer(true);
 #else
     QQuickWindow::setDefaultAlphaBuffer(false);

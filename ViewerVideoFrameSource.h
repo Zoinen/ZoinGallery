@@ -22,21 +22,25 @@ class ViewerVideoFrameSource : public QObject
     Q_PROPERTY(bool hasFrame READ hasFrame NOTIFY frameChanged)
     Q_PROPERTY(QSize frameSize READ frameSize NOTIFY frameChanged)
     Q_PROPERTY(quint64 revision READ revision NOTIFY frameChanged)
+    Q_PROPERTY(bool edrEligible READ edrEligible NOTIFY frameChanged)
     Q_PROPERTY(bool hdr READ hdr NOTIFY hdrChanged)
 
 public:
     struct Snapshot {
         QVideoFrame frame;
         quint64 revision = 0;
+        bool allowUpcoming = false;
     };
 
     explicit ViewerVideoFrameSource(QObject *parent = nullptr);
 
     QObject *sink();
+    static QVideoSink *createPlaybackSink(QObject *parent);
     bool hasFrame() const;
     QSize frameSize() const;
     quint64 revision() const;
     bool hdr() const;
+    bool edrEligible() const;
     Snapshot snapshot() const;
 
 signals:
@@ -45,12 +49,14 @@ signals:
 
 private:
     friend class VideoPlaybackController;
-    void acceptFrame(const QVideoFrame &frame);
+    void acceptFrame(const QVideoFrame &frame, bool allowUpcoming = false);
+    void cancelUpcoming();
 
     QVideoSink *m_sink = nullptr;
     mutable QMutex m_mutex;
     QVideoFrame m_frame;
     quint64 m_revision = 0;
+    bool m_allowUpcoming = false;
 };
 
 } // namespace ZoinGallery

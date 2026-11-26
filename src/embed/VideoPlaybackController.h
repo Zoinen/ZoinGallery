@@ -2,6 +2,7 @@
 #define ZOINGALLERY_VIDEOPLAYBACKCONTROLLER_H
 
 #include <QObject>
+#include <QElapsedTimer>
 #include <QMutex>
 #include <QMetaType>
 #include <QPointer>
@@ -9,6 +10,7 @@
 #include <QThread>
 #include <QVideoFrame>
 #include <QVideoSink>
+#include <QVariantList>
 #include <QVariantMap>
 
 #include <atomic>
@@ -47,11 +49,22 @@ class VideoPlaybackController final : public QObject {
     Q_PROPERTY(QString state READ state NOTIFY changed)
     Q_PROPERTY(QString error READ error NOTIFY changed)
     Q_PROPERTY(qint64 position READ position NOTIFY changed)
+    Q_PROPERTY(qint64 resumePosition READ resumePosition NOTIFY changed)
     Q_PROPERTY(qint64 duration READ duration NOTIFY changed)
     Q_PROPERTY(bool playing READ playing NOTIFY changed)
     Q_PROPERTY(bool looping READ looping NOTIFY changed)
     Q_PROPERTY(bool muted READ muted NOTIFY changed)
     Q_PROPERTY(qreal volume READ volume NOTIFY changed)
+    Q_PROPERTY(QVariantList audioTracks READ audioTracks NOTIFY tracksChanged)
+    Q_PROPERTY(QVariantList subtitleTracks READ subtitleTracks NOTIFY tracksChanged)
+    Q_PROPERTY(QString audioLanguage MEMBER m_audioLanguage NOTIFY tracksChanged)
+    Q_PROPERTY(QString subtitleLanguage MEMBER m_subtitleLanguage NOTIFY tracksChanged)
+    Q_PROPERTY(int activeAudioTrack READ activeAudioTrack NOTIFY tracksChanged)
+    Q_PROPERTY(int activeSubtitleTrack READ activeSubtitleTrack NOTIFY tracksChanged)
+    Q_PROPERTY(QString subtitleText READ subtitleText NOTIFY subtitleTextChanged)
+    Q_PROPERTY(bool arrowKeysSeek MEMBER m_arrowKeysSeek NOTIFY arrowKeysSeekChanged)
+    Q_PROPERTY(int subtitleOffsetPercent READ subtitleOffsetPercent WRITE setSubtitleOffsetPercent
+               NOTIFY subtitleOffsetPercentChanged)
 
 public:
     explicit VideoPlaybackController(
@@ -64,20 +77,31 @@ public:
     QString state() const { return m_state; }
     QString error() const { return m_error; }
     qint64 position() const { return m_position; }
+    qint64 resumePosition() const { return m_resumePosition; }
     qint64 duration() const { return m_duration; }
     bool playing() const { return m_playing; }
     bool looping() const { return m_looping; }
     bool muted() const { return m_muted; }
     qreal volume() const { return m_volume; }
+    QVariantList audioTracks() const { return m_audioTracks; }
+    QVariantList subtitleTracks() const { return m_subtitleTracks; }
+    int activeAudioTrack() const { return m_activeAudioTrack; }
+    int activeSubtitleTrack() const { return m_activeSubtitleTrack; }
+    QString subtitleText() const { return m_subtitleText; }
+    int subtitleOffsetPercent() const { return m_subtitleOffsetPercent; }
+    void setSubtitleOffsetPercent(int percent);
 
     Q_INVOKABLE void openSource(const QVariantMap &source,
                                 const QString &startMode);
     Q_INVOKABLE void stop();
     Q_INVOKABLE void playPause();
+    Q_INVOKABLE void resume();
     Q_INVOKABLE void seekBy(qint64 deltaMs);
     Q_INVOKABLE void seekTo(qint64 positionMs);
     Q_INVOKABLE void toggleLoop();
     Q_INVOKABLE void toggleMute();
+    Q_INVOKABLE void selectAudioTrack(int index);
+    Q_INVOKABLE void selectSubtitleTrack(int index);
     Q_INVOKABLE void adjustVolume(qreal delta);
     Q_INVOKABLE void setPresentationVisible(bool visible);
     Q_INVOKABLE void setOutputSink(QObject *sink);
@@ -86,6 +110,10 @@ public:
 signals:
     void availableChanged();
     void changed();
+    void tracksChanged();
+    void subtitleTextChanged();
+    void arrowKeysSeekChanged();
+    void subtitleOffsetPercentChanged();
 
 private slots:
     void drainLatestFrame();
@@ -100,11 +128,18 @@ private:
     void invalidateSource(bool clearFrame);
     void postWorkerStop();
     void applyMutePreference(bool muted);
+    void updateSubtitleText(const QString &text);
+    void updateSubtitleOffsetPercent(int percent, bool save);
+    void resetTracks();
+    void saveProgress();
+    void resetPresentationClock();
 
     struct FrameMailbox {
         QMutex mutex;
         QVideoFrame frame;
         std::atomic<qulonglong> generation{0};
+        quint64 clockRevision = 0;
+        bool clockRunning = false;
         bool deliveryQueued = false;
     };
 
@@ -120,7 +155,12 @@ private:
     QSharedPointer<ImageSourceCancellation> m_cancellation;
     QSharedPointer<FrameMailbox> m_frameMailbox;
     std::atomic<qulonglong> m_generation{0};
+    quint64 m_clockRevision = 0;
+    qint64 m_resumePosition = 0;
+    std::optional<qint64> m_pendingProgress;
+    QElapsedTimer m_progressTimer;
     QString m_sourceIdentity;
+    QString m_fileSettingsGroup;
     QString m_state = QStringLiteral("idle");
     QString m_error;
     qint64 m_position = 0;
@@ -129,6 +169,15 @@ private:
     bool m_looping = false;
     bool m_muted = true;
     qreal m_volume = 1.0;
+    QVariantList m_audioTracks;
+    QVariantList m_subtitleTracks;
+    QString m_audioLanguage;
+    QString m_subtitleLanguage;
+    int m_activeAudioTrack = -1;
+    int m_activeSubtitleTrack = -1;
+    QString m_subtitleText;
+    bool m_arrowKeysSeek = false;
+    int m_subtitleOffsetPercent = 0;
 };
 
 } // namespace ZoinGallery

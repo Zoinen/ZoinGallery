@@ -17,6 +17,18 @@ inline bool isHdr(const QVideoFrameFormat &format)
         || format.colorTransfer() == QVideoFrameFormat::ColorTransfer_ST2084;
 }
 
+inline float masteringPeak(const QVideoFrameFormat &format)
+{
+    float peak = format.maxLuminance();
+#ifdef Q_OS_MACOS
+    // The unpatched Qt 6.11.1 FFmpeg plugin applies the HEVC metadata
+    // scale a second time. Values outside the PQ domain can identify it.
+    if (peak > 10000.f)
+        peak /= 10000.f;
+#endif
+    return std::isfinite(peak) && peak > 0.f && peak <= 10000.f ? peak : 1000.f;
+}
+
 inline float encodedWhite(float linear, bool hlg)
 {
     if (hlg)
@@ -87,7 +99,7 @@ inline QImage cpuHdrToSdr(QVideoFrame frame)
         return {};
     }
     const bool hlg = format.colorTransfer() == QVideoFrameFormat::ColorTransfer_STD_B67;
-    const float white = encodedWhite(format.maxLuminance() / 100, hlg);
+    const float white = encodedWhite(masteringPeak(format) / 100, hlg);
     const float output = encodedWhite(1, hlg);
     const bool full = format.colorRange() == QVideoFrameFormat::ColorRange_Full;
     // Normalized YUV matrices match Qt's BT.709/BT.2020 conversion, including

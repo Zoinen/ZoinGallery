@@ -35,6 +35,7 @@ Window {
             objectName: "galleryHdrPlaybackSurface"
             anchors.fill: parent
             controller: window.videoSurface.controller
+            viewerHasFocus: window.active
             sharedFrameSource: window.videoSurface.frameSource
             managesFrameSource: false
             externalHdrOutput: window.hdrOutput

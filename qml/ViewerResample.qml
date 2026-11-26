@@ -12,6 +12,13 @@ ViewerResampleEffect {
     property var videoFrameSource: null
     property bool cacheVideoPresentation: true
     property bool cacheVideoConversion: true
+    MacVideoEdr {
+        id: videoLayer
+        anchors.fill: parent
+        source: Qt.platform.os === "osx" && root.videoFrameSource
+            && root.videoFrameSource.edrEligible ? root.videoFrameSource : null
+    }
+    property bool nativeVideoActive: videoLayer.active
     property real presentationGeometryRevision: 0
     readonly property real presentationDpr: Window.window
         ? Window.window.devicePixelRatio : 0
@@ -20,7 +27,7 @@ ViewerResampleEffect {
         // approximation. Only admit exact 1:1 opaque, resting composition.
         // Unknown transforms, fades and screen/backing-DPR mismatches use the
         // original direct path. Never allocate an unbounded zoom-sized cache.
-        if (!visible || hardwareSampling || !cacheVideoPresentation || !videoFrameSource
+        if (nativeVideoActive || !visible || hardwareSampling || !cacheVideoPresentation || !videoFrameSource
                 || !videoFrameSource.hasFrame || !pixelAligned
                 || presentationDpr <= 0 || width <= 0 || height <= 0)
             return false
@@ -103,7 +110,7 @@ ViewerResampleEffect {
         const scaleY = imagePixelSize.height / viewportSize.height
         return scaleX <= 2.6 && scaleY <= 2.6
     }
-    readonly property int requiredLevels: hardwareSampling || nearestNeighbor
+    readonly property int requiredLevels: nativeVideoActive || hardwareSampling || nearestNeighbor
         || preferDirectVideoSampling ? 0 : naturalLevels
     property int retainedLevels: 0
     property int pyramidRevision: 0
@@ -152,12 +159,13 @@ ViewerResampleEffect {
     }
 
     source: {
+        if (nativeVideoActive) return null
         root.pyramidRevision
         const level = requiredLevels > 0
             ? pyramid.itemAt(requiredLevels - 1) : null
         return level ? level.texture : imageSource
     }
-    videoSource: requiredLevels > 0 || !videoFrameSource
+    videoSource: nativeVideoActive || requiredLevels > 0 || !videoFrameSource
         || !videoFrameSource.hasFrame ? null : videoFrameSource
     // Conversion storage is float32, never an encoded/quantized surrogate.
     // Keep it source-sized and bounded. Unlike the presentation cache, source
@@ -170,7 +178,7 @@ ViewerResampleEffect {
         const first = requiredLevels > 0 ? pyramid.itemAt(0) : null
         return first ? first.resampler : root
     }
-    readonly property bool linearVideoCacheRequested: cacheVideoConversion
+    readonly property bool linearVideoCacheRequested: !nativeVideoActive && cacheVideoConversion
         && !hardwareSampling && !referenceSampling && videoFrameSource && videoFrameSource.hasFrame
         && isFinite(viewportSize.width) && isFinite(viewportSize.height)
         && viewportSize.width > 0 && viewportSize.height > 0
@@ -212,7 +220,7 @@ ViewerResampleEffect {
 
     Repeater {
         id: pyramid
-        model: root.retainedLevels
+        model: root.nativeVideoActive ? 0 : root.retainedLevels
         onItemAdded: root.pyramidRevision++
         onItemRemoved: root.pyramidRevision++
 

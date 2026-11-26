@@ -1,4 +1,7 @@
 #include "ViewerResampleEffect.h"
+#ifdef ZOIN_ENABLE_VIDEO_PLAYBACK
+#include "VideoColorSpace.h"
+#endif
 #include <ZoinGallery/MediaTimingTrace.h>
 
 #include <QDebug>
@@ -185,9 +188,11 @@ int videoTextureFormatCode(int value)
 
 void fillVideoUniforms(ResampleUniforms &uniforms, QRhi *rhi, const QVideoFrame &frame)
 {
-    const auto format = frame.surfaceFormat();
+    auto format = frame.surfaceFormat();
     if (!frame.isValid() || !format.isValid())
         return;
+    if (ZoinGallery::VideoColorSpace::isHdr(format))
+        format.setMaxLuminance(ZoinGallery::VideoColorSpace::masteringPeak(format));
     QByteArray videoData(sizeof(QVideoTextureHelper::UniformData), '\0');
     QVideoTextureHelper::updateUniformData(&videoData, rhi, format, frame, QMatrix4x4(), 1.0f);
     const auto *video = reinterpret_cast<const QVideoTextureHelper::UniformData *>(videoData.constData());

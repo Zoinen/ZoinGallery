@@ -7,6 +7,7 @@
 
 #include <QColorSpace>
 #include <QFile>
+#include <QLoggingCategory>
 #include <libheif/heif.h>
 #include <libheif/heif_sequences.h>
 #include <libraw/libraw.h>
@@ -16,6 +17,8 @@
 
 namespace ZoinGallery {
 namespace {
+
+Q_LOGGING_CATEGORY(lcRawPages, "zoingallery.raw.pages", QtWarningMsg)
 
 class WebpPages final : public PagedImageDocument {
 public:
@@ -278,10 +281,11 @@ class RawPages final : public PagedImageDocument {
 public:
     explicit RawPages(const QString &path) : _path(path)
     {
-        LibRaw reader;
-        if (open(reader, 0)) {
-            _count = int(qMin(reader.imgdata.idata.raw_count, unsigned(INT_MAX)));
-            _firstSize = dimensions(reader);
+        // LibRaw is too large for the default macOS page worker stack.
+        const auto reader = std::make_unique<LibRaw>();
+        if (open(*reader, 0)) {
+            _count = int(qMin(reader->imgdata.idata.raw_count, unsigned(INT_MAX)));
+            _firstSize = dimensions(*reader);
         }
     }
 
@@ -290,18 +294,20 @@ public:
     {
         if (index == 0)
             return _firstSize;
-        LibRaw reader;
-        return open(reader, index) ? dimensions(reader) : QSize{};
+        const auto reader = std::make_unique<LibRaw>();
+        return open(*reader, index) ? dimensions(*reader) : QSize{};
     }
 
     ImagePage render(int index, QSize target, QRect, const Canceled &canceled) override
     {
-        LibRaw reader;
-        if (canceled() || !open(reader, index) || !validPageRaster(dimensions(reader))
-            || reader.unpack() != LIBRAW_SUCCESS || canceled() || reader.dcraw_process() != LIBRAW_SUCCESS)
+        if (canceled())
+            return {{}, {}, 0, PageError::CannotRead};
+        const auto reader = std::make_unique<LibRaw>();
+        if (!open(*reader, index) || !validPageRaster(dimensions(*reader))
+            || reader->unpack() != LIBRAW_SUCCESS || canceled() || reader->dcraw_process() != LIBRAW_SUCCESS)
             return {{}, {}, 0, PageError::CannotRead};
         const std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)>
-            pixels(reader.dcraw_make_mem_image(), &LibRaw::dcraw_clear_mem);
+            pixels(reader->dcraw_make_mem_image(), &LibRaw::dcraw_clear_mem);
         if (!pixels || pixels->type != LIBRAW_IMAGE_BITMAP || pixels->colors != 3 || pixels->bits != 8)
             return {{}, {}, 0, PageError::CannotRead};
         const QSize size(pixels->width, pixels->height);
@@ -316,10 +322,12 @@ private:
     {
         reader.imgdata.rawparams.shot_select = unsigned(index);
 #ifdef Q_OS_WIN
-        return reader.open_file(reinterpret_cast<const wchar_t *>(_path.utf16())) == LIBRAW_SUCCESS;
+        const int status = reader.open_file(reinterpret_cast<const wchar_t *>(_path.utf16()));
 #else
-        return reader.open_file(QFile::encodeName(_path).constData()) == LIBRAW_SUCCESS;
+        const int status = reader.open_file(QFile::encodeName(_path).constData());
 #endif
+        qCDebug(lcRawPages) << "[FIX] RAW page" << index << "open result" << LibRaw::strerror(status);
+        return status == LIBRAW_SUCCESS;
     }
 
     static QSize dimensions(const LibRaw &reader)

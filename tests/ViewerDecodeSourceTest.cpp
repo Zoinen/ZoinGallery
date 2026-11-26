@@ -14,6 +14,7 @@
 #include <QPainter>
 #include <QPdfWriter>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtTest>
 #include <QtGui/private/qtguiglobal_p.h>
 #include <turbojpeg.h>
@@ -212,6 +213,30 @@ private slots:
             QVERIFY(!decodedInfo.previewUsed.isEmpty());
             QCOMPARE(decodedInfo.isAuthoritativePreview, !nativeDecode);
         }
+    }
+
+    void unreadableRawReturnsErrorOnPageWorker() {
+        using namespace ZoinGallery;
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("unreadable.dng"));
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write("invalid RAW data") > 0);
+        file.close();
+        QVERIFY(PagedImageDocument::canOpen(path));
+
+        PageError error = PageError::None;
+        bool opened = false;
+        const std::unique_ptr<QThread> worker(QThread::create([&] {
+            opened = bool(PagedImageDocument::open(path, path, error));
+        }));
+        // Match the default macOS worker stack on platforms with larger stacks.
+        worker->setStackSize(512 * 1024);
+        worker->start();
+        QVERIFY(worker->wait());
+        QVERIFY(!opened);
+        QCOMPARE(error, PageError::CannotRead);
     }
 
     void pagedTiffAndWebpDecodeEachFrame() {
